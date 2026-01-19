@@ -44,7 +44,7 @@ check_result "project.godot exists"
 test -f godot/rocket_tycoon.gdextension
 check_result "GDExtension config exists"
 
-# Test 3: Check Rust source files
+# Test 3: Check Rust source files (Phase 1)
 test -f rust/src/lib.rs
 check_result "lib.rs exists"
 
@@ -54,7 +54,22 @@ check_result "launcher.rs exists"
 test -f rust/src/rocket_launcher.rs
 check_result "rocket_launcher.rs exists"
 
-# Test 4: Check Godot files
+# Test 3b: Check Rust source files (Phase 2 - Rocket Design)
+echo ""
+echo "Checking Phase 2 files..."
+test -f rust/src/engine.rs
+check_result "engine.rs exists (Phase 2)"
+
+test -f rust/src/stage.rs
+check_result "stage.rs exists (Phase 2)"
+
+test -f rust/src/rocket_design.rs
+check_result "rocket_design.rs exists (Phase 2)"
+
+test -f rust/src/rocket_designer.rs
+check_result "rocket_designer.rs exists (Phase 2)"
+
+# Test 4: Check Godot files (Phase 1)
 test -f godot/scenes/main.tscn
 check_result "main.tscn exists"
 
@@ -63,6 +78,13 @@ check_result "main.gd exists"
 
 test -f godot/assets/rocket.svg
 check_result "rocket.svg exists"
+
+# Test 4b: Check Godot files (Phase 2 - Design Screen)
+test -f godot/scenes/design_screen.tscn
+check_result "design_screen.tscn exists (Phase 2)"
+
+test -f godot/scripts/design_screen.gd
+check_result "design_screen.gd exists (Phase 2)"
 
 # Test 5: Build Rust library
 echo ""

@@ -72,11 +72,17 @@ custom_minimum_size = Vector2(600, 0)
 layout_mode = 2
 theme_override_constants/separation = 20
 
-[node name="LaunchButton" type="Button" parent="MarginContainer/VBoxContainer/CenterContainer/ContentVBox"]
+[node name="DesignButton" type="Button" parent="MarginContainer/VBoxContainer/CenterContainer/ContentVBox"]
 custom_minimum_size = Vector2(0, 80)
 layout_mode = 2
 theme_override_font_sizes/font_size = 24
-text = "LAUNCH ROCKET"
+text = "DESIGN ROCKET"
+
+[node name="LaunchButton" type="Button" parent="MarginContainer/VBoxContainer/CenterContainer/ContentVBox"]
+custom_minimum_size = Vector2(0, 60)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "QUICK LAUNCH (Default Rocket)"
 
 [node name="StatusPanel" type="PanelContainer" parent="MarginContainer/VBoxContainer/CenterContainer/ContentVBox"]
 visible = false
@@ -180,5 +186,6 @@ mouse_filter = 2
 color = Color(1, 1, 1, 0)
 script = ExtResource("4")
 
+[connection signal="pressed" from="MarginContainer/VBoxContainer/CenterContainer/ContentVBox/DesignButton" to="." method="_on_design_button_pressed"]
 [connection signal="pressed" from="MarginContainer/VBoxContainer/CenterContainer/ContentVBox/LaunchButton" to="." method="_on_launch_button_pressed"]
 [connection signal="pressed" from="MarginContainer/VBoxContainer/CenterContainer/ContentVBox/ResultPanel/MarginContainer/VBox/TryAgainButton" to="." method="_on_try_again_button_pressed"]
