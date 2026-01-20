@@ -9,6 +9,7 @@ signal back_requested
 # UI references - Header
 @onready var target_dv_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/TargetDV
 @onready var payload_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/Payload
+@onready var budget_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/Budget
 
 # UI references - Main content
 @onready var stages_container = $MarginContainer/VBox/ContentHBox/StagesPanel/StagesMargin/StagesVBox/StagesScroll/StagesList
@@ -20,6 +21,9 @@ signal back_requested
 @onready var dv_label = $MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/DVInfo/DVLabel
 @onready var dv_status = $MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/DVInfo/DVStatus
 @onready var success_label = $MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/DVInfo/SuccessLabel
+@onready var cost_label = $MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/BudgetInfo/CostLabel
+@onready var budget_status = $MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/BudgetInfo/BudgetStatus
+@onready var remaining_label = $MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/BudgetInfo/RemainingLabel
 @onready var launch_button = $MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox/LaunchButton
 @onready var back_button = $MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox/BackButton
 
@@ -46,6 +50,7 @@ func _ready():
 	# Initial UI update
 	_rebuild_stages_list()
 	_update_dv_display()
+	_update_budget_display()
 	_update_launch_button()
 
 func _setup_engine_cards():
@@ -96,10 +101,11 @@ func _create_engine_card(engine_type: int) -> Control:
 	var ve = designer.get_engine_exhaust_velocity(engine_type)
 	var mass = designer.get_engine_mass(engine_type)
 	var failure = designer.get_engine_failure_rate(engine_type) * 100
+	var cost = designer.get_engine_cost(engine_type)
 
 	var stats_label = Label.new()
 	stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMass: %.0f kg\nFailure: %.1f%%" % [thrust, ve, mass, failure]
+	stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMass: %.0f kg\nFailure: %.1f%%\nCost: $%sM" % [thrust, ve, mass, failure, _format_money(cost / 1000000)]
 	stats_label.add_theme_font_size_override("font_size", 12)
 	stats_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	vbox.add_child(stats_label)
@@ -120,16 +126,32 @@ func _on_add_engine_stage_pressed(engine_type: int):
 func _update_header():
 	target_dv_label.text = "Target Δv: %.0f m/s" % designer.get_target_delta_v()
 	payload_label.text = "Payload: %.0f kg" % designer.get_payload_mass()
+	budget_label.text = "Budget: $%s" % _format_money(designer.get_starting_budget())
+
+# Helper to format money values with commas
+func _format_money(value: float) -> String:
+	var int_value = int(value)
+	var str_val = str(int_value)
+	var result = ""
+	var count = 0
+	for i in range(str_val.length() - 1, -1, -1):
+		if count > 0 and count % 3 == 0:
+			result = "," + result
+		result = str_val[i] + result
+		count += 1
+	return result
 
 func _on_design_changed():
 	# Don't rebuild if we're dragging a slider - just update values
 	if _slider_dragging:
 		_update_stage_values_only()
 		_update_dv_display()
+		_update_budget_display()
 		_update_launch_button()
 	else:
 		_rebuild_stages_list()
 		_update_dv_display()
+		_update_budget_display()
 		_update_launch_button()
 
 func _update_stage_values_only():
@@ -140,14 +162,33 @@ func _update_stage_values_only():
 		var card_data = _stage_cards[i]
 		if card_data.has("stage_index"):
 			var stage_index = card_data["stage_index"]
-			# Update delta-v label
+			# Update TWR label
+			if card_data.has("twr_label"):
+				var twr = designer.get_stage_twr(stage_index)
+				card_data["twr_label"].text = "TWR: %.2f" % twr
+				# Color-code TWR
+				if twr < 1.0:
+					card_data["twr_label"].add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+				elif twr < 1.2:
+					card_data["twr_label"].add_theme_color_override("font_color", Color(1.0, 1.0, 0.3))
+				else:
+					card_data["twr_label"].add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+			# Update delta-v label with effective delta-v and gravity loss
 			if card_data.has("dv_label"):
-				var dv = designer.get_stage_delta_v(stage_index)
-				card_data["dv_label"].text = "Δv: %.0f m/s" % dv
+				var effective_dv = designer.get_stage_effective_delta_v(stage_index)
+				var gravity_loss = designer.get_stage_gravity_loss(stage_index)
+				if gravity_loss > 0:
+					card_data["dv_label"].text = "Δv: %.0f m/s (-%.0f)" % [effective_dv, gravity_loss]
+				else:
+					card_data["dv_label"].text = "Δv: %.0f m/s" % effective_dv
 			# Update propellant mass label
 			if card_data.has("prop_label"):
 				var prop_mass = designer.get_stage_propellant_mass(stage_index)
 				card_data["prop_label"].text = "Propellant: %.0f kg" % prop_mass
+			# Update cost label
+			if card_data.has("cost_label"):
+				var stage_cost = designer.get_stage_cost(stage_index)
+				card_data["cost_label"].text = "Cost: $%s" % _format_money(stage_cost)
 			# Update fraction label
 			if card_data.has("frac_label"):
 				var frac = designer.get_stage_mass_fraction(stage_index)
@@ -275,10 +316,34 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	engine_hbox.add_child(spacer)
 
-	# Delta-v for this stage
-	var dv = designer.get_stage_delta_v(stage_index)
+	# TWR for this stage
+	var twr = designer.get_stage_twr(stage_index)
+	var twr_label = Label.new()
+	twr_label.text = "TWR: %.2f" % twr
+	twr_label.add_theme_font_size_override("font_size", 14)
+	# Color-code TWR: red if can't lift off, yellow if marginal, green if good
+	if twr < 1.0:
+		twr_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+	elif twr < 1.2:
+		twr_label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.3))
+	else:
+		twr_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+	engine_hbox.add_child(twr_label)
+
+	# Small spacer
+	var spacer2 = Control.new()
+	spacer2.custom_minimum_size = Vector2(15, 0)
+	engine_hbox.add_child(spacer2)
+
+	# Effective delta-v for this stage (after gravity losses)
+	var effective_dv = designer.get_stage_effective_delta_v(stage_index)
+	var ideal_dv = designer.get_stage_delta_v(stage_index)
+	var gravity_loss = designer.get_stage_gravity_loss(stage_index)
 	var dv_label_stage = Label.new()
-	dv_label_stage.text = "Δv: %.0f m/s" % dv
+	if gravity_loss > 0:
+		dv_label_stage.text = "Δv: %.0f m/s (-%0.f)" % [effective_dv, gravity_loss]
+	else:
+		dv_label_stage.text = "Δv: %.0f m/s" % effective_dv
 	dv_label_stage.add_theme_font_size_override("font_size", 14)
 	dv_label_stage.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0))
 	engine_hbox.add_child(dv_label_stage)
@@ -312,19 +377,33 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 	frac_value_label.custom_minimum_size = Vector2(50, 0)
 	slider_hbox.add_child(frac_value_label)
 
-	# Propellant mass info
+	# Stage info row (propellant and cost)
+	var info_hbox = HBoxContainer.new()
+	info_hbox.add_theme_constant_override("separation", 20)
+	vbox.add_child(info_hbox)
+
 	var prop_mass = designer.get_stage_propellant_mass(stage_index)
 	var prop_label = Label.new()
 	prop_label.text = "Propellant: %.0f kg" % prop_mass
 	prop_label.add_theme_font_size_override("font_size", 12)
 	prop_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	vbox.add_child(prop_label)
+	info_hbox.add_child(prop_label)
+
+	# Stage cost
+	var stage_cost = designer.get_stage_cost(stage_index)
+	var cost_label_stage = Label.new()
+	cost_label_stage.text = "Cost: $%s" % _format_money(stage_cost)
+	cost_label_stage.add_theme_font_size_override("font_size", 12)
+	cost_label_stage.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
+	info_hbox.add_child(cost_label_stage)
 
 	# Store references for updating without rebuild
 	var card_data = {
 		"stage_index": stage_index,
 		"dv_label": dv_label_stage,
+		"twr_label": twr_label,
 		"prop_label": prop_label,
+		"cost_label": cost_label_stage,
 		"frac_label": frac_value_label,
 		"slider": slider
 	}
@@ -377,12 +456,18 @@ func _on_mass_fraction_changed(value: float, stage_index: int):
 			break
 
 func _update_dv_display():
-	var total_dv = designer.get_total_delta_v()
+	var effective_dv = designer.get_total_effective_delta_v()
+	var ideal_dv = designer.get_total_delta_v()
+	var gravity_loss = designer.get_total_gravity_loss()
 	var target_dv = designer.get_target_delta_v()
 	var percentage = designer.get_delta_v_percentage()
 	var success_prob = designer.get_mission_success_probability() * 100
 
-	dv_label.text = "Δv: %.0f / %.0f m/s" % [total_dv, target_dv]
+	# Show effective delta-v with gravity loss in parentheses
+	if gravity_loss > 0:
+		dv_label.text = "Δv: %.0f / %.0f m/s (gravity loss: -%.0f)" % [effective_dv, target_dv, gravity_loss]
+	else:
+		dv_label.text = "Δv: %.0f / %.0f m/s" % [effective_dv, target_dv]
 	dv_progress.value = min(percentage, 100)
 
 	if designer.is_design_sufficient():
@@ -399,8 +484,25 @@ func _update_dv_display():
 	else:
 		success_label.text = ""
 
+func _update_budget_display():
+	var total_cost = designer.get_total_cost()
+	var remaining = designer.get_remaining_budget()
+
+	cost_label.text = "Cost: $%s" % _format_money(total_cost)
+	remaining_label.text = "Remaining: $%s" % _format_money(remaining)
+
+	if designer.is_within_budget():
+		budget_status.text = "WITHIN BUDGET"
+		budget_status.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+		remaining_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	else:
+		budget_status.text = "OVER BUDGET"
+		budget_status.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+		remaining_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+
 func _update_launch_button():
-	launch_button.disabled = not designer.is_design_sufficient()
+	# Rocket must have sufficient delta-v AND be within budget to launch
+	launch_button.disabled = not designer.is_launchable()
 
 func _on_launch_button_pressed():
 	launch_requested.emit()

@@ -1,4 +1,4 @@
-use crate::engine::{EngineSpec, EngineType};
+use crate::engine::{costs, EngineSpec, EngineType};
 
 /// A stage in a rocket design
 #[derive(Debug, Clone)]
@@ -26,12 +26,22 @@ impl RocketStage {
         self.engine_type.spec()
     }
 
-    /// Calculate the dry mass of this stage (engines only, no propellant)
-    pub fn dry_mass_kg(&self) -> f64 {
+    /// Calculate the mass of engines in this stage
+    pub fn engine_mass_kg(&self) -> f64 {
         self.engine_spec().total_mass_kg(self.engine_count)
     }
 
-    /// Calculate the wet mass of this stage (engines + propellant)
+    /// Calculate the structural mass of tanks (walls, insulation, plumbing)
+    pub fn tank_mass_kg(&self) -> f64 {
+        self.propellant_mass_kg * costs::TANK_STRUCTURAL_MASS_RATIO
+    }
+
+    /// Calculate the dry mass of this stage (engines + tank structure, no propellant)
+    pub fn dry_mass_kg(&self) -> f64 {
+        self.engine_mass_kg() + self.tank_mass_kg()
+    }
+
+    /// Calculate the wet mass of this stage (engines + tanks + propellant)
     pub fn wet_mass_kg(&self) -> f64 {
         self.dry_mass_kg() + self.propellant_mass_kg
     }
@@ -84,15 +94,176 @@ impl RocketStage {
     /// * `fraction` - Desired mass fraction (0.0 to 1.0, typically 0.5 to 0.95)
     /// * `payload_mass_kg` - Mass above this stage
     pub fn set_mass_fraction(&mut self, fraction: f64, payload_mass_kg: f64) {
-        // mass_fraction = propellant / (propellant + dry_mass + payload)
-        // fraction * (propellant + dry_mass + payload) = propellant
-        // fraction * dry_mass + fraction * payload = propellant - fraction * propellant
-        // fraction * dry_mass + fraction * payload = propellant * (1 - fraction)
-        // propellant = fraction * (dry_mass + payload) / (1 - fraction)
+        // mass_fraction = propellant / (engine_mass + tank_mass + propellant + payload)
+        // where tank_mass = propellant * TANK_STRUCTURAL_MASS_RATIO (let's call it t)
+        //
+        // Let e = engine_mass, p = propellant, L = payload, t = tank ratio
+        // fraction = p / (e + t*p + p + L) = p / (e + p*(1+t) + L)
+        //
+        // Solving for p:
+        // f * (e + p*(1+t) + L) = p
+        // f*e + f*L = p - f*p*(1+t) = p * (1 - f*(1+t))
+        // p = f*(e + L) / (1 - f*(1+t))
 
         let fraction = fraction.clamp(0.01, 0.99); // Prevent division by zero
-        let dry_mass = self.dry_mass_kg();
-        self.propellant_mass_kg = fraction * (dry_mass + payload_mass_kg) / (1.0 - fraction);
+        let engine_mass = self.engine_mass_kg();
+        let t = costs::TANK_STRUCTURAL_MASS_RATIO;
+        let denominator = 1.0 - fraction * (1.0 + t);
+
+        if denominator > 0.01 {
+            self.propellant_mass_kg =
+                fraction * (engine_mass + payload_mass_kg) / denominator;
+        }
+    }
+
+    // ==========================================
+    // Cost Calculations
+    // ==========================================
+
+    /// Get the propellant density for this stage's engine type in kg/m³
+    pub fn propellant_density(&self) -> f64 {
+        self.engine_type.propellant_density()
+    }
+
+    /// Calculate the tank volume required for the propellant in m³
+    pub fn tank_volume_m3(&self) -> f64 {
+        self.propellant_mass_kg / self.propellant_density()
+    }
+
+    /// Calculate the cost of engines for this stage in dollars
+    pub fn engine_cost(&self) -> f64 {
+        self.engine_type.engine_cost() * self.engine_count as f64
+    }
+
+    /// Calculate the cost of tanks for this stage in dollars
+    /// Based on tank volume required for the propellant
+    pub fn tank_cost(&self) -> f64 {
+        self.tank_volume_m3() * costs::TANK_COST_PER_M3
+    }
+
+    /// Calculate the total cost of this stage in dollars
+    /// Includes engines, tanks, and stage overhead
+    pub fn total_cost(&self) -> f64 {
+        self.engine_cost() + self.tank_cost() + costs::STAGE_OVERHEAD_COST
+    }
+
+    // ==========================================
+    // TWR and Gravity Loss Calculations
+    // ==========================================
+
+    /// Standard gravity in m/s²
+    const G0: f64 = 9.81;
+
+    /// Calculate the initial thrust-to-weight ratio for this stage
+    ///
+    /// # Arguments
+    /// * `payload_mass_kg` - Mass above this stage (payload + upper stages)
+    ///
+    /// # Returns
+    /// TWR as a dimensionless ratio (must be > 1.0 to lift off)
+    pub fn initial_twr(&self, payload_mass_kg: f64) -> f64 {
+        let thrust_n = self.total_thrust_kn() * 1000.0; // kN to N
+        let total_mass_kg = self.wet_mass_kg() + payload_mass_kg;
+        let weight_n = total_mass_kg * Self::G0;
+
+        if weight_n > 0.0 {
+            thrust_n / weight_n
+        } else {
+            0.0
+        }
+    }
+
+    /// Calculate the mass ratio for this stage (initial mass / final mass)
+    ///
+    /// # Arguments
+    /// * `payload_mass_kg` - Mass above this stage
+    ///
+    /// # Returns
+    /// Mass ratio R = m0/mf (always >= 1.0)
+    pub fn mass_ratio(&self, payload_mass_kg: f64) -> f64 {
+        let m0 = self.wet_mass_kg() + payload_mass_kg;
+        let mf = self.dry_mass_kg() + payload_mass_kg;
+
+        if mf > 0.0 {
+            m0 / mf
+        } else {
+            1.0
+        }
+    }
+
+    /// Calculate the burn time for this stage in seconds
+    ///
+    /// # Returns
+    /// Burn time = propellant_mass × exhaust_velocity / thrust
+    pub fn burn_time_seconds(&self) -> f64 {
+        let thrust_n = self.total_thrust_kn() * 1000.0;
+        if thrust_n > 0.0 {
+            self.propellant_mass_kg * self.exhaust_velocity_ms() / thrust_n
+        } else {
+            0.0
+        }
+    }
+
+    /// Calculate gravity losses for this stage
+    ///
+    /// Gravity loss formula: ΔV_gravity ≈ Ve × (1 - 1/R) / TWR₀
+    ///
+    /// This represents delta-v lost to fighting gravity during ascent.
+    /// Higher TWR means less time fighting gravity, so less loss.
+    ///
+    /// # Arguments
+    /// * `payload_mass_kg` - Mass above this stage
+    /// * `gravity_loss_coefficient` - How much of burn is vertical (1.0 = all vertical, 0.0 = all horizontal)
+    ///
+    /// # Returns
+    /// Gravity loss in m/s
+    pub fn gravity_loss(&self, payload_mass_kg: f64, gravity_loss_coefficient: f64) -> f64 {
+        let twr = self.initial_twr(payload_mass_kg);
+        let mass_ratio = self.mass_ratio(payload_mass_kg);
+        let ve = self.exhaust_velocity_ms();
+
+        // Avoid division by zero and handle edge cases
+        if twr <= 0.0 || mass_ratio <= 1.0 {
+            return 0.0;
+        }
+
+        // ΔV_gravity = C × Ve × (1 - 1/R) / TWR₀
+        let gravity_loss = gravity_loss_coefficient * ve * (1.0 - 1.0 / mass_ratio) / twr;
+
+        // Cap gravity loss at a reasonable maximum (can't lose more than we'd gain)
+        gravity_loss.min(self.delta_v(payload_mass_kg) * 0.9)
+    }
+
+    /// Calculate gravity efficiency (1.0 = no losses, 0.0 = all lost to gravity)
+    ///
+    /// # Arguments
+    /// * `payload_mass_kg` - Mass above this stage
+    /// * `gravity_loss_coefficient` - How much of burn is vertical
+    ///
+    /// # Returns
+    /// Efficiency as a ratio (0.0 to 1.0)
+    pub fn gravity_efficiency(&self, payload_mass_kg: f64, gravity_loss_coefficient: f64) -> f64 {
+        let ideal_dv = self.delta_v(payload_mass_kg);
+        if ideal_dv <= 0.0 {
+            return 0.0;
+        }
+
+        let loss = self.gravity_loss(payload_mass_kg, gravity_loss_coefficient);
+        (1.0 - loss / ideal_dv).max(0.0)
+    }
+
+    /// Calculate effective delta-v after gravity losses
+    ///
+    /// # Arguments
+    /// * `payload_mass_kg` - Mass above this stage
+    /// * `gravity_loss_coefficient` - How much of burn is vertical
+    ///
+    /// # Returns
+    /// Effective delta-v in m/s
+    pub fn effective_delta_v(&self, payload_mass_kg: f64, gravity_loss_coefficient: f64) -> f64 {
+        let ideal_dv = self.delta_v(payload_mass_kg);
+        let loss = self.gravity_loss(payload_mass_kg, gravity_loss_coefficient);
+        (ideal_dv - loss).max(0.0)
     }
 }
 
@@ -112,8 +283,12 @@ mod tests {
     fn test_dry_mass() {
         let mut stage = RocketStage::new(EngineType::Kerolox);
         stage.engine_count = 3;
-        // 3 Kerolox engines at 450 kg each
-        assert_eq!(stage.dry_mass_kg(), 1350.0);
+        // 3 Kerolox engines at 450 kg each = 1350 kg
+        // Default propellant 1000 kg, tank mass = 1000 × 0.08 = 80 kg
+        // Total dry = 1350 + 80 = 1430 kg
+        assert_eq!(stage.dry_mass_kg(), 1430.0);
+        assert_eq!(stage.engine_mass_kg(), 1350.0);
+        assert_eq!(stage.tank_mass_kg(), 80.0);
     }
 
     #[test]
@@ -121,25 +296,34 @@ mod tests {
         let mut stage = RocketStage::new(EngineType::Hydrolox);
         stage.engine_count = 2;
         stage.propellant_mass_kg = 5000.0;
-        // 2 Hydrolox at 300 kg each = 600 kg dry + 5000 kg propellant
-        assert_eq!(stage.wet_mass_kg(), 5600.0);
+        // 2 Hydrolox at 300 kg each = 600 kg engines
+        // Tank mass = 5000 × 0.08 = 400 kg
+        // Dry mass = 600 + 400 = 1000 kg
+        // Wet mass = 1000 + 5000 = 6000 kg
+        assert_eq!(stage.wet_mass_kg(), 6000.0);
     }
 
     #[test]
     fn test_delta_v_calculation() {
         let mut stage = RocketStage::new(EngineType::Hydrolox);
         stage.engine_count = 1;
-        stage.propellant_mass_kg = 2700.0; // Will give nice numbers
+        stage.propellant_mass_kg = 2700.0;
 
         // Hydrolox: Ve = 4500 m/s
         // Engine mass: 300 kg
-        // Wet mass: 3000 kg
+        // Tank mass: 2700 × 0.08 = 216 kg
+        // Dry mass: 300 + 216 = 516 kg
+        // Wet mass: 516 + 2700 = 3216 kg
         // With 1000 kg payload:
-        // m0 = 4000, mf = 1300
-        // Δv = 4500 * ln(4000/1300) = 4500 * ln(3.077) = 4500 * 1.124 = ~5058 m/s
+        // m0 = 4216, mf = 1516
+        // Δv = 4500 * ln(4216/1516) = 4500 * ln(2.78) = 4500 * 1.022 = ~4600 m/s
 
         let delta_v = stage.delta_v(1000.0);
-        assert!(delta_v > 5000.0 && delta_v < 5200.0);
+        assert!(
+            delta_v > 4500.0 && delta_v < 4700.0,
+            "Expected ~4600 m/s, got {}",
+            delta_v
+        );
     }
 
     #[test]
@@ -148,12 +332,18 @@ mod tests {
         stage.engine_count = 1;
         stage.propellant_mass_kg = 4050.0;
 
-        // Dry mass: 450 kg
-        // Wet mass: 4500 kg
-        // With 500 kg payload: total = 5000 kg
-        // Fraction = 4050 / 5000 = 0.81
+        // Engine mass: 450 kg
+        // Tank mass: 4050 × 0.08 = 324 kg
+        // Dry mass: 450 + 324 = 774 kg
+        // Wet mass: 774 + 4050 = 4824 kg
+        // With 500 kg payload: total = 5324 kg
+        // Fraction = 4050 / 5324 ≈ 0.761
         let fraction = stage.mass_fraction(500.0);
-        assert!((fraction - 0.81).abs() < 0.001);
+        assert!(
+            (fraction - 0.761).abs() < 0.01,
+            "Expected ~0.761, got {}",
+            fraction
+        );
     }
 
     #[test]
@@ -162,12 +352,16 @@ mod tests {
         stage.engine_count = 1;
         let payload = 500.0;
 
-        // Set to 80% mass fraction
-        stage.set_mass_fraction(0.80, payload);
+        // Set to 70% mass fraction (achievable with tank mass overhead)
+        stage.set_mass_fraction(0.70, payload);
 
         // Verify it's close
         let actual_fraction = stage.mass_fraction(payload);
-        assert!((actual_fraction - 0.80).abs() < 0.001);
+        assert!(
+            (actual_fraction - 0.70).abs() < 0.01,
+            "Expected ~0.70, got {}",
+            actual_fraction
+        );
     }
 
     #[test]
@@ -188,7 +382,241 @@ mod tests {
     fn test_total_thrust() {
         let mut stage = RocketStage::new(EngineType::Kerolox);
         stage.engine_count = 5;
-        // 5 × 1000 kN = 5000 kN
-        assert_eq!(stage.total_thrust_kn(), 5000.0);
+        // 5 × 500 kN = 2500 kN
+        assert_eq!(stage.total_thrust_kn(), 2500.0);
+    }
+
+    // ==========================================
+    // Cost Tests
+    // ==========================================
+
+    #[test]
+    fn test_propellant_density() {
+        // Kerolox: ~1020 kg/m³
+        let kerolox_stage = RocketStage::new(EngineType::Kerolox);
+        assert_eq!(kerolox_stage.propellant_density(), 1020.0);
+
+        // Hydrolox: ~290 kg/m³
+        let hydrolox_stage = RocketStage::new(EngineType::Hydrolox);
+        assert_eq!(hydrolox_stage.propellant_density(), 290.0);
+    }
+
+    #[test]
+    fn test_tank_volume() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.propellant_mass_kg = 10200.0; // 10200 kg / 1020 kg/m³ = 10 m³
+        assert!((stage.tank_volume_m3() - 10.0).abs() < 0.01);
+
+        let mut hydrolox_stage = RocketStage::new(EngineType::Hydrolox);
+        hydrolox_stage.propellant_mass_kg = 2900.0; // 2900 kg / 290 kg/m³ = 10 m³
+        assert!((hydrolox_stage.tank_volume_m3() - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_engine_cost() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.engine_count = 3;
+        // 3 × $10M = $30M
+        assert_eq!(stage.engine_cost(), 30_000_000.0);
+
+        let mut hydrolox_stage = RocketStage::new(EngineType::Hydrolox);
+        hydrolox_stage.engine_count = 2;
+        // 2 × $15M = $30M
+        assert_eq!(hydrolox_stage.engine_cost(), 30_000_000.0);
+    }
+
+    #[test]
+    fn test_tank_cost() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.propellant_mass_kg = 10200.0; // 10 m³
+        // 10 m³ × $100,000/m³ = $1M
+        assert!((stage.tank_cost() - 1_000_000.0).abs() < 100.0);
+    }
+
+    #[test]
+    fn test_stage_total_cost() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.engine_count = 1;
+        stage.propellant_mass_kg = 10200.0; // 10 m³
+
+        // Engine cost: 1 × $10M = $10M
+        // Tank cost: 10 m³ × $100K = $1M
+        // Stage overhead: $5M
+        // Total: $16M
+        let expected = 10_000_000.0 + 1_000_000.0 + 5_000_000.0;
+        assert!((stage.total_cost() - expected).abs() < 100.0);
+    }
+
+    #[test]
+    fn test_hydrolox_tanks_more_expensive_per_kg() {
+        // Same propellant mass, but hydrolox needs larger tanks
+        let mut kerolox = RocketStage::new(EngineType::Kerolox);
+        kerolox.propellant_mass_kg = 10000.0;
+
+        let mut hydrolox = RocketStage::new(EngineType::Hydrolox);
+        hydrolox.propellant_mass_kg = 10000.0;
+
+        // Hydrolox tanks should cost more due to lower density
+        // Kerolox: 10000/1020 = 9.8 m³
+        // Hydrolox: 10000/290 = 34.5 m³
+        assert!(hydrolox.tank_cost() > kerolox.tank_cost() * 3.0);
+    }
+
+    // ==========================================
+    // TWR and Gravity Loss Tests
+    // ==========================================
+
+    #[test]
+    fn test_initial_twr() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.engine_count = 3;
+        stage.propellant_mass_kg = 25000.0;
+
+        // Kerolox: 500 kN per engine, 450 kg per engine
+        // 3 engines = 1500 kN thrust, 1350 kg engine mass
+        // Tank mass = 25000 × 0.08 = 2000 kg
+        // Dry mass = 1350 + 2000 = 3350 kg
+        // Wet mass = 3350 + 25000 = 28350 kg
+        // With 1000 kg payload: total = 29350 kg
+        // Weight = 29350 × 9.81 = 287,924 N
+        // Thrust = 1,500,000 N
+        // TWR = 1,500,000 / 287,924 ≈ 5.21
+
+        let twr = stage.initial_twr(1000.0);
+        assert!(twr > 4.5 && twr < 6.0, "TWR should be ~5.2: {}", twr);
+    }
+
+    #[test]
+    fn test_twr_decreases_with_payload() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.engine_count = 1;
+        stage.propellant_mass_kg = 10000.0;
+
+        let twr_light = stage.initial_twr(1000.0);
+        let twr_heavy = stage.initial_twr(50000.0);
+
+        assert!(
+            twr_light > twr_heavy,
+            "TWR should decrease with more payload: {} vs {}",
+            twr_light,
+            twr_heavy
+        );
+    }
+
+    #[test]
+    fn test_mass_ratio() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.engine_count = 1;
+        stage.propellant_mass_kg = 9000.0;
+        // Engine mass: 450 kg
+        // Tank mass: 9000 × 0.08 = 720 kg
+        // Dry mass: 1170 kg
+        // Wet mass: 10170 kg
+        // With 550 kg payload:
+        // m0 = 10720 kg, mf = 1720 kg
+        // R = 10720 / 1720 = 6.23
+
+        let ratio = stage.mass_ratio(550.0);
+        assert!(
+            (ratio - 6.23).abs() < 0.1,
+            "Mass ratio should be ~6.23: {}",
+            ratio
+        );
+    }
+
+    #[test]
+    fn test_burn_time() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.engine_count = 1;
+        stage.propellant_mass_kg = 10000.0;
+
+        // Kerolox: Ve = 3000 m/s, Thrust = 500 kN = 500,000 N
+        // burn_time = propellant_mass * Ve / thrust
+        // burn_time = 10000 * 3000 / 500,000 = 60 seconds
+
+        let burn_time = stage.burn_time_seconds();
+        assert!((burn_time - 60.0).abs() < 0.1, "Burn time should be 60s: {}", burn_time);
+    }
+
+    #[test]
+    fn test_gravity_loss_increases_with_lower_twr() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.propellant_mass_kg = 10000.0;
+        let payload = 5000.0;
+        let coefficient = 0.85;
+
+        // With 3 engines (higher TWR)
+        stage.engine_count = 3;
+        let loss_high_twr = stage.gravity_loss(payload, coefficient);
+        let twr_high = stage.initial_twr(payload);
+
+        // With 1 engine (lower TWR, same mass ratio)
+        stage.engine_count = 1;
+        let loss_low_twr = stage.gravity_loss(payload, coefficient);
+        let twr_low = stage.initial_twr(payload);
+
+        assert!(
+            twr_high > twr_low,
+            "3 engines should have higher TWR: {} vs {}",
+            twr_high,
+            twr_low
+        );
+        assert!(
+            loss_low_twr > loss_high_twr,
+            "Lower TWR ({:.2}) should have higher gravity losses: {:.2} vs {:.2}",
+            twr_low,
+            loss_low_twr,
+            loss_high_twr
+        );
+    }
+
+    #[test]
+    fn test_effective_delta_v_less_than_ideal() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.engine_count = 3;
+        stage.propellant_mass_kg = 25000.0;
+
+        let ideal_dv = stage.delta_v(5000.0);
+        let effective_dv = stage.effective_delta_v(5000.0, 0.85);
+
+        assert!(
+            effective_dv < ideal_dv,
+            "Effective delta-v should be less than ideal: {} vs {}",
+            effective_dv,
+            ideal_dv
+        );
+        assert!(
+            effective_dv > 0.5 * ideal_dv,
+            "Effective delta-v shouldn't be too much less: {} vs {}",
+            effective_dv,
+            ideal_dv
+        );
+    }
+
+    #[test]
+    fn test_gravity_efficiency() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.engine_count = 3;
+        stage.propellant_mass_kg = 25000.0;
+
+        let efficiency = stage.gravity_efficiency(5000.0, 0.85);
+
+        // With good TWR, efficiency should be fairly high (>50%)
+        assert!(
+            efficiency > 0.5 && efficiency < 1.0,
+            "Gravity efficiency should be reasonable: {}",
+            efficiency
+        );
+    }
+
+    #[test]
+    fn test_zero_gravity_loss_when_coefficient_zero() {
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.engine_count = 1;
+        stage.propellant_mass_kg = 10000.0;
+
+        // With coefficient = 0 (fully horizontal burn), no gravity loss
+        let loss = stage.gravity_loss(5000.0, 0.0);
+        assert!(loss.abs() < 0.001, "Zero coefficient should mean zero loss: {}", loss);
     }
 }

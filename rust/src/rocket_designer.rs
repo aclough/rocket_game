@@ -1,6 +1,6 @@
 use godot::prelude::*;
 
-use crate::engine::EngineType;
+use crate::engine::{costs, EngineType};
 use crate::rocket_design::{RocketDesign, DEFAULT_PAYLOAD_KG, TARGET_DELTA_V_MS};
 
 /// Godot-accessible rocket designer node
@@ -308,10 +308,75 @@ impl RocketDesigner {
         self.design.delta_v_margin()
     }
 
-    /// Gets the delta-v as a percentage of target (100 = exactly sufficient)
+    /// Gets the effective delta-v as a percentage of target (100 = exactly sufficient)
     #[func]
     pub fn get_delta_v_percentage(&self) -> f64 {
         self.design.delta_v_percentage()
+    }
+
+    /// Gets the ideal delta-v as a percentage of target (ignoring gravity losses)
+    #[func]
+    pub fn get_ideal_delta_v_percentage(&self) -> f64 {
+        self.design.ideal_delta_v_percentage()
+    }
+
+    // ==========================================
+    // TWR and Gravity Loss
+    // ==========================================
+
+    /// Gets the initial TWR for a stage (thrust / weight at ignition)
+    #[func]
+    pub fn get_stage_twr(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 {
+            return 0.0;
+        }
+        self.design.stage_twr(stage_index as usize)
+    }
+
+    /// Gets the gravity loss coefficient for a stage (0.0 to 1.0)
+    /// Higher values mean more of the burn is fighting gravity
+    #[func]
+    pub fn get_stage_gravity_coefficient(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 {
+            return 0.0;
+        }
+        self.design.stage_gravity_coefficient(stage_index as usize)
+    }
+
+    /// Gets the gravity loss for a stage in m/s
+    #[func]
+    pub fn get_stage_gravity_loss(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 {
+            return 0.0;
+        }
+        self.design.stage_gravity_loss(stage_index as usize)
+    }
+
+    /// Gets the effective delta-v for a stage (after gravity losses) in m/s
+    #[func]
+    pub fn get_stage_effective_delta_v(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 {
+            return 0.0;
+        }
+        self.design.stage_effective_delta_v(stage_index as usize)
+    }
+
+    /// Gets the total effective delta-v of the rocket (after gravity losses) in m/s
+    #[func]
+    pub fn get_total_effective_delta_v(&self) -> f64 {
+        self.design.total_effective_delta_v()
+    }
+
+    /// Gets the total gravity loss across all stages in m/s
+    #[func]
+    pub fn get_total_gravity_loss(&self) -> f64 {
+        self.design.total_gravity_loss()
+    }
+
+    /// Gets the overall gravity efficiency (effective_dv / ideal_dv)
+    #[func]
+    pub fn get_gravity_efficiency(&self) -> f64 {
+        self.design.gravity_efficiency()
     }
 
     /// Returns true if the design has sufficient delta-v for the mission
@@ -415,6 +480,118 @@ impl RocketDesigner {
             return -1;
         }
         events[event_index as usize].rocket_stage as i32
+    }
+
+    // ==========================================
+    // Budget & Cost
+    // ==========================================
+
+    /// Gets the starting budget in dollars
+    #[func]
+    pub fn get_starting_budget(&self) -> f64 {
+        RocketDesign::starting_budget()
+    }
+
+    /// Gets the cost of a single engine of the given type in dollars
+    #[func]
+    pub fn get_engine_cost(&self, engine_type: i32) -> f64 {
+        match EngineType::from_index(engine_type) {
+            Some(et) => et.engine_cost(),
+            None => 0.0,
+        }
+    }
+
+    /// Gets the propellant density for an engine type in kg/m³
+    #[func]
+    pub fn get_propellant_density(&self, engine_type: i32) -> f64 {
+        match EngineType::from_index(engine_type) {
+            Some(et) => et.propellant_density(),
+            None => 0.0,
+        }
+    }
+
+    /// Gets the cost per cubic meter of tank volume
+    #[func]
+    pub fn get_tank_cost_per_m3(&self) -> f64 {
+        costs::TANK_COST_PER_M3
+    }
+
+    /// Gets the fixed overhead cost per stage
+    #[func]
+    pub fn get_stage_overhead_cost(&self) -> f64 {
+        costs::STAGE_OVERHEAD_COST
+    }
+
+    /// Gets the fixed overhead cost per rocket
+    #[func]
+    pub fn get_rocket_overhead_cost(&self) -> f64 {
+        costs::ROCKET_OVERHEAD_COST
+    }
+
+    /// Gets the tank volume for a stage in cubic meters
+    #[func]
+    pub fn get_stage_tank_volume(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
+            return 0.0;
+        }
+        self.design.stages[stage_index as usize].tank_volume_m3()
+    }
+
+    /// Gets the engine cost for a stage in dollars
+    #[func]
+    pub fn get_stage_engine_cost(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
+            return 0.0;
+        }
+        self.design.stages[stage_index as usize].engine_cost()
+    }
+
+    /// Gets the tank cost for a stage in dollars
+    #[func]
+    pub fn get_stage_tank_cost(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
+            return 0.0;
+        }
+        self.design.stages[stage_index as usize].tank_cost()
+    }
+
+    /// Gets the total cost of a stage in dollars (engines + tanks + overhead)
+    #[func]
+    pub fn get_stage_cost(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 {
+            return 0.0;
+        }
+        self.design.stage_cost(stage_index as usize)
+    }
+
+    /// Gets the total cost of all stages in dollars
+    #[func]
+    pub fn get_total_stages_cost(&self) -> f64 {
+        self.design.total_stages_cost()
+    }
+
+    /// Gets the total cost of the rocket in dollars (all stages + rocket overhead)
+    #[func]
+    pub fn get_total_cost(&self) -> f64 {
+        self.design.total_cost()
+    }
+
+    /// Gets the remaining budget in dollars (starting budget - total cost)
+    #[func]
+    pub fn get_remaining_budget(&self) -> f64 {
+        self.design.remaining_budget()
+    }
+
+    /// Returns true if the design is within budget
+    #[func]
+    pub fn is_within_budget(&self) -> bool {
+        self.design.is_within_budget()
+    }
+
+    /// Returns true if the design is launchable (sufficient delta-v AND within budget)
+    #[func]
+    pub fn is_launchable(&self) -> bool {
+        self.design.is_launchable()
     }
 
     // ==========================================

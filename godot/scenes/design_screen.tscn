@@ -88,6 +88,11 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 16
 text = "Payload: 1,000 kg"
 
+[node name="Budget" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Budget: $100,000,000"
+
 [node name="ContentHBox" type="HBoxContainer" parent="MarginContainer/VBox"]
 layout_mode = 2
 size_flags_vertical = 3
@@ -217,6 +222,31 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 16
 theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
 text = "Success Rate: 85%"
+
+[node name="BudgetInfo" type="HBoxContainer" parent="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="CostLabel" type="Label" parent="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/BudgetInfo"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Cost: $0"
+
+[node name="BudgetStatus" type="Label" parent="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/BudgetInfo"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+theme_override_colors/font_color = Color(0.3, 1, 0.3, 1)
+text = "WITHIN BUDGET"
+
+[node name="Spacer2" type="Control" parent="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/BudgetInfo"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RemainingLabel" type="Label" parent="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/BudgetInfo"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+text = "Remaining: $100,000,000"
 
 [node name="ButtonsHBox" type="HBoxContainer" parent="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox"]
 layout_mode = 2

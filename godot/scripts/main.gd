@@ -100,8 +100,10 @@ func start_launch():
 	for child in stage_list.get_children():
 		child.queue_free()
 
-	# Start rocket animation
+	# Start rocket animation with correct stage count for gravity turn
 	if rocket_sprite:
+		var stage_count = launcher.get_stage_count()
+		rocket_sprite.set_total_stages(stage_count)
 		rocket_sprite.start_launch()
 
 	# Run the launch with proper timing control

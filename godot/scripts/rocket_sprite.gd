@@ -11,6 +11,11 @@ var total_stages = 7
 var start_position = Vector2.ZERO
 var target_position = Vector2.ZERO
 
+# Gravity turn animation - rocket pitches from vertical to horizontal
+# 0 radians = vertical (pointing up), PI/2 = horizontal (orbiting parallel to Earth)
+const LAUNCH_ROTATION = 0.0  # Start vertical
+const ORBIT_ROTATION = PI / 2.0  # End horizontal (90 degrees)
+
 # Particle effect references
 var engine_particles: CPUParticles2D = null
 var success_particles: CPUParticles2D = null
@@ -45,6 +50,9 @@ func reset():
 	if explosion_label:
 		explosion_label.visible = false
 
+func set_total_stages(count: int):
+	total_stages = max(1, count)
+
 func start_launch():
 	is_launching = true
 	current_stage = 0
@@ -52,7 +60,7 @@ func start_launch():
 	if rocket_image:
 		rocket_image.visible = true
 		rocket_image.position = Vector2(0, 0)
-		rocket_image.rotation = 0
+		rocket_image.rotation = LAUNCH_ROTATION  # Start vertical
 		rocket_image.modulate = Color.WHITE
 
 	# Start engine flame particles
@@ -69,6 +77,17 @@ func advance_stage():
 	var progress = float(current_stage) / float(total_stages)
 	var target_y = -200 * progress  # Move up to -200 pixels
 
+	# Gravity turn: gradually pitch from vertical (0) to horizontal (PI/2)
+	# Use an easing curve so the turn is more gradual at first, then steeper
+	# This simulates a real gravity turn where the rocket starts vertical
+	# and progressively tilts toward horizontal as it gains altitude
+	var pitch_progress = ease(progress, 0.5)  # Ease-in curve for gradual start
+	var target_rotation = lerp(LAUNCH_ROTATION, ORBIT_ROTATION, pitch_progress)
+
+	# Add slight wobble for realism (reduced since we have real rotation now)
+	var wobble = randf_range(-0.02, 0.02)
+	target_rotation += wobble
+
 	# Animate movement
 	var tween = create_tween()
 	tween.set_ease(Tween.EASE_OUT)
@@ -76,10 +95,7 @@ func advance_stage():
 
 	if rocket_image:
 		tween.tween_property(rocket_image, "position:y", target_y, STAGE_DURATION)
-
-		# Add slight wobble for realism
-		var wobble = randf_range(-0.05, 0.05)
-		tween.parallel().tween_property(rocket_image, "rotation", wobble, STAGE_DURATION)
+		tween.parallel().tween_property(rocket_image, "rotation", target_rotation, STAGE_DURATION)
 
 func show_explosion():
 	is_launching = false
@@ -138,8 +154,8 @@ func show_success():
 		# Add success glow
 		tween.parallel().tween_property(rocket_image, "modulate", Color(0.5, 1.0, 0.5), 0.3)
 
-		# Rotate to orbit orientation
-		tween.parallel().tween_property(rocket_image, "rotation", deg_to_rad(45), 0.5)
+		# Ensure rocket is horizontal for orbit (parallel to Earth's surface)
+		tween.parallel().tween_property(rocket_image, "rotation", ORBIT_ROTATION, 0.5)
 
 		await tween.finished
 

@@ -7,6 +7,53 @@ pub enum EngineType {
     Kerolox,
 }
 
+/// Cost constants for rocket budget system
+pub mod costs {
+    /// Starting budget in dollars
+    pub const STARTING_BUDGET: f64 = 150_000_000.0;
+
+    /// Cost per engine by type (in dollars)
+    pub const KEROLOX_ENGINE_COST: f64 = 10_000_000.0;
+    pub const HYDROLOX_ENGINE_COST: f64 = 15_000_000.0;
+
+    /// Cost per cubic meter of tank volume (in dollars)
+    /// Covers tank structure, insulation, plumbing, etc.
+    pub const TANK_COST_PER_M3: f64 = 100_000.0;
+
+    /// Fixed overhead cost per stage (in dollars)
+    /// Covers separation systems, avionics, structural integration
+    pub const STAGE_OVERHEAD_COST: f64 = 5_000_000.0;
+
+    /// Fixed overhead cost per rocket (in dollars)
+    /// Covers integration, testing, launch operations
+    pub const ROCKET_OVERHEAD_COST: f64 = 10_000_000.0;
+
+    /// Propellant densities in kg/m³
+    /// These are effective combined densities accounting for mixture ratios
+    ///
+    /// Kerolox (RP-1/LOX):
+    /// - RP-1: ~810 kg/m³
+    /// - LOX: ~1141 kg/m³
+    /// - Typical O:F ratio ~2.56:1 by mass
+    /// - Effective combined density: ~1020 kg/m³
+    pub const KEROLOX_DENSITY_KG_M3: f64 = 1020.0;
+
+    /// Hydrolox (LH2/LOX):
+    /// - LH2: ~71 kg/m³ (extremely low density)
+    /// - LOX: ~1141 kg/m³
+    /// - Typical O:F ratio ~6:1 by mass
+    /// - Effective combined density: ~290 kg/m³
+    pub const HYDROLOX_DENSITY_KG_M3: f64 = 290.0;
+
+    /// Tank structural mass as a fraction of propellant mass
+    /// This accounts for tank walls, stringers, insulation, plumbing, etc.
+    /// Real rockets range from 5-12% depending on propellant type and technology
+    /// - Kerolox tanks: typically ~5-7% (denser propellant, smaller tanks)
+    /// - Hydrolox tanks: typically ~8-12% (larger tanks for low-density LH2, insulation)
+    /// We use a single value for simplicity; could be per-propellant-type later
+    pub const TANK_STRUCTURAL_MASS_RATIO: f64 = 0.08;
+}
+
 impl EngineType {
     /// Returns all available engine types
     pub fn all() -> Vec<EngineType> {
@@ -30,6 +77,22 @@ impl EngineType {
         }
     }
 
+    /// Get the cost per engine for this type in dollars
+    pub fn engine_cost(&self) -> f64 {
+        match self {
+            EngineType::Hydrolox => costs::HYDROLOX_ENGINE_COST,
+            EngineType::Kerolox => costs::KEROLOX_ENGINE_COST,
+        }
+    }
+
+    /// Get the propellant density for this engine type in kg/m³
+    pub fn propellant_density(&self) -> f64 {
+        match self {
+            EngineType::Hydrolox => costs::HYDROLOX_DENSITY_KG_M3,
+            EngineType::Kerolox => costs::KEROLOX_DENSITY_KG_M3,
+        }
+    }
+
     /// Get the specification for this engine type
     pub fn spec(&self) -> EngineSpec {
         match self {
@@ -44,20 +107,20 @@ impl EngineType {
                 revision: 1,
                 production_count: 0,
                 required_tech_level: 0,
-                base_cost: 0.0, // Not implemented yet
+                base_cost: costs::HYDROLOX_ENGINE_COST,
             },
             EngineType::Kerolox => EngineSpec {
                 engine_type: *self,
                 name: "Kerolox".to_string(),
                 mass_kg: 450.0,
-                thrust_kn: 1000.0,
+                thrust_kn: 500.0,  // Reduced from 1000 kN
                 exhaust_velocity_ms: 3000.0,
                 failure_rate: 0.007, // 0.7%
                 // Future-proofing fields
                 revision: 1,
                 production_count: 0,
                 required_tech_level: 0,
-                base_cost: 0.0,
+                base_cost: costs::KEROLOX_ENGINE_COST,
             },
         }
     }
@@ -150,7 +213,7 @@ mod tests {
     fn test_kerolox_spec() {
         let spec = EngineType::Kerolox.spec();
         assert_eq!(spec.mass_kg, 450.0);
-        assert_eq!(spec.thrust_kn, 1000.0);
+        assert_eq!(spec.thrust_kn, 500.0);
         assert_eq!(spec.exhaust_velocity_ms, 3000.0);
         assert_eq!(spec.failure_rate, 0.007);
     }
@@ -172,7 +235,7 @@ mod tests {
     #[test]
     fn test_total_thrust() {
         let spec = EngineType::Kerolox.spec();
-        assert_eq!(spec.total_thrust_kn(3), 3000.0);
+        assert_eq!(spec.total_thrust_kn(3), 1500.0); // 3 × 500 kN
     }
 
     #[test]
