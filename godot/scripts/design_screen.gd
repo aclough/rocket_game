@@ -67,7 +67,7 @@ func _setup_engine_cards():
 func _create_engine_card(engine_type: int) -> Control:
 	# Use a Control as container so we can implement _get_drag_data via script
 	var container = Control.new()
-	container.custom_minimum_size = Vector2(200, 120)
+	container.custom_minimum_size = Vector2(200, 160)  # Increased height for all content
 	container.set_meta("engine_type", engine_type)
 
 	var panel = PanelContainer.new()
@@ -185,6 +185,10 @@ func _update_stage_values_only():
 			if card_data.has("prop_label"):
 				var prop_mass = designer.get_stage_propellant_mass(stage_index)
 				card_data["prop_label"].text = "Propellant: %.0f kg" % prop_mass
+			# Update dry mass label
+			if card_data.has("dry_label"):
+				var dry_mass = designer.get_stage_dry_mass(stage_index)
+				card_data["dry_label"].text = "Dry: %.0f kg" % dry_mass
 			# Update cost label
 			if card_data.has("cost_label"):
 				var stage_cost = designer.get_stage_cost(stage_index)
@@ -377,7 +381,7 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 	frac_value_label.custom_minimum_size = Vector2(50, 0)
 	slider_hbox.add_child(frac_value_label)
 
-	# Stage info row (propellant and cost)
+	# Stage info row (propellant, dry mass, and cost)
 	var info_hbox = HBoxContainer.new()
 	info_hbox.add_theme_constant_override("separation", 20)
 	vbox.add_child(info_hbox)
@@ -388,6 +392,14 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 	prop_label.add_theme_font_size_override("font_size", 12)
 	prop_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	info_hbox.add_child(prop_label)
+
+	# Dry mass (engines + tank structure)
+	var dry_mass = designer.get_stage_dry_mass(stage_index)
+	var dry_label = Label.new()
+	dry_label.text = "Dry: %.0f kg" % dry_mass
+	dry_label.add_theme_font_size_override("font_size", 12)
+	dry_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	info_hbox.add_child(dry_label)
 
 	# Stage cost
 	var stage_cost = designer.get_stage_cost(stage_index)
@@ -403,6 +415,7 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 		"dv_label": dv_label_stage,
 		"twr_label": twr_label,
 		"prop_label": prop_label,
+		"dry_label": dry_label,
 		"cost_label": cost_label_stage,
 		"frac_label": frac_value_label,
 		"slider": slider
