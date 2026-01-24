@@ -28,10 +28,15 @@ extends Control
 var design_screen: Control = null
 var design_screen_scene = preload("res://scenes/design_screen.tscn")
 
+# Testing screen (loaded dynamically)
+var testing_screen: Control = null
+var testing_screen_scene = preload("res://scenes/testing_screen.tscn")
+
 # State tracking
 var attempt_count = 0
 var success_count = 0
 var has_custom_design = false
+var last_launch_success = false
 
 func _ready():
 	# Initial UI state
@@ -44,7 +49,15 @@ func _on_design_button_pressed():
 	show_design_screen()
 
 func _on_try_again_button_pressed():
-	reset_ui()
+	if last_launch_success:
+		# Success - go back to main menu
+		reset_ui()
+	else:
+		# Failure - go back to testing screen to fix issues
+		result_panel.visible = false
+		if rocket_sprite:
+			rocket_sprite.reset()
+		show_testing_screen()
 
 func show_design_screen():
 	# Create design screen if not exists
@@ -52,6 +65,8 @@ func show_design_screen():
 		design_screen = design_screen_scene.instantiate()
 		design_screen.launch_requested.connect(_on_design_launch_requested)
 		design_screen.back_requested.connect(_on_design_back_requested)
+		if design_screen.has_signal("testing_requested"):
+			design_screen.testing_requested.connect(_on_design_testing_requested)
 		add_child(design_screen)
 
 	# Hide main content
@@ -69,22 +84,76 @@ func hide_design_screen():
 	main_content.visible = true
 	rocket_visual.visible = true
 
+func show_testing_screen():
+	# Ensure design screen exists to get the designer
+	if design_screen == null:
+		design_screen = design_screen_scene.instantiate()
+		design_screen.launch_requested.connect(_on_design_launch_requested)
+		design_screen.back_requested.connect(_on_design_back_requested)
+		design_screen.testing_requested.connect(_on_design_testing_requested)
+		add_child(design_screen)
+		design_screen.visible = false
+
+	# Create testing screen if not exists
+	if testing_screen == null:
+		testing_screen = testing_screen_scene.instantiate()
+		testing_screen.launch_requested.connect(_on_testing_launch_requested)
+		testing_screen.back_requested.connect(_on_testing_back_requested)
+		add_child(testing_screen)
+
+	# Pass the designer to the testing screen
+	var designer = design_screen.get_designer()
+	testing_screen.set_designer(designer)
+
+	# Hide main content and design screen
+	main_content.visible = false
+	rocket_visual.visible = false
+	if design_screen:
+		design_screen.visible = false
+
+	# Show testing screen
+	testing_screen.visible = true
+
+func hide_testing_screen():
+	if testing_screen:
+		testing_screen.visible = false
+
+	# Show main content
+	main_content.visible = true
+	rocket_visual.visible = true
+
 func _on_design_launch_requested():
+	# Go to testing screen instead of launching directly
+	_on_design_testing_requested()
+
+func _on_design_testing_requested():
+	# Hide design screen and show testing screen
+	if design_screen:
+		design_screen.visible = false
+
+	show_testing_screen()
+
+func _on_design_back_requested():
+	hide_design_screen()
+	reset_ui()
+
+func _on_testing_launch_requested():
 	# Copy design from designer to launcher
 	if design_screen:
 		var designer = design_screen.get_designer()
 		launcher.copy_design_from(designer)
 		has_custom_design = true
 
-	# Hide design screen
-	hide_design_screen()
+	# Hide testing screen
+	hide_testing_screen()
 
 	# Start the launch
 	start_launch()
 
-func _on_design_back_requested():
-	hide_design_screen()
-	reset_ui()
+func _on_testing_back_requested():
+	# Go back to design screen
+	hide_testing_screen()
+	show_design_screen()
 
 func start_launch():
 	# Update state
@@ -145,7 +214,8 @@ func run_launch_with_delays():
 	# Go through each stage with delays
 	for i in range(stage_count):
 		var stage_name = launcher.get_stage_description(i)
-		var failure_rate = launcher.get_stage_failure_rate(i)
+		# Use total failure rate which includes flaw contributions
+		var failure_rate = launcher.get_total_failure_rate(i)
 
 		# Show this stage as in progress first
 		var label = Label.new()
@@ -196,6 +266,7 @@ func run_launch_with_delays():
 			await get_tree().create_timer(1.2).timeout
 
 	# Update state
+	last_launch_success = success
 	if success:
 		success_count += 1
 
@@ -208,7 +279,9 @@ func run_launch_with_delays():
 		result_label.text = "SUCCESS!"
 		result_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
 		message_label.text = "Rocket reached Low Earth Orbit!"
+		try_again_button.text = "CONTINUE"
 	else:
 		result_label.text = "FAILURE"
 		result_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
 		message_label.text = "Failure during " + failed_stage_name + ". Rocket lost."
+		try_again_button.text = "BACK TO TESTING"

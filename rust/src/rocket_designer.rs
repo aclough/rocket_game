@@ -703,6 +703,202 @@ impl RocketDesigner {
     }
 
     // ==========================================
+    // Flaw System
+    // ==========================================
+
+    /// Ensure flaws are generated for this design
+    /// Call this before testing or launching
+    #[func]
+    pub fn ensure_flaws_generated(&mut self) {
+        self.design.generate_flaws();
+    }
+
+    /// Check if flaws have been generated
+    #[func]
+    pub fn has_flaws_generated(&self) -> bool {
+        self.design.has_flaws_generated()
+    }
+
+    /// Get the total number of flaws
+    #[func]
+    pub fn get_flaw_count(&self) -> i32 {
+        self.design.get_flaw_count() as i32
+    }
+
+    /// Get the number of discovered flaws
+    #[func]
+    pub fn get_discovered_flaw_count(&self) -> i32 {
+        self.design.get_discovered_flaw_count() as i32
+    }
+
+    /// Get the number of fixed flaws
+    #[func]
+    pub fn get_fixed_flaw_count(&self) -> i32 {
+        self.design.get_fixed_flaw_count() as i32
+    }
+
+    /// Get the number of unknown (undiscovered, unfixed) flaws
+    #[func]
+    pub fn get_unknown_flaw_count(&self) -> i32 {
+        self.design.get_unknown_flaw_count() as i32
+    }
+
+    /// Get the name of a flaw by index
+    #[func]
+    pub fn get_flaw_name(&self, index: i32) -> GString {
+        if index < 0 {
+            return GString::from("");
+        }
+        match self.design.get_flaw(index as usize) {
+            Some(flaw) => GString::from(flaw.name.as_str()),
+            None => GString::from(""),
+        }
+    }
+
+    /// Get the description of a flaw by index
+    #[func]
+    pub fn get_flaw_description(&self, index: i32) -> GString {
+        if index < 0 {
+            return GString::from("");
+        }
+        match self.design.get_flaw(index as usize) {
+            Some(flaw) => GString::from(flaw.description.as_str()),
+            None => GString::from(""),
+        }
+    }
+
+    /// Check if a flaw is discovered
+    #[func]
+    pub fn is_flaw_discovered(&self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        match self.design.get_flaw(index as usize) {
+            Some(flaw) => flaw.discovered,
+            None => false,
+        }
+    }
+
+    /// Check if a flaw is fixed
+    #[func]
+    pub fn is_flaw_fixed(&self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        match self.design.get_flaw(index as usize) {
+            Some(flaw) => flaw.fixed,
+            None => false,
+        }
+    }
+
+    /// Check if a flaw is an engine type (vs design type)
+    #[func]
+    pub fn is_flaw_engine_type(&self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        match self.design.get_flaw(index as usize) {
+            Some(flaw) => flaw.flaw_type == crate::flaw::FlawType::Engine,
+            None => false,
+        }
+    }
+
+    /// Run an engine test - returns array of discovered flaw names
+    #[func]
+    pub fn run_engine_test(&mut self) -> Array<GString> {
+        let discovered = self.design.run_engine_test();
+        let mut result = Array::new();
+        for name in discovered {
+            result.push(&GString::from(name.as_str()));
+        }
+        self.emit_design_changed();
+        result
+    }
+
+    /// Run a rocket test - returns array of discovered flaw names
+    #[func]
+    pub fn run_rocket_test(&mut self) -> Array<GString> {
+        let discovered = self.design.run_rocket_test();
+        let mut result = Array::new();
+        for name in discovered {
+            result.push(&GString::from(name.as_str()));
+        }
+        self.emit_design_changed();
+        result
+    }
+
+    /// Fix a flaw by index - returns true if successful
+    #[func]
+    pub fn fix_flaw(&mut self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let result = self.design.fix_flaw_by_index(index as usize);
+        if result {
+            self.emit_design_changed();
+        }
+        result
+    }
+
+    /// Get the cost of an engine test
+    #[func]
+    pub fn get_engine_test_cost(&self) -> f64 {
+        RocketDesign::engine_test_cost()
+    }
+
+    /// Get the cost of a rocket test
+    #[func]
+    pub fn get_rocket_test_cost(&self) -> f64 {
+        RocketDesign::rocket_test_cost()
+    }
+
+    /// Get the cost to fix a flaw
+    #[func]
+    pub fn get_flaw_fix_cost(&self) -> f64 {
+        RocketDesign::flaw_fix_cost()
+    }
+
+    /// Check if we can afford an engine test
+    #[func]
+    pub fn can_afford_engine_test(&self) -> bool {
+        self.design.can_afford_engine_test()
+    }
+
+    /// Check if we can afford a rocket test
+    #[func]
+    pub fn can_afford_rocket_test(&self) -> bool {
+        self.design.can_afford_rocket_test()
+    }
+
+    /// Check if we can afford to fix a flaw
+    #[func]
+    pub fn can_afford_fix(&self) -> bool {
+        self.design.can_afford_fix()
+    }
+
+    /// Get the estimated success rate including flaws
+    #[func]
+    pub fn get_estimated_success_rate(&self) -> f64 {
+        self.design.estimate_success_rate_with_flaws()
+    }
+
+    /// Get the estimated range of unknown flaws (min, max)
+    #[func]
+    pub fn get_estimated_unknown_flaw_range(&self) -> Array<i32> {
+        let (min, max) = self.design.estimate_unknown_flaws();
+        let mut result = Array::new();
+        result.push(min as i32);
+        result.push(max as i32);
+        result
+    }
+
+    /// Get total testing spent
+    #[func]
+    pub fn get_testing_spent(&self) -> f64 {
+        self.design.get_testing_spent()
+    }
+
+    // ==========================================
     // Signals
     // ==========================================
 

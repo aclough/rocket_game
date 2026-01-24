@@ -1,4 +1,5 @@
 use crate::engine::{costs, EngineType};
+use crate::flaw::{calculate_flaw_failure_rate, estimate_success_rate, estimate_unknown_flaw_count, run_test, Flaw, FlawGenerator, FlawType};
 use crate::stage::RocketStage;
 
 /// Represents a group of stages that fire simultaneously
@@ -66,6 +67,15 @@ pub struct RocketDesign {
     pub name: String,
     /// Number of times this design has been launched (for reliability progression)
     pub launch_count: u32,
+
+    // Flaw system fields
+
+    /// Hidden flaws in this rocket design
+    pub flaws: Vec<Flaw>,
+    /// Whether flaws have been generated for this design
+    pub flaws_generated: bool,
+    /// Budget spent on testing and fixing (deducted from remaining budget)
+    pub testing_spent: f64,
 }
 
 impl RocketDesign {
@@ -76,6 +86,9 @@ impl RocketDesign {
             payload_mass_kg: DEFAULT_PAYLOAD_KG,
             name: "Unnamed Rocket".to_string(),
             launch_count: 0,
+            flaws: Vec::new(),
+            flaws_generated: false,
+            testing_spent: 0.0,
         }
     }
 
@@ -757,19 +770,203 @@ impl RocketDesign {
         self.total_stages_cost() + self.rocket_overhead_cost()
     }
 
-    /// Calculate remaining budget after subtracting rocket cost
+    /// Calculate remaining budget after subtracting rocket cost and testing expenses
     pub fn remaining_budget(&self) -> f64 {
-        costs::STARTING_BUDGET - self.total_cost()
+        costs::STARTING_BUDGET - self.total_cost() - self.testing_spent
     }
 
-    /// Check if the design is within budget
+    /// Check if the design is within budget (including testing expenses)
     pub fn is_within_budget(&self) -> bool {
-        self.total_cost() <= costs::STARTING_BUDGET
+        self.total_cost() + self.testing_spent <= costs::STARTING_BUDGET
     }
 
     /// Check if the design is both sufficient (delta-v) and affordable (budget)
     pub fn is_launchable(&self) -> bool {
         self.is_sufficient() && self.is_within_budget()
+    }
+
+    // ==========================================
+    // Flaw System
+    // ==========================================
+
+    /// Get the cost to run an engine test
+    pub fn engine_test_cost() -> f64 {
+        costs::ENGINE_TEST_COST
+    }
+
+    /// Get the cost to run a rocket test
+    pub fn rocket_test_cost() -> f64 {
+        costs::ROCKET_TEST_COST
+    }
+
+    /// Get the cost to fix a discovered flaw
+    pub fn flaw_fix_cost() -> f64 {
+        costs::FLAW_FIX_COST
+    }
+
+    /// Generate flaws for this rocket design
+    /// Should be called when the design is finalized (before testing/launching)
+    pub fn generate_flaws(&mut self) {
+        if self.flaws_generated {
+            return;
+        }
+
+        let total_engines: u32 = self.stages.iter().map(|s| s.engine_count).sum();
+        let stage_count = self.stages.len();
+
+        if total_engines == 0 || stage_count == 0 {
+            return;
+        }
+
+        let mut generator = FlawGenerator::new();
+        self.flaws = generator.generate_flaws(total_engines, stage_count);
+        self.flaws_generated = true;
+    }
+
+    /// Check if flaws have been generated
+    pub fn has_flaws_generated(&self) -> bool {
+        self.flaws_generated
+    }
+
+    /// Get all flaws
+    pub fn get_flaws(&self) -> &[Flaw] {
+        &self.flaws
+    }
+
+    /// Get the total number of flaws
+    pub fn get_flaw_count(&self) -> usize {
+        self.flaws.len()
+    }
+
+    /// Get the number of discovered flaws
+    pub fn get_discovered_flaw_count(&self) -> usize {
+        self.flaws.iter().filter(|f| f.discovered).count()
+    }
+
+    /// Get the number of fixed flaws
+    pub fn get_fixed_flaw_count(&self) -> usize {
+        self.flaws.iter().filter(|f| f.fixed).count()
+    }
+
+    /// Get the number of undiscovered, unfixed flaws (unknown issues)
+    pub fn get_unknown_flaw_count(&self) -> usize {
+        self.flaws.iter().filter(|f| !f.discovered && !f.fixed).count()
+    }
+
+    /// Get a flaw by index
+    pub fn get_flaw(&self, index: usize) -> Option<&Flaw> {
+        self.flaws.get(index)
+    }
+
+    /// Get a mutable flaw by index
+    pub fn get_flaw_mut(&mut self, index: usize) -> Option<&mut Flaw> {
+        self.flaws.get_mut(index)
+    }
+
+    /// Run an engine test - returns names of newly discovered flaws
+    /// Costs ENGINE_TEST_COST from budget
+    pub fn run_engine_test(&mut self) -> Vec<String> {
+        if self.remaining_budget() < costs::ENGINE_TEST_COST {
+            return Vec::new();
+        }
+
+        self.testing_spent += costs::ENGINE_TEST_COST;
+        run_test(&mut self.flaws, FlawType::Engine)
+    }
+
+    /// Run a rocket test - returns names of newly discovered flaws
+    /// Costs ROCKET_TEST_COST from budget
+    pub fn run_rocket_test(&mut self) -> Vec<String> {
+        if self.remaining_budget() < costs::ROCKET_TEST_COST {
+            return Vec::new();
+        }
+
+        self.testing_spent += costs::ROCKET_TEST_COST;
+        run_test(&mut self.flaws, FlawType::Design)
+    }
+
+    /// Fix a flaw by ID
+    /// Costs FLAW_FIX_COST from budget
+    /// Returns true if the flaw was fixed
+    pub fn fix_flaw(&mut self, flaw_id: u32) -> bool {
+        if self.remaining_budget() < costs::FLAW_FIX_COST {
+            return false;
+        }
+
+        for flaw in &mut self.flaws {
+            if flaw.id == flaw_id && flaw.discovered && !flaw.fixed {
+                flaw.fixed = true;
+                self.testing_spent += costs::FLAW_FIX_COST;
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Fix a flaw by index
+    /// Costs FLAW_FIX_COST from budget
+    /// Returns true if the flaw was fixed
+    pub fn fix_flaw_by_index(&mut self, index: usize) -> bool {
+        if self.remaining_budget() < costs::FLAW_FIX_COST {
+            return false;
+        }
+
+        if let Some(flaw) = self.flaws.get_mut(index) {
+            if flaw.discovered && !flaw.fixed {
+                flaw.fixed = true;
+                self.testing_spent += costs::FLAW_FIX_COST;
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Get the additional failure rate from flaws for a given event
+    pub fn get_flaw_failure_contribution(&self, event_name: &str) -> f64 {
+        calculate_flaw_failure_rate(&self.flaws, event_name)
+    }
+
+    /// Estimate success rate including flaw contributions
+    pub fn estimate_success_rate_with_flaws(&self) -> f64 {
+        let base_success = self.mission_success_probability();
+        estimate_success_rate(&self.flaws, base_success)
+    }
+
+    /// Get estimated range of unknown flaw count (fuzzy, not exact)
+    pub fn estimate_unknown_flaws(&self) -> (usize, usize) {
+        estimate_unknown_flaw_count(&self.flaws)
+    }
+
+    /// Check if a flaw can be afforded
+    pub fn can_afford_fix(&self) -> bool {
+        self.remaining_budget() >= costs::FLAW_FIX_COST
+    }
+
+    /// Check if an engine test can be afforded
+    pub fn can_afford_engine_test(&self) -> bool {
+        self.remaining_budget() >= costs::ENGINE_TEST_COST
+    }
+
+    /// Check if a rocket test can be afforded
+    pub fn can_afford_rocket_test(&self) -> bool {
+        self.remaining_budget() >= costs::ROCKET_TEST_COST
+    }
+
+    /// Mark a flaw as discovered (used when failure occurs during launch)
+    pub fn discover_flaw(&mut self, flaw_id: u32) {
+        for flaw in &mut self.flaws {
+            if flaw.id == flaw_id {
+                flaw.discovered = true;
+                break;
+            }
+        }
+    }
+
+    /// Get total testing spent
+    pub fn get_testing_spent(&self) -> f64 {
+        self.testing_spent
     }
 }
 
@@ -1464,7 +1661,7 @@ mod tests {
 
     #[test]
     fn test_starting_budget() {
-        assert_eq!(RocketDesign::starting_budget(), 150_000_000.0);
+        assert_eq!(RocketDesign::starting_budget(), 500_000_000.0);
     }
 
     #[test]
@@ -1502,7 +1699,7 @@ mod tests {
         let remaining = design.remaining_budget();
         let cost = design.total_cost();
 
-        assert_eq!(remaining + cost, 150_000_000.0);
+        assert_eq!(remaining + cost, 500_000_000.0);
         assert!(remaining > 0.0, "Default design should have remaining budget");
     }
 
@@ -1510,12 +1707,13 @@ mod tests {
     fn test_over_budget_detection() {
         let mut design = RocketDesign::new();
 
-        // Add 10 expensive Hydrolox engines (10 × $15M = $150M engine cost alone)
+        // Add 35 expensive Hydrolox engines (35 × $15M = $525M engine cost alone)
+        // This should exceed the $500M budget
         design.add_stage(EngineType::Hydrolox);
-        design.stages[0].engine_count = 10;
+        design.stages[0].engine_count = 35;
 
         assert!(!design.is_within_budget(),
-            "10 Hydrolox engines should exceed budget");
+            "35 Hydrolox engines should exceed budget");
         assert!(design.remaining_budget() < 0.0,
             "Remaining budget should be negative");
     }

@@ -1,6 +1,7 @@
 use godot::prelude::*;
 
 pub mod engine;
+pub mod flaw;
 pub mod launcher;
 pub mod rocket_design;
 pub mod stage;

@@ -10,7 +10,16 @@ pub enum EngineType {
 /// Cost constants for rocket budget system
 pub mod costs {
     /// Starting budget in dollars
-    pub const STARTING_BUDGET: f64 = 150_000_000.0;
+    pub const STARTING_BUDGET: f64 = 500_000_000.0;
+
+    /// Cost per engine test in dollars
+    pub const ENGINE_TEST_COST: f64 = 5_000_000.0;
+
+    /// Cost per rocket test in dollars
+    pub const ROCKET_TEST_COST: f64 = 5_000_000.0;
+
+    /// Cost to fix a discovered flaw in dollars
+    pub const FLAW_FIX_COST: f64 = 5_000_000.0;
 
     /// Cost per engine by type (in dollars)
     pub const KEROLOX_ENGINE_COST: f64 = 10_000_000.0;

@@ -2,6 +2,7 @@ extends Control
 
 signal launch_requested
 signal back_requested
+signal testing_requested
 
 # Designer node reference
 @onready var designer: RocketDesigner = $RocketDesigner
@@ -598,7 +599,8 @@ func _update_launch_button():
 	launch_button.disabled = not designer.is_launchable()
 
 func _on_launch_button_pressed():
-	launch_requested.emit()
+	# Go to testing screen instead of launching directly
+	testing_requested.emit()
 
 func _on_back_button_pressed():
 	back_requested.emit()
