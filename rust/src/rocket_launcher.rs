@@ -116,10 +116,12 @@ impl RocketLauncher {
 
             let engine_type =
                 EngineType::from_index(engine_type_idx).unwrap_or(EngineType::Kerolox);
+            let is_booster = designer_ref.is_stage_booster(i);
 
             let mut stage = RocketStage::new(engine_type);
             stage.engine_count = engine_count.max(1) as u32;
             stage.propellant_mass_kg = propellant_mass.max(0.0);
+            stage.is_booster = is_booster;
 
             design.stages.push(stage);
         }

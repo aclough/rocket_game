@@ -52,6 +52,14 @@ pub mod costs {
     /// - Hydrolox tanks: typically ~8-12% (larger tanks for low-density LH2, insulation)
     /// We use a single value for simplicity; could be per-propellant-type later
     pub const TANK_STRUCTURAL_MASS_RATIO: f64 = 0.08;
+
+    /// Structural mass for booster attachment points in kg
+    /// Covers radial decouplers, structural adapters, and crossfeed plumbing
+    pub const BOOSTER_ATTACHMENT_MASS_KG: f64 = 500.0;
+
+    /// Cost for booster attachment hardware in dollars
+    /// Covers radial decouplers, structural integration, and separation systems
+    pub const BOOSTER_ATTACHMENT_COST: f64 = 1_000_000.0;
 }
 
 impl EngineType {

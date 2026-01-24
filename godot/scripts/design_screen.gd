@@ -234,13 +234,24 @@ func _create_drop_zone_label() -> Control:
 	return container
 
 func _create_stage_card(stage_index: int) -> PanelContainer:
+	var is_booster = designer.is_stage_booster(stage_index)
+
 	var panel = PanelContainer.new()
 	panel.custom_minimum_size = Vector2(0, 140)
 	panel.set_meta("stage_index", stage_index)
 	panel.set_meta("is_stage_card", true)
 
+	# Visual styling for boosters - indent and add a tint
+	if is_booster:
+		var style = StyleBoxFlat.new()
+		style.set_bg_color(Color(0.15, 0.12, 0.08))  # Slight orange/brown tint
+		style.set_border_width_all(1)
+		style.set_border_color(Color(1.0, 0.8, 0.2, 0.5))  # Orange border
+		style.content_margin_left = 25  # Indent booster cards
+		panel.add_theme_stylebox_override("panel", style)
+
 	var margin = MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 15)
+	margin.add_theme_constant_override("margin_left", 15 if not is_booster else 25)
 	margin.add_theme_constant_override("margin_right", 15)
 	margin.add_theme_constant_override("margin_top", 10)
 	margin.add_theme_constant_override("margin_bottom", 10)
@@ -270,12 +281,43 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 	move_down_btn.pressed.connect(_on_move_stage_down_pressed.bind(stage_index))
 	header_hbox.add_child(move_down_btn)
 
+	# OUT button (make parallel/booster)
+	var out_btn = Button.new()
+	out_btn.text = "⇥" if not is_booster else "⇤"
+	out_btn.custom_minimum_size = Vector2(30, 30)
+	out_btn.tooltip_text = "Remove from parallel" if is_booster else "Make parallel with stage below (booster)"
+	out_btn.pressed.connect(_on_toggle_booster_pressed.bind(stage_index))
+	# Can only make a booster if not the first stage
+	out_btn.visible = stage_index > 0
+	# Highlight button if this is a booster
+	if is_booster:
+		out_btn.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
+	header_hbox.add_child(out_btn)
+
 	var engine_type = designer.get_stage_engine_type(stage_index)
 	var engine_name = designer.get_engine_name(engine_type)
-	var stage_num = stage_index + 1
+
+	# Calculate actual stage number (only counting non-booster stages)
+	var stage_num = 0
+	for i in range(stage_index + 1):
+		if not designer.is_stage_booster(i):
+			stage_num += 1
 
 	var title_label = Label.new()
-	title_label.text = " Stage %d: %s" % [stage_num, engine_name]
+	if is_booster:
+		# Find the core stage this booster is attached to
+		var core_index = stage_index - 1
+		while core_index > 0 and designer.is_stage_booster(core_index):
+			core_index -= 1
+		# Calculate the core's stage number
+		var core_stage_num = 0
+		for i in range(core_index + 1):
+			if not designer.is_stage_booster(i):
+				core_stage_num += 1
+		title_label.text = " Stage %d Booster: %s" % [core_stage_num, engine_name]
+		title_label.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
+	else:
+		title_label.text = " Stage %d: %s" % [stage_num, engine_name]
 	title_label.add_theme_font_size_override("font_size", 16)
 	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header_hbox.add_child(title_label)
@@ -323,15 +365,21 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 	# TWR for this stage
 	var twr = designer.get_stage_twr(stage_index)
 	var twr_label = Label.new()
-	twr_label.text = "TWR: %.2f" % twr
 	twr_label.add_theme_font_size_override("font_size", 14)
-	# Color-code TWR: red if can't lift off, yellow if marginal, green if good
-	if twr < 1.0:
-		twr_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
-	elif twr < 1.2:
-		twr_label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.3))
+
+	if is_booster:
+		# Booster TWR is combined with core
+		twr_label.text = "(parallel)"
+		twr_label.add_theme_color_override("font_color", Color(0.7, 0.6, 0.4))
 	else:
-		twr_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+		twr_label.text = "TWR: %.2f" % twr
+		# Color-code TWR: red if can't lift off, yellow if marginal, green if good
+		if twr < 1.0:
+			twr_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+		elif twr < 1.2:
+			twr_label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.3))
+		else:
+			twr_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
 	engine_hbox.add_child(twr_label)
 
 	# Small spacer
@@ -344,12 +392,18 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 	var ideal_dv = designer.get_stage_delta_v(stage_index)
 	var gravity_loss = designer.get_stage_gravity_loss(stage_index)
 	var dv_label_stage = Label.new()
-	if gravity_loss > 0:
+	dv_label_stage.add_theme_font_size_override("font_size", 14)
+
+	if is_booster:
+		# Booster delta-v is combined with core
+		dv_label_stage.text = "(with core)"
+		dv_label_stage.add_theme_color_override("font_color", Color(0.7, 0.6, 0.4))
+	elif gravity_loss > 0:
 		dv_label_stage.text = "Δv: %.0f m/s (-%0.f)" % [effective_dv, gravity_loss]
+		dv_label_stage.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0))
 	else:
 		dv_label_stage.text = "Δv: %.0f m/s" % effective_dv
-	dv_label_stage.add_theme_font_size_override("font_size", 14)
-	dv_label_stage.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0))
+		dv_label_stage.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0))
 	engine_hbox.add_child(dv_label_stage)
 
 	# Mass fraction slider row
@@ -467,6 +521,32 @@ func _on_mass_fraction_changed(value: float, stage_index: int):
 		if card_data.get("stage_index") == stage_index and card_data.has("frac_label"):
 			card_data["frac_label"].text = "%.0f%%" % (value * 100)
 			break
+
+func _on_toggle_booster_pressed(stage_index: int):
+	var is_booster = designer.is_stage_booster(stage_index)
+	if is_booster:
+		# Remove booster status
+		designer.set_stage_booster(stage_index, false)
+	else:
+		# Check if can be booster
+		if designer.can_be_booster(stage_index):
+			designer.set_stage_booster(stage_index, true)
+		else:
+			# Show error message
+			var error = designer.get_booster_validation_error(stage_index)
+			_show_booster_error(error)
+
+func _show_booster_error(error: String):
+	# Create a simple popup to show the error
+	var popup = AcceptDialog.new()
+	popup.title = "Cannot Set Booster"
+	popup.dialog_text = error
+	popup.dialog_hide_on_ok = true
+	add_child(popup)
+	popup.popup_centered()
+	# Clean up popup when closed
+	popup.confirmed.connect(func(): popup.queue_free())
+	popup.canceled.connect(func(): popup.queue_free())
 
 func _update_dv_display():
 	var effective_dv = designer.get_total_effective_delta_v()

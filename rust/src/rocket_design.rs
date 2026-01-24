@@ -1,6 +1,16 @@
 use crate::engine::{costs, EngineType};
 use crate::stage::RocketStage;
 
+/// Represents a group of stages that fire simultaneously
+/// A core stage with zero or more boosters attached to it
+#[derive(Debug, Clone)]
+pub struct BoosterGroup {
+    /// Index of the core stage (the stage boosters are attached to)
+    pub core_stage_index: usize,
+    /// Indices of booster stages that fire with this core
+    pub booster_indices: Vec<usize>,
+}
+
 /// Mission constants for LEO insertion
 /// Note: This is the EFFECTIVE delta-v needed, accounting for gravity and drag losses
 pub const TARGET_DELTA_V_MS: f64 = 8100.0; // ~7800 orbital velocity + ~300 aerodynamic losses
@@ -114,31 +124,339 @@ impl RocketDesign {
         }
     }
 
+    // ==========================================
+    // Booster Management
+    // ==========================================
+
+    /// Find all booster groups in the design
+    /// A booster group consists of a core stage and all boosters attached to it
+    /// Boosters at index i are attached to the stage at index i-1 (the core)
+    pub fn find_booster_groups(&self) -> Vec<BoosterGroup> {
+        let mut groups = Vec::new();
+        let mut processed = vec![false; self.stages.len()];
+
+        for i in 0..self.stages.len() {
+            if processed[i] {
+                continue;
+            }
+
+            // Skip boosters - they'll be added to their core's group
+            if self.stages[i].is_booster {
+                continue;
+            }
+
+            // This is a core stage - find all boosters attached to it
+            let mut booster_indices = Vec::new();
+            // Boosters are at higher indices and marked as is_booster
+            // A booster at index j attaches to core at index j-1
+            for j in (i + 1)..self.stages.len() {
+                if self.stages[j].is_booster {
+                    // Check if this booster attaches to stage i
+                    // A booster at j attaches to j-1, but if j-1 is also a booster,
+                    // we need to trace back to the core
+                    let mut attach_point = j - 1;
+                    while attach_point > i && self.stages[attach_point].is_booster {
+                        attach_point -= 1;
+                    }
+                    if attach_point == i {
+                        booster_indices.push(j);
+                        processed[j] = true;
+                    }
+                } else {
+                    // Hit a non-booster stage, stop looking for boosters for this core
+                    break;
+                }
+            }
+
+            groups.push(BoosterGroup {
+                core_stage_index: i,
+                booster_indices,
+            });
+            processed[i] = true;
+        }
+
+        groups
+    }
+
+    /// Validate booster configuration
+    /// Returns Ok(()) if valid, or an error message if invalid
+    pub fn validate_boosters(&self) -> Result<(), String> {
+        for (i, stage) in self.stages.iter().enumerate() {
+            if stage.is_booster {
+                // Must not be first stage
+                if i == 0 {
+                    return Err("First stage cannot be a booster".to_string());
+                }
+
+                // Must have more than 1 engine
+                if stage.engine_count <= 1 {
+                    return Err(format!(
+                        "Booster stage {} must have more than 1 engine",
+                        i + 1
+                    ));
+                }
+
+                // Find the core stage this booster attaches to
+                let mut core_index = i - 1;
+                while core_index > 0 && self.stages[core_index].is_booster {
+                    core_index -= 1;
+                }
+
+                // Burn time must not exceed core stage burn time
+                let core_burn_time = self.stages[core_index].burn_time_seconds();
+                let booster_burn_time = stage.burn_time_seconds();
+                if booster_burn_time > core_burn_time {
+                    return Err(format!(
+                        "Booster stage {} burns longer ({:.1}s) than core stage {} ({:.1}s)",
+                        i + 1,
+                        booster_burn_time,
+                        core_index + 1,
+                        core_burn_time
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Get validation error for a specific stage being set as a booster
+    /// Returns None if valid, or an error message if invalid
+    pub fn get_booster_validation_error(&self, stage_index: usize) -> Option<String> {
+        if stage_index >= self.stages.len() {
+            return Some("Invalid stage index".to_string());
+        }
+
+        // Can't make first stage a booster
+        if stage_index == 0 {
+            return Some("First stage cannot be a booster".to_string());
+        }
+
+        let stage = &self.stages[stage_index];
+
+        // Must have more than 1 engine
+        if stage.engine_count <= 1 {
+            return Some("Booster must have more than 1 engine".to_string());
+        }
+
+        // Find the core stage
+        let mut core_index = stage_index - 1;
+        while core_index > 0 && self.stages[core_index].is_booster {
+            core_index -= 1;
+        }
+
+        // Check burn time
+        let core_burn_time = self.stages[core_index].burn_time_seconds();
+        let booster_burn_time = stage.burn_time_seconds();
+        if booster_burn_time > core_burn_time {
+            return Some(format!(
+                "Booster burns longer ({:.1}s) than core ({:.1}s)",
+                booster_burn_time, core_burn_time
+            ));
+        }
+
+        None
+    }
+
+    /// Check if a stage can be made a booster
+    pub fn can_be_booster(&self, stage_index: usize) -> bool {
+        self.get_booster_validation_error(stage_index).is_none()
+    }
+
+    /// Get combined thrust for a booster group in kN
+    pub fn booster_group_thrust_kn(&self, group: &BoosterGroup) -> f64 {
+        let mut total = self.stages[group.core_stage_index].total_thrust_kn();
+        for &bi in &group.booster_indices {
+            total += self.stages[bi].total_thrust_kn();
+        }
+        total
+    }
+
+    /// Get combined wet mass for a booster group in kg (includes payload above)
+    pub fn booster_group_wet_mass_kg(&self, group: &BoosterGroup, payload_above: f64) -> f64 {
+        let mut total = self.stages[group.core_stage_index].wet_mass_kg() + payload_above;
+        for &bi in &group.booster_indices {
+            total += self.stages[bi].wet_mass_with_attachment_kg();
+        }
+        total
+    }
+
+    /// Get combined initial TWR for a booster group
+    pub fn booster_group_initial_twr(&self, group: &BoosterGroup, payload_above: f64) -> f64 {
+        let thrust_n = self.booster_group_thrust_kn(group) * 1000.0;
+        let mass_kg = self.booster_group_wet_mass_kg(group, payload_above);
+        let weight_n = mass_kg * 9.81;
+
+        if weight_n > 0.0 {
+            thrust_n / weight_n
+        } else {
+            0.0
+        }
+    }
+
     /// Calculate the mass above a given stage (payload + all upper stages)
     /// Stage 0 is the bottom, so it carries the most mass
+    /// For boosters, this includes the booster attachment mass
     pub fn mass_above_stage(&self, stage_index: usize) -> f64 {
         let mut mass = self.payload_mass_kg;
 
         // Add mass of all stages above this one
         for i in (stage_index + 1)..self.stages.len() {
-            mass += self.stages[i].wet_mass_kg();
+            // Use wet mass with attachment for boosters
+            mass += self.stages[i].wet_mass_with_attachment_kg();
         }
 
         mass
     }
 
+    /// Calculate the mass above a given stage including any boosters attached to it
+    /// This is used when calculating the TWR/delta-v for a core stage with boosters
+    pub fn mass_above_stage_with_boosters(&self, stage_index: usize) -> f64 {
+        let mut mass = self.mass_above_stage(stage_index);
+
+        // If this is a core stage, also add any boosters attached to it
+        if !self.stages[stage_index].is_booster {
+            let groups = self.find_booster_groups();
+            for group in &groups {
+                if group.core_stage_index == stage_index {
+                    for &bi in &group.booster_indices {
+                        mass += self.stages[bi].wet_mass_with_attachment_kg();
+                    }
+                }
+            }
+        }
+
+        mass
+    }
+
+    /// Calculate delta-v for a core stage with boosters during parallel burn
+    /// Returns (phase1_dv, phase2_dv) where:
+    /// - phase1_dv is delta-v during combined burn (boosters + core)
+    /// - phase2_dv is delta-v during core-only burn (after boosters deplete)
+    pub fn calculate_parallel_stage_delta_v(&self, group: &BoosterGroup) -> (f64, f64) {
+        if group.booster_indices.is_empty() {
+            // No boosters, all delta-v comes from core alone
+            let payload = self.mass_above_stage(group.core_stage_index);
+            let dv = self.stages[group.core_stage_index].delta_v(payload);
+            return (0.0, dv);
+        }
+
+        let core = &self.stages[group.core_stage_index];
+        let payload_above = self.mass_above_stage(group.core_stage_index);
+
+        // Find shortest booster burn time (when first booster depletes)
+        let booster_burn_time = group
+            .booster_indices
+            .iter()
+            .map(|&bi| self.stages[bi].burn_time_seconds())
+            .fold(f64::INFINITY, f64::min);
+
+        let _core_burn_time = core.burn_time_seconds();
+
+        // Combined thrust during parallel burn
+        let combined_thrust_kn = self.booster_group_thrust_kn(group);
+        let _combined_thrust_n = combined_thrust_kn * 1000.0;
+
+        // Calculate thrust-weighted average exhaust velocity
+        let core_thrust_kn = core.total_thrust_kn();
+        let core_ve = core.exhaust_velocity_ms();
+        let mut weighted_ve = core_thrust_kn * core_ve;
+        let mut total_thrust = core_thrust_kn;
+
+        for &bi in &group.booster_indices {
+            let booster = &self.stages[bi];
+            weighted_ve += booster.total_thrust_kn() * booster.exhaust_velocity_ms();
+            total_thrust += booster.total_thrust_kn();
+        }
+        let effective_ve = weighted_ve / total_thrust;
+
+        // Initial mass (all stages + payload)
+        let mut m0 = core.wet_mass_kg() + payload_above;
+        for &bi in &group.booster_indices {
+            m0 += self.stages[bi].wet_mass_with_attachment_kg();
+        }
+
+        // Calculate propellant consumed during phase 1 (parallel burn)
+        // Mass flow rate = thrust / exhaust_velocity
+        let core_mass_flow = core.total_thrust_kn() * 1000.0 / core.exhaust_velocity_ms();
+        let mut total_mass_flow = core_mass_flow;
+        for &bi in &group.booster_indices {
+            let booster = &self.stages[bi];
+            total_mass_flow +=
+                booster.total_thrust_kn() * 1000.0 / booster.exhaust_velocity_ms();
+        }
+
+        // Propellant consumed during phase 1
+        let propellant_phase1 = total_mass_flow * booster_burn_time;
+
+        // Mass at end of phase 1 (boosters depleted, ready to jettison)
+        let m1 = m0 - propellant_phase1;
+
+        // Phase 1 delta-v (parallel burn)
+        let phase1_dv = if m1 > 0.0 && m0 > m1 {
+            effective_ve * (m0 / m1).ln()
+        } else {
+            0.0
+        };
+
+        // After booster jettison, core continues alone
+        // Mass after jettisoning boosters
+        let mut booster_dry_mass = 0.0;
+        for &bi in &group.booster_indices {
+            booster_dry_mass += self.stages[bi].dry_mass_with_attachment_kg();
+        }
+        let m2_start = m1 - booster_dry_mass;
+
+        // Remaining propellant in core
+        let core_propellant_used = core_mass_flow * booster_burn_time;
+        let core_propellant_remaining = core.propellant_mass_kg - core_propellant_used;
+
+        if core_propellant_remaining <= 0.0 || m2_start <= 0.0 {
+            return (phase1_dv, 0.0);
+        }
+
+        // Final mass after core burns out
+        let m2_end = m2_start - core_propellant_remaining;
+
+        // Phase 2 delta-v (core alone)
+        let phase2_dv = if m2_end > 0.0 && m2_start > m2_end {
+            core_ve * (m2_start / m2_end).ln()
+        } else {
+            0.0
+        };
+
+        (phase1_dv, phase2_dv)
+    }
+
     /// Calculate delta-v for a single stage
+    /// For boosters, returns 0 (their contribution is counted with the core stage)
+    /// For core stages with boosters, returns combined delta-v
     pub fn stage_delta_v(&self, stage_index: usize) -> f64 {
         if stage_index >= self.stages.len() {
             return 0.0;
         }
 
+        // Boosters don't contribute delta-v separately - counted with core
+        if self.stages[stage_index].is_booster {
+            return 0.0;
+        }
+
+        // Check if this core has boosters
+        let groups = self.find_booster_groups();
+        for group in &groups {
+            if group.core_stage_index == stage_index && !group.booster_indices.is_empty() {
+                let (phase1, phase2) = self.calculate_parallel_stage_delta_v(&group);
+                return phase1 + phase2;
+            }
+        }
+
+        // No boosters - normal calculation
         let payload = self.mass_above_stage(stage_index);
         self.stages[stage_index].delta_v(payload)
     }
 
     /// Calculate total delta-v for the entire rocket (ideal, no gravity losses)
     /// Stages fire from bottom (index 0) to top
+    /// Properly handles parallel stages (boosters)
     pub fn total_delta_v(&self) -> f64 {
         let mut total = 0.0;
         for i in 0..self.stages.len() {
@@ -157,32 +475,98 @@ impl RocketDesign {
     }
 
     /// Calculate the initial TWR for a stage (thrust / weight at ignition)
+    /// For core stages with boosters, returns combined TWR
+    /// For booster stages, returns 0 (their TWR is combined with core)
     pub fn stage_twr(&self, stage_index: usize) -> f64 {
         if stage_index >= self.stages.len() {
             return 0.0;
         }
+
+        // Boosters don't have separate TWR - counted with core
+        if self.stages[stage_index].is_booster {
+            return 0.0;
+        }
+
+        // Check if this core has boosters
+        let groups = self.find_booster_groups();
+        for group in &groups {
+            if group.core_stage_index == stage_index && !group.booster_indices.is_empty() {
+                let payload = self.mass_above_stage(stage_index);
+                return self.booster_group_initial_twr(&group, payload);
+            }
+        }
+
+        // No boosters - normal calculation
         let payload = self.mass_above_stage(stage_index);
         self.stages[stage_index].initial_twr(payload)
     }
 
+    /// Get the combined TWR during booster burn for a stage index
+    /// Returns None if this stage doesn't have boosters
+    pub fn get_combined_twr_during_boost(&self, stage_index: usize) -> Option<f64> {
+        if stage_index >= self.stages.len() {
+            return None;
+        }
+
+        if self.stages[stage_index].is_booster {
+            return None;
+        }
+
+        let groups = self.find_booster_groups();
+        for group in &groups {
+            if group.core_stage_index == stage_index && !group.booster_indices.is_empty() {
+                let payload = self.mass_above_stage(stage_index);
+                return Some(self.booster_group_initial_twr(&group, payload));
+            }
+        }
+
+        None
+    }
+
     /// Calculate the gravity loss for a single stage in m/s
+    /// For boosters, returns 0 (their loss is counted with core)
     pub fn stage_gravity_loss(&self, stage_index: usize) -> f64 {
         if stage_index >= self.stages.len() {
             return 0.0;
         }
-        let payload = self.mass_above_stage(stage_index);
-        let coefficient = self.stage_gravity_coefficient(stage_index);
-        self.stages[stage_index].gravity_loss(payload, coefficient)
+
+        // Boosters don't have separate gravity loss
+        if self.stages[stage_index].is_booster {
+            return 0.0;
+        }
+
+        // For stages with boosters, use combined TWR for gravity loss calculation
+        let ideal_dv = self.stage_delta_v(stage_index);
+        let effective_dv = self.stage_effective_delta_v(stage_index);
+        (ideal_dv - effective_dv).max(0.0)
     }
 
     /// Calculate the effective delta-v for a single stage (after gravity losses)
+    /// For boosters, returns 0 (their contribution is counted with core)
     pub fn stage_effective_delta_v(&self, stage_index: usize) -> f64 {
         if stage_index >= self.stages.len() {
             return 0.0;
         }
-        let payload = self.mass_above_stage(stage_index);
+
+        // Boosters don't contribute delta-v separately
+        if self.stages[stage_index].is_booster {
+            return 0.0;
+        }
+
+        let ideal_dv = self.stage_delta_v(stage_index);
+        let twr = self.stage_twr(stage_index);
         let coefficient = self.stage_gravity_coefficient(stage_index);
-        self.stages[stage_index].effective_delta_v(payload, coefficient)
+
+        // Use the same gravity loss formula but with combined TWR
+        if twr <= 0.0 {
+            return 0.0;
+        }
+
+        // Simplified gravity loss: dv_loss = C × dv × (1 - 1/R) / TWR
+        // But we need mass ratio R, which is more complex with boosters
+        // Use a simplified approximation based on the combined TWR
+        let gravity_loss = coefficient * ideal_dv / twr;
+        (ideal_dv - gravity_loss).max(0.0)
     }
 
     /// Calculate total effective delta-v for the entire rocket (after gravity losses)
@@ -277,11 +661,23 @@ impl RocketDesign {
     /// Calculate thrust-to-weight ratio at liftoff
     /// Must be > 1.0 for the rocket to lift off
     /// Typically want 1.2-1.5 for a real rocket
+    /// Includes boosters if the first stage has them
     pub fn liftoff_twr(&self) -> f64 {
         if self.stages.is_empty() {
             return 0.0;
         }
 
+        // Check if first stage has boosters
+        let groups = self.find_booster_groups();
+        for group in &groups {
+            if group.core_stage_index == 0 && !group.booster_indices.is_empty() {
+                let thrust_n = self.booster_group_thrust_kn(&group) * 1000.0;
+                let weight_n = self.total_wet_mass_kg() * 9.81;
+                return thrust_n / weight_n;
+            }
+        }
+
+        // No boosters on first stage
         let first_stage = &self.stages[0];
         let thrust_n = first_stage.total_thrust_kn() * 1000.0; // kN to N
         let weight_n = self.total_wet_mass_kg() * 9.81; // kg to N (Earth gravity)
@@ -331,16 +727,18 @@ impl RocketDesign {
     }
 
     /// Calculate the cost of a single stage in dollars
+    /// Includes booster attachment cost if the stage is a booster
     pub fn stage_cost(&self, stage_index: usize) -> f64 {
         if stage_index >= self.stages.len() {
             return 0.0;
         }
-        self.stages[stage_index].total_cost()
+        self.stages[stage_index].total_cost_with_attachment()
     }
 
     /// Calculate the total cost of all stages in dollars
+    /// Includes booster attachment costs for boosters
     pub fn total_stages_cost(&self) -> f64 {
-        self.stages.iter().map(|s| s.total_cost()).sum()
+        self.stages.iter().map(|s| s.total_cost_with_attachment()).sum()
     }
 
     /// Calculate the rocket overhead cost in dollars
@@ -397,29 +795,67 @@ pub struct LaunchEvent {
 impl RocketDesign {
     /// Generate the sequence of launch events based on the rocket design
     ///
-    /// First stage: Ignition → Liftoff → MaxQ → Separation
-    /// Middle stages: Ignition → Separation
+    /// First stage: Ignition → Liftoff → MaxQ → [Booster Separation] → Separation
+    /// Middle stages: Ignition → [Booster Separation] → Separation
     /// Last stage: Ignition → Orbital Insertion
+    /// Boosters separate before their core stage separates
     pub fn generate_launch_events(&self) -> Vec<LaunchEvent> {
         let mut events = Vec::new();
 
+        // Find booster groups so we know which boosters belong to which core
+        let groups = self.find_booster_groups();
+
+        // Track stage number (only counting non-booster stages)
+        let mut stage_num = 0;
+
         for (i, stage) in self.stages.iter().enumerate() {
-            let is_first = i == 0;
-            let is_last = i == self.stages.len() - 1;
+            // Skip boosters - their events are added with their core stage
+            if stage.is_booster {
+                continue;
+            }
+
+            stage_num += 1;
+            let is_first = stage_num == 1;
             let failure_rate = stage.ignition_failure_rate();
 
-            // Ignition event for all stages
-            events.push(LaunchEvent {
-                name: format!("Stage {} Ignition", i + 1),
-                description: format!(
-                    "Stage {} engine{} ignit{}",
-                    i + 1,
-                    if stage.engine_count > 1 { "s" } else { "" },
-                    if stage.engine_count > 1 { "e" } else { "es" }
-                ),
-                failure_rate,
-                rocket_stage: i,
-            });
+            // Find if this core has boosters
+            let boosters_for_this_core: Vec<usize> = groups
+                .iter()
+                .find(|g| g.core_stage_index == i)
+                .map(|g| g.booster_indices.clone())
+                .unwrap_or_default();
+
+            // Ignition event (includes boosters if any)
+            if boosters_for_this_core.is_empty() {
+                events.push(LaunchEvent {
+                    name: format!("Stage {} Ignition", stage_num),
+                    description: format!(
+                        "Stage {} engine{} ignit{}",
+                        stage_num,
+                        if stage.engine_count > 1 { "s" } else { "" },
+                        if stage.engine_count > 1 { "e" } else { "es" }
+                    ),
+                    failure_rate,
+                    rocket_stage: i,
+                });
+            } else {
+                // Combined ignition with boosters
+                let total_engines: u32 = stage.engine_count
+                    + boosters_for_this_core
+                        .iter()
+                        .map(|&bi| self.stages[bi].engine_count)
+                        .sum::<u32>();
+                events.push(LaunchEvent {
+                    name: format!("Stage {} Ignition", stage_num),
+                    description: format!(
+                        "Stage {} and boosters ignite ({} engines)",
+                        stage_num,
+                        total_engines
+                    ),
+                    failure_rate,
+                    rocket_stage: i,
+                });
+            }
 
             if is_first {
                 // First stage gets Liftoff and MaxQ
@@ -438,16 +874,31 @@ impl RocketDesign {
                 });
             }
 
-            if !is_last {
-                // All stages except last get separation
+            // Booster separation events (happen before core separation)
+            for &booster_idx in &boosters_for_this_core {
                 events.push(LaunchEvent {
-                    name: format!("Stage {} Separation", i + 1),
-                    description: format!("Stage {} separates", i + 1),
+                    name: format!("Stage {} Booster Separation", stage_num),
+                    description: format!("Stage {} booster separates", stage_num),
+                    failure_rate: 0.03, // Fixed 3% for separation
+                    rocket_stage: booster_idx,
+                });
+            }
+
+            // Check if there are any non-booster stages after this one
+            let has_non_booster_after = self.stages[(i + 1)..]
+                .iter()
+                .any(|s| !s.is_booster);
+
+            if has_non_booster_after {
+                // Regular stage separation
+                events.push(LaunchEvent {
+                    name: format!("Stage {} Separation", stage_num),
+                    description: format!("Stage {} separates", stage_num),
                     failure_rate: 0.03, // Fixed 3% for separation
                     rocket_stage: i,
                 });
             } else {
-                // Last stage gets orbital insertion
+                // This is the last core stage - orbital insertion
                 events.push(LaunchEvent {
                     name: "Orbital Insertion".to_string(),
                     description: "Final burn for orbit".to_string(),
@@ -600,6 +1051,52 @@ mod tests {
         // Stage 3: Ignition, Orbital Insertion (2)
         // Total: 8 events
         assert_eq!(events.len(), 8);
+    }
+
+    #[test]
+    fn test_generate_launch_events_with_booster() {
+        let mut design = RocketDesign::new();
+
+        // Stage 1 (core) - index 0
+        design.add_stage(EngineType::Kerolox);
+        design.stages[0].engine_count = 3;
+        design.stages[0].propellant_mass_kg = 100000.0;
+
+        // Stage 1 Booster - index 1
+        design.add_stage(EngineType::Kerolox);
+        design.stages[1].engine_count = 2;
+        design.stages[1].propellant_mass_kg = 20000.0; // Less propellant, shorter burn
+        design.stages[1].is_booster = true;
+
+        // Stage 2 (upper stage) - index 2
+        design.add_stage(EngineType::Hydrolox);
+        design.stages[2].engine_count = 1;
+        design.stages[2].propellant_mass_kg = 20000.0;
+
+        let events = design.generate_launch_events();
+
+        // Print all events for debugging
+        for (i, event) in events.iter().enumerate() {
+            println!("Event {}: {} - {}", i, event.name, event.description);
+        }
+
+        // Expected sequence:
+        // Stage 1: Ignition (with boosters), Liftoff, Max-Q, Booster Separation, Separation (5)
+        // Stage 2: Ignition, Orbital Insertion (2)
+        // Total: 7 events
+        assert_eq!(events.len(), 7, "Expected 7 events, got {}", events.len());
+
+        // Verify event names
+        assert_eq!(events[0].name, "Stage 1 Ignition");
+        assert!(events[0].description.contains("boosters"),
+            "Ignition should mention boosters: {}", events[0].description);
+        assert_eq!(events[1].name, "Liftoff");
+        assert_eq!(events[2].name, "Max-Q");
+        assert_eq!(events[3].name, "Stage 1 Booster Separation",
+            "Expected 'Stage 1 Booster Separation', got '{}'", events[3].name);
+        assert_eq!(events[4].name, "Stage 1 Separation");
+        assert_eq!(events[5].name, "Stage 2 Ignition");
+        assert_eq!(events[6].name, "Orbital Insertion");
     }
 
     #[test]

@@ -595,6 +595,114 @@ impl RocketDesigner {
     }
 
     // ==========================================
+    // Booster Management
+    // ==========================================
+
+    /// Check if a stage is a booster (fires in parallel with stage below it)
+    #[func]
+    pub fn is_stage_booster(&self, stage_index: i32) -> bool {
+        if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
+            return false;
+        }
+        self.design.stages[stage_index as usize].is_booster
+    }
+
+    /// Set whether a stage is a booster
+    /// Returns true if successful, false if validation failed
+    #[func]
+    pub fn set_stage_booster(&mut self, stage_index: i32, is_booster: bool) -> bool {
+        if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
+            return false;
+        }
+
+        if is_booster {
+            // Validate before setting
+            if !self.design.can_be_booster(stage_index as usize) {
+                return false;
+            }
+        }
+
+        self.design.stages[stage_index as usize].is_booster = is_booster;
+        self.emit_design_changed();
+        true
+    }
+
+    /// Check if a stage can be made a booster
+    /// Returns true if the stage meets booster requirements
+    #[func]
+    pub fn can_be_booster(&self, stage_index: i32) -> bool {
+        if stage_index < 0 {
+            return false;
+        }
+        self.design.can_be_booster(stage_index as usize)
+    }
+
+    /// Get the validation error for making a stage a booster
+    /// Returns empty string if valid, or an error message
+    #[func]
+    pub fn get_booster_validation_error(&self, stage_index: i32) -> GString {
+        if stage_index < 0 {
+            return GString::from("Invalid stage index");
+        }
+        match self.design.get_booster_validation_error(stage_index as usize) {
+            Some(err) => GString::from(err.as_str()),
+            None => GString::from(""),
+        }
+    }
+
+    /// Get the combined TWR during booster burn for a core stage
+    /// Returns 0 if the stage has no boosters or is itself a booster
+    #[func]
+    pub fn get_combined_twr_during_boost(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 {
+            return 0.0;
+        }
+        self.design
+            .get_combined_twr_during_boost(stage_index as usize)
+            .unwrap_or(0.0)
+    }
+
+    /// Check if a stage has boosters attached to it
+    #[func]
+    pub fn stage_has_boosters(&self, stage_index: i32) -> bool {
+        if stage_index < 0 {
+            return false;
+        }
+        let groups = self.design.find_booster_groups();
+        for group in &groups {
+            if group.core_stage_index == stage_index as usize && !group.booster_indices.is_empty() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get the number of boosters attached to a stage
+    #[func]
+    pub fn get_booster_count(&self, stage_index: i32) -> i32 {
+        if stage_index < 0 {
+            return 0;
+        }
+        let groups = self.design.find_booster_groups();
+        for group in &groups {
+            if group.core_stage_index == stage_index as usize {
+                return group.booster_indices.len() as i32;
+            }
+        }
+        0
+    }
+
+    /// Validate all booster configurations
+    /// Returns empty string if valid, or an error message
+    #[func]
+    pub fn validate_boosters(&self) -> GString {
+        match self.design.validate_boosters() {
+            Ok(()) => GString::from(""),
+            Err(err) => GString::from(err.as_str()),
+        }
+    }
+
+    // ==========================================
     // Signals
     // ==========================================
 

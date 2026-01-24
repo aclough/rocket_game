@@ -9,6 +9,9 @@ pub struct RocketStage {
     pub engine_count: u32,
     /// Mass of propellant in kilograms
     pub propellant_mass_kg: f64,
+    /// Whether this stage is a booster that fires in parallel with the stage above it
+    /// When true, this stage fires simultaneously with the stage at index-1
+    pub is_booster: bool,
 }
 
 impl RocketStage {
@@ -18,6 +21,7 @@ impl RocketStage {
             engine_type,
             engine_count: 1,
             propellant_mass_kg: 1000.0, // Default starting propellant
+            is_booster: false,
         }
     }
 
@@ -145,6 +149,45 @@ impl RocketStage {
     /// Includes engines, tanks, and stage overhead
     pub fn total_cost(&self) -> f64 {
         self.engine_cost() + self.tank_cost() + costs::STAGE_OVERHEAD_COST
+    }
+
+    // ==========================================
+    // Booster Attachment Calculations
+    // ==========================================
+
+    /// Get the additional structural mass for booster attachment in kg
+    /// Returns 0 if this stage is not a booster
+    pub fn booster_attachment_mass_kg(&self) -> f64 {
+        if self.is_booster {
+            costs::BOOSTER_ATTACHMENT_MASS_KG
+        } else {
+            0.0
+        }
+    }
+
+    /// Get the additional cost for booster attachment hardware in dollars
+    /// Returns 0 if this stage is not a booster
+    pub fn booster_attachment_cost(&self) -> f64 {
+        if self.is_booster {
+            costs::BOOSTER_ATTACHMENT_COST
+        } else {
+            0.0
+        }
+    }
+
+    /// Calculate the total cost including booster attachment if applicable
+    pub fn total_cost_with_attachment(&self) -> f64 {
+        self.total_cost() + self.booster_attachment_cost()
+    }
+
+    /// Calculate the dry mass including booster attachment hardware if applicable
+    pub fn dry_mass_with_attachment_kg(&self) -> f64 {
+        self.dry_mass_kg() + self.booster_attachment_mass_kg()
+    }
+
+    /// Calculate the wet mass including booster attachment hardware if applicable
+    pub fn wet_mass_with_attachment_kg(&self) -> f64 {
+        self.wet_mass_kg() + self.booster_attachment_mass_kg()
     }
 
     // ==========================================
