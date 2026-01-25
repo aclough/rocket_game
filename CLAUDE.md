@@ -13,3 +13,11 @@ In the very first iteration the player will be able to try launching a rocket to
 the option to launch their rocket.  It will be a two stage rocket trying to reach LEO.  As it flieds it will pass
 through several stages like 'ignition', 'Max-Q', etc.  At each it has a chance to explode.  If it reaches orbit or
 explodes show the user and then let them try again.
+
+# Alert
+
+When a task is complete and you need the user's attention, run this command:
+
+```bash
+play /usr/share/sounds/freedesktop/stereo/complete.oga
+```
