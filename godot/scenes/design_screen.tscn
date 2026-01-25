@@ -60,11 +60,21 @@ theme_override_constants/margin_bottom = 15
 layout_mode = 2
 theme_override_constants/separation = 5
 
-[node name="Title" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox"]
+[node name="TitleHBox" type="HBoxContainer" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 20
+
+[node name="Title" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/TitleHBox"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 32
 text = "ROCKET DESIGNER"
-horizontal_alignment = 1
+
+[node name="DesignNameLabel" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/TitleHBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+theme_override_colors/font_color = Color(0.5, 0.8, 1.0, 1)
+text = "- Design #1"
 
 [node name="Subtitle" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox"]
 layout_mode = 2
@@ -259,6 +269,13 @@ custom_minimum_size = Vector2(0, 50)
 theme_override_font_sizes/font_size = 18
 text = "BACK"
 
+[node name="SaveButton" type="Button" parent="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 50)
+theme_override_font_sizes/font_size = 18
+text = "SAVE DESIGN"
+
 [node name="LaunchButton" type="Button" parent="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox"]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -270,4 +287,5 @@ text = "CONTINUE TO TESTING"
 [node name="RocketDesigner" type="RocketDesigner" parent="."]
 
 [connection signal="pressed" from="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox/BackButton" to="." method="_on_back_button_pressed"]
+[connection signal="pressed" from="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox/SaveButton" to="." method="_on_save_button_pressed"]
 [connection signal="pressed" from="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox/LaunchButton" to="." method="_on_launch_button_pressed"]

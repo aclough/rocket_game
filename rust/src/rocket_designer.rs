@@ -296,9 +296,22 @@ impl RocketDesigner {
         self.design.total_delta_v()
     }
 
-    /// Gets the target delta-v for LEO in m/s
+    /// Gets the target delta-v for the current mission in m/s
     #[func]
     pub fn get_target_delta_v(&self) -> f64 {
+        self.design.target_delta_v()
+    }
+
+    /// Sets the target delta-v for the current mission in m/s
+    #[func]
+    pub fn set_target_delta_v(&mut self, delta_v: f64) {
+        self.design.set_target_delta_v(delta_v);
+        self.emit_design_changed();
+    }
+
+    /// Gets the default target delta-v (LEO)
+    #[func]
+    pub fn get_default_target_delta_v(&self) -> f64 {
         TARGET_DELTA_V_MS
     }
 
@@ -708,8 +721,12 @@ impl RocketDesigner {
 
     /// Ensure flaws are generated for this design
     /// Call this before testing or launching
+    /// This will automatically reset flaws if the design has changed significantly
     #[func]
     pub fn ensure_flaws_generated(&mut self) {
+        // First check if design has changed since flaws were generated
+        self.design.check_and_reset_flaws_if_changed();
+        // Then generate flaws if needed
         self.design.generate_flaws();
     }
 
@@ -717,6 +734,19 @@ impl RocketDesigner {
     #[func]
     pub fn has_flaws_generated(&self) -> bool {
         self.design.has_flaws_generated()
+    }
+
+    /// Check if the design has changed since flaws were generated
+    #[func]
+    pub fn design_changed_since_flaws(&self) -> bool {
+        self.design.design_changed_since_flaws()
+    }
+
+    /// Manually reset flaws (e.g., when starting a new design)
+    #[func]
+    pub fn reset_flaws(&mut self) {
+        self.design.reset_flaws();
+        self.emit_design_changed();
     }
 
     /// Get the total number of flaws
@@ -815,6 +845,82 @@ impl RocketDesigner {
         result
     }
 
+    /// Run an engine test for a specific engine type - returns array of discovered flaw names
+    #[func]
+    pub fn run_engine_test_for_type(&mut self, engine_type: i32) -> Array<GString> {
+        let discovered = self.design.run_engine_test_for_type(engine_type);
+        let mut result = Array::new();
+        for name in discovered {
+            result.push(&GString::from(name.as_str()));
+        }
+        self.emit_design_changed();
+        result
+    }
+
+    /// Get the list of unique engine types in the design
+    /// Returns array of engine type indices
+    #[func]
+    pub fn get_unique_engine_types(&self) -> Array<i32> {
+        let types = self.design.get_unique_engine_types();
+        let mut result = Array::new();
+        for t in types {
+            result.push(t);
+        }
+        result
+    }
+
+    /// Get the engine type index for a flaw (returns -1 if not an engine flaw or invalid index)
+    #[func]
+    pub fn get_flaw_engine_type_index(&self, index: i32) -> i32 {
+        if index < 0 {
+            return -1;
+        }
+        self.design.get_flaw_engine_type_index(index as usize).unwrap_or(-1)
+    }
+
+    /// Check if any flaw triggers at a given event
+    /// stage_engine_type: the engine type index of the stage that failed (-1 if unknown)
+    /// Returns the flaw ID if a flaw caused failure, or -1 if no flaw triggered
+    #[func]
+    pub fn check_flaw_trigger(&self, event_name: GString, stage_engine_type: i32) -> i32 {
+        let engine_type = if stage_engine_type >= 0 {
+            Some(stage_engine_type)
+        } else {
+            None
+        };
+        self.design.check_flaw_trigger(&event_name.to_string(), engine_type)
+            .map(|id| id as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Mark a flaw as discovered by its ID (used when failure occurs)
+    /// Returns the flaw name if found, or empty string
+    #[func]
+    pub fn discover_flaw_by_id(&mut self, flaw_id: i32) -> GString {
+        if flaw_id < 0 {
+            return GString::from("");
+        }
+        match self.design.discover_flaw_by_id(flaw_id as u32) {
+            Some(name) => {
+                self.emit_design_changed();
+                GString::from(name.as_str())
+            }
+            None => GString::from("")
+        }
+    }
+
+    /// Get the failure rate for a flaw by index
+    #[func]
+    pub fn get_flaw_failure_rate(&self, index: i32) -> f64 {
+        if index < 0 {
+            return 0.0;
+        }
+        match self.design.get_flaw(index as usize) {
+            Some(flaw) => flaw.failure_rate,
+            None => 0.0
+        }
+    }
+
     /// Run a rocket test - returns array of discovered flaw names
     #[func]
     pub fn run_rocket_test(&mut self) -> Array<GString> {
@@ -909,5 +1015,16 @@ impl RocketDesigner {
     /// Helper to emit design_changed signal
     fn emit_design_changed(&mut self) {
         self.base_mut().emit_signal("design_changed", &[]);
+    }
+
+    /// Get a clone of the internal design (for syncing with GameState)
+    pub fn get_design_clone(&self) -> crate::rocket_design::RocketDesign {
+        self.design.clone()
+    }
+
+    /// Set the internal design from an external source
+    pub fn set_design(&mut self, design: crate::rocket_design::RocketDesign) {
+        self.design = design;
+        self.emit_design_changed();
     }
 }

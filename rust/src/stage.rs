@@ -254,6 +254,9 @@ impl RocketStage {
     /// This represents delta-v lost to fighting gravity during ascent.
     /// Higher TWR means less time fighting gravity, so less loss.
     ///
+    /// At TWR = 1.0, the rocket just hovers - all vertical delta-v is lost to gravity.
+    /// At TWR < 1.0, the rocket cannot lift off and all delta-v is wasted.
+    ///
     /// # Arguments
     /// * `payload_mass_kg` - Mass above this stage
     /// * `gravity_loss_coefficient` - How much of burn is vertical (1.0 = all vertical, 0.0 = all horizontal)
@@ -264,17 +267,24 @@ impl RocketStage {
         let twr = self.initial_twr(payload_mass_kg);
         let mass_ratio = self.mass_ratio(payload_mass_kg);
         let ve = self.exhaust_velocity_ms();
+        let ideal_dv = self.delta_v(payload_mass_kg);
 
         // Avoid division by zero and handle edge cases
         if twr <= 0.0 || mass_ratio <= 1.0 {
             return 0.0;
         }
 
+        // At TWR <= 1.0, the rocket can't accelerate upward - all vertical delta-v is lost
+        // The rocket just hovers (TWR=1) or falls back (TWR<1)
+        if twr <= 1.0 {
+            return ideal_dv * gravity_loss_coefficient;
+        }
+
         // ΔV_gravity = C × Ve × (1 - 1/R) / TWR₀
         let gravity_loss = gravity_loss_coefficient * ve * (1.0 - 1.0 / mass_ratio) / twr;
 
-        // Cap gravity loss at a reasonable maximum (can't lose more than we'd gain)
-        gravity_loss.min(self.delta_v(payload_mass_kg) * 0.9)
+        // Cap gravity loss at 100% of ideal delta-v (can't lose more than we'd gain)
+        gravity_loss.min(ideal_dv * gravity_loss_coefficient)
     }
 
     /// Calculate gravity efficiency (1.0 = no losses, 0.0 = all lost to gravity)
@@ -661,5 +671,101 @@ mod tests {
         // With coefficient = 0 (fully horizontal burn), no gravity loss
         let loss = stage.gravity_loss(5000.0, 0.0);
         assert!(loss.abs() < 0.001, "Zero coefficient should mean zero loss: {}", loss);
+    }
+
+    #[test]
+    fn test_upper_stage_low_twr_still_provides_delta_v() {
+        // Upper stages have low gravity coefficients (0.01-0.03) because they're
+        // burning mostly horizontally in orbit. Even with TWR < 1.0, they should
+        // still provide most of their delta-v.
+
+        let mut stage = RocketStage::new(EngineType::Hydrolox);
+        stage.engine_count = 1;
+        stage.propellant_mass_kg = 20000.0;
+
+        // Set up a very heavy payload to get TWR well below 1.0
+        let heavy_payload = 200000.0; // 200 tons
+        let twr = stage.initial_twr(heavy_payload);
+        assert!(twr < 0.5, "Should have very low TWR: {}", twr);
+
+        let ideal_dv = stage.delta_v(heavy_payload);
+
+        // Upper stage coefficient (nearly horizontal burn in orbit)
+        let upper_stage_coefficient = 0.01;
+        let effective_dv = stage.effective_delta_v(heavy_payload, upper_stage_coefficient);
+
+        // Should retain 99% of delta-v even with terrible TWR
+        let efficiency = effective_dv / ideal_dv;
+        assert!(
+            efficiency > 0.98,
+            "Upper stage should retain >98% delta-v even with low TWR. Got {}% (TWR={})",
+            efficiency * 100.0,
+            twr
+        );
+    }
+
+    #[test]
+    fn test_adding_propellant_at_twr_one_doesnt_increase_effective_dv() {
+        // At TWR = 1.0, the rocket is at the margin where it can just barely lift off.
+        // Adding more propellant lowers TWR (more mass, same thrust) and increases
+        // gravity losses proportionally, so effective delta-v should not increase.
+
+        let mut stage = RocketStage::new(EngineType::Kerolox);
+        stage.engine_count = 1;
+
+        // Kerolox: 500 kN thrust per engine
+        // For TWR = 1.0: thrust = total_mass × g
+        // 500,000 N = total_mass × 9.81
+        // total_mass = 50,968 kg
+
+        // Set up initial propellant
+        stage.propellant_mass_kg = 10000.0;
+        let wet_mass = stage.wet_mass_kg();
+
+        // Calculate payload that gives TWR = 1.0
+        // TWR = thrust / ((wet_mass + payload) × g) = 1.0
+        // payload = thrust/g - wet_mass
+        let thrust_n = stage.total_thrust_kn() * 1000.0;
+        let payload_for_twr_one = thrust_n / RocketStage::G0 - wet_mass;
+
+        // Verify we actually have TWR = 1.0
+        let twr = stage.initial_twr(payload_for_twr_one);
+        assert!(
+            (twr - 1.0).abs() < 0.001,
+            "TWR should be 1.0: {}",
+            twr
+        );
+
+        // Calculate effective delta-v at TWR = 1.0
+        let gravity_coefficient = 0.85; // Typical first stage value
+        let effective_dv_before = stage.effective_delta_v(payload_for_twr_one, gravity_coefficient);
+
+        // Add more propellant (this will lower TWR below 1.0)
+        let additional_propellant = 5000.0;
+        stage.propellant_mass_kg += additional_propellant;
+
+        // Recalculate payload to maintain the same total payload
+        // (the original payload mass doesn't change, but now we have more propellant)
+        // TWR will now be < 1.0
+
+        let new_twr = stage.initial_twr(payload_for_twr_one);
+        assert!(
+            new_twr < 1.0,
+            "Adding propellant should lower TWR below 1.0: {}",
+            new_twr
+        );
+
+        // Calculate new effective delta-v
+        let effective_dv_after = stage.effective_delta_v(payload_for_twr_one, gravity_coefficient);
+
+        // The key assertion: adding propellant at TWR <= 1.0 should not increase effective delta-v
+        // In fact, it should decrease or stay roughly the same
+        assert!(
+            effective_dv_after <= effective_dv_before + 1.0, // Small tolerance for floating point
+            "Adding propellant at TWR=1.0 should not increase effective delta-v. Before: {}, After: {}, TWR went from 1.0 to {}",
+            effective_dv_before,
+            effective_dv_after,
+            new_twr
+        );
     }
 }

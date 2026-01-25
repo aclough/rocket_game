@@ -1,0 +1,219 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/design_select_screen.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/starfield.gd" id="2"]
+
+[node name="DesignSelectScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.02, 0.02, 0.05, 1)
+
+[node name="Starfield" type="Control" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2")
+
+[node name="MarginContainer" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 50
+theme_override_constants/margin_top = 30
+theme_override_constants/margin_right = 50
+theme_override_constants/margin_bottom = 30
+
+[node name="VBox" type="VBoxContainer" parent="MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="HeaderPanel" type="PanelContainer" parent="MarginContainer/VBox"]
+layout_mode = 2
+
+[node name="HeaderMargin" type="MarginContainer" parent="MarginContainer/VBox/HeaderPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 15
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 15
+
+[node name="HeaderHBox" type="HBoxContainer" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin"]
+layout_mode = 2
+
+[node name="TitleVBox" type="VBoxContainer" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 5
+
+[node name="Title" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/TitleVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+text = "SELECT ROCKET DESIGN"
+
+[node name="MissionLabel" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/TitleVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+text = "Mission: Sample Mission to LEO"
+
+[node name="RequirementsLabel" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/TitleVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.7, 0.8, 1.0, 1)
+text = "Requirements: 9,400 m/s | 5,000 kg payload"
+
+[node name="StatsVBox" type="VBoxContainer" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox"]
+layout_mode = 2
+alignment = 1
+
+[node name="MoneyLabel" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/StatsVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+theme_override_colors/font_color = Color(0.3, 1, 0.3, 1)
+text = "Budget: $500M"
+horizontal_alignment = 2
+
+[node name="ContentPanel" type="PanelContainer" parent="MarginContainer/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ContentMargin" type="MarginContainer" parent="MarginContainer/VBox/ContentPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="ContentHBox" type="HBoxContainer" parent="MarginContainer/VBox/ContentPanel/ContentMargin"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="SavedDesignsPanel" type="PanelContainer" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 2.0
+
+[node name="SavedMargin" type="MarginContainer" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/SavedDesignsPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 15
+theme_override_constants/margin_top = 15
+theme_override_constants/margin_right = 15
+theme_override_constants/margin_bottom = 15
+
+[node name="SavedVBox" type="VBoxContainer" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/SavedDesignsPanel/SavedMargin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="SavedTitle" type="Label" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/SavedDesignsPanel/SavedMargin/SavedVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "SAVED DESIGNS"
+
+[node name="HSeparator" type="HSeparator" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/SavedDesignsPanel/SavedMargin/SavedVBox"]
+layout_mode = 2
+
+[node name="DesignsScroll" type="ScrollContainer" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/SavedDesignsPanel/SavedMargin/SavedVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="DesignsList" type="VBoxContainer" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/SavedDesignsPanel/SavedMargin/SavedVBox/DesignsScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="NewDesignPanel" type="PanelContainer" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="NewMargin" type="MarginContainer" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 15
+theme_override_constants/margin_top = 15
+theme_override_constants/margin_right = 15
+theme_override_constants/margin_bottom = 15
+
+[node name="NewVBox" type="VBoxContainer" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin"]
+layout_mode = 2
+theme_override_constants/separation = 15
+
+[node name="NewTitle" type="Label" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "CREATE NEW DESIGN"
+
+[node name="HSeparator" type="HSeparator" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox"]
+layout_mode = 2
+
+[node name="NewDefaultButton" type="Button" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 60)
+theme_override_font_sizes/font_size = 16
+text = "NEW FROM TEMPLATE"
+
+[node name="DefaultDesc" type="Label" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.5, 0.5, 0.5, 1)
+text = "Start with a basic 2-stage rocket design"
+autowrap_mode = 2
+
+[node name="NewEmptyButton" type="Button" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 60)
+theme_override_font_sizes/font_size = 16
+text = "NEW EMPTY DESIGN"
+
+[node name="EmptyDesc" type="Label" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.5, 0.5, 0.5, 1)
+text = "Start from scratch with no stages"
+autowrap_mode = 2
+
+[node name="FooterPanel" type="PanelContainer" parent="MarginContainer/VBox"]
+layout_mode = 2
+
+[node name="FooterMargin" type="MarginContainer" parent="MarginContainer/VBox/FooterPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 15
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 15
+
+[node name="FooterHBox" type="HBoxContainer" parent="MarginContainer/VBox/FooterPanel/FooterMargin"]
+layout_mode = 2
+theme_override_constants/separation = 30
+
+[node name="BackButton" type="Button" parent="MarginContainer/VBox/FooterPanel/FooterMargin/FooterHBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(150, 50)
+theme_override_font_sizes/font_size = 16
+text = "BACK"
+
+[node name="Spacer" type="Control" parent="MarginContainer/VBox/FooterPanel/FooterMargin/FooterHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[connection signal="pressed" from="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox/NewDefaultButton" to="." method="_on_new_default_pressed"]
+[connection signal="pressed" from="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox/NewEmptyButton" to="." method="_on_new_empty_pressed"]
+[connection signal="pressed" from="MarginContainer/VBox/FooterPanel/FooterMargin/FooterHBox/BackButton" to="." method="_on_back_pressed"]

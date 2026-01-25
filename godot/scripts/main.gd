@@ -11,7 +11,7 @@ extends Control
 @onready var try_again_button = $MarginContainer/VBoxContainer/CenterContainer/ContentVBox/ResultPanel/MarginContainer/VBox/TryAgainButton
 @onready var subtitle = $MarginContainer/VBoxContainer/HeaderContainer/Subtitle
 
-# Main content container (to hide when showing design screen)
+# Main content container (to hide when showing other screens)
 @onready var main_content = $MarginContainer
 @onready var rocket_visual = $RocketVisual
 
@@ -24,23 +24,39 @@ extends Control
 # Screen effects reference
 @onready var screen_effects = $ScreenEffects
 
+# Contract screen (loaded dynamically)
+var contract_screen: Control = null
+var contract_screen_scene = preload("res://scenes/contract_screen.tscn")
+
 # Design screen (loaded dynamically)
 var design_screen: Control = null
 var design_screen_scene = preload("res://scenes/design_screen.tscn")
 
+# Design selection screen (loaded dynamically)
+var design_select_screen: Control = null
+var design_select_screen_scene = preload("res://scenes/design_select_screen.tscn")
+
 # Testing screen (loaded dynamically)
 var testing_screen: Control = null
 var testing_screen_scene = preload("res://scenes/testing_screen.tscn")
+
+# Game manager reference (from contract screen)
+var game_manager: GameManager = null
 
 # State tracking
 var attempt_count = 0
 var success_count = 0
 var has_custom_design = false
 var last_launch_success = false
+var free_launch_mode = false
 
 func _ready():
-	# Initial UI state
-	reset_ui()
+	# Hide main content initially - show contract screen instead
+	main_content.visible = false
+	rocket_visual.visible = false
+
+	# Show contract screen
+	show_contract_screen()
 
 func _on_launch_button_pressed():
 	start_launch()
@@ -50,14 +66,44 @@ func _on_design_button_pressed():
 
 func _on_try_again_button_pressed():
 	if last_launch_success:
-		# Success - go back to main menu
-		reset_ui()
+		# Success - go back to contract selection
+		if free_launch_mode:
+			reset_ui()
+		else:
+			show_contract_screen()
 	else:
 		# Failure - go back to testing screen to fix issues
 		result_panel.visible = false
 		if rocket_sprite:
 			rocket_sprite.reset()
 		show_testing_screen()
+
+func show_contract_screen():
+	# Create contract screen if not exists
+	if contract_screen == null:
+		contract_screen = contract_screen_scene.instantiate()
+		contract_screen.contract_selected.connect(_on_contract_selected)
+		contract_screen.free_launch_requested.connect(_on_free_launch_requested)
+		contract_screen.new_game_requested.connect(_on_new_game_requested)
+		add_child(contract_screen)
+		game_manager = contract_screen.get_game_manager()
+
+	# Hide other screens
+	main_content.visible = false
+	rocket_visual.visible = false
+	if design_screen:
+		design_screen.visible = false
+	if design_select_screen:
+		design_select_screen.visible = false
+	if testing_screen:
+		testing_screen.visible = false
+
+	# Show contract screen
+	contract_screen.visible = true
+
+func hide_contract_screen():
+	if contract_screen:
+		contract_screen.visible = false
 
 func show_design_screen():
 	# Create design screen if not exists
@@ -69,9 +115,28 @@ func show_design_screen():
 			design_screen.testing_requested.connect(_on_design_testing_requested)
 		add_child(design_screen)
 
-	# Hide main content
+	# Pass game manager to design screen
+	design_screen.set_game_manager(game_manager)
+
+	# Sync design from game state to designer
+	var designer = design_screen.get_designer()
+	if game_manager and designer:
+		game_manager.sync_design_to(designer)
+
+	# Update design screen with contract info if we have an active contract
+	if game_manager and game_manager.has_active_contract():
+		if designer:
+			# Set target delta-v and payload from contract
+			var target_dv = game_manager.get_active_contract_delta_v()
+			var payload = game_manager.get_active_contract_payload()
+			designer.set_target_delta_v(target_dv)
+			designer.set_payload_mass(payload)
+
+	# Hide other screens
 	main_content.visible = false
 	rocket_visual.visible = false
+	hide_contract_screen()
+	hide_design_select_screen()
 
 	# Show design screen
 	design_screen.visible = true
@@ -80,9 +145,30 @@ func hide_design_screen():
 	if design_screen:
 		design_screen.visible = false
 
-	# Show main content
-	main_content.visible = true
-	rocket_visual.visible = true
+func show_design_select_screen():
+	# Create design select screen if not exists
+	if design_select_screen == null:
+		design_select_screen = design_select_screen_scene.instantiate()
+		design_select_screen.design_selected.connect(_on_design_selected)
+		design_select_screen.back_requested.connect(_on_design_select_back_requested)
+		add_child(design_select_screen)
+
+	# Pass game manager to design select screen
+	design_select_screen.set_game_manager(game_manager)
+
+	# Hide other screens
+	main_content.visible = false
+	rocket_visual.visible = false
+	hide_contract_screen()
+	hide_design_screen()
+	hide_testing_screen()
+
+	# Show design select screen
+	design_select_screen.visible = true
+
+func hide_design_select_screen():
+	if design_select_screen:
+		design_select_screen.visible = false
 
 func show_testing_screen():
 	# Ensure design screen exists to get the designer
@@ -105,9 +191,11 @@ func show_testing_screen():
 	var designer = design_screen.get_designer()
 	testing_screen.set_designer(designer)
 
-	# Hide main content and design screen
+	# Hide other screens
 	main_content.visible = false
 	rocket_visual.visible = false
+	hide_contract_screen()
+	hide_design_select_screen()
 	if design_screen:
 		design_screen.visible = false
 
@@ -118,9 +206,39 @@ func hide_testing_screen():
 	if testing_screen:
 		testing_screen.visible = false
 
-	# Show main content
-	main_content.visible = true
-	rocket_visual.visible = true
+func _on_contract_selected(contract_id: int):
+	free_launch_mode = false
+	hide_contract_screen()
+	show_design_select_screen()
+
+func _on_free_launch_requested():
+	free_launch_mode = true
+	hide_contract_screen()
+	show_design_select_screen()
+
+func _on_design_selected(design_index: int):
+	# design_index is -1 for new design, otherwise the saved design index
+	hide_design_select_screen()
+	show_design_screen()
+
+func _on_design_select_back_requested():
+	hide_design_select_screen()
+	if free_launch_mode:
+		reset_ui()
+	else:
+		show_contract_screen()
+
+func _on_new_game_requested():
+	# Reset state
+	attempt_count = 0
+	success_count = 0
+	has_custom_design = false
+
+	# Reset design if exists
+	if design_screen:
+		var designer = design_screen.get_designer()
+		if designer:
+			designer.load_default_design()
 
 func _on_design_launch_requested():
 	# Go to testing screen instead of launching directly
@@ -135,7 +253,7 @@ func _on_design_testing_requested():
 
 func _on_design_back_requested():
 	hide_design_screen()
-	reset_ui()
+	show_design_select_screen()
 
 func _on_testing_launch_requested():
 	# Copy design from designer to launcher
@@ -146,6 +264,10 @@ func _on_testing_launch_requested():
 
 	# Hide testing screen
 	hide_testing_screen()
+
+	# Show main content for launch
+	main_content.visible = true
+	rocket_visual.visible = true
 
 	# Start the launch
 	start_launch()
@@ -179,6 +301,10 @@ func start_launch():
 	await run_launch_with_delays()
 
 func reset_ui():
+	# Show main content
+	main_content.visible = true
+	rocket_visual.visible = true
+
 	# Reset panels
 	launch_button.visible = true
 	design_button.visible = true
@@ -210,6 +336,12 @@ func run_launch_with_delays():
 	var stage_count = launcher.get_stage_count()
 	var success = true
 	var failed_stage_name = ""
+	var discovered_flaw_name = ""
+
+	# Get the designer for flaw discovery
+	var designer = null
+	if design_screen:
+		designer = design_screen.get_designer()
 
 	# Go through each stage with delays
 	for i in range(stage_count):
@@ -239,6 +371,28 @@ func run_launch_with_delays():
 			label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
 			success = false
 			failed_stage_name = stage_name
+
+			# Determine if a flaw caused this failure
+			# P(flaw caused it | failure) = flaw_rate / total_rate
+			if designer:
+				var base_rate = launcher.get_stage_failure_rate(i)
+				var flaw_rate = launcher.get_flaw_failure_rate(i)
+
+				# Only check for flaw if there's flaw contribution
+				if flaw_rate > 0:
+					var flaw_probability = flaw_rate / failure_rate
+					var flaw_roll = randf()
+					if flaw_roll < flaw_probability:
+						# A flaw caused this failure - find which one
+						# Get the engine type of the stage that failed
+						var rocket_stage = launcher.get_event_rocket_stage(i)
+						var stage_engine_type = -1
+						if rocket_stage >= 0:
+							stage_engine_type = designer.get_stage_engine_type(rocket_stage)
+						var flaw_id = designer.check_flaw_trigger(stage_name, stage_engine_type)
+						if flaw_id >= 0:
+							discovered_flaw_name = designer.discover_flaw_by_id(flaw_id)
+
 			await get_tree().create_timer(0.2).timeout
 			break
 		else:
@@ -270,6 +424,16 @@ func run_launch_with_delays():
 	if success:
 		success_count += 1
 
+	# Handle contract completion/failure
+	var reward = 0.0
+	var destination = ""
+	if game_manager and game_manager.has_active_contract() and not free_launch_mode:
+		destination = game_manager.get_active_contract_destination()
+		if success:
+			reward = game_manager.complete_contract()
+		else:
+			game_manager.fail_contract()
+
 	# Show result panel
 	status_panel.visible = false
 	result_panel.visible = true
@@ -278,10 +442,34 @@ func run_launch_with_delays():
 	if success:
 		result_label.text = "SUCCESS!"
 		result_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-		message_label.text = "Rocket reached Low Earth Orbit!"
-		try_again_button.text = "CONTINUE"
+		if reward > 0:
+			message_label.text = "Rocket reached %s!\nReward: %s\nNew Balance: %s" % [
+				destination,
+				_format_money(reward),
+				game_manager.get_money_formatted()
+			]
+		else:
+			message_label.text = "Rocket reached orbit!"
+
+		if free_launch_mode:
+			try_again_button.text = "CONTINUE"
+		else:
+			try_again_button.text = "NEW CONTRACT"
 	else:
 		result_label.text = "FAILURE"
 		result_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
-		message_label.text = "Failure during " + failed_stage_name + ". Rocket lost."
+		if discovered_flaw_name != "":
+			message_label.text = "Failure during " + failed_stage_name + ".\nCause identified: " + discovered_flaw_name + "\nThis issue has been added to your known problems."
+		else:
+			message_label.text = "Failure during " + failed_stage_name + ". Rocket lost."
 		try_again_button.text = "BACK TO TESTING"
+
+func _format_money(value: float) -> String:
+	if value >= 1_000_000_000:
+		return "$%.1fB" % (value / 1_000_000_000)
+	elif value >= 1_000_000:
+		return "$%.0fM" % (value / 1_000_000)
+	elif value >= 1_000:
+		return "$%.0fK" % (value / 1_000)
+	else:
+		return "$%.0f" % value

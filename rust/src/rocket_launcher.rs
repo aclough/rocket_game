@@ -156,6 +156,7 @@ impl RocketLauncher {
                 },
                 discovered,
                 fixed,
+                engine_type_index: None, // We don't track engine type here
             };
             design.flaws.push(flaw);
         }
@@ -252,8 +253,13 @@ impl RocketLauncher {
         // Add flaw contributions if we have a design with flaws
         if let Some(design) = &self.design {
             if index >= 0 && (index as usize) < self.cached_events.len() {
-                let event_name = &self.cached_events[index as usize].name;
-                let flaw_rate = design.get_flaw_failure_contribution(event_name);
+                let event = &self.cached_events[index as usize];
+                let event_name = &event.name;
+                // Get the engine type for this stage
+                let stage_engine_type = design.stages
+                    .get(event.rocket_stage)
+                    .map(|s| s.engine_type.to_index());
+                let flaw_rate = design.get_flaw_failure_contribution(event_name, stage_engine_type);
                 // Cap total failure rate at 95%
                 return (base_rate + flaw_rate).min(0.95);
             }
@@ -267,8 +273,13 @@ impl RocketLauncher {
     pub fn get_flaw_failure_rate(&self, index: i32) -> f64 {
         if let Some(design) = &self.design {
             if index >= 0 && (index as usize) < self.cached_events.len() {
-                let event_name = &self.cached_events[index as usize].name;
-                return design.get_flaw_failure_contribution(event_name);
+                let event = &self.cached_events[index as usize];
+                let event_name = &event.name;
+                // Get the engine type for this stage
+                let stage_engine_type = design.stages
+                    .get(event.rocket_stage)
+                    .map(|s| s.engine_type.to_index());
+                return design.get_flaw_failure_contribution(event_name, stage_engine_type);
             }
         }
         0.0

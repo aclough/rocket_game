@@ -3,11 +3,17 @@ extends Control
 signal launch_requested
 signal back_requested
 signal testing_requested
+signal design_saved
+
+# Game manager reference (set by parent)
+var game_manager: GameManager = null
 
 # Designer node reference
 @onready var designer: RocketDesigner = $RocketDesigner
+@onready var save_button = $MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox/SaveButton
 
 # UI references - Header
+@onready var design_name_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/TitleHBox/DesignNameLabel
 @onready var target_dv_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/TargetDV
 @onready var payload_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/Payload
 @onready var budget_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/Budget
@@ -39,6 +45,9 @@ func _ready():
 	# Connect designer signal
 	designer.design_changed.connect(_on_design_changed)
 
+	# Connect visibility changed to update header when screen shown
+	visibility_changed.connect(_on_visibility_changed)
+
 	# Set up engine cards
 	_setup_engine_cards()
 
@@ -53,6 +62,12 @@ func _ready():
 	_update_dv_display()
 	_update_budget_display()
 	_update_launch_button()
+
+func _on_visibility_changed():
+	if visible:
+		# Update header when screen becomes visible (payload/target may have changed)
+		_update_header()
+		_update_dv_display()
 
 func _setup_engine_cards():
 	# Clear existing
@@ -125,6 +140,7 @@ func _on_add_engine_stage_pressed(engine_type: int):
 
 
 func _update_header():
+	design_name_label.text = "- " + designer.get_design_name()
 	target_dv_label.text = "Target Δv: %.0f m/s" % designer.get_target_delta_v()
 	payload_label.text = "Payload: %.0f kg" % designer.get_payload_mass()
 	budget_label.text = "Budget: $%s" % _format_money(designer.get_starting_budget())
@@ -604,6 +620,69 @@ func _on_launch_button_pressed():
 
 func _on_back_button_pressed():
 	back_requested.emit()
+
+func _on_save_button_pressed():
+	if game_manager:
+		# Get the current design name
+		var current_name = designer.get_design_name()
+
+		# Create a simple save dialog
+		var dialog = ConfirmationDialog.new()
+		dialog.title = "Save Design"
+
+		var vbox = VBoxContainer.new()
+		dialog.add_child(vbox)
+
+		var label = Label.new()
+		label.text = "Enter a name for this design:"
+		vbox.add_child(label)
+
+		var name_input = LineEdit.new()
+		name_input.text = current_name
+		name_input.select_all_on_focus = true
+		name_input.custom_minimum_size = Vector2(300, 0)
+		vbox.add_child(name_input)
+
+		add_child(dialog)
+		dialog.popup_centered()
+		name_input.grab_focus()
+
+		# Handle confirm
+		dialog.confirmed.connect(func():
+			var new_name = name_input.text.strip_edges()
+			if new_name.is_empty():
+				new_name = "Unnamed Rocket"
+			designer.set_design_name(new_name)
+			# Sync design from designer to game state before saving
+			game_manager.sync_design_from(designer)
+			game_manager.save_current_design()
+			design_saved.emit()
+			dialog.queue_free()
+			_show_save_notification(new_name)
+		)
+
+		dialog.canceled.connect(func():
+			dialog.queue_free()
+		)
+
+func _show_save_notification(name: String):
+	# Show a brief notification that the design was saved
+	var notification = Label.new()
+	notification.text = "Design '%s' saved!" % name
+	notification.add_theme_font_size_override("font_size", 18)
+	notification.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+	notification.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	notification.position = Vector2(get_viewport_rect().size.x / 2 - 150, 100)
+	notification.custom_minimum_size = Vector2(300, 40)
+	add_child(notification)
+
+	# Fade out and remove after 2 seconds
+	var tween = create_tween()
+	tween.tween_property(notification, "modulate:a", 0.0, 0.5).set_delay(1.5)
+	tween.tween_callback(notification.queue_free)
+
+func set_game_manager(gm: GameManager):
+	game_manager = gm
 
 # Called by main scene to get the designer node
 func get_designer() -> RocketDesigner:

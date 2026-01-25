@@ -60,6 +60,8 @@ pub struct RocketDesign {
     pub stages: Vec<RocketStage>,
     /// Payload mass in kilograms
     pub payload_mass_kg: f64,
+    /// Target delta-v for the mission (can be set per-contract)
+    pub target_delta_v: f64,
 
     // Future-proofing fields (from Rocket Tycoon 1.0 vision)
 
@@ -76,6 +78,9 @@ pub struct RocketDesign {
     pub flaws_generated: bool,
     /// Budget spent on testing and fixing (deducted from remaining budget)
     pub testing_spent: f64,
+    /// Signature of the design when flaws were generated
+    /// Used to detect when the design has changed significantly
+    flaw_design_signature: String,
 }
 
 impl RocketDesign {
@@ -84,12 +89,70 @@ impl RocketDesign {
         Self {
             stages: Vec::new(),
             payload_mass_kg: DEFAULT_PAYLOAD_KG,
+            target_delta_v: TARGET_DELTA_V_MS,
             name: "Unnamed Rocket".to_string(),
             launch_count: 0,
             flaws: Vec::new(),
             flaws_generated: false,
             testing_spent: 0.0,
+            flaw_design_signature: String::new(),
         }
+    }
+
+    /// Compute a signature string that captures the essential design characteristics
+    /// Changes to engine types, counts, or propellant masses will change the signature
+    pub fn compute_design_signature(&self) -> String {
+        let mut signature = String::new();
+        signature.push_str(&format!("stages:{};", self.stages.len()));
+        for (i, stage) in self.stages.iter().enumerate() {
+            signature.push_str(&format!(
+                "s{}:{}x{}:{:.0}kg,b:{};",
+                i,
+                stage.engine_type.to_index(),
+                stage.engine_count,
+                stage.propellant_mass_kg,
+                if stage.is_booster { 1 } else { 0 }
+            ));
+        }
+        signature
+    }
+
+    /// Check if the design has changed significantly since flaws were generated
+    /// Returns true if the design signature differs from when flaws were generated
+    pub fn design_changed_since_flaws(&self) -> bool {
+        if !self.flaws_generated {
+            return false; // No flaws generated yet, nothing to compare
+        }
+        self.compute_design_signature() != self.flaw_design_signature
+    }
+
+    /// Reset flaws and testing state (call when design changes significantly)
+    pub fn reset_flaws(&mut self) {
+        self.flaws.clear();
+        self.flaws_generated = false;
+        self.testing_spent = 0.0;
+        self.flaw_design_signature.clear();
+    }
+
+    /// Check if flaws need to be reset due to design changes, and reset if so
+    /// Returns true if flaws were reset
+    pub fn check_and_reset_flaws_if_changed(&mut self) -> bool {
+        if self.design_changed_since_flaws() {
+            self.reset_flaws();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the target delta-v for this mission
+    pub fn target_delta_v(&self) -> f64 {
+        self.target_delta_v
+    }
+
+    /// Set the target delta-v for this mission
+    pub fn set_target_delta_v(&mut self, delta_v: f64) {
+        self.target_delta_v = delta_v;
     }
 
     /// Create a default two-stage rocket that's almost sufficient for LEO
@@ -609,15 +672,10 @@ impl RocketDesign {
         self.total_effective_delta_v() / ideal
     }
 
-    /// Check if the design provides sufficient effective delta-v for LEO
+    /// Check if the design provides sufficient effective delta-v for the mission
     /// This accounts for gravity losses based on each stage's TWR
     pub fn is_sufficient(&self) -> bool {
-        self.total_effective_delta_v() >= TARGET_DELTA_V_MS
-    }
-
-    /// Get the target delta-v
-    pub fn target_delta_v(&self) -> f64 {
-        TARGET_DELTA_V_MS
+        self.total_effective_delta_v() >= self.target_delta_v
     }
 
     /// Get mass fraction for a stage
@@ -700,23 +758,23 @@ impl RocketDesign {
 
     /// Calculate how much effective delta-v margin we have (positive = excess, negative = shortfall)
     pub fn delta_v_margin(&self) -> f64 {
-        self.total_effective_delta_v() - TARGET_DELTA_V_MS
+        self.total_effective_delta_v() - self.target_delta_v
     }
 
     /// Calculate effective delta-v as a percentage of target (100% = exactly sufficient)
     pub fn delta_v_percentage(&self) -> f64 {
-        if TARGET_DELTA_V_MS == 0.0 {
+        if self.target_delta_v == 0.0 {
             return 0.0;
         }
-        (self.total_effective_delta_v() / TARGET_DELTA_V_MS) * 100.0
+        (self.total_effective_delta_v() / self.target_delta_v) * 100.0
     }
 
     /// Calculate ideal delta-v as a percentage of target (ignoring gravity losses)
     pub fn ideal_delta_v_percentage(&self) -> f64 {
-        if TARGET_DELTA_V_MS == 0.0 {
+        if self.target_delta_v == 0.0 {
             return 0.0;
         }
-        (self.total_delta_v() / TARGET_DELTA_V_MS) * 100.0
+        (self.total_delta_v() / self.target_delta_v) * 100.0
     }
 
     /// Calculate overall mission success probability
@@ -818,9 +876,42 @@ impl RocketDesign {
             return;
         }
 
+        // Collect engine types and their counts
+        let engine_types = self.get_engine_type_counts();
+
         let mut generator = FlawGenerator::new();
-        self.flaws = generator.generate_flaws(total_engines, stage_count);
+        self.flaws = generator.generate_flaws_with_engine_types(total_engines, stage_count, &engine_types);
         self.flaws_generated = true;
+        // Save the design signature so we can detect changes
+        self.flaw_design_signature = self.compute_design_signature();
+    }
+
+    /// Get a list of unique engine types and their total counts in the design
+    /// Returns a vector of (engine_type_index, engine_count) pairs
+    pub fn get_engine_type_counts(&self) -> Vec<(i32, u32)> {
+        use std::collections::HashMap;
+        let mut counts: HashMap<i32, u32> = HashMap::new();
+
+        for stage in &self.stages {
+            let engine_idx = stage.engine_type.to_index();
+            *counts.entry(engine_idx).or_insert(0) += stage.engine_count;
+        }
+
+        counts.into_iter().collect()
+    }
+
+    /// Get the list of unique engine type indices in the design
+    pub fn get_unique_engine_types(&self) -> Vec<i32> {
+        use std::collections::HashSet;
+        let mut types: HashSet<i32> = HashSet::new();
+
+        for stage in &self.stages {
+            types.insert(stage.engine_type.to_index());
+        }
+
+        let mut result: Vec<i32> = types.into_iter().collect();
+        result.sort();
+        result
     }
 
     /// Check if flaws have been generated
@@ -874,6 +965,17 @@ impl RocketDesign {
         run_test(&mut self.flaws, FlawType::Engine)
     }
 
+    /// Run an engine test for a specific engine type - returns names of newly discovered flaws
+    /// Costs ENGINE_TEST_COST from budget
+    pub fn run_engine_test_for_type(&mut self, engine_type_index: i32) -> Vec<String> {
+        if self.remaining_budget() < costs::ENGINE_TEST_COST {
+            return Vec::new();
+        }
+
+        self.testing_spent += costs::ENGINE_TEST_COST;
+        crate::flaw::run_engine_test_for_type(&mut self.flaws, engine_type_index)
+    }
+
     /// Run a rocket test - returns names of newly discovered flaws
     /// Costs ROCKET_TEST_COST from budget
     pub fn run_rocket_test(&mut self) -> Vec<String> {
@@ -924,8 +1026,9 @@ impl RocketDesign {
     }
 
     /// Get the additional failure rate from flaws for a given event
-    pub fn get_flaw_failure_contribution(&self, event_name: &str) -> f64 {
-        calculate_flaw_failure_rate(&self.flaws, event_name)
+    /// stage_engine_type: the engine type index of the stage (for filtering engine flaws)
+    pub fn get_flaw_failure_contribution(&self, event_name: &str, stage_engine_type: Option<i32>) -> f64 {
+        calculate_flaw_failure_rate(&self.flaws, event_name, stage_engine_type)
     }
 
     /// Estimate success rate including flaw contributions
@@ -964,6 +1067,24 @@ impl RocketDesign {
         }
     }
 
+    /// Check if any flaw triggers at a given event, and return the flaw ID if it caused a failure
+    /// stage_engine_type: the engine type index of the stage that failed
+    /// Returns Some(flaw_id) if a flaw triggered failure, None otherwise
+    pub fn check_flaw_trigger(&self, event_name: &str, stage_engine_type: Option<i32>) -> Option<u32> {
+        crate::flaw::check_flaw_trigger(&self.flaws, event_name, stage_engine_type)
+    }
+
+    /// Mark a flaw as discovered and return its name
+    /// Used when a flaw causes a failure during launch
+    pub fn discover_flaw_by_id(&mut self, flaw_id: u32) -> Option<String> {
+        crate::flaw::mark_flaw_discovered(&mut self.flaws, flaw_id)
+    }
+
+    /// Get the engine type index for a flaw (None for design flaws)
+    pub fn get_flaw_engine_type_index(&self, index: usize) -> Option<i32> {
+        self.flaws.get(index).and_then(|f| f.engine_type_index)
+    }
+
     /// Get total testing spent
     pub fn get_testing_spent(&self) -> f64 {
         self.testing_spent
@@ -994,7 +1115,7 @@ impl RocketDesign {
     ///
     /// First stage: Ignition → Liftoff → MaxQ → [Booster Separation] → Separation
     /// Middle stages: Ignition → [Booster Separation] → Separation
-    /// Last stage: Ignition → Orbital Insertion
+    /// Last stage: Ignition → Payload Release
     /// Boosters separate before their core stage separates
     pub fn generate_launch_events(&self) -> Vec<LaunchEvent> {
         let mut events = Vec::new();
@@ -1097,7 +1218,7 @@ impl RocketDesign {
             } else {
                 // This is the last core stage - orbital insertion
                 events.push(LaunchEvent {
-                    name: "Orbital Insertion".to_string(),
+                    name: "Payload Release".to_string(),
                     description: "Final burn for orbit".to_string(),
                     failure_rate: 0.02, // Fixed 2% for final burn
                     rocket_stage: i,
@@ -1204,12 +1325,12 @@ mod tests {
 
         let events = design.generate_launch_events();
 
-        // Single stage should have: Ignition, Liftoff, Max-Q, Orbital Insertion
+        // Single stage should have: Ignition, Liftoff, Max-Q, Payload Release
         assert_eq!(events.len(), 4);
         assert!(events[0].name.contains("Ignition"));
         assert_eq!(events[1].name, "Liftoff");
         assert_eq!(events[2].name, "Max-Q");
-        assert_eq!(events[3].name, "Orbital Insertion");
+        assert_eq!(events[3].name, "Payload Release");
     }
 
     #[test]
@@ -1222,7 +1343,7 @@ mod tests {
 
         // Two stages:
         // Stage 1: Ignition, Liftoff, Max-Q, Separation
-        // Stage 2: Ignition, Orbital Insertion
+        // Stage 2: Ignition, Payload Release
         // Total: 6 events
         assert_eq!(events.len(), 6);
         assert!(events[0].name.contains("Stage 1 Ignition"));
@@ -1230,7 +1351,7 @@ mod tests {
         assert_eq!(events[2].name, "Max-Q");
         assert!(events[3].name.contains("Stage 1 Separation"));
         assert!(events[4].name.contains("Stage 2 Ignition"));
-        assert_eq!(events[5].name, "Orbital Insertion");
+        assert_eq!(events[5].name, "Payload Release");
     }
 
     #[test]
@@ -1245,7 +1366,7 @@ mod tests {
         // Three stages:
         // Stage 1: Ignition, Liftoff, Max-Q, Separation (4)
         // Stage 2: Ignition, Separation (2)
-        // Stage 3: Ignition, Orbital Insertion (2)
+        // Stage 3: Ignition, Payload Release (2)
         // Total: 8 events
         assert_eq!(events.len(), 8);
     }
@@ -1279,7 +1400,7 @@ mod tests {
 
         // Expected sequence:
         // Stage 1: Ignition (with boosters), Liftoff, Max-Q, Booster Separation, Separation (5)
-        // Stage 2: Ignition, Orbital Insertion (2)
+        // Stage 2: Ignition, Payload Release (2)
         // Total: 7 events
         assert_eq!(events.len(), 7, "Expected 7 events, got {}", events.len());
 
@@ -1293,7 +1414,7 @@ mod tests {
             "Expected 'Stage 1 Booster Separation', got '{}'", events[3].name);
         assert_eq!(events[4].name, "Stage 1 Separation");
         assert_eq!(events[5].name, "Stage 2 Ignition");
-        assert_eq!(events[6].name, "Orbital Insertion");
+        assert_eq!(events[6].name, "Payload Release");
     }
 
     #[test]
@@ -1634,7 +1755,7 @@ mod tests {
         design.stages[0].engine_count = 1;
 
         // Single stage with 1 engine:
-        // Events: Ignition (0.7%), Liftoff (2%), Max-Q (5%), Orbital Insertion (2%)
+        // Events: Ignition (0.7%), Liftoff (2%), Max-Q (5%), Payload Release (2%)
         // Success prob = 0.993 * 0.98 * 0.95 * 0.98 = ~0.906
 
         let prob = design.mission_success_probability();
