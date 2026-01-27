@@ -72,13 +72,12 @@ impl RocketDesigner {
         }
     }
 
-    /// Returns the failure rate of an engine type (0.0 to 1.0)
+    /// Returns the base failure rate of an engine type
+    /// Note: Engine failures now come from flaws only, so this always returns 0.0
     #[func]
-    pub fn get_engine_failure_rate(&self, engine_type: i32) -> f64 {
-        match EngineType::from_index(engine_type) {
-            Some(et) => et.spec().failure_rate,
-            None => 0.0,
-        }
+    pub fn get_engine_failure_rate(&self, _engine_type: i32) -> f64 {
+        // Engine failures are handled through the flaw system
+        0.0
     }
 
     // ==========================================
@@ -436,13 +435,12 @@ impl RocketDesigner {
         self.design.mission_success_probability()
     }
 
-    /// Gets the ignition failure rate for a stage
+    /// Gets the base ignition failure rate for a stage
+    /// Note: Engine failures now come from flaws only, so this always returns 0.0
     #[func]
-    pub fn get_stage_ignition_failure_rate(&self, stage_index: i32) -> f64 {
-        if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
-            return 0.0;
-        }
-        self.design.stages[stage_index as usize].ignition_failure_rate()
+    pub fn get_stage_ignition_failure_rate(&self, _stage_index: i32) -> f64 {
+        // Engine failures are handled through the flaw system
+        0.0
     }
 
     // ==========================================

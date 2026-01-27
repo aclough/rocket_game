@@ -1,5 +1,5 @@
 use crate::contract::{Contract, Destination};
-use crate::engine::costs;
+use crate::engine::{costs, EngineRegistry};
 use crate::rocket_design::RocketDesign;
 
 /// Cost to refresh the contract list
@@ -35,6 +35,8 @@ pub struct GameState {
     pub total_launches: u32,
     /// Successful launches
     pub successful_launches: u32,
+    /// Engine registry with engine specs and their flaws
+    pub engine_registry: EngineRegistry,
 }
 
 impl GameState {
@@ -53,6 +55,7 @@ impl GameState {
             next_design_id: 1,
             total_launches: 0,
             successful_launches: 0,
+            engine_registry: EngineRegistry::new(),
         };
 
         // Generate initial contracts

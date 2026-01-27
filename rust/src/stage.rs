@@ -60,12 +60,6 @@ impl RocketStage {
         self.engine_spec().total_thrust_kn(self.engine_count)
     }
 
-    /// Calculate failure rate for stage ignition
-    /// All engines must ignite successfully
-    pub fn ignition_failure_rate(&self) -> f64 {
-        self.engine_spec().stage_failure_rate(self.engine_count)
-    }
-
     /// Calculate delta-v this stage provides given the mass it's pushing
     ///
     /// # Arguments
@@ -194,9 +188,6 @@ impl RocketStage {
     // TWR and Gravity Loss Calculations
     // ==========================================
 
-    /// Standard gravity in m/s²
-    const G0: f64 = 9.81;
-
     /// Calculate the initial thrust-to-weight ratio for this stage
     ///
     /// # Arguments
@@ -207,7 +198,7 @@ impl RocketStage {
     pub fn initial_twr(&self, payload_mass_kg: f64) -> f64 {
         let thrust_n = self.total_thrust_kn() * 1000.0; // kN to N
         let total_mass_kg = self.wet_mass_kg() + payload_mass_kg;
-        let weight_n = total_mass_kg * Self::G0;
+        let weight_n = total_mass_kg * costs::G0;
 
         if weight_n > 0.0 {
             thrust_n / weight_n
@@ -415,20 +406,6 @@ mod tests {
             "Expected ~0.70, got {}",
             actual_fraction
         );
-    }
-
-    #[test]
-    fn test_ignition_failure_rate() {
-        let mut stage = RocketStage::new(EngineType::Kerolox);
-
-        // Single engine: 0.7%
-        stage.engine_count = 1;
-        assert!((stage.ignition_failure_rate() - 0.007).abs() < 0.0001);
-
-        // Three engines: 1 - 0.993^3 ≈ 2.08%
-        stage.engine_count = 3;
-        let expected = 1.0 - 0.993_f64.powi(3);
-        assert!((stage.ignition_failure_rate() - expected).abs() < 0.0001);
     }
 
     #[test]
@@ -726,7 +703,7 @@ mod tests {
         // TWR = thrust / ((wet_mass + payload) × g) = 1.0
         // payload = thrust/g - wet_mass
         let thrust_n = stage.total_thrust_kn() * 1000.0;
-        let payload_for_twr_one = thrust_n / RocketStage::G0 - wet_mass;
+        let payload_for_twr_one = thrust_n / costs::G0 - wet_mass;
 
         // Verify we actually have TWR = 1.0
         let twr = stage.initial_twr(payload_for_twr_one);

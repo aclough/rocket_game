@@ -1,4 +1,5 @@
 use rand::Rng;
+use rand_distr::{Distribution, LogNormal};
 
 /// Represents a hidden defect in a rocket that can cause failures
 #[derive(Clone, Debug)]
@@ -225,15 +226,49 @@ pub const DESIGN_FLAW_TEMPLATES: &[FlawTemplate] = &[
 ];
 
 impl Flaw {
+    /// Generate a randomized failure rate based on a template value.
+    /// Uses a log-normal distribution to create a "long tail" of low-likelihood flaws.
+    /// Most flaws will be near the template value, but some will be much lower or higher.
+    fn randomize_failure_rate(base_rate: f64) -> f64 {
+        let mut rng = rand::thread_rng();
+
+        // Log-normal distribution centered on base_rate
+        // sigma = 0.6 gives good spread: ~68% of values between base_rate/1.8 and base_rate*1.8
+        // and a long tail of low-probability flaws
+        let mu = base_rate.ln();
+        let sigma = 0.6;
+
+        if let Ok(dist) = LogNormal::new(mu, sigma) {
+            let rate = dist.sample(&mut rng);
+            // Clamp to reasonable range: 0.5% to 30%
+            rate.clamp(0.005, 0.30)
+        } else {
+            // Fallback to base rate if distribution creation fails
+            base_rate
+        }
+    }
+
+    /// Generate a randomized testing modifier.
+    /// Higher values mean easier to discover during testing.
+    fn randomize_testing_modifier(base_modifier: f64) -> f64 {
+        let mut rng = rand::thread_rng();
+
+        // Add some uniform noise to the testing modifier
+        // Range: base ± 0.2, clamped to [0.3, 1.0]
+        let noise = rng.gen_range(-0.2..0.2);
+        (base_modifier + noise).clamp(0.3, 1.0)
+    }
+
     /// Create a new flaw from a template with a unique ID
+    /// Failure rate and testing modifier are randomized around the template values
     pub fn from_template(template: &FlawTemplate, id: u32) -> Self {
         Self {
             id,
             flaw_type: template.flaw_type.clone(),
             name: template.name.to_string(),
             description: template.description.to_string(),
-            failure_rate: template.failure_rate,
-            testing_modifier: template.testing_modifier,
+            failure_rate: Self::randomize_failure_rate(template.failure_rate),
+            testing_modifier: Self::randomize_testing_modifier(template.testing_modifier),
             trigger_event_type: template.trigger_event_type.clone(),
             discovered: false,
             fixed: false,
@@ -242,14 +277,15 @@ impl Flaw {
     }
 
     /// Create a new engine flaw from a template with a specific engine type
+    /// Failure rate and testing modifier are randomized around the template values
     pub fn from_template_with_engine(template: &FlawTemplate, id: u32, engine_type: i32) -> Self {
         Self {
             id,
             flaw_type: template.flaw_type.clone(),
             name: template.name.to_string(),
             description: template.description.to_string(),
-            failure_rate: template.failure_rate,
-            testing_modifier: template.testing_modifier,
+            failure_rate: Self::randomize_failure_rate(template.failure_rate),
+            testing_modifier: Self::randomize_testing_modifier(template.testing_modifier),
             trigger_event_type: template.trigger_event_type.clone(),
             discovered: false,
             fixed: false,
@@ -287,6 +323,7 @@ impl Flaw {
 }
 
 /// Generate a set of flaws for a rocket design
+#[derive(Debug, Clone)]
 pub struct FlawGenerator {
     next_id: u32,
 }
@@ -296,15 +333,61 @@ impl FlawGenerator {
         Self { next_id: 1 }
     }
 
-    /// Generate flaws for a rocket based on its configuration
+    /// Generate engine flaws for a specific engine type.
+    /// Fixed count per engine type (not scaled by usage in designs).
+    /// Called when an engine type is first used via EngineRegistry.
+    pub fn generate_engine_flaws_for_type(&mut self, engine_type_index: i32) -> Vec<Flaw> {
+        let mut rng = rand::thread_rng();
+
+        // Fixed 3-4 flaws per engine type (with log-normal distribution for varied severity)
+        let flaw_count = 3 + rng.gen_range(0..2);
+        let templates = self.select_random_templates(ENGINE_FLAW_TEMPLATES, flaw_count, &mut rng);
+
+        templates
+            .into_iter()
+            .map(|template| {
+                let flaw = Flaw::from_template_with_engine(template, self.next_id, engine_type_index);
+                self.next_id += 1;
+                flaw
+            })
+            .collect()
+    }
+
+    /// Generate only design flaws for a rocket (engine flaws are on EngineSpec now).
+    /// Called when a rocket design is created.
+    pub fn generate_design_flaws(&mut self, stage_count: usize) -> Vec<Flaw> {
+        let mut rng = rand::thread_rng();
+
+        // Design flaws: 3-6 based on stage count
+        // More flaws with long tail distribution for varied gameplay
+        let design_flaw_count = 3 + stage_count.min(3);
+        let design_templates = self.select_random_templates(
+            DESIGN_FLAW_TEMPLATES,
+            design_flaw_count,
+            &mut rng,
+        );
+
+        design_templates
+            .into_iter()
+            .map(|template| {
+                let flaw = Flaw::from_template(template, self.next_id);
+                self.next_id += 1;
+                flaw
+            })
+            .collect()
+    }
+
+    /// Generate flaws for a rocket based on its configuration (legacy method)
     /// Returns a vector of flaws
+    #[deprecated(note = "Use generate_design_flaws instead; engine flaws are now on EngineSpec")]
     pub fn generate_flaws(&mut self, total_engines: u32, stage_count: usize) -> Vec<Flaw> {
         // Call the extended version with empty engine types (backward compatible)
         self.generate_flaws_with_engine_types(total_engines, stage_count, &[])
     }
 
-    /// Generate flaws for a rocket with specific engine types
+    /// Generate flaws for a rocket with specific engine types (legacy method)
     /// engine_types is a list of (engine_type_index, engine_count) pairs
+    #[deprecated(note = "Use generate_design_flaws instead; engine flaws are now on EngineSpec")]
     pub fn generate_flaws_with_engine_types(
         &mut self,
         total_engines: u32,
@@ -315,10 +398,12 @@ impl FlawGenerator {
         let mut flaws = Vec::new();
 
         // If we have engine type info, generate flaws per engine type
+        // More flaws than before, but the log-normal distribution means many
+        // will have low failure rates (long tail of low-likelihood flaws)
         if !engine_types.is_empty() {
             for &(engine_type, count) in engine_types {
-                // 1-2 flaws per engine type, scaled by count
-                let flaw_count = 1 + (count / 3).min(1) as usize;
+                // 2-4 flaws per engine type, scaled by engine count
+                let flaw_count = 2 + (count / 2).min(2) as usize;
                 let templates = self.select_random_templates(
                     ENGINE_FLAW_TEMPLATES,
                     flaw_count,
@@ -331,7 +416,7 @@ impl FlawGenerator {
             }
         } else {
             // Fallback: generate engine flaws without type association
-            let engine_flaw_count = 2 + (total_engines / 5).min(2) as usize;
+            let engine_flaw_count = 3 + (total_engines / 4).min(3) as usize;
             let engine_templates = self.select_random_templates(
                 ENGINE_FLAW_TEMPLATES,
                 engine_flaw_count,
@@ -343,9 +428,9 @@ impl FlawGenerator {
             }
         }
 
-        // Design flaws: 2-4 based on stage count
-        // More stages = more potential design flaws
-        let design_flaw_count = 2 + stage_count.min(2);
+        // Design flaws: 3-6 based on stage count
+        // More flaws with long tail distribution for varied gameplay
+        let design_flaw_count = 3 + stage_count.min(3);
         let design_templates = self.select_random_templates(
             DESIGN_FLAW_TEMPLATES,
             design_flaw_count,

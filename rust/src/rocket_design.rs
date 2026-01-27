@@ -52,6 +52,42 @@ pub mod gravity_coefficients {
     }
 }
 
+/// Calculate gravity loss for a burn phase using the full Tsiolkovsky-based formula.
+/// This is the single source of truth for gravity loss calculations.
+///
+/// # Arguments
+/// * `coefficient` - Gravity loss coefficient (1.0 = all vertical, 0.0 = all horizontal)
+/// * `exhaust_velocity` - Exhaust velocity in m/s
+/// * `mass_ratio` - Initial mass / final mass (m0/mf)
+/// * `initial_twr` - Thrust-to-weight ratio at start of burn
+/// * `ideal_delta_v` - Ideal delta-v for this burn phase (for capping)
+///
+/// # Returns
+/// Gravity loss in m/s
+pub fn calculate_gravity_loss(
+    coefficient: f64,
+    exhaust_velocity: f64,
+    mass_ratio: f64,
+    initial_twr: f64,
+    ideal_delta_v: f64,
+) -> f64 {
+    // Handle edge cases
+    if initial_twr <= 0.0 || mass_ratio <= 1.0 || coefficient <= 0.0 {
+        return 0.0;
+    }
+
+    // At TWR <= 1.0, the rocket can't accelerate upward - all vertical delta-v is lost
+    if initial_twr <= 1.0 {
+        return ideal_delta_v * coefficient;
+    }
+
+    // ΔV_gravity = C × Ve × (1 - 1/R) / TWR₀
+    let gravity_loss = coefficient * exhaust_velocity * (1.0 - 1.0 / mass_ratio) / initial_twr;
+
+    // Cap gravity loss at coefficient × ideal_dv (can't lose more than vertical component)
+    gravity_loss.min(ideal_delta_v * coefficient)
+}
+
 /// A complete rocket design with multiple stages
 #[derive(Debug, Clone)]
 pub struct RocketDesign {
@@ -360,7 +396,7 @@ impl RocketDesign {
     pub fn booster_group_initial_twr(&self, group: &BoosterGroup, payload_above: f64) -> f64 {
         let thrust_n = self.booster_group_thrust_kn(group) * 1000.0;
         let mass_kg = self.booster_group_wet_mass_kg(group, payload_above);
-        let weight_n = mass_kg * 9.81;
+        let weight_n = mass_kg * costs::G0;
 
         if weight_n > 0.0 {
             thrust_n / weight_n
@@ -629,20 +665,137 @@ impl RocketDesign {
             return 0.0;
         }
 
-        let ideal_dv = self.stage_delta_v(stage_index);
-        let twr = self.stage_twr(stage_index);
         let coefficient = self.stage_gravity_coefficient(stage_index);
 
-        // Use the same gravity loss formula but with combined TWR
-        if twr <= 0.0 {
-            return 0.0;
+        // Check if this core has boosters
+        let groups = self.find_booster_groups();
+        for group in &groups {
+            if group.core_stage_index == stage_index && !group.booster_indices.is_empty() {
+                // Boosted stage: calculate gravity loss for each phase
+                return self.calculate_boosted_stage_effective_delta_v(&group, coefficient);
+            }
         }
 
-        // Simplified gravity loss: dv_loss = C × dv × (1 - 1/R) / TWR
-        // But we need mass ratio R, which is more complex with boosters
-        // Use a simplified approximation based on the combined TWR
-        let gravity_loss = coefficient * ideal_dv / twr;
-        (ideal_dv - gravity_loss).max(0.0)
+        // Non-boosted stage: use the stage's gravity_loss method directly
+        let payload = self.mass_above_stage(stage_index);
+        let stage = &self.stages[stage_index];
+        stage.effective_delta_v(payload, coefficient)
+    }
+
+    /// Calculate effective delta-v for a stage with boosters, accounting for gravity losses
+    /// in both burn phases (parallel burn and core-only burn)
+    fn calculate_boosted_stage_effective_delta_v(
+        &self,
+        group: &BoosterGroup,
+        coefficient: f64,
+    ) -> f64 {
+        if group.booster_indices.is_empty() {
+            // Fallback to non-boosted calculation
+            let payload = self.mass_above_stage(group.core_stage_index);
+            return self.stages[group.core_stage_index].effective_delta_v(payload, coefficient);
+        }
+
+        let core = &self.stages[group.core_stage_index];
+        let payload_above = self.mass_above_stage(group.core_stage_index);
+
+        // Calculate values needed for both phases
+        let booster_burn_time = group
+            .booster_indices
+            .iter()
+            .map(|&bi| self.stages[bi].burn_time_seconds())
+            .fold(f64::INFINITY, f64::min);
+
+        // Combined thrust during parallel burn
+        let combined_thrust_kn = self.booster_group_thrust_kn(group);
+        let combined_thrust_n = combined_thrust_kn * 1000.0;
+
+        // Calculate thrust-weighted average exhaust velocity
+        let core_thrust_kn = core.total_thrust_kn();
+        let core_ve = core.exhaust_velocity_ms();
+        let mut weighted_ve = core_thrust_kn * core_ve;
+        let mut total_thrust = core_thrust_kn;
+
+        for &bi in &group.booster_indices {
+            let booster = &self.stages[bi];
+            weighted_ve += booster.total_thrust_kn() * booster.exhaust_velocity_ms();
+            total_thrust += booster.total_thrust_kn();
+        }
+        let effective_ve = weighted_ve / total_thrust;
+
+        // Initial mass (all stages + payload)
+        let mut m0 = core.wet_mass_kg() + payload_above;
+        for &bi in &group.booster_indices {
+            m0 += self.stages[bi].wet_mass_with_attachment_kg();
+        }
+
+        // Mass flow rates
+        let core_mass_flow = core.total_thrust_kn() * 1000.0 / core.exhaust_velocity_ms();
+        let mut total_mass_flow = core_mass_flow;
+        for &bi in &group.booster_indices {
+            let booster = &self.stages[bi];
+            total_mass_flow += booster.total_thrust_kn() * 1000.0 / booster.exhaust_velocity_ms();
+        }
+
+        // Propellant consumed during phase 1
+        let propellant_phase1 = total_mass_flow * booster_burn_time;
+        let m1 = m0 - propellant_phase1;
+
+        // Phase 1 delta-v and gravity loss
+        let phase1_dv = if m1 > 0.0 && m0 > m1 {
+            effective_ve * (m0 / m1).ln()
+        } else {
+            0.0
+        };
+
+        let phase1_twr = combined_thrust_n / (m0 * costs::G0);
+        let phase1_mass_ratio = if m1 > 0.0 { m0 / m1 } else { 1.0 };
+        let phase1_gravity_loss = calculate_gravity_loss(
+            coefficient,
+            effective_ve,
+            phase1_mass_ratio,
+            phase1_twr,
+            phase1_dv,
+        );
+        let phase1_effective_dv = (phase1_dv - phase1_gravity_loss).max(0.0);
+
+        // After booster jettison, core continues alone
+        let mut booster_dry_mass = 0.0;
+        for &bi in &group.booster_indices {
+            booster_dry_mass += self.stages[bi].dry_mass_with_attachment_kg();
+        }
+        let m2_start = m1 - booster_dry_mass;
+
+        // Remaining propellant in core
+        let core_propellant_used = core_mass_flow * booster_burn_time;
+        let core_propellant_remaining = core.propellant_mass_kg - core_propellant_used;
+
+        if core_propellant_remaining <= 0.0 || m2_start <= 0.0 {
+            return phase1_effective_dv;
+        }
+
+        // Final mass after core burns out
+        let m2_end = m2_start - core_propellant_remaining;
+
+        // Phase 2 delta-v and gravity loss
+        let phase2_dv = if m2_end > 0.0 && m2_start > m2_end {
+            core_ve * (m2_start / m2_end).ln()
+        } else {
+            0.0
+        };
+
+        let core_thrust_n = core.total_thrust_kn() * 1000.0;
+        let phase2_twr = core_thrust_n / (m2_start * costs::G0);
+        let phase2_mass_ratio = if m2_end > 0.0 { m2_start / m2_end } else { 1.0 };
+        let phase2_gravity_loss = calculate_gravity_loss(
+            coefficient,
+            core_ve,
+            phase2_mass_ratio,
+            phase2_twr,
+            phase2_dv,
+        );
+        let phase2_effective_dv = (phase2_dv - phase2_gravity_loss).max(0.0);
+
+        phase1_effective_dv + phase2_effective_dv
     }
 
     /// Calculate total effective delta-v for the entire rocket (after gravity losses)
@@ -743,7 +896,7 @@ impl RocketDesign {
         for group in &groups {
             if group.core_stage_index == 0 && !group.booster_indices.is_empty() {
                 let thrust_n = self.booster_group_thrust_kn(&group) * 1000.0;
-                let weight_n = self.total_wet_mass_kg() * 9.81;
+                let weight_n = self.total_wet_mass_kg() * costs::G0;
                 return thrust_n / weight_n;
             }
         }
@@ -751,7 +904,7 @@ impl RocketDesign {
         // No boosters on first stage
         let first_stage = &self.stages[0];
         let thrust_n = first_stage.total_thrust_kn() * 1000.0; // kN to N
-        let weight_n = self.total_wet_mass_kg() * 9.81; // kg to N (Earth gravity)
+        let weight_n = self.total_wet_mass_kg() * costs::G0;
 
         thrust_n / weight_n
     }
@@ -1134,7 +1287,8 @@ impl RocketDesign {
 
             stage_num += 1;
             let is_first = stage_num == 1;
-            let failure_rate = stage.ignition_failure_rate();
+            // Engine ignition failures come from flaws only, not base failure rate
+            let failure_rate = 0.0;
 
             // Find if this core has boosters
             let boosters_for_this_core: Vec<usize> = groups
@@ -1418,7 +1572,8 @@ mod tests {
     }
 
     #[test]
-    fn test_ignition_failure_rate_scales_with_engines() {
+    fn test_ignition_base_failure_rate_is_zero() {
+        // Engine ignition failures now come only from flaws, not base failure rate
         let mut design = RocketDesign::new();
         design.add_stage(EngineType::Kerolox);
         design.stages[0].engine_count = 5;
@@ -1426,9 +1581,8 @@ mod tests {
         let events = design.generate_launch_events();
         let ignition = &events[0];
 
-        // 5 engines at 0.7% each: 1 - 0.993^5 ≈ 3.45%
-        let expected = 1.0 - 0.993_f64.powi(5);
-        assert!((ignition.failure_rate - expected).abs() < 0.001);
+        // Base failure rate should be 0.0 (flaws add on top of this)
+        assert_eq!(ignition.failure_rate, 0.0);
     }
 
     #[test]
@@ -1754,23 +1908,24 @@ mod tests {
         design.add_stage(EngineType::Kerolox);
         design.stages[0].engine_count = 1;
 
-        // Single stage with 1 engine:
-        // Events: Ignition (0.7%), Liftoff (2%), Max-Q (5%), Payload Release (2%)
-        // Success prob = 0.993 * 0.98 * 0.95 * 0.98 = ~0.906
+        // Single stage:
+        // Events: Ignition (0% - flaws only), Liftoff (2%), Max-Q (5%), Payload Release (2%)
+        // Success prob = 1.0 * 0.98 * 0.95 * 0.98 = ~0.912
 
         let prob = design.mission_success_probability();
         assert!(
-            prob > 0.85 && prob < 0.95,
-            "Success probability should be ~90%: {}",
+            prob > 0.90 && prob < 0.95,
+            "Success probability should be ~91%: {}",
             prob
         );
 
-        // Adding more engines decreases success (more ignition risk)
+        // Engine count no longer affects base success probability
+        // (ignition failures now come only from flaws)
         design.stages[0].engine_count = 5;
         let prob2 = design.mission_success_probability();
         assert!(
-            prob2 < prob,
-            "More engines should decrease success: {} vs {}",
+            (prob2 - prob).abs() < 0.001,
+            "Engine count shouldn't affect base success probability: {} vs {}",
             prob2,
             prob
         );

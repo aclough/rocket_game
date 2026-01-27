@@ -9,6 +9,9 @@ pub enum EngineType {
 
 /// Cost constants for rocket budget system
 pub mod costs {
+    /// Standard gravity at Earth's surface in m/s²
+    pub const G0: f64 = 9.81;
+
     /// Starting budget in dollars
     pub const STARTING_BUDGET: f64 = 500_000_000.0;
 
@@ -110,7 +113,8 @@ impl EngineType {
         }
     }
 
-    /// Get the specification for this engine type
+    /// Get the default specification for this engine type (without flaws).
+    /// For flaw-aware operations, use EngineRegistry instead.
     pub fn spec(&self) -> EngineSpec {
         match self {
             EngineType::Hydrolox => EngineSpec {
@@ -119,31 +123,35 @@ impl EngineType {
                 mass_kg: 300.0,
                 thrust_kn: 100.0,
                 exhaust_velocity_ms: 4500.0,
-                failure_rate: 0.008, // 0.8%
-                // Future-proofing fields
                 revision: 1,
                 production_count: 0,
                 required_tech_level: 0,
                 base_cost: costs::HYDROLOX_ENGINE_COST,
+                flaws: Vec::new(),
+                flaws_generated: false,
             },
             EngineType::Kerolox => EngineSpec {
                 engine_type: *self,
                 name: "Kerolox".to_string(),
                 mass_kg: 450.0,
-                thrust_kn: 500.0,  // Reduced from 1000 kN
+                thrust_kn: 500.0,
                 exhaust_velocity_ms: 3000.0,
-                failure_rate: 0.007, // 0.7%
-                // Future-proofing fields
                 revision: 1,
                 production_count: 0,
                 required_tech_level: 0,
                 base_cost: costs::KEROLOX_ENGINE_COST,
+                flaws: Vec::new(),
+                flaws_generated: false,
             },
         }
     }
 }
 
+use crate::flaw::{Flaw, FlawGenerator};
+use std::collections::HashMap;
+
 /// Specification for a rocket engine
+/// Note: Engine failures are handled through the flaw system stored on EngineSpec.
 #[derive(Debug, Clone)]
 pub struct EngineSpec {
     /// The type of engine
@@ -156,8 +164,6 @@ pub struct EngineSpec {
     pub thrust_kn: f64,
     /// Exhaust velocity in meters per second (equivalent to Isp * g0)
     pub exhaust_velocity_ms: f64,
-    /// Probability of failure per ignition (0.0 to 1.0)
-    pub failure_rate: f64,
 
     // Future-proofing fields (from Rocket Tycoon 1.0 vision)
 
@@ -169,21 +175,16 @@ pub struct EngineSpec {
     pub required_tech_level: u32,
     /// Base cost per engine in dollars (for future economy system)
     pub base_cost: f64,
+
+    // Flaw system fields
+
+    /// Flaws associated with this engine type
+    pub flaws: Vec<Flaw>,
+    /// Whether flaws have been generated for this engine
+    pub flaws_generated: bool,
 }
 
 impl EngineSpec {
-    /// Calculate success rate for a stage with multiple engines
-    /// All engines must ignite successfully
-    pub fn stage_success_rate(&self, engine_count: u32) -> f64 {
-        let single_success = 1.0 - self.failure_rate;
-        single_success.powi(engine_count as i32)
-    }
-
-    /// Calculate failure rate for a stage with multiple engines
-    pub fn stage_failure_rate(&self, engine_count: u32) -> f64 {
-        1.0 - self.stage_success_rate(engine_count)
-    }
-
     /// Calculate total thrust for multiple engines in kN
     pub fn total_thrust_kn(&self, engine_count: u32) -> f64 {
         self.thrust_kn * engine_count as f64
@@ -192,6 +193,98 @@ impl EngineSpec {
     /// Calculate total engine mass for multiple engines in kg
     pub fn total_mass_kg(&self, engine_count: u32) -> f64 {
         self.mass_kg * engine_count as f64
+    }
+
+    /// Generate flaws for this engine if not already generated
+    pub fn generate_flaws(&mut self, generator: &mut FlawGenerator) {
+        if self.flaws_generated {
+            return;
+        }
+
+        // Generate engine flaws for this engine type
+        // Fixed count per engine type (not scaled by usage)
+        let engine_type_index = self.engine_type.to_index();
+        self.flaws = generator.generate_engine_flaws_for_type(engine_type_index);
+        self.flaws_generated = true;
+    }
+
+    /// Get active (unfixed) flaws for this engine
+    pub fn active_flaws(&self) -> Vec<&Flaw> {
+        self.flaws.iter().filter(|f| f.is_active()).collect()
+    }
+
+    /// Find a flaw by ID
+    pub fn get_flaw(&self, id: u32) -> Option<&Flaw> {
+        self.flaws.iter().find(|f| f.id == id)
+    }
+
+    /// Find a flaw by ID (mutable)
+    pub fn get_flaw_mut(&mut self, id: u32) -> Option<&mut Flaw> {
+        self.flaws.iter_mut().find(|f| f.id == id)
+    }
+}
+
+/// Registry of engine specifications with their flaws.
+/// Engine flaws are shared across all designs using the same engine type.
+#[derive(Debug, Clone)]
+pub struct EngineRegistry {
+    specs: HashMap<EngineType, EngineSpec>,
+    flaw_generator: FlawGenerator,
+}
+
+impl EngineRegistry {
+    /// Create a new registry with default engine specs
+    pub fn new() -> Self {
+        let mut specs = HashMap::new();
+        for engine_type in EngineType::all() {
+            specs.insert(engine_type, engine_type.spec());
+        }
+        Self {
+            specs,
+            flaw_generator: FlawGenerator::new(),
+        }
+    }
+
+    /// Get an engine spec (generates flaws if not already done)
+    pub fn get(&mut self, engine_type: EngineType) -> &EngineSpec {
+        // Ensure flaws are generated
+        if let Some(spec) = self.specs.get_mut(&engine_type) {
+            if !spec.flaws_generated {
+                spec.generate_flaws(&mut self.flaw_generator);
+            }
+        }
+        self.specs.get(&engine_type).unwrap()
+    }
+
+    /// Get an engine spec mutably (generates flaws if not already done)
+    pub fn get_mut(&mut self, engine_type: EngineType) -> &mut EngineSpec {
+        let spec = self.specs.get_mut(&engine_type).unwrap();
+        if !spec.flaws_generated {
+            let generator = &mut self.flaw_generator;
+            spec.generate_flaws(generator);
+        }
+        self.specs.get_mut(&engine_type).unwrap()
+    }
+
+    /// Get an engine spec without generating flaws (for read-only access to stats)
+    pub fn get_spec_readonly(&self, engine_type: EngineType) -> &EngineSpec {
+        self.specs.get(&engine_type).unwrap()
+    }
+
+    /// Get all engine types in the registry
+    pub fn engine_types(&self) -> Vec<EngineType> {
+        self.specs.keys().cloned().collect()
+    }
+
+    /// Get the flaw generator (for generating design flaws)
+    pub fn flaw_generator_mut(&mut self) -> &mut FlawGenerator {
+        &mut self.flaw_generator
+    }
+}
+
+impl Default for EngineRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -223,7 +316,6 @@ mod tests {
         assert_eq!(spec.mass_kg, 300.0);
         assert_eq!(spec.thrust_kn, 100.0);
         assert_eq!(spec.exhaust_velocity_ms, 4500.0);
-        assert_eq!(spec.failure_rate, 0.008);
     }
 
     #[test]
@@ -232,21 +324,6 @@ mod tests {
         assert_eq!(spec.mass_kg, 450.0);
         assert_eq!(spec.thrust_kn, 500.0);
         assert_eq!(spec.exhaust_velocity_ms, 3000.0);
-        assert_eq!(spec.failure_rate, 0.007);
-    }
-
-    #[test]
-    fn test_stage_failure_rate() {
-        let spec = EngineType::Kerolox.spec();
-
-        // Single engine: 0.7% failure
-        let single = spec.stage_failure_rate(1);
-        assert!((single - 0.007).abs() < 0.0001);
-
-        // Three engines: 1 - (0.993)^3 = ~2.08%
-        let triple = spec.stage_failure_rate(3);
-        let expected = 1.0 - 0.993_f64.powi(3);
-        assert!((triple - expected).abs() < 0.0001);
     }
 
     #[test]
