@@ -116,14 +116,19 @@ func _create_engine_card(engine_type: int) -> Control:
 	var thrust = designer.get_engine_thrust(engine_type)
 	var ve = designer.get_engine_exhaust_velocity(engine_type)
 	var mass = designer.get_engine_mass(engine_type)
-	var failure = designer.get_engine_failure_rate(engine_type) * 100
 	var cost = designer.get_engine_cost(engine_type)
+	var is_solid = designer.is_engine_type_solid(engine_type)
 
 	var stats_label = Label.new()
 	stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMass: %.0f kg\nFailure: %.1f%%\nCost: $%sM" % [thrust, ve, mass, failure, _format_money(cost / 1000000)]
+	if is_solid:
+		# Solid motors show different info
+		stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMotor: %.0f kg\nFixed ratio: 88%%\nCost: $%sM" % [thrust, ve, mass, _format_money(cost / 1000000)]
+		stats_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.4))
+	else:
+		stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMass: %.0f kg\nCost: $%sM" % [thrust, ve, mass, _format_money(cost / 1000000)]
+		stats_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	stats_label.add_theme_font_size_override("font_size", 12)
-	stats_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	vbox.add_child(stats_label)
 
 	# Add button instead of drag
@@ -205,7 +210,10 @@ func _update_stage_values_only():
 			# Update dry mass label
 			if card_data.has("dry_label"):
 				var dry_mass = designer.get_stage_dry_mass(stage_index)
-				card_data["dry_label"].text = "Dry: %.0f kg" % dry_mass
+				if card_data.get("is_solid", false):
+					card_data["dry_label"].text = "Motor Mass: %.0f kg" % dry_mass
+				else:
+					card_data["dry_label"].text = "Dry: %.0f kg" % dry_mass
 			# Update cost label
 			if card_data.has("cost_label"):
 				var stage_cost = designer.get_stage_cost(stage_index)
@@ -423,34 +431,47 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 		dv_label_stage.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0))
 	engine_hbox.add_child(dv_label_stage)
 
-	# Mass fraction slider row
+	# Mass fraction slider row (or fixed info for solids)
 	var slider_hbox = HBoxContainer.new()
 	slider_hbox.add_theme_constant_override("separation", 10)
 	vbox.add_child(slider_hbox)
 
-	var frac_label = Label.new()
-	frac_label.text = "Propellant:"
-	frac_label.add_theme_font_size_override("font_size", 14)
-	slider_hbox.add_child(frac_label)
+	var is_solid = designer.is_stage_solid(stage_index)
+	var slider: HSlider = null
+	var frac_value_label: Label = null
 
-	var slider = HSlider.new()
-	slider.min_value = 0.5
-	slider.max_value = 0.95
-	slider.step = 0.01
-	slider.value = designer.get_stage_mass_fraction(stage_index)
-	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slider.custom_minimum_size = Vector2(150, 0)
-	# Connect to drag_started and drag_ended to track slider state
-	slider.drag_started.connect(_on_slider_drag_started.bind(stage_index))
-	slider.drag_ended.connect(_on_slider_drag_ended.bind(stage_index))
-	slider.value_changed.connect(_on_mass_fraction_changed.bind(stage_index))
-	slider_hbox.add_child(slider)
+	if is_solid:
+		# Solid motors have fixed mass ratio - show info instead of slider
+		var solid_label = Label.new()
+		solid_label.text = "Solid Motor (fixed mass ratio 88%)"
+		solid_label.add_theme_font_size_override("font_size", 14)
+		solid_label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.2))
+		slider_hbox.add_child(solid_label)
+	else:
+		# Liquid engines - show adjustable propellant slider
+		var frac_label = Label.new()
+		frac_label.text = "Propellant:"
+		frac_label.add_theme_font_size_override("font_size", 14)
+		slider_hbox.add_child(frac_label)
 
-	var frac_value_label = Label.new()
-	frac_value_label.text = "%.0f%%" % (slider.value * 100)
-	frac_value_label.add_theme_font_size_override("font_size", 14)
-	frac_value_label.custom_minimum_size = Vector2(50, 0)
-	slider_hbox.add_child(frac_value_label)
+		slider = HSlider.new()
+		slider.min_value = 0.5
+		slider.max_value = 0.95
+		slider.step = 0.01
+		slider.value = designer.get_stage_mass_fraction(stage_index)
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		slider.custom_minimum_size = Vector2(150, 0)
+		# Connect to drag_started and drag_ended to track slider state
+		slider.drag_started.connect(_on_slider_drag_started.bind(stage_index))
+		slider.drag_ended.connect(_on_slider_drag_ended.bind(stage_index))
+		slider.value_changed.connect(_on_mass_fraction_changed.bind(stage_index))
+		slider_hbox.add_child(slider)
+
+		frac_value_label = Label.new()
+		frac_value_label.text = "%.0f%%" % (slider.value * 100)
+		frac_value_label.add_theme_font_size_override("font_size", 14)
+		frac_value_label.custom_minimum_size = Vector2(50, 0)
+		slider_hbox.add_child(frac_value_label)
 
 	# Stage info row (propellant, dry mass, and cost)
 	var info_hbox = HBoxContainer.new()
@@ -458,19 +479,32 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 	vbox.add_child(info_hbox)
 
 	var prop_mass = designer.get_stage_propellant_mass(stage_index)
-	var prop_label = Label.new()
-	prop_label.text = "Propellant: %.0f kg" % prop_mass
-	prop_label.add_theme_font_size_override("font_size", 12)
-	prop_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	info_hbox.add_child(prop_label)
-
-	# Dry mass (engines + tank structure)
 	var dry_mass = designer.get_stage_dry_mass(stage_index)
+	var prop_label = Label.new()
 	var dry_label = Label.new()
-	dry_label.text = "Dry: %.0f kg" % dry_mass
-	dry_label.add_theme_font_size_override("font_size", 12)
-	dry_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	info_hbox.add_child(dry_label)
+
+	if is_solid:
+		# For solid motors, show motor mass (dry) and propellant (auto-calculated)
+		dry_label.text = "Motor Mass: %.0f kg" % dry_mass
+		dry_label.add_theme_font_size_override("font_size", 12)
+		dry_label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.2))
+		info_hbox.add_child(dry_label)
+
+		prop_label.text = "Propellant: %.0f kg" % prop_mass
+		prop_label.add_theme_font_size_override("font_size", 12)
+		prop_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		info_hbox.add_child(prop_label)
+	else:
+		# For liquid stages, show propellant first then dry mass
+		prop_label.text = "Propellant: %.0f kg" % prop_mass
+		prop_label.add_theme_font_size_override("font_size", 12)
+		prop_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		info_hbox.add_child(prop_label)
+
+		dry_label.text = "Dry: %.0f kg" % dry_mass
+		dry_label.add_theme_font_size_override("font_size", 12)
+		dry_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		info_hbox.add_child(dry_label)
 
 	# Stage cost
 	var stage_cost = designer.get_stage_cost(stage_index)
@@ -488,9 +522,12 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 		"prop_label": prop_label,
 		"dry_label": dry_label,
 		"cost_label": cost_label_stage,
-		"frac_label": frac_value_label,
-		"slider": slider
+		"is_solid": is_solid,
 	}
+	# Only store slider references for non-solid stages
+	if not is_solid:
+		card_data["frac_label"] = frac_value_label
+		card_data["slider"] = slider
 	_stage_cards.append(card_data)
 
 	return panel

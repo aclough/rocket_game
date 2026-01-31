@@ -27,6 +27,13 @@ impl INode for GameManager {
             finance: Gd::from_init_fn(PlayerFinance::init),
         }
     }
+
+    fn ready(&mut self) {
+        // Connect PlayerFinance money_changed signal to forward through GameManager
+        let mut finance = self.finance.clone();
+        let callable = self.base().callable("_on_finance_money_changed");
+        finance.connect("money_changed", &callable);
+    }
 }
 
 #[godot_api]
@@ -56,6 +63,12 @@ impl GameManager {
     // ==========================================
     // Money and Budget
     // ==========================================
+
+    /// Callback to forward money_changed signal from PlayerFinance
+    #[func]
+    fn _on_finance_money_changed(&mut self, new_amount: f64) {
+        self.base_mut().emit_signal("money_changed", &[Variant::from(new_amount)]);
+    }
 
     /// Get the PlayerFinance resource (single source of truth for money)
     #[func]
@@ -679,11 +692,21 @@ impl GameManager {
             // Already saved, just return the index
             index as i32
         } else {
-            // Save new design
-            let index = self.state.save_current_design();
-            self.current_saved_design_index = Some(index);
-            self.base_mut().emit_signal("designs_changed", &[]);
-            index as i32
+            // Check if a design with this name already exists
+            let current_name = &self.state.rocket_design.name;
+            if let Some(existing_index) = self.state.saved_designs.iter().position(|d| &d.name == current_name) {
+                // Update existing design instead of creating duplicate
+                self.state.update_saved_design(existing_index);
+                self.current_saved_design_index = Some(existing_index);
+                self.base_mut().emit_signal("designs_changed", &[]);
+                existing_index as i32
+            } else {
+                // Save new design
+                let index = self.state.save_current_design();
+                self.current_saved_design_index = Some(index);
+                self.base_mut().emit_signal("designs_changed", &[]);
+                index as i32
+            }
         }
     }
 

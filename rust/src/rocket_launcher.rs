@@ -129,6 +129,7 @@ impl RocketLauncher {
 
         // Copy flaws from the designer
         let flaw_count = designer_ref.get_flaw_count();
+        godot_print!("copy_design_from: copying {} flaws", flaw_count);
         for i in 0..flaw_count {
             let name = designer_ref.get_flaw_name(i).to_string();
             let description = designer_ref.get_flaw_description(i).to_string();
@@ -137,6 +138,12 @@ impl RocketLauncher {
             let is_engine = designer_ref.is_flaw_engine_type(i);
             let failure_rate = designer_ref.get_flaw_failure_rate(i);
             let engine_type_idx = designer_ref.get_flaw_engine_type_index(i);
+            let trigger_type_idx = designer_ref.get_flaw_trigger_type(i);
+
+            let trigger = crate::flaw::FlawTrigger::from_index(trigger_type_idx)
+                .unwrap_or(crate::flaw::FlawTrigger::MaxQ);
+            godot_print!("  flaw[{}]: {} trigger={:?} rate={} fixed={}",
+                i, name, trigger, failure_rate, fixed);
 
             // Create a flaw with matching properties
             let flaw = crate::flaw::Flaw {
@@ -150,11 +157,7 @@ impl RocketLauncher {
                 description,
                 failure_rate,
                 testing_modifier: 0.8,
-                trigger_event_type: if is_engine {
-                    crate::flaw::FlawTrigger::Ignition
-                } else {
-                    crate::flaw::FlawTrigger::MaxQ
-                },
+                trigger_event_type: trigger,
                 discovered,
                 fixed,
                 engine_type_index: if engine_type_idx >= 0 { Some(engine_type_idx) } else { None },
@@ -227,37 +230,25 @@ impl RocketLauncher {
     }
 
     /// Returns the BASE failure probability for a specific stage/event by index
-    /// Does not include flaw contributions
+    /// Always returns 0.0 since all failures come from flaws
     #[func]
-    pub fn get_stage_failure_rate(&self, index: i32) -> f64 {
-        if index < 0 {
-            return 0.0;
-        }
-
-        if self.use_design && !self.cached_events.is_empty() {
-            if (index as usize) < self.cached_events.len() {
-                self.cached_events[index as usize].failure_rate
-            } else {
-                0.0
-            }
-        } else {
-            let stages = LaunchStage::all_stages();
-            if (index as usize) < stages.len() {
-                stages[index as usize].failure_probability()
-            } else {
-                0.0
-            }
-        }
+    pub fn get_stage_failure_rate(&self, _index: i32) -> f64 {
+        0.0
     }
 
     /// Returns the TOTAL failure probability for a specific stage/event
-    /// Includes base failure rate PLUS flaw contributions (design + engine flaws)
+    /// All failures come from flaws only
     #[func]
     pub fn get_total_failure_rate(&mut self, index: i32) -> f64 {
-        let base_rate = self.get_stage_failure_rate(index);
         let flaw_rate = self.get_flaw_failure_rate(index);
+        let event_name = if index >= 0 && (index as usize) < self.cached_events.len() {
+            self.cached_events[index as usize].name.clone()
+        } else {
+            "unknown".to_string()
+        };
+        godot_print!("get_total_failure_rate: event={}, flaw_rate={}", event_name, flaw_rate);
         // Cap total failure rate at 95%
-        (base_rate + flaw_rate).min(0.95)
+        flaw_rate.min(0.95)
     }
 
     /// Returns the combined flaw failure contribution for a specific event

@@ -1,3 +1,5 @@
+use crate::flaw::FlawCategory;
+
 /// Engine types available for rocket design
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EngineType {
@@ -5,6 +7,8 @@ pub enum EngineType {
     Hydrolox,
     /// Kerosene/Oxygen engine - lower efficiency, higher thrust
     Kerolox,
+    /// Solid rocket motor - fixed mass ratio, high thrust, cheap
+    Solid,
 }
 
 /// Cost constants for rocket budget system
@@ -27,6 +31,7 @@ pub mod costs {
     /// Cost per engine by type (in dollars)
     pub const KEROLOX_ENGINE_COST: f64 = 10_000_000.0;
     pub const HYDROLOX_ENGINE_COST: f64 = 15_000_000.0;
+    pub const SOLID_ENGINE_COST: f64 = 15_000_000.0;  // Cost per solid motor
 
     /// Cost per cubic meter of tank volume (in dollars)
     /// Covers tank structure, insulation, plumbing, etc.
@@ -72,6 +77,19 @@ pub mod costs {
     /// More complex plumbing and boil-off management
     pub const HYDROLOX_TANK_MASS_RATIO: f64 = 0.10;
 
+    /// Solid motor fixed mass ratio (propellant mass / total mass)
+    /// Modern solid motors achieve ~0.88 mass ratio
+    /// Player cannot adjust propellant independently - motor is a fixed unit
+    pub const SOLID_MASS_RATIO: f64 = 0.88;
+
+    /// Solid motor propellant density in kg/m³
+    /// HTPB/AP propellant is quite dense
+    pub const SOLID_DENSITY_KG_M3: f64 = 1800.0;
+
+    /// Solid motor "tank" mass ratio (casing mass as fraction of propellant)
+    /// For solids this represents the motor casing, not tanks
+    pub const SOLID_TANK_MASS_RATIO: f64 = 0.136;  // Derived from mass ratio: (1 - 0.88) / 0.88
+
     /// Structural mass for booster attachment points in kg
     /// Covers radial decouplers, structural adapters, and crossfeed plumbing
     pub const BOOSTER_ATTACHMENT_MASS_KG: f64 = 500.0;
@@ -84,7 +102,7 @@ pub mod costs {
 impl EngineType {
     /// Returns all available engine types
     pub fn all() -> Vec<EngineType> {
-        vec![EngineType::Hydrolox, EngineType::Kerolox]
+        vec![EngineType::Hydrolox, EngineType::Kerolox, EngineType::Solid]
     }
 
     /// Convert from integer index (for Godot API)
@@ -92,6 +110,7 @@ impl EngineType {
         match index {
             0 => Some(EngineType::Hydrolox),
             1 => Some(EngineType::Kerolox),
+            2 => Some(EngineType::Solid),
             _ => None,
         }
     }
@@ -101,6 +120,7 @@ impl EngineType {
         match self {
             EngineType::Hydrolox => 0,
             EngineType::Kerolox => 1,
+            EngineType::Solid => 2,
         }
     }
 
@@ -109,6 +129,7 @@ impl EngineType {
         match self {
             EngineType::Hydrolox => costs::HYDROLOX_ENGINE_COST,
             EngineType::Kerolox => costs::KEROLOX_ENGINE_COST,
+            EngineType::Solid => costs::SOLID_ENGINE_COST,
         }
     }
 
@@ -117,15 +138,41 @@ impl EngineType {
         match self {
             EngineType::Hydrolox => costs::HYDROLOX_DENSITY_KG_M3,
             EngineType::Kerolox => costs::KEROLOX_DENSITY_KG_M3,
+            EngineType::Solid => costs::SOLID_DENSITY_KG_M3,
         }
     }
 
     /// Get the tank structural mass ratio for this engine type
     /// This is the fraction of propellant mass that the tank structure weighs
+    /// For solids, this represents the motor casing
     pub fn tank_mass_ratio(&self) -> f64 {
         match self {
             EngineType::Hydrolox => costs::HYDROLOX_TANK_MASS_RATIO,
             EngineType::Kerolox => costs::KEROLOX_TANK_MASS_RATIO,
+            EngineType::Solid => costs::SOLID_TANK_MASS_RATIO,
+        }
+    }
+
+    /// Get the fixed mass ratio for this engine type, if applicable
+    /// Solid motors have a fixed mass ratio; liquid engines return None
+    pub fn fixed_mass_ratio(&self) -> Option<f64> {
+        match self {
+            EngineType::Solid => Some(costs::SOLID_MASS_RATIO),
+            _ => None,
+        }
+    }
+
+    /// Check if this engine type uses solid propellant
+    pub fn is_solid(&self) -> bool {
+        matches!(self, EngineType::Solid)
+    }
+
+    /// Get the flaw category for this engine type
+    /// Determines which set of flaw templates to use
+    pub fn flaw_category(&self) -> FlawCategory {
+        match self {
+            EngineType::Solid => FlawCategory::SolidMotor,
+            _ => FlawCategory::LiquidEngine,
         }
     }
 
@@ -157,6 +204,20 @@ impl EngineType {
                 production_count: 0,
                 required_tech_level: 0,
                 base_cost: costs::KEROLOX_ENGINE_COST,
+                active_flaws: Vec::new(),
+                fixed_flaws: Vec::new(),
+                flaws_generated: false,
+            },
+            EngineType::Solid => EngineSpec {
+                engine_type: *self,
+                name: "Solid".to_string(),
+                mass_kg: 40_000.0,   // Dry mass of one solid motor
+                thrust_kn: 8_000.0,  // High thrust
+                exhaust_velocity_ms: 2650.0, // ~270s Isp
+                revision: 1,
+                production_count: 0,
+                required_tech_level: 0,
+                base_cost: costs::SOLID_ENGINE_COST,
                 active_flaws: Vec::new(),
                 fixed_flaws: Vec::new(),
                 flaws_generated: false,
@@ -221,10 +282,11 @@ impl EngineSpec {
             return;
         }
 
-        // Generate engine flaws for this engine type
-        // Fixed count per engine type (not scaled by usage)
+        // Generate engine flaws for this engine type using the appropriate category
+        // Solid motors use SolidMotor flaws, liquid engines use LiquidEngine flaws
         let engine_type_index = self.engine_type.to_index();
-        self.active_flaws = generator.generate_engine_flaws_for_type(engine_type_index);
+        let category = self.engine_type.flaw_category();
+        self.active_flaws = generator.generate_engine_flaws_for_type_with_category(engine_type_index, category);
         self.fixed_flaws.clear();
         self.flaws_generated = true;
     }
@@ -338,19 +400,40 @@ mod tests {
     #[test]
     fn test_engine_types() {
         let types = EngineType::all();
-        assert_eq!(types.len(), 2);
+        assert_eq!(types.len(), 3);
         assert!(types.contains(&EngineType::Hydrolox));
         assert!(types.contains(&EngineType::Kerolox));
+        assert!(types.contains(&EngineType::Solid));
     }
 
     #[test]
     fn test_engine_index_conversion() {
         assert_eq!(EngineType::from_index(0), Some(EngineType::Hydrolox));
         assert_eq!(EngineType::from_index(1), Some(EngineType::Kerolox));
-        assert_eq!(EngineType::from_index(2), None);
+        assert_eq!(EngineType::from_index(2), Some(EngineType::Solid));
+        assert_eq!(EngineType::from_index(3), None);
 
         assert_eq!(EngineType::Hydrolox.to_index(), 0);
         assert_eq!(EngineType::Kerolox.to_index(), 1);
+        assert_eq!(EngineType::Solid.to_index(), 2);
+    }
+
+    #[test]
+    fn test_solid_spec() {
+        let spec = EngineType::Solid.spec();
+        assert_eq!(spec.mass_kg, 40_000.0);
+        assert_eq!(spec.thrust_kn, 8_000.0);
+        assert_eq!(spec.exhaust_velocity_ms, 2650.0);
+    }
+
+    #[test]
+    fn test_solid_fixed_mass_ratio() {
+        assert!(EngineType::Solid.fixed_mass_ratio().is_some());
+        assert!(EngineType::Kerolox.fixed_mass_ratio().is_none());
+        assert!(EngineType::Hydrolox.fixed_mass_ratio().is_none());
+
+        let ratio = EngineType::Solid.fixed_mass_ratio().unwrap();
+        assert!((ratio - 0.88).abs() < 0.01);
     }
 
     #[test]

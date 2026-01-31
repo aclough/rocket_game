@@ -43,7 +43,7 @@ impl RocketDesigner {
     }
 
     /// Returns the name of an engine type by index
-    /// 0 = Hydrolox, 1 = Kerolox
+    /// 0 = Hydrolox, 1 = Kerolox, 2 = Solid
     #[func]
     pub fn get_engine_name(&self, engine_type: i32) -> GString {
         match EngineType::from_index(engine_type) {
@@ -85,6 +85,15 @@ impl RocketDesigner {
     pub fn get_engine_failure_rate(&self, _engine_type: i32) -> f64 {
         // Engine failures are handled through the flaw system
         0.0
+    }
+
+    /// Check if an engine type is a solid rocket motor
+    #[func]
+    pub fn is_engine_type_solid(&self, engine_type: i32) -> bool {
+        match EngineType::from_index(engine_type) {
+            Some(et) => et.is_solid(),
+            None => false,
+        }
     }
 
     // ==========================================
@@ -193,6 +202,25 @@ impl RocketDesigner {
         self.design.stages[stage_index as usize].engine_type.to_index()
     }
 
+    /// Gets the engine type name for a stage (e.g., "Kerolox", "Hydrolox", "Solid")
+    #[func]
+    pub fn get_stage_engine_type_name(&self, stage_index: i32) -> GString {
+        if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
+            return GString::from("");
+        }
+        let engine_type = self.design.stages[stage_index as usize].engine_type;
+        GString::from(engine_type.spec().name.as_str())
+    }
+
+    /// Check if a stage uses solid rocket motors
+    #[func]
+    pub fn is_stage_solid(&self, stage_index: i32) -> bool {
+        if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
+            return false;
+        }
+        self.design.stages[stage_index as usize].engine_type.is_solid()
+    }
+
     // ==========================================
     // Stage Configuration
     // ==========================================
@@ -207,13 +235,14 @@ impl RocketDesigner {
     }
 
     /// Sets the number of engines in a stage
+    /// For solid motors, this also updates the propellant mass
     #[func]
     pub fn set_stage_engine_count(&mut self, stage_index: i32, count: i32) {
         if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
             return;
         }
-        let count = count.max(1) as u32; // Minimum 1 engine
-        self.design.stages[stage_index as usize].engine_count = count;
+        // Use set_engine_count which handles solid propellant updates
+        self.design.stages[stage_index as usize].set_engine_count(count.max(1) as u32);
         self.emit_design_changed();
     }
 
@@ -480,14 +509,11 @@ impl RocketDesigner {
         GString::from(events[event_index as usize].description.as_str())
     }
 
-    /// Gets the failure rate of a launch event by index
+    /// Gets the base failure rate of a launch event by index
+    /// Always returns 0.0 since all failures come from flaws
     #[func]
-    pub fn get_launch_event_failure_rate(&self, event_index: i32) -> f64 {
-        let events = self.design.generate_launch_events();
-        if event_index < 0 || event_index as usize >= events.len() {
-            return 0.0;
-        }
-        events[event_index as usize].failure_rate
+    pub fn get_launch_event_failure_rate(&self, _event_index: i32) -> f64 {
+        0.0
     }
 
     /// Gets the rocket stage index for a launch event
@@ -950,6 +976,18 @@ impl RocketDesigner {
         }
     }
 
+    /// Get the trigger type index for a flaw (0=Ignition, 1=Liftoff, 2=MaxQ, 3=Separation, 4=PayloadRelease)
+    #[func]
+    pub fn get_flaw_trigger_type(&self, index: i32) -> i32 {
+        if index < 0 {
+            return -1;
+        }
+        match self.get_flaw_by_combined_index(index as usize) {
+            Some((flaw, _, _)) => flaw.trigger_event_type.to_index(),
+            None => -1,
+        }
+    }
+
     /// Run an engine test - tests engine flaws for all engine types in the design
     /// Returns array of discovered flaw names
     #[func]
@@ -1210,9 +1248,33 @@ impl RocketDesigner {
     }
 
     /// Get the estimated success rate including flaws
+    /// Combines design flaws and engine flaws from the registry
     #[func]
     pub fn get_estimated_success_rate(&self) -> f64 {
-        self.design.estimate_success_rate_with_flaws()
+        let base_success = self.design.mission_success_probability();
+
+        // Start with design flaw success rate
+        let design_flaw_success: f64 = self.design.active_flaws
+            .iter()
+            .filter(|f| !f.fixed)
+            .map(|f| 1.0 - f.failure_rate)
+            .product();
+
+        // Multiply by engine flaw success rates for each engine type used
+        let engine_flaw_success: f64 = self.design.get_unique_engine_types()
+            .iter()
+            .filter_map(|&et_idx| EngineType::from_index(et_idx))
+            .map(|et| {
+                let spec = self.engine_registry.get_spec_readonly(et);
+                spec.active_flaws
+                    .iter()
+                    .filter(|f| !f.fixed)
+                    .map(|f| 1.0 - f.failure_rate)
+                    .product::<f64>()
+            })
+            .product();
+
+        base_success * design_flaw_success * engine_flaw_success
     }
 
     /// Get the estimated range of unknown flaws (min, max)

@@ -17,40 +17,51 @@ pub struct BoosterGroup {
 pub const TARGET_DELTA_V_MS: f64 = 8100.0; // ~7800 orbital velocity + ~300 aerodynamic losses
 pub const DEFAULT_PAYLOAD_KG: f64 = 8000.0;
 
-/// Gravity loss coefficients by stage position
+/// Gravity loss coefficients based on cumulative delta-v achieved
 /// These represent how much of the burn is fighting gravity vs. building horizontal velocity
-/// First stage burns mostly vertical, upper stages burn more horizontal (gravity turn)
+/// Early burns are mostly vertical, later burns are more horizontal (gravity turn)
 /// Real gravity losses are ~1000-1500 m/s for first stage (~10-15% of total delta-v)
 pub mod gravity_coefficients {
-    /// First stage: mostly vertical, significant gravity losses
-    pub const FIRST_STAGE: f64 = 0.15;
-    /// Second stage: gravity turn in progress, moderate losses
-    pub const SECOND_STAGE: f64 = 0.08;
-    /// Third stage: mostly horizontal, low losses
-    pub const THIRD_STAGE: f64 = 0.03;
-    /// Fourth+ stages: nearly horizontal, minimal losses
-    pub const UPPER_STAGE: f64 = 0.01;
+    /// Maximum coefficient at launch (mostly vertical)
+    pub const MAX_COEFFICIENT: f64 = 0.18;
+    /// Minimum coefficient at high velocity (nearly horizontal)
+    pub const MIN_COEFFICIENT: f64 = 0.01;
+    /// Delta-v at which trajectory is mostly horizontal
+    const HORIZONTAL_DV: f64 = 5000.0;
 
-    /// Get the gravity loss coefficient for a stage based on its position
-    /// Stage index 0 = first stage (fires first)
-    pub fn for_stage(stage_index: usize, total_stages: usize) -> f64 {
-        if total_stages == 0 {
-            return 0.0;
+    /// Get the gravity loss coefficient based on cumulative delta-v already achieved
+    ///
+    /// The coefficient decreases as the rocket gains velocity because:
+    /// - At launch (0 m/s): rocket is vertical, fighting gravity directly
+    /// - During gravity turn (~1000-3000 m/s): transitioning to horizontal
+    /// - Near orbit (~5000+ m/s): mostly horizontal, minimal gravity loss
+    ///
+    /// # Arguments
+    /// * `cumulative_delta_v` - Effective delta-v achieved by previous stages
+    ///
+    /// # Returns
+    /// Coefficient between MIN_COEFFICIENT and MAX_COEFFICIENT
+    pub fn for_cumulative_delta_v(cumulative_delta_v: f64) -> f64 {
+        if cumulative_delta_v <= 0.0 {
+            return MAX_COEFFICIENT;
         }
 
-        // For single-stage rockets, use an average coefficient
-        if total_stages == 1 {
-            return 0.10;
+        if cumulative_delta_v >= HORIZONTAL_DV {
+            return MIN_COEFFICIENT;
         }
 
-        match stage_index {
-            0 => FIRST_STAGE,
-            1 => SECOND_STAGE,
-            2 => THIRD_STAGE,
-            _ => UPPER_STAGE,
-        }
+        // Exponential decay from MAX to MIN based on cumulative delta-v
+        // This models the gravity turn where the rocket progressively pitches over
+        let decay_rate = (MAX_COEFFICIENT / MIN_COEFFICIENT).ln() / HORIZONTAL_DV;
+        let coefficient = MAX_COEFFICIENT * (-decay_rate * cumulative_delta_v).exp();
+
+        coefficient.max(MIN_COEFFICIENT)
     }
 }
+
+/// Threshold coefficient above which TWR <= 1 means "can't lift off"
+/// Below this threshold, the burn is mostly horizontal (in space) and TWR < 1 is acceptable
+const VERTICAL_BURN_THRESHOLD: f64 = 0.10;
 
 /// Calculate gravity loss for a burn phase using the full Tsiolkovsky-based formula.
 /// This is the single source of truth for gravity loss calculations.
@@ -76,9 +87,15 @@ pub fn calculate_gravity_loss(
         return 0.0;
     }
 
-    // At TWR <= 1.0, the rocket can't accelerate upward - all vertical delta-v is lost
+    // At TWR <= 1.0, behavior depends on whether this is a vertical or horizontal burn
     if initial_twr <= 1.0 {
-        return ideal_delta_v * coefficient;
+        if coefficient > VERTICAL_BURN_THRESHOLD {
+            // Mostly vertical burn (early in flight): can't lift off, all delta-v is lost
+            return ideal_delta_v;
+        } else {
+            // Mostly horizontal burn (in space): just burns slowly, only lose vertical component
+            return ideal_delta_v * coefficient;
+        }
     }
 
     // ΔV_gravity = C × Ve × (1 - 1/R) / TWR₀
@@ -447,6 +464,27 @@ impl RocketDesign {
         mass
     }
 
+    /// Calculate the mass above a given stage EXCLUDING boosters attached to this stage
+    /// This is the "true payload" for delta-v calculations when boosters fire in parallel
+    pub fn mass_above_stage_excluding_attached_boosters(
+        &self,
+        stage_index: usize,
+        group: &BoosterGroup,
+    ) -> f64 {
+        let mut mass = self.payload_mass_kg;
+
+        // Add mass of all stages above this one, excluding boosters in the given group
+        for i in (stage_index + 1)..self.stages.len() {
+            // Skip boosters that are part of this group (they fire in parallel, not payload)
+            if group.booster_indices.contains(&i) {
+                continue;
+            }
+            mass += self.stages[i].wet_mass_with_attachment_kg();
+        }
+
+        mass
+    }
+
     /// Calculate delta-v for a core stage with boosters during parallel burn
     /// Returns (phase1_dv, phase2_dv) where:
     /// - phase1_dv is delta-v during combined burn (boosters + core)
@@ -460,7 +498,9 @@ impl RocketDesign {
         }
 
         let core = &self.stages[group.core_stage_index];
-        let payload_above = self.mass_above_stage(group.core_stage_index);
+        // Use payload excluding boosters - boosters fire in parallel, not as payload
+        let payload_above =
+            self.mass_above_stage_excluding_attached_boosters(group.core_stage_index, group);
 
         // Find shortest booster burn time (when first booster depletes)
         let booster_burn_time = group
@@ -588,9 +628,27 @@ impl RocketDesign {
     // TWR and Gravity Loss Calculations
     // ==========================================
 
-    /// Get the gravity loss coefficient for a stage based on its position
+    /// Get the gravity loss coefficient for a stage based on cumulative delta-v
+    /// from previous stages
     pub fn stage_gravity_coefficient(&self, stage_index: usize) -> f64 {
-        gravity_coefficients::for_stage(stage_index, self.stages.len())
+        let cumulative_dv = self.cumulative_effective_delta_v_before_stage(stage_index);
+        gravity_coefficients::for_cumulative_delta_v(cumulative_dv)
+    }
+
+    /// Calculate the cumulative effective delta-v from all stages before the given stage
+    /// This is used to determine the gravity loss coefficient for a stage
+    fn cumulative_effective_delta_v_before_stage(&self, stage_index: usize) -> f64 {
+        if stage_index == 0 {
+            return 0.0;
+        }
+
+        // Calculate effective delta-v for each previous stage in order
+        let mut cumulative_dv = 0.0;
+        for i in 0..stage_index {
+            let effective_dv = self.stage_effective_delta_v_internal(i, cumulative_dv);
+            cumulative_dv += effective_dv;
+        }
+        cumulative_dv
     }
 
     /// Calculate the initial TWR for a stage (thrust / weight at ignition)
@@ -663,6 +721,13 @@ impl RocketDesign {
     /// Calculate the effective delta-v for a single stage (after gravity losses)
     /// For boosters, returns 0 (their contribution is counted with core)
     pub fn stage_effective_delta_v(&self, stage_index: usize) -> f64 {
+        let cumulative_dv = self.cumulative_effective_delta_v_before_stage(stage_index);
+        self.stage_effective_delta_v_internal(stage_index, cumulative_dv)
+    }
+
+    /// Internal method to calculate effective delta-v given cumulative delta-v from previous stages
+    /// This avoids recalculating cumulative delta-v when processing stages in order
+    fn stage_effective_delta_v_internal(&self, stage_index: usize, cumulative_delta_v: f64) -> f64 {
         if stage_index >= self.stages.len() {
             return 0.0;
         }
@@ -672,7 +737,7 @@ impl RocketDesign {
             return 0.0;
         }
 
-        let coefficient = self.stage_gravity_coefficient(stage_index);
+        let coefficient = gravity_coefficients::for_cumulative_delta_v(cumulative_delta_v);
 
         // Check if this core has boosters
         let groups = self.find_booster_groups();
@@ -703,7 +768,9 @@ impl RocketDesign {
         }
 
         let core = &self.stages[group.core_stage_index];
-        let payload_above = self.mass_above_stage(group.core_stage_index);
+        // Use payload excluding boosters - boosters fire in parallel, not as payload
+        let payload_above =
+            self.mass_above_stage_excluding_attached_boosters(group.core_stage_index, group);
 
         // Calculate values needed for both phases
         let booster_burn_time = group
@@ -938,14 +1005,9 @@ impl RocketDesign {
     }
 
     /// Calculate overall mission success probability
-    /// Product of all event success probabilities
+    /// Returns 1.0 since all failures come from flaws, not base event failure rates
     pub fn mission_success_probability(&self) -> f64 {
-        let events = self.generate_launch_events();
-        let mut probability = 1.0;
-        for event in events {
-            probability *= 1.0 - event.failure_rate;
-        }
-        probability
+        1.0
     }
 
     // ==========================================
@@ -1320,8 +1382,6 @@ pub struct LaunchEvent {
     pub name: String,
     /// Description of the event
     pub description: String,
-    /// Failure rate for this event (0.0 to 1.0)
-    pub failure_rate: f64,
     /// Which rocket stage this event belongs to (0-indexed)
     pub rocket_stage: usize,
 }
@@ -1350,8 +1410,6 @@ impl RocketDesign {
 
             stage_num += 1;
             let is_first = stage_num == 1;
-            // Engine ignition failures come from flaws only, not base failure rate
-            let failure_rate = 0.0;
 
             // Find if this core has boosters
             let boosters_for_this_core: Vec<usize> = groups
@@ -1370,7 +1428,6 @@ impl RocketDesign {
                         if stage.engine_count > 1 { "s" } else { "" },
                         if stage.engine_count > 1 { "e" } else { "es" }
                     ),
-                    failure_rate,
                     rocket_stage: i,
                 });
             } else {
@@ -1387,7 +1444,6 @@ impl RocketDesign {
                         stage_num,
                         total_engines
                     ),
-                    failure_rate,
                     rocket_stage: i,
                 });
             }
@@ -1397,14 +1453,12 @@ impl RocketDesign {
                 events.push(LaunchEvent {
                     name: "Liftoff".to_string(),
                     description: "Rocket lifts off from the pad".to_string(),
-                    failure_rate: 0.02, // Fixed 2% for liftoff structural
                     rocket_stage: i,
                 });
 
                 events.push(LaunchEvent {
                     name: "Max-Q".to_string(),
                     description: "Maximum dynamic pressure".to_string(),
-                    failure_rate: 0.05, // Fixed 5% for max-q aerodynamic
                     rocket_stage: i,
                 });
             }
@@ -1414,7 +1468,6 @@ impl RocketDesign {
                 events.push(LaunchEvent {
                     name: format!("Stage {} Booster Separation", stage_num),
                     description: format!("Stage {} booster separates", stage_num),
-                    failure_rate: 0.03, // Fixed 3% for separation
                     rocket_stage: booster_idx,
                 });
             }
@@ -1429,7 +1482,6 @@ impl RocketDesign {
                 events.push(LaunchEvent {
                     name: format!("Stage {} Separation", stage_num),
                     description: format!("Stage {} separates", stage_num),
-                    failure_rate: 0.03, // Fixed 3% for separation
                     rocket_stage: i,
                 });
             } else {
@@ -1437,7 +1489,6 @@ impl RocketDesign {
                 events.push(LaunchEvent {
                     name: "Payload Release".to_string(),
                     description: "Final burn for orbit".to_string(),
-                    failure_rate: 0.02, // Fixed 2% for final burn
                     rocket_stage: i,
                 });
             }
@@ -1632,20 +1683,6 @@ mod tests {
         assert_eq!(events[4].name, "Stage 1 Separation");
         assert_eq!(events[5].name, "Stage 2 Ignition");
         assert_eq!(events[6].name, "Payload Release");
-    }
-
-    #[test]
-    fn test_ignition_base_failure_rate_is_zero() {
-        // Engine ignition failures now come only from flaws, not base failure rate
-        let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
-        design.stages[0].engine_count = 5;
-
-        let events = design.generate_launch_events();
-        let ignition = &events[0];
-
-        // Base failure rate should be 0.0 (flaws add on top of this)
-        assert_eq!(ignition.failure_rate, 0.0);
     }
 
     #[test]
@@ -1940,17 +1977,19 @@ mod tests {
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
         design.add_stage(EngineType::Hydrolox);
-        design.stages[0].propellant_mass_kg = 14000.0; // Enough to exceed 100%
-        design.stages[0].engine_count = 1;
-        // With tank mass at 10% (Hydrolox), this gives ~8300 m/s ideal (>100% of 8100 target)
-        // Effective delta-v is lower due to gravity losses
+        // Need enough propellant to exceed 100% ideal delta-v even with 2 engines
+        design.stages[0].propellant_mass_kg = 17000.0;
+        // Need multiple engines to achieve TWR > 1 for liftoff
+        // 1 Hydrolox engine (100 kN) with this mass gives TWR ~0.55, which can't lift off
+        // 2 engines gives TWR ~1.1, which can lift off
+        design.stages[0].engine_count = 2;
 
         // Test that effective percentage is less than ideal
         let effective_percentage = design.delta_v_percentage();
         let ideal_percentage = design.ideal_delta_v_percentage();
 
         assert!(
-            ideal_percentage > 100.0 && ideal_percentage < 120.0,
+            ideal_percentage > 100.0 && ideal_percentage < 130.0,
             "Ideal percentage should be >100%: {}",
             ideal_percentage
         );
@@ -1973,18 +2012,16 @@ mod tests {
         design.add_stage(EngineType::Kerolox);
         design.stages[0].engine_count = 1;
 
-        // Single stage:
-        // Events: Ignition (0% - flaws only), Liftoff (2%), Max-Q (5%), Payload Release (2%)
-        // Success prob = 1.0 * 0.98 * 0.95 * 0.98 = ~0.912
-
+        // All base failure rates are now 0% - failures come only from flaws
+        // Without flaws, success probability is 100%
         let prob = design.mission_success_probability();
         assert!(
-            prob > 0.90 && prob < 0.95,
-            "Success probability should be ~91%: {}",
+            (prob - 1.0).abs() < 0.001,
+            "Success probability should be 100% without flaws: {}",
             prob
         );
 
-        // Engine count no longer affects base success probability
+        // Engine count doesn't affect base success probability
         // (ignition failures now come only from flaws)
         design.stages[0].engine_count = 5;
         let prob2 = design.mission_success_probability();
@@ -2105,13 +2142,17 @@ mod tests {
 
     #[test]
     fn test_gravity_coefficients() {
-        // First stage should have highest coefficient
-        let c1 = gravity_coefficients::for_stage(0, 3);
-        let c2 = gravity_coefficients::for_stage(1, 3);
-        let c3 = gravity_coefficients::for_stage(2, 3);
+        // Coefficient should decrease as cumulative delta-v increases
+        let c_start = gravity_coefficients::for_cumulative_delta_v(0.0);
+        let c_mid = gravity_coefficients::for_cumulative_delta_v(2500.0);
+        let c_high = gravity_coefficients::for_cumulative_delta_v(5000.0);
 
-        assert!(c1 > c2, "First stage should have higher coefficient: {} vs {}", c1, c2);
-        assert!(c2 > c3, "Second stage should have higher coefficient than third: {} vs {}", c2, c3);
+        assert!(c_start > c_mid, "Coefficient at 0 m/s should be higher than at 2500 m/s: {} vs {}", c_start, c_mid);
+        assert!(c_mid > c_high, "Coefficient at 2500 m/s should be higher than at 5000 m/s: {} vs {}", c_mid, c_high);
+
+        // Verify bounds
+        assert!(c_start <= gravity_coefficients::MAX_COEFFICIENT, "Coefficient should not exceed MAX");
+        assert!(c_high >= gravity_coefficients::MIN_COEFFICIENT, "Coefficient should not go below MIN");
     }
 
     #[test]
@@ -2169,11 +2210,12 @@ mod tests {
 
         let efficiency = design.gravity_efficiency();
 
-        // With default design, efficiency depends on TWR
-        // Lower TWR = higher gravity losses = lower efficiency
-        // With realistic TWR (~1.8), efficiency may be 40-80%
+        // With dynamic gravity coefficients based on cumulative delta-v:
+        // - First stage starts with high coefficient (~0.18) but good TWR (~1.8)
+        // - Second stage has lower coefficient (accumulated delta-v reduces it)
+        // Overall efficiency is typically 90-98% with good TWR
         assert!(
-            efficiency > 0.4 && efficiency < 0.95,
+            efficiency > 0.85 && efficiency < 0.99,
             "Gravity efficiency should be reasonable: {}",
             efficiency
         );
@@ -2234,6 +2276,84 @@ mod tests {
             "More engines should reduce gravity loss: {} vs {}",
             loss2,
             loss1
+        );
+    }
+
+    #[test]
+    fn test_solid_boosters_increase_delta_v() {
+        // Create a simple two-stage rocket with 1 ton payload
+        let mut design = RocketDesign::new();
+        design.payload_mass_kg = 1000.0;
+
+        // First stage: 5 Kerolox engines
+        let mut stage1 = RocketStage::new(EngineType::Kerolox);
+        stage1.engine_count = 5;
+        stage1.propellant_mass_kg = 100000.0;
+        design.stages.push(stage1);
+
+        // Second stage: 1 Hydrolox engine
+        let mut stage2 = RocketStage::new(EngineType::Hydrolox);
+        stage2.engine_count = 1;
+        stage2.propellant_mass_kg = 20000.0;
+        design.stages.push(stage2);
+
+        // Measure delta-v without boosters
+        let dv_without_boosters = design.total_effective_delta_v();
+        println!("=== Without Boosters ===");
+        println!("Total delta-v: {:.0} m/s", dv_without_boosters);
+        println!("Stage 0 delta-v: {:.0} m/s", design.stage_effective_delta_v(0));
+        println!("Stage 1 delta-v: {:.0} m/s", design.stage_effective_delta_v(1));
+        println!("Total wet mass: {:.0} kg", design.total_wet_mass_kg());
+        println!("Mass above stage 0: {:.0} kg", design.mass_above_stage(0));
+
+        // Add solid booster - must be inserted at index 1 to attach to stage 0
+        // Boosters attach to the stage at index-1
+        let mut booster = RocketStage::new(EngineType::Solid);
+        booster.set_engine_count(2);  // Use setter to trigger propellant update
+        booster.is_booster = true;
+        design.stages.insert(1, booster);  // Insert at index 1, attaches to stage 0
+
+        // Debug booster groups
+        let groups = design.find_booster_groups();
+        println!("\n=== Booster Groups ===");
+        for group in &groups {
+            println!("Core stage {}, boosters: {:?}", group.core_stage_index, group.booster_indices);
+        }
+
+        // Debug each stage
+        println!("\n=== Stage Details ===");
+        for (i, stage) in design.stages.iter().enumerate() {
+            println!("Stage {}: {} engine(s), is_booster={}, dry={:.0}kg, prop={:.0}kg, wet={:.0}kg",
+                i,
+                stage.engine_count,
+                stage.is_booster,
+                stage.dry_mass_kg(),
+                stage.propellant_mass_kg,
+                stage.wet_mass_kg()
+            );
+        }
+
+        // Measure delta-v with boosters
+        let dv_with_boosters = design.total_effective_delta_v();
+        println!("\n=== With Boosters ===");
+        println!("Total delta-v: {:.0} m/s", dv_with_boosters);
+        println!("Stage 0 delta-v: {:.0} m/s (core+booster)", design.stage_effective_delta_v(0));
+        println!("Stage 1 delta-v: {:.0} m/s (booster, counted with core)", design.stage_effective_delta_v(1));
+        println!("Stage 2 delta-v: {:.0} m/s", design.stage_effective_delta_v(2));
+        println!("Total wet mass: {:.0} kg", design.total_wet_mass_kg());
+        println!("Mass above stage 0: {:.0} kg", design.mass_above_stage(0));
+        println!("Mass above stage 0 with boosters: {:.0} kg", design.mass_above_stage_with_boosters(0));
+
+        // Adding boosters should INCREASE delta-v, not decrease it
+        assert!(
+            dv_with_boosters > dv_without_boosters,
+            "Adding solid boosters should increase delta-v!\n\
+             Without boosters: {:.0} m/s\n\
+             With boosters: {:.0} m/s\n\
+             Change: {:.0} m/s",
+            dv_without_boosters,
+            dv_with_boosters,
+            dv_with_boosters - dv_without_boosters
         );
     }
 }

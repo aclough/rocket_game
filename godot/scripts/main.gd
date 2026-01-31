@@ -77,6 +77,10 @@ func _on_try_again_button_pressed():
 		result_panel.visible = false
 		if rocket_sprite:
 			rocket_sprite.reset()
+		# Sync discovered flaws from designer back to game state before showing testing
+		if design_screen and game_manager:
+			var designer = design_screen.get_designer()
+			game_manager.sync_design_from(designer)
 		show_testing_screen()
 
 func show_contract_screen():
@@ -275,10 +279,11 @@ func _on_testing_launch_requested():
 		var designer = design_screen.get_designer()
 		launcher.copy_design_from(designer)
 		has_custom_design = true
-		# Ensure the design is saved before launching (so flaws persist)
+		# Sync design first (so state.rocket_design has the current flaw state)
+		# Then ensure it's saved (so flaws persist across sessions)
 		if game_manager:
-			game_manager.ensure_design_saved()
 			game_manager.sync_design_from(designer)
+			game_manager.ensure_design_saved()
 
 	# Hide testing screen
 	hide_testing_screen()

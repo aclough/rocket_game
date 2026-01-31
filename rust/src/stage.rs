@@ -1,4 +1,5 @@
 use crate::engine::{costs, EngineSpec, EngineType};
+use crate::rocket_design::calculate_gravity_loss;
 
 /// A stage in a rocket design
 #[derive(Debug, Clone)]
@@ -17,17 +18,36 @@ pub struct RocketStage {
 impl RocketStage {
     /// Create a new rocket stage with default values
     pub fn new(engine_type: EngineType) -> Self {
-        Self {
+        let mut stage = Self {
             engine_type,
             engine_count: 1,
-            propellant_mass_kg: 1000.0, // Default starting propellant
+            propellant_mass_kg: 1000.0, // Default starting propellant (will be overridden for solids)
             is_booster: false,
-        }
+        };
+        // For solid motors, set the propellant mass based on fixed mass ratio
+        stage.update_solid_propellant();
+        stage
     }
 
     /// Get the engine specification for this stage
     pub fn engine_spec(&self) -> EngineSpec {
         self.engine_type.spec()
+    }
+
+    /// Check if this stage uses solid rocket motors
+    pub fn is_solid(&self) -> bool {
+        self.engine_type.is_solid()
+    }
+
+    /// Update propellant mass for solid motors based on engine count and fixed mass ratio
+    /// Should be called whenever engine_count changes for solid stages
+    fn update_solid_propellant(&mut self) {
+        if let Some(mass_ratio) = self.engine_type.fixed_mass_ratio() {
+            // For solid motors: propellant = dry_mass * mass_ratio / (1 - mass_ratio)
+            // where dry_mass is the casing mass (engine_mass_kg)
+            let dry_mass = self.engine_mass_kg();
+            self.propellant_mass_kg = dry_mass * mass_ratio / (1.0 - mass_ratio);
+        }
     }
 
     /// Calculate the mass of engines in this stage
@@ -37,8 +57,13 @@ impl RocketStage {
 
     /// Calculate the structural mass of tanks (walls, insulation, plumbing)
     /// Uses engine-type-specific ratio (Hydrolox needs bigger tanks for low-density LH2)
+    /// For solid motors, returns 0 (casing is already in engine_mass_kg)
     pub fn tank_mass_kg(&self) -> f64 {
-        self.propellant_mass_kg * self.engine_type.tank_mass_ratio()
+        if self.is_solid() {
+            0.0 // Solid motor casing is already included in engine_mass_kg
+        } else {
+            self.propellant_mass_kg * self.engine_type.tank_mass_ratio()
+        }
     }
 
     /// Calculate the dry mass of this stage (engines + tank structure, no propellant)
@@ -49,6 +74,17 @@ impl RocketStage {
     /// Calculate the wet mass of this stage (engines + tanks + propellant)
     pub fn wet_mass_kg(&self) -> f64 {
         self.dry_mass_kg() + self.propellant_mass_kg
+    }
+
+    /// Get the propellant mass, recalculating for solid motors
+    pub fn get_propellant_mass(&self) -> f64 {
+        if let Some(mass_ratio) = self.engine_type.fixed_mass_ratio() {
+            // For solid motors: propellant = dry_mass * mass_ratio / (1 - mass_ratio)
+            let dry_mass = self.engine_mass_kg();
+            dry_mass * mass_ratio / (1.0 - mass_ratio)
+        } else {
+            self.propellant_mass_kg
+        }
     }
 
     /// Calculate the exhaust velocity (same for all engines of this type)
@@ -78,21 +114,28 @@ impl RocketStage {
     }
 
     /// Calculate mass fraction (propellant / (propellant + dry mass + payload above))
-    /// This is what the slider controls
+    /// This is what the slider controls (for liquid engines)
+    /// For solid motors, returns the fixed mass ratio
     ///
     /// # Arguments
     /// * `payload_mass_kg` - Mass above this stage
     pub fn mass_fraction(&self, payload_mass_kg: f64) -> f64 {
         let total = self.wet_mass_kg() + payload_mass_kg;
-        self.propellant_mass_kg / total
+        self.get_propellant_mass() / total
     }
 
     /// Set propellant mass from a desired mass fraction
+    /// For solid motors, this is a no-op (mass ratio is fixed)
     ///
     /// # Arguments
     /// * `fraction` - Desired mass fraction (0.0 to 1.0, typically 0.5 to 0.95)
     /// * `payload_mass_kg` - Mass above this stage
     pub fn set_mass_fraction(&mut self, fraction: f64, payload_mass_kg: f64) {
+        // Solid motors have fixed mass ratio - ignore attempts to change it
+        if self.is_solid() {
+            return;
+        }
+
         // mass_fraction = propellant / (engine_mass + tank_mass + propellant + payload)
         // where tank_mass = propellant * tank_ratio (engine-type specific)
         //
@@ -113,6 +156,12 @@ impl RocketStage {
             self.propellant_mass_kg =
                 fraction * (engine_mass + payload_mass_kg) / denominator;
         }
+    }
+
+    /// Set the engine count, updating propellant for solid motors
+    pub fn set_engine_count(&mut self, count: u32) {
+        self.engine_count = count.max(1);
+        self.update_solid_propellant();
     }
 
     // ==========================================
@@ -136,8 +185,13 @@ impl RocketStage {
 
     /// Calculate the cost of tanks for this stage in dollars
     /// Based on tank volume required for the propellant
+    /// For solid motors, returns 0 (no separate tanks)
     pub fn tank_cost(&self) -> f64 {
-        self.tank_volume_m3() * costs::TANK_COST_PER_M3
+        if self.is_solid() {
+            0.0 // Solid motors have no separate tanks
+        } else {
+            self.tank_volume_m3() * costs::TANK_COST_PER_M3
+        }
     }
 
     /// Calculate the total cost of this stage in dollars
@@ -236,42 +290,24 @@ impl RocketStage {
 
     /// Calculate gravity losses for this stage
     ///
-    /// Gravity loss formula: ΔV_gravity ≈ Ve × (1 - 1/R) / TWR₀
-    ///
-    /// This represents delta-v lost to fighting gravity during ascent.
-    /// Higher TWR means less time fighting gravity, so less loss.
-    ///
-    /// At TWR = 1.0, the rocket just hovers - all vertical delta-v is lost to gravity.
-    /// At TWR < 1.0, the rocket cannot lift off and all delta-v is wasted.
+    /// Uses the central `calculate_gravity_loss` function which implements:
+    /// - At TWR <= 1.0: rocket can't lift off, ALL delta-v is lost
+    /// - At TWR > 1.0: gravity loss scales with coefficient, exhaust velocity, and TWR
     ///
     /// # Arguments
     /// * `payload_mass_kg` - Mass above this stage
-    /// * `gravity_loss_coefficient` - How much of burn is vertical (1.0 = all vertical, 0.0 = all horizontal)
+    /// * `gravity_loss_coefficient` - How much of burn is vertical (higher = more vertical)
     ///
     /// # Returns
     /// Gravity loss in m/s
     pub fn gravity_loss(&self, payload_mass_kg: f64, gravity_loss_coefficient: f64) -> f64 {
-        let twr = self.initial_twr(payload_mass_kg);
-        let mass_ratio = self.mass_ratio(payload_mass_kg);
-        let ve = self.exhaust_velocity_ms();
-        let ideal_dv = self.delta_v(payload_mass_kg);
-
-        // Avoid division by zero and handle edge cases
-        if twr <= 0.0 || mass_ratio <= 1.0 {
-            return 0.0;
-        }
-
-        // At TWR <= 1.0, the rocket can't accelerate upward - all vertical delta-v is lost
-        // The rocket just hovers (TWR=1) or falls back (TWR<1)
-        if twr <= 1.0 {
-            return ideal_dv * gravity_loss_coefficient;
-        }
-
-        // ΔV_gravity = C × Ve × (1 - 1/R) / TWR₀
-        let gravity_loss = gravity_loss_coefficient * ve * (1.0 - 1.0 / mass_ratio) / twr;
-
-        // Cap gravity loss at 100% of ideal delta-v (can't lose more than we'd gain)
-        gravity_loss.min(ideal_dv * gravity_loss_coefficient)
+        calculate_gravity_loss(
+            gravity_loss_coefficient,
+            self.exhaust_velocity_ms(),
+            self.mass_ratio(payload_mass_kg),
+            self.initial_twr(payload_mass_kg),
+            self.delta_v(payload_mass_kg),
+        )
     }
 
     /// Calculate gravity efficiency (1.0 = no losses, 0.0 = all lost to gravity)

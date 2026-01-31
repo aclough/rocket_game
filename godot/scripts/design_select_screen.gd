@@ -175,6 +175,10 @@ func _create_design_card(index: int, required_dv: float) -> PanelContainer:
 	select_btn.custom_minimum_size = Vector2(100, 35)
 	select_btn.add_theme_font_size_override("font_size", 14)
 	select_btn.pressed.connect(_on_select_design_pressed.bind(index))
+	# Disable selection if rocket doesn't meet delta-v requirements
+	if not meets_requirements:
+		select_btn.disabled = true
+		select_btn.tooltip_text = "Insufficient delta-v for this mission"
 	buttons_vbox.add_child(select_btn)
 
 	var edit_btn = Button.new()

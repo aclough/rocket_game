@@ -39,6 +39,15 @@ pub enum FlawType {
     Design,
 }
 
+/// Category of engine flaws - determines which flaw template list to use
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FlawCategory {
+    /// Liquid engine flaws (turbopumps, injectors, combustion chambers)
+    LiquidEngine,
+    /// Solid motor flaws (O-rings, grain cracks, nozzle erosion)
+    SolidMotor,
+}
+
 /// Which launch event triggers a flaw
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlawTrigger {
@@ -68,6 +77,29 @@ impl FlawTrigger {
             }
         }
     }
+
+    /// Convert trigger to an index for serialization
+    pub fn to_index(&self) -> i32 {
+        match self {
+            FlawTrigger::Ignition => 0,
+            FlawTrigger::Liftoff => 1,
+            FlawTrigger::MaxQ => 2,
+            FlawTrigger::Separation => 3,
+            FlawTrigger::PayloadRelease => 4,
+        }
+    }
+
+    /// Convert index back to trigger type
+    pub fn from_index(index: i32) -> Option<FlawTrigger> {
+        match index {
+            0 => Some(FlawTrigger::Ignition),
+            1 => Some(FlawTrigger::Liftoff),
+            2 => Some(FlawTrigger::MaxQ),
+            3 => Some(FlawTrigger::Separation),
+            4 => Some(FlawTrigger::PayloadRelease),
+            _ => None,
+        }
+    }
 }
 
 /// Template for generating flaws
@@ -81,8 +113,9 @@ pub struct FlawTemplate {
     pub trigger_event_type: FlawTrigger,
 }
 
-/// Engine flaw templates - discovered by engine testing, trigger at ignition
-pub const ENGINE_FLAW_TEMPLATES: &[FlawTemplate] = &[
+/// Liquid engine flaw templates - discovered by engine testing, trigger at ignition
+/// Used for Kerolox and Hydrolox engines
+pub const LIQUID_ENGINE_FLAW_TEMPLATES: &[FlawTemplate] = &[
     FlawTemplate {
         name: "Turbopump Bearing Defect",
         description: "Microscopic imperfections in turbopump bearings cause premature wear and potential seizure during high-speed operation.",
@@ -137,6 +170,51 @@ pub const ENGINE_FLAW_TEMPLATES: &[FlawTemplate] = &[
         flaw_type: FlawType::Engine,
         failure_rate: 0.11,
         testing_modifier: 0.75,
+        trigger_event_type: FlawTrigger::Ignition,
+    },
+];
+
+/// Solid motor flaw templates - discovered by engine testing, trigger at ignition
+/// Used for solid rocket motors
+pub const SOLID_MOTOR_FLAW_TEMPLATES: &[FlawTemplate] = &[
+    FlawTemplate {
+        name: "O-Ring Seal Defect",
+        description: "Field joint O-rings lose elasticity in cold conditions, allowing hot gas blow-by and joint failure.",
+        flaw_type: FlawType::Engine,
+        failure_rate: 0.12,
+        testing_modifier: 0.7,
+        trigger_event_type: FlawTrigger::Ignition,
+    },
+    FlawTemplate {
+        name: "Propellant Grain Crack",
+        description: "Internal cracks in the solid propellant grain cause uneven burning and potential case burn-through.",
+        flaw_type: FlawType::Engine,
+        failure_rate: 0.15,
+        testing_modifier: 0.6,
+        trigger_event_type: FlawTrigger::Ignition,
+    },
+    FlawTemplate {
+        name: "Nozzle Throat Erosion",
+        description: "Excessive erosion of the nozzle throat causes loss of chamber pressure and thrust reduction.",
+        flaw_type: FlawType::Engine,
+        failure_rate: 0.10,
+        testing_modifier: 0.85,
+        trigger_event_type: FlawTrigger::Ignition,
+    },
+    FlawTemplate {
+        name: "Case Insulation Failure",
+        description: "Internal insulation fails to protect the motor case from combustion heat, causing structural failure.",
+        flaw_type: FlawType::Engine,
+        failure_rate: 0.08,
+        testing_modifier: 0.8,
+        trigger_event_type: FlawTrigger::Ignition,
+    },
+    FlawTemplate {
+        name: "Igniter Squib Malfunction",
+        description: "Pyrotechnic igniter fails to produce sufficient heat to reliably ignite the main propellant grain.",
+        flaw_type: FlawType::Engine,
+        failure_rate: 0.09,
+        testing_modifier: 0.9,
         trigger_event_type: FlawTrigger::Ignition,
     },
 ];
@@ -333,17 +411,31 @@ impl FlawGenerator {
         Self { next_id: 1 }
     }
 
-    /// Generate engine flaws for a specific engine type.
+    /// Get the flaw templates for a given category
+    pub fn templates_for_category(category: FlawCategory) -> &'static [FlawTemplate] {
+        match category {
+            FlawCategory::LiquidEngine => LIQUID_ENGINE_FLAW_TEMPLATES,
+            FlawCategory::SolidMotor => SOLID_MOTOR_FLAW_TEMPLATES,
+        }
+    }
+
+    /// Generate engine flaws for a specific engine type with the given flaw category.
     /// Fixed count per engine type (not scaled by usage in designs).
     /// Called when an engine type is first used via EngineRegistry.
-    pub fn generate_engine_flaws_for_type(&mut self, engine_type_index: i32) -> Vec<Flaw> {
+    pub fn generate_engine_flaws_for_type_with_category(
+        &mut self,
+        engine_type_index: i32,
+        category: FlawCategory,
+    ) -> Vec<Flaw> {
         let mut rng = rand::thread_rng();
+
+        let templates = Self::templates_for_category(category);
 
         // Fixed 3-4 flaws per engine type (with log-normal distribution for varied severity)
         let flaw_count = 3 + rng.gen_range(0..2);
-        let templates = self.select_random_templates(ENGINE_FLAW_TEMPLATES, flaw_count, &mut rng);
+        let selected = self.select_random_templates(templates, flaw_count, &mut rng);
 
-        templates
+        selected
             .into_iter()
             .map(|template| {
                 let flaw = Flaw::from_template_with_engine(template, self.next_id, engine_type_index);
@@ -351,6 +443,13 @@ impl FlawGenerator {
                 flaw
             })
             .collect()
+    }
+
+    /// Generate engine flaws for a specific engine type (defaults to LiquidEngine category).
+    /// Fixed count per engine type (not scaled by usage in designs).
+    /// Called when an engine type is first used via EngineRegistry.
+    pub fn generate_engine_flaws_for_type(&mut self, engine_type_index: i32) -> Vec<Flaw> {
+        self.generate_engine_flaws_for_type_with_category(engine_type_index, FlawCategory::LiquidEngine)
     }
 
     /// Generate only design flaws for a rocket (engine flaws are on EngineSpec now).
@@ -542,16 +641,14 @@ pub fn check_flaw_trigger(flaws: &[Flaw], event_name: &str, stage_engine_type: O
 /// Estimate the success rate based on active flaws
 /// This is a rough estimate shown to the player
 pub fn estimate_success_rate(flaws: &[Flaw], base_success_rate: f64) -> f64 {
-    // Sum up failure rates from unfixed flaws
-    let total_flaw_failure: f64 = flaws
+    // Multiply survival probabilities for each unfixed flaw
+    // This is statistically correct: P(all survive) = P(survive_1) * P(survive_2) * ...
+    let flaw_success_rate: f64 = flaws
         .iter()
         .filter(|f| !f.fixed)
-        .map(|f| f.failure_rate)
-        .sum();
+        .map(|f| 1.0 - f.failure_rate)
+        .product();
 
-    // Convert to success rate (simplified model)
-    // Each flaw is roughly independent
-    let flaw_success_rate = 1.0 - total_flaw_failure.min(0.95);
     base_success_rate * flaw_success_rate
 }
 
@@ -576,7 +673,7 @@ mod tests {
 
     #[test]
     fn test_flaw_from_template() {
-        let template = &ENGINE_FLAW_TEMPLATES[0];
+        let template = &LIQUID_ENGINE_FLAW_TEMPLATES[0];
         let flaw = Flaw::from_template(template, 1);
 
         assert_eq!(flaw.id, 1);
@@ -588,7 +685,7 @@ mod tests {
 
     #[test]
     fn test_flaw_is_active() {
-        let mut flaw = Flaw::from_template(&ENGINE_FLAW_TEMPLATES[0], 1);
+        let mut flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1);
 
         assert!(flaw.is_active());
 
@@ -598,7 +695,7 @@ mod tests {
 
     #[test]
     fn test_flaw_trigger_matches() {
-        let ignition_flaw = Flaw::from_template(&ENGINE_FLAW_TEMPLATES[0], 1);
+        let ignition_flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1);
         assert!(ignition_flaw.can_trigger_at("Stage 1 Ignition"));
         assert!(!ignition_flaw.can_trigger_at("Liftoff"));
 
@@ -609,7 +706,7 @@ mod tests {
 
     #[test]
     fn test_effective_failure_rate() {
-        let mut flaw = Flaw::from_template(&ENGINE_FLAW_TEMPLATES[0], 1);
+        let mut flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1);
 
         let original_rate = flaw.failure_rate;
         assert!(flaw.effective_failure_rate() > 0.0);
@@ -621,7 +718,7 @@ mod tests {
 
     #[test]
     fn test_discovery_probability() {
-        let mut flaw = Flaw::from_template(&ENGINE_FLAW_TEMPLATES[0], 1);
+        let mut flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1);
 
         let prob = flaw.discovery_probability();
         assert!(prob > 0.0);
