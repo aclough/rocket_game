@@ -60,6 +60,12 @@ impl GameManager {
     #[signal]
     fn designs_changed();
 
+    #[signal]
+    fn date_changed(new_day: i32);
+
+    #[signal]
+    fn fame_changed(new_fame: f64);
+
     // ==========================================
     // Money and Budget
     // ==========================================
@@ -365,6 +371,11 @@ impl GameManager {
         let reward = self.state.complete_contract();
         if reward > 0.0 {
             self.sync_money_from_state();
+            // Launch takes 30 days
+            self.advance_time(30);
+            // Successful launch increases fame (more fame for harder missions)
+            let fame_gain = 10.0 + (reward / 10_000_000.0); // Base 10 + scaled by reward
+            self.adjust_fame(fame_gain);
             self.base_mut()
                 .emit_signal("contract_completed", &[Variant::from(reward)]);
             self.base_mut().emit_signal("contracts_changed", &[]);
@@ -378,6 +389,10 @@ impl GameManager {
         self.sync_money_to_state();
         self.state.fail_contract();
         self.sync_money_from_state();
+        // Launch takes 30 days even on failure
+        self.advance_time(30);
+        // Failed launch decreases fame
+        self.adjust_fame(-15.0);
         self.base_mut().emit_signal("contract_failed", &[]);
     }
 
@@ -719,6 +734,152 @@ impl GameManager {
         design.budget = self.finance.bind().get_money();
         designer.bind_mut().set_design(design);
         designer.bind_mut().set_finance(self.finance.clone());
+    }
+
+    // ==========================================
+    // Date/Time Management
+    // ==========================================
+
+    /// Get current day number
+    #[func]
+    pub fn get_current_day(&self) -> i32 {
+        self.state.current_day as i32
+    }
+
+    /// Get formatted date string (e.g., "Day 45, Year 2001")
+    #[func]
+    pub fn get_date_formatted(&self) -> GString {
+        GString::from(self.state.get_date_string().as_str())
+    }
+
+    /// Get current year
+    #[func]
+    pub fn get_current_year(&self) -> i32 {
+        self.state.get_current_year() as i32
+    }
+
+    /// Advance game time by a number of days and emit signal
+    fn advance_time(&mut self, days: u32) {
+        self.state.advance_days(days);
+        let new_day = self.state.current_day as i32;
+        self.base_mut()
+            .emit_signal("date_changed", &[Variant::from(new_day)]);
+    }
+
+    // ==========================================
+    // Fame Management
+    // ==========================================
+
+    /// Get current fame value
+    #[func]
+    pub fn get_fame(&self) -> f64 {
+        self.state.fame
+    }
+
+    /// Get fame formatted as integer for display
+    #[func]
+    pub fn get_fame_formatted(&self) -> GString {
+        GString::from(format!("{:.0}", self.state.fame).as_str())
+    }
+
+    /// Get fame tier (0-5)
+    #[func]
+    pub fn get_fame_tier(&self) -> i32 {
+        self.state.get_fame_tier() as i32
+    }
+
+    /// Get fame tier name (Unknown, Newcomer, Established, etc.)
+    #[func]
+    pub fn get_fame_tier_name(&self) -> GString {
+        GString::from(self.state.get_fame_tier_name())
+    }
+
+    /// Adjust fame and emit signal
+    fn adjust_fame(&mut self, delta: f64) {
+        self.state.adjust_fame(delta);
+        let new_fame = self.state.fame;
+        self.base_mut()
+            .emit_signal("fame_changed", &[Variant::from(new_fame)]);
+    }
+
+    // ==========================================
+    // Launch Site Management
+    // ==========================================
+
+    /// Get current pad level (1-5)
+    #[func]
+    pub fn get_pad_level(&self) -> i32 {
+        self.state.launch_site.pad_level as i32
+    }
+
+    /// Get pad level name
+    #[func]
+    pub fn get_pad_level_name(&self) -> GString {
+        GString::from(self.state.launch_site.pad_level_name())
+    }
+
+    /// Get maximum launch mass for current pad
+    #[func]
+    pub fn get_max_launch_mass(&self) -> f64 {
+        self.state.launch_site.max_launch_mass_kg()
+    }
+
+    /// Get maximum launch mass formatted (e.g., "200t")
+    #[func]
+    pub fn get_max_launch_mass_formatted(&self) -> GString {
+        let mass = self.state.launch_site.max_launch_mass_kg();
+        if mass >= 1_000_000.0 {
+            GString::from(format!("{:.1}kt", mass / 1_000_000.0).as_str())
+        } else {
+            GString::from(format!("{:.0}t", mass / 1000.0).as_str())
+        }
+    }
+
+    /// Get cost to upgrade pad
+    #[func]
+    pub fn get_pad_upgrade_cost(&self) -> f64 {
+        self.state.launch_site.pad_upgrade_cost()
+    }
+
+    /// Get pad upgrade cost formatted
+    #[func]
+    pub fn get_pad_upgrade_cost_formatted(&self) -> GString {
+        let cost = self.state.launch_site.pad_upgrade_cost();
+        if cost > 0.0 {
+            GString::from(format_money(cost).as_str())
+        } else {
+            GString::from("Max Level")
+        }
+    }
+
+    /// Check if pad can be upgraded
+    #[func]
+    pub fn can_upgrade_pad(&self) -> bool {
+        let cost = self.state.launch_site.pad_upgrade_cost();
+        cost > 0.0 && self.finance.bind().get_money() >= cost
+    }
+
+    /// Upgrade the launch pad (deducts cost)
+    #[func]
+    pub fn upgrade_pad(&mut self) -> bool {
+        let cost = self.state.launch_site.pad_upgrade_cost();
+        if cost > 0.0 && self.finance.bind_mut().deduct(cost) {
+            self.state.launch_site.upgrade_pad()
+        } else {
+            false
+        }
+    }
+
+    /// Check if current rocket can be launched at this site
+    #[func]
+    pub fn can_launch_current_rocket(&self) -> bool {
+        self.state.can_launch_rocket_at_site()
+    }
+
+    /// Get propellant storage capacity
+    #[func]
+    pub fn get_propellant_storage(&self) -> f64 {
+        self.state.launch_site.propellant_storage_kg
     }
 
     // ==========================================

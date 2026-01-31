@@ -73,20 +73,14 @@ theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
 text = "Test and fix hidden flaws before launch"
 horizontal_alignment = 1
 
-[node name="BudgetInfo" type="HBoxContainer" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox"]
+[node name="DesignInfo" type="HBoxContainer" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox"]
 layout_mode = 2
 alignment = 1
-theme_override_constants/separation = 40
 
-[node name="DesignName" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/BudgetInfo"]
+[node name="DesignName" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/DesignInfo"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 16
 text = "Design: Default Rocket"
-
-[node name="Budget" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/BudgetInfo"]
-layout_mode = 2
-theme_override_font_sizes/font_size = 16
-text = "Budget: $100,000,000"
 
 [node name="ContentHBox" type="HBoxContainer" parent="MarginContainer/VBox"]
 layout_mode = 2

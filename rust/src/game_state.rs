@@ -1,5 +1,6 @@
 use crate::contract::{Contract, Destination};
 use crate::engine::{costs, EngineRegistry};
+use crate::launch_site::LaunchSite;
 use crate::rocket_design::RocketDesign;
 
 /// Cost to refresh the contract list
@@ -15,6 +16,14 @@ pub struct GameState {
     pub money: f64,
     /// Current turn/month
     pub turn: u32,
+    /// Current game day (advances with actions)
+    pub current_day: u32,
+    /// Starting year for date display
+    pub start_year: u32,
+    /// Player fame/reputation (0.0+)
+    pub fame: f64,
+    /// Launch site infrastructure
+    pub launch_site: LaunchSite,
     /// Next contract ID to assign
     next_contract_id: u32,
     /// Available contracts to choose from
@@ -45,6 +54,10 @@ impl GameState {
         let mut state = Self {
             money: costs::STARTING_BUDGET,
             turn: 1,
+            current_day: 1,
+            start_year: 2001,
+            fame: 0.0,
+            launch_site: LaunchSite::new(),
             next_contract_id: 1,
             available_contracts: Vec::new(),
             active_contract: None,
@@ -95,10 +108,11 @@ impl GameState {
         {
             self.active_contract = Some(self.available_contracts.remove(idx));
 
-            // Reset rocket design for new contract but keep the structure
-            // Players can modify it in the design screen
+            // Update rocket design for new contract
+            // Set payload and target delta-v from contract requirements
             if let Some(ref contract) = self.active_contract {
                 self.rocket_design.payload_mass_kg = contract.payload_mass_kg;
+                self.rocket_design.target_delta_v = contract.destination.required_delta_v();
             }
 
             true
@@ -272,9 +286,17 @@ impl GameState {
 
     /// Load a saved design into the current working design
     /// The saved design is cloned, preserving the original
+    /// If there's an active contract, the payload and target delta-v are set from the contract
     pub fn load_design(&mut self, index: usize) -> bool {
         if let Some(design) = self.saved_designs.get(index) {
             self.rocket_design = design.clone();
+
+            // If there's an active contract, override payload and target delta-v
+            if let Some(ref contract) = self.active_contract {
+                self.rocket_design.payload_mass_kg = contract.payload_mass_kg;
+                self.rocket_design.target_delta_v = contract.destination.required_delta_v();
+            }
+
             true
         } else {
             false
@@ -330,17 +352,111 @@ impl GameState {
     }
 
     /// Create a new empty design and set it as current
+    /// If there's an active contract, sets payload and target delta-v from it
     pub fn create_new_design(&mut self) {
         self.rocket_design = RocketDesign::new();
         self.rocket_design.name = format!("Design #{}", self.next_design_id);
         self.next_design_id += 1;
+
+        // Apply contract requirements if active
+        if let Some(ref contract) = self.active_contract {
+            self.rocket_design.payload_mass_kg = contract.payload_mass_kg;
+            self.rocket_design.target_delta_v = contract.destination.required_delta_v();
+        }
     }
 
     /// Create a new design based on the default template
+    /// If there's an active contract, sets payload and target delta-v from it
     pub fn create_default_design(&mut self) {
         self.rocket_design = RocketDesign::default_design();
         self.rocket_design.name = format!("Design #{}", self.next_design_id);
         self.next_design_id += 1;
+
+        // Apply contract requirements if active
+        if let Some(ref contract) = self.active_contract {
+            self.rocket_design.payload_mass_kg = contract.payload_mass_kg;
+            self.rocket_design.target_delta_v = contract.destination.required_delta_v();
+        }
+    }
+
+    // ==========================================
+    // Date/Time Management
+    // ==========================================
+
+    /// Advance game time by a number of days
+    pub fn advance_days(&mut self, days: u32) {
+        self.current_day += days;
+    }
+
+    /// Get formatted date string (e.g., "Day 45, Year 2001")
+    pub fn get_date_string(&self) -> String {
+        let year = self.start_year + (self.current_day - 1) / 365;
+        let day_of_year = ((self.current_day - 1) % 365) + 1;
+        format!("Day {}, Year {}", day_of_year, year)
+    }
+
+    /// Get current year
+    pub fn get_current_year(&self) -> u32 {
+        self.start_year + (self.current_day - 1) / 365
+    }
+
+    /// Get day of the current year (1-365)
+    pub fn get_day_of_year(&self) -> u32 {
+        ((self.current_day - 1) % 365) + 1
+    }
+
+    // ==========================================
+    // Fame Management
+    // ==========================================
+
+    /// Adjust fame by a delta (can be positive or negative)
+    pub fn adjust_fame(&mut self, delta: f64) {
+        self.fame = (self.fame + delta).max(0.0);
+    }
+
+    /// Get current fame level as a tier (0-5)
+    pub fn get_fame_tier(&self) -> u32 {
+        match self.fame as u32 {
+            0..=9 => 0,      // Unknown
+            10..=29 => 1,    // Newcomer
+            30..=59 => 2,    // Established
+            60..=99 => 3,    // Renowned
+            100..=199 => 4,  // Famous
+            _ => 5,          // Legendary
+        }
+    }
+
+    /// Get fame tier name
+    pub fn get_fame_tier_name(&self) -> &'static str {
+        match self.get_fame_tier() {
+            0 => "Unknown",
+            1 => "Newcomer",
+            2 => "Established",
+            3 => "Renowned",
+            4 => "Famous",
+            _ => "Legendary",
+        }
+    }
+
+    // ==========================================
+    // Launch Site Management
+    // ==========================================
+
+    /// Check if a rocket can be launched at the current launch site
+    pub fn can_launch_rocket_at_site(&self) -> bool {
+        let rocket_mass = self.rocket_design.total_wet_mass_kg();
+        self.launch_site.can_launch_rocket(rocket_mass)
+    }
+
+    /// Upgrade the launch pad (returns true if successful)
+    pub fn upgrade_launch_pad(&mut self) -> bool {
+        let cost = self.launch_site.pad_upgrade_cost();
+        if cost > 0.0 && self.money >= cost {
+            self.money -= cost;
+            self.launch_site.upgrade_pad()
+        } else {
+            false
+        }
     }
 }
 
@@ -455,5 +571,47 @@ mod tests {
         state.total_launches = 10;
         state.successful_launches = 7;
         assert!((state.success_rate() - 70.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_date_tracking() {
+        let mut state = GameState::new();
+        assert_eq!(state.current_day, 1);
+        assert_eq!(state.start_year, 2001);
+        assert_eq!(state.get_date_string(), "Day 1, Year 2001");
+
+        state.advance_days(30);
+        assert_eq!(state.current_day, 31);
+        assert_eq!(state.get_date_string(), "Day 31, Year 2001");
+
+        // Advance to next year
+        state.advance_days(335); // Day 366 = Day 1 of year 2
+        assert_eq!(state.current_day, 366);
+        assert_eq!(state.get_current_year(), 2002);
+        assert_eq!(state.get_day_of_year(), 1);
+    }
+
+    #[test]
+    fn test_fame_tracking() {
+        let mut state = GameState::new();
+        assert_eq!(state.fame, 0.0);
+        assert_eq!(state.get_fame_tier(), 0);
+        assert_eq!(state.get_fame_tier_name(), "Unknown");
+
+        state.adjust_fame(15.0);
+        assert_eq!(state.fame, 15.0);
+        assert_eq!(state.get_fame_tier(), 1);
+        assert_eq!(state.get_fame_tier_name(), "Newcomer");
+
+        // Fame can't go negative
+        state.adjust_fame(-20.0);
+        assert_eq!(state.fame, 0.0);
+    }
+
+    #[test]
+    fn test_launch_site_integration() {
+        let state = GameState::new();
+        assert_eq!(state.launch_site.pad_level, 1);
+        assert_eq!(state.launch_site.max_launch_mass_kg(), 300_000.0);
     }
 }

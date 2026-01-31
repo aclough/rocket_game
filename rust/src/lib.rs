@@ -4,6 +4,7 @@ pub mod contract;
 pub mod engine;
 pub mod flaw;
 pub mod game_state;
+pub mod launch_site;
 pub mod launcher;
 pub mod rocket_design;
 pub mod stage;

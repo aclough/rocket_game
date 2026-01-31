@@ -1120,7 +1120,9 @@ impl RocketDesigner {
             if let Some(flaw) = spec.get_flaw_mut(flaw_id as u32) {
                 if !flaw.discovered {
                     flaw.discovered = true;
-                    return GString::from(flaw.name.as_str());
+                    let name = GString::from(flaw.name.as_str());
+                    self.emit_design_changed();
+                    return name;
                 }
             }
         }

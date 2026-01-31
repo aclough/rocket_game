@@ -9,7 +9,6 @@ var game_manager: GameManager = null
 # UI references
 @onready var mission_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/TitleVBox/MissionLabel
 @onready var requirements_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/TitleVBox/RequirementsLabel
-@onready var money_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/StatsVBox/MoneyLabel
 @onready var designs_list = $MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/SavedDesignsPanel/SavedMargin/SavedVBox/DesignsScroll/DesignsList
 
 func _ready():
@@ -39,8 +38,6 @@ func _update_ui():
 	else:
 		mission_label.text = "Free Launch Mode"
 		requirements_label.text = "No specific requirements"
-
-	money_label.text = "Budget: " + game_manager.get_money_formatted()
 
 	# Rebuild designs list
 	_rebuild_designs_list()

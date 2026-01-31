@@ -7,8 +7,7 @@ signal back_requested
 var designer: RocketDesigner = null
 
 # UI references - Header
-@onready var design_name_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/BudgetInfo/DesignName
-@onready var budget_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/BudgetInfo/Budget
+@onready var design_name_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/DesignInfo/DesignName
 
 # UI references - Tests panel (will hold dynamic engine test cards)
 @onready var tests_vbox = $MarginContainer/VBox/ContentHBox/TestsPanel/TestsMargin/TestsVBox
@@ -61,7 +60,6 @@ func _update_ui():
 
 	# Update header
 	design_name_label.text = "Design: " + designer.get_design_name()
-	budget_label.text = "Budget: $" + _format_money(designer.get_remaining_budget())
 
 	# Rebuild engine test cards for each engine type
 	_rebuild_engine_test_cards()

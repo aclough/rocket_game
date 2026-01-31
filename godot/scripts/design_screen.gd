@@ -15,8 +15,14 @@ var game_manager: GameManager = null
 # UI references - Header
 @onready var design_name_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/TitleHBox/DesignNameLabel
 @onready var target_dv_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/TargetDV
-@onready var payload_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/Payload
-@onready var budget_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/Budget
+@onready var payload_value_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer/PayloadValue
+@onready var payload_decrease_btn = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer/PayloadDecreaseBtn
+@onready var payload_increase_btn = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer/PayloadIncreaseBtn
+
+# Payload adjustment increment in kg
+const PAYLOAD_INCREMENT: float = 1000.0
+const PAYLOAD_MIN: float = 100.0
+const PAYLOAD_MAX: float = 50000.0
 
 # UI references - Main content
 @onready var stages_container = $MarginContainer/VBox/ContentHBox/StagesPanel/StagesMargin/StagesVBox/StagesScroll/StagesList
@@ -147,8 +153,19 @@ func _on_add_engine_stage_pressed(engine_type: int):
 func _update_header():
 	design_name_label.text = "- " + designer.get_design_name()
 	target_dv_label.text = "Target Δv: %.0f m/s" % designer.get_target_delta_v()
-	payload_label.text = "Payload: %.0f kg" % designer.get_payload_mass()
-	budget_label.text = "Budget: $%s" % _format_money(designer.get_starting_budget())
+
+	var payload = designer.get_payload_mass()
+	payload_value_label.text = _format_number(payload) + " kg"
+
+	# Enable/disable payload buttons based on whether there's an active contract
+	var has_contract = game_manager and game_manager.has_active_contract()
+	payload_decrease_btn.visible = not has_contract
+	payload_increase_btn.visible = not has_contract
+
+	# Also disable at min/max limits
+	if not has_contract:
+		payload_decrease_btn.disabled = payload <= PAYLOAD_MIN
+		payload_increase_btn.disabled = payload >= PAYLOAD_MAX
 
 # Helper to format money values with commas
 func _format_money(value: float) -> String:
@@ -162,6 +179,10 @@ func _format_money(value: float) -> String:
 		result = str_val[i] + result
 		count += 1
 	return result
+
+# Helper to format numbers with commas (alias for non-money values)
+func _format_number(value: float) -> String:
+	return _format_money(value)
 
 func _on_design_changed():
 	# Don't rebuild if we're dragging a slider - just update values
@@ -654,6 +675,18 @@ func _update_launch_button():
 func _on_launch_button_pressed():
 	# Go to testing screen instead of launching directly
 	testing_requested.emit()
+
+func _on_payload_decrease_pressed():
+	var current = designer.get_payload_mass()
+	var new_payload = max(PAYLOAD_MIN, current - PAYLOAD_INCREMENT)
+	designer.set_payload_mass(new_payload)
+	_update_header()
+
+func _on_payload_increase_pressed():
+	var current = designer.get_payload_mass()
+	var new_payload = min(PAYLOAD_MAX, current + PAYLOAD_INCREMENT)
+	designer.set_payload_mass(new_payload)
+	_update_header()
 
 func _on_back_button_pressed():
 	back_requested.emit()

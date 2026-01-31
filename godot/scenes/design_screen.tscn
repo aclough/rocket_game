@@ -93,15 +93,33 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 16
 text = "Target Δv: 9,200 m/s"
 
-[node name="Payload" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo"]
+[node name="PayloadContainer" type="HBoxContainer" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 16
-text = "Payload: 1,000 kg"
+theme_override_constants/separation = 8
 
-[node name="Budget" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo"]
+[node name="PayloadLabel" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 16
-text = "Budget: $100,000,000"
+text = "Payload:"
+
+[node name="PayloadDecreaseBtn" type="Button" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer"]
+custom_minimum_size = Vector2(30, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "-"
+
+[node name="PayloadValue" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer"]
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "8,000 kg"
+horizontal_alignment = 1
+
+[node name="PayloadIncreaseBtn" type="Button" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer"]
+custom_minimum_size = Vector2(30, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "+"
 
 [node name="ContentHBox" type="HBoxContainer" parent="MarginContainer/VBox"]
 layout_mode = 2
@@ -286,6 +304,8 @@ text = "CONTINUE TO TESTING"
 
 [node name="RocketDesigner" type="RocketDesigner" parent="."]
 
+[connection signal="pressed" from="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer/PayloadDecreaseBtn" to="." method="_on_payload_decrease_pressed"]
+[connection signal="pressed" from="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer/PayloadIncreaseBtn" to="." method="_on_payload_increase_pressed"]
 [connection signal="pressed" from="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox/BackButton" to="." method="_on_back_button_pressed"]
 [connection signal="pressed" from="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox/SaveButton" to="." method="_on_save_button_pressed"]
 [connection signal="pressed" from="MarginContainer/VBox/FooterPanel/FooterMargin/FooterVBox/ButtonsHBox/LaunchButton" to="." method="_on_launch_button_pressed"]

@@ -81,17 +81,6 @@ theme_override_font_sizes/font_size = 14
 theme_override_colors/font_color = Color(0.7, 0.8, 1.0, 1)
 text = "Requirements: 9,400 m/s | 5,000 kg payload"
 
-[node name="StatsVBox" type="VBoxContainer" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox"]
-layout_mode = 2
-alignment = 1
-
-[node name="MoneyLabel" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/StatsVBox"]
-layout_mode = 2
-theme_override_font_sizes/font_size = 20
-theme_override_colors/font_color = Color(0.3, 1, 0.3, 1)
-text = "Budget: $500M"
-horizontal_alignment = 2
-
 [node name="ContentPanel" type="PanelContainer" parent="MarginContainer/VBox"]
 layout_mode = 2
 size_flags_vertical = 3
