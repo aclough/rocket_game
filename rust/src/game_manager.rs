@@ -2,6 +2,7 @@ use godot::prelude::*;
 
 use crate::contract::{format_money, Destination};
 use crate::game_state::{GameState, CONTRACT_REFRESH_COST};
+use crate::player_finance::PlayerFinance;
 use crate::rocket_designer::RocketDesigner;
 
 /// Godot node for managing overall game state
@@ -10,6 +11,10 @@ use crate::rocket_designer::RocketDesigner;
 pub struct GameManager {
     base: Base<Node>,
     state: GameState,
+    /// Index of the saved design currently being edited (if any)
+    current_saved_design_index: Option<usize>,
+    /// Player finances - single source of truth for money
+    finance: Gd<PlayerFinance>,
 }
 
 #[godot_api]
@@ -18,6 +23,8 @@ impl INode for GameManager {
         Self {
             base,
             state: GameState::new(),
+            current_saved_design_index: None,
+            finance: Gd::from_init_fn(PlayerFinance::init),
         }
     }
 }
@@ -50,16 +57,32 @@ impl GameManager {
     // Money and Budget
     // ==========================================
 
+    /// Get the PlayerFinance resource (single source of truth for money)
+    #[func]
+    pub fn get_finance(&self) -> Gd<PlayerFinance> {
+        self.finance.clone()
+    }
+
+    /// Sync money from PlayerFinance to GameState (call before GameState operations)
+    fn sync_money_to_state(&mut self) {
+        self.state.money = self.finance.bind().get_money();
+    }
+
+    /// Sync money from GameState to PlayerFinance (call after GameState operations that modify money)
+    fn sync_money_from_state(&mut self) {
+        self.finance.bind_mut().set_money(self.state.money);
+    }
+
     /// Get current money
     #[func]
     pub fn get_money(&self) -> f64 {
-        self.state.money
+        self.finance.bind().get_money()
     }
 
     /// Get money formatted for display (e.g., "$500M")
     #[func]
     pub fn get_money_formatted(&self) -> GString {
-        GString::from(format_money(self.state.money).as_str())
+        GString::from(format_money(self.finance.bind().get_money()).as_str())
     }
 
     /// Get the current turn number
@@ -234,10 +257,9 @@ impl GameManager {
     /// Refresh available contracts (costs money)
     #[func]
     pub fn refresh_contracts(&mut self) -> bool {
+        self.sync_money_to_state();
         if self.state.refresh_contracts() {
-            let money = self.state.money;
-            self.base_mut()
-                .emit_signal("money_changed", &[Variant::from(money)]);
+            self.sync_money_from_state();
             self.base_mut().emit_signal("contracts_changed", &[]);
             true
         } else {
@@ -326,13 +348,12 @@ impl GameManager {
     /// Complete the current contract (call after successful launch)
     #[func]
     pub fn complete_contract(&mut self) -> f64 {
+        self.sync_money_to_state();
         let reward = self.state.complete_contract();
         if reward > 0.0 {
-            let money = self.state.money;
+            self.sync_money_from_state();
             self.base_mut()
                 .emit_signal("contract_completed", &[Variant::from(reward)]);
-            self.base_mut()
-                .emit_signal("money_changed", &[Variant::from(money)]);
             self.base_mut().emit_signal("contracts_changed", &[]);
         }
         reward
@@ -341,31 +362,22 @@ impl GameManager {
     /// Record a failed launch
     #[func]
     pub fn fail_contract(&mut self) {
+        self.sync_money_to_state();
         self.state.fail_contract();
+        self.sync_money_from_state();
         self.base_mut().emit_signal("contract_failed", &[]);
     }
 
     /// Pay for the rocket (deduct cost from money)
     #[func]
     pub fn pay_for_rocket(&mut self, cost: f64) -> bool {
-        if self.state.money >= cost {
-            self.state.money -= cost;
-            let money = self.state.money;
-            self.base_mut()
-                .emit_signal("money_changed", &[Variant::from(money)]);
-            true
-        } else {
-            false
-        }
+        self.finance.bind_mut().deduct(cost)
     }
 
     /// Add money (for testing or cheats)
     #[func]
     pub fn add_money(&mut self, amount: f64) {
-        self.state.money += amount;
-        let money = self.state.money;
-        self.base_mut()
-            .emit_signal("money_changed", &[Variant::from(money)]);
+        self.finance.bind_mut().add(amount);
     }
 
     // ==========================================
@@ -537,10 +549,14 @@ impl GameManager {
     #[func]
     pub fn load_design(&mut self, index: i32) -> bool {
         if index < 0 {
+            self.current_saved_design_index = None;
             return false;
         }
         let result = self.state.load_design(index as usize);
         if result {
+            // Set budget to current player money
+            self.state.rocket_design.budget = self.finance.bind().get_money();
+            self.current_saved_design_index = Some(index as usize);
             self.base_mut().emit_signal("designs_changed", &[]);
         }
         result
@@ -557,6 +573,16 @@ impl GameManager {
             self.base_mut().emit_signal("designs_changed", &[]);
         }
         result
+    }
+
+    /// Update the currently edited saved design with the working design
+    /// Call this after launch to save testing_spent reset and flaw changes
+    #[func]
+    pub fn update_current_saved_design(&mut self) {
+        if let Some(index) = self.current_saved_design_index {
+            self.state.update_saved_design(index);
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
     }
 
     /// Delete a saved design
@@ -604,12 +630,18 @@ impl GameManager {
     #[func]
     pub fn create_new_design(&mut self) {
         self.state.create_new_design();
+        // Set budget to current player money
+        self.state.rocket_design.budget = self.finance.bind().get_money();
+        self.current_saved_design_index = None;
     }
 
     /// Create a new design based on the default template
     #[func]
     pub fn create_default_design(&mut self) {
         self.state.create_default_design();
+        // Set budget to current player money
+        self.state.rocket_design.budget = self.finance.bind().get_money();
+        self.current_saved_design_index = None;
     }
 
     /// Get the current working design name
@@ -626,16 +658,44 @@ impl GameManager {
 
     /// Copy design from a RocketDesigner node into the game state
     /// Call this before saving to ensure the game state has the latest design
+    /// Also updates the saved design if one is being edited
     #[func]
     pub fn sync_design_from(&mut self, designer: Gd<RocketDesigner>) {
         self.state.rocket_design = designer.bind().get_design_clone();
+
+        // Update the saved design if we're editing one
+        if let Some(index) = self.current_saved_design_index {
+            self.state.update_saved_design(index);
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+    }
+
+    /// Save the current design if it hasn't been saved yet
+    /// Call this before launching a new (unsaved) design
+    /// Returns the index of the saved design
+    #[func]
+    pub fn ensure_design_saved(&mut self) -> i32 {
+        if let Some(index) = self.current_saved_design_index {
+            // Already saved, just return the index
+            index as i32
+        } else {
+            // Save new design
+            let index = self.state.save_current_design();
+            self.current_saved_design_index = Some(index);
+            self.base_mut().emit_signal("designs_changed", &[]);
+            index as i32
+        }
     }
 
     /// Copy design from game state to a RocketDesigner node
     /// Call this after loading a design to update the designer
+    /// Sets the design's budget to the current player money
     #[func]
     pub fn sync_design_to(&self, mut designer: Gd<RocketDesigner>) {
-        designer.bind_mut().set_design(self.state.rocket_design.clone());
+        let mut design = self.state.rocket_design.clone();
+        design.budget = self.finance.bind().get_money();
+        designer.bind_mut().set_design(design);
+        designer.bind_mut().set_finance(self.finance.clone());
     }
 
     // ==========================================
@@ -646,9 +706,8 @@ impl GameManager {
     #[func]
     pub fn new_game(&mut self) {
         self.state = GameState::new();
-        let money = self.state.money;
-        self.base_mut()
-            .emit_signal("money_changed", &[Variant::from(money)]);
+        self.current_saved_design_index = None;
+        self.finance.bind_mut().reset();
         self.base_mut().emit_signal("contracts_changed", &[]);
     }
 
@@ -658,7 +717,7 @@ impl GameManager {
         let summary = format!(
             "Turn: {} | Money: {} | Launches: {}/{} ({:.0}%)",
             self.state.turn,
-            format_money(self.state.money),
+            format_money(self.finance.bind().get_money()),
             self.state.successful_launches,
             self.state.total_launches,
             self.state.success_rate()

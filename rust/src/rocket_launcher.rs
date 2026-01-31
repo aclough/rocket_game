@@ -135,9 +135,10 @@ impl RocketLauncher {
             let discovered = designer_ref.is_flaw_discovered(i);
             let fixed = designer_ref.is_flaw_fixed(i);
             let is_engine = designer_ref.is_flaw_engine_type(i);
+            let failure_rate = designer_ref.get_flaw_failure_rate(i);
+            let engine_type_idx = designer_ref.get_flaw_engine_type_index(i);
 
             // Create a flaw with matching properties
-            // We use dummy values for rates since they're already factored in
             let flaw = crate::flaw::Flaw {
                 id: (i + 1) as u32,
                 flaw_type: if is_engine {
@@ -147,7 +148,7 @@ impl RocketLauncher {
                 },
                 name,
                 description,
-                failure_rate: 0.10, // Will use get_flaw_failure_rate from designer
+                failure_rate,
                 testing_modifier: 0.8,
                 trigger_event_type: if is_engine {
                     crate::flaw::FlawTrigger::Ignition
@@ -156,9 +157,14 @@ impl RocketLauncher {
                 },
                 discovered,
                 fixed,
-                engine_type_index: None, // We don't track engine type here
+                engine_type_index: if engine_type_idx >= 0 { Some(engine_type_idx) } else { None },
             };
-            design.flaws.push(flaw);
+            // Add to appropriate vector based on fixed status
+            if fixed {
+                design.fixed_flaws.push(flaw);
+            } else {
+                design.active_flaws.push(flaw);
+            }
         }
         design.flaws_generated = designer_ref.has_flaws_generated();
 
@@ -245,40 +251,31 @@ impl RocketLauncher {
     }
 
     /// Returns the TOTAL failure probability for a specific stage/event
-    /// Includes base failure rate PLUS flaw contributions
+    /// Includes base failure rate PLUS flaw contributions (design + engine flaws)
     #[func]
-    pub fn get_total_failure_rate(&self, index: i32) -> f64 {
+    pub fn get_total_failure_rate(&mut self, index: i32) -> f64 {
         let base_rate = self.get_stage_failure_rate(index);
-
-        // Add flaw contributions if we have a design with flaws
-        if let Some(design) = &self.design {
-            if index >= 0 && (index as usize) < self.cached_events.len() {
-                let event = &self.cached_events[index as usize];
-                let event_name = &event.name;
-                // Get the engine type for this stage
-                let stage_engine_type = design.stages
-                    .get(event.rocket_stage)
-                    .map(|s| s.engine_type.to_index());
-                let flaw_rate = design.get_flaw_failure_contribution(event_name, stage_engine_type);
-                // Cap total failure rate at 95%
-                return (base_rate + flaw_rate).min(0.95);
-            }
-        }
-
-        base_rate
+        let flaw_rate = self.get_flaw_failure_rate(index);
+        // Cap total failure rate at 95%
+        (base_rate + flaw_rate).min(0.95)
     }
 
-    /// Returns the flaw failure contribution for a specific event
+    /// Returns the combined flaw failure contribution for a specific event
+    /// Uses only the flaws copied from the designer (includes both design and engine flaws)
     #[func]
-    pub fn get_flaw_failure_rate(&self, index: i32) -> f64 {
+    pub fn get_flaw_failure_rate(&mut self, index: i32) -> f64 {
         if let Some(design) = &self.design {
             if index >= 0 && (index as usize) < self.cached_events.len() {
                 let event = &self.cached_events[index as usize];
                 let event_name = &event.name;
+
                 // Get the engine type for this stage
                 let stage_engine_type = design.stages
                     .get(event.rocket_stage)
                     .map(|s| s.engine_type.to_index());
+
+                // All flaws (design + engine) are in the copied design
+                // Don't use self.engine_registry - those flaws weren't fixed by the user
                 return design.get_flaw_failure_contribution(event_name, stage_engine_type);
             }
         }

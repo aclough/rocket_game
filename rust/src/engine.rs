@@ -60,10 +60,17 @@ pub mod costs {
     /// Tank structural mass as a fraction of propellant mass
     /// This accounts for tank walls, stringers, insulation, plumbing, etc.
     /// Real rockets range from 5-12% depending on propellant type and technology
-    /// - Kerolox tanks: typically ~5-7% (denser propellant, smaller tanks)
-    /// - Hydrolox tanks: typically ~8-12% (larger tanks for low-density LH2, insulation)
-    /// We use a single value for simplicity; could be per-propellant-type later
-    pub const TANK_STRUCTURAL_MASS_RATIO: f64 = 0.08;
+
+    /// Kerolox tank structural mass ratio (~6%)
+    /// Denser propellant means smaller tank volume for the same mass
+    /// Less insulation needed (RP-1 is storable, LOX is mildly cryogenic)
+    pub const KEROLOX_TANK_MASS_RATIO: f64 = 0.06;
+
+    /// Hydrolox tank structural mass ratio (~10%)
+    /// Very low density LH2 requires much larger tanks
+    /// Extensive insulation needed for deeply cryogenic LH2 (20K)
+    /// More complex plumbing and boil-off management
+    pub const HYDROLOX_TANK_MASS_RATIO: f64 = 0.10;
 
     /// Structural mass for booster attachment points in kg
     /// Covers radial decouplers, structural adapters, and crossfeed plumbing
@@ -113,6 +120,15 @@ impl EngineType {
         }
     }
 
+    /// Get the tank structural mass ratio for this engine type
+    /// This is the fraction of propellant mass that the tank structure weighs
+    pub fn tank_mass_ratio(&self) -> f64 {
+        match self {
+            EngineType::Hydrolox => costs::HYDROLOX_TANK_MASS_RATIO,
+            EngineType::Kerolox => costs::KEROLOX_TANK_MASS_RATIO,
+        }
+    }
+
     /// Get the default specification for this engine type (without flaws).
     /// For flaw-aware operations, use EngineRegistry instead.
     pub fn spec(&self) -> EngineSpec {
@@ -127,7 +143,8 @@ impl EngineType {
                 production_count: 0,
                 required_tech_level: 0,
                 base_cost: costs::HYDROLOX_ENGINE_COST,
-                flaws: Vec::new(),
+                active_flaws: Vec::new(),
+                fixed_flaws: Vec::new(),
                 flaws_generated: false,
             },
             EngineType::Kerolox => EngineSpec {
@@ -140,7 +157,8 @@ impl EngineType {
                 production_count: 0,
                 required_tech_level: 0,
                 base_cost: costs::KEROLOX_ENGINE_COST,
-                flaws: Vec::new(),
+                active_flaws: Vec::new(),
+                fixed_flaws: Vec::new(),
                 flaws_generated: false,
             },
         }
@@ -178,8 +196,10 @@ pub struct EngineSpec {
 
     // Flaw system fields
 
-    /// Flaws associated with this engine type
-    pub flaws: Vec<Flaw>,
+    /// Active (unfixed) flaws associated with this engine type
+    pub active_flaws: Vec<Flaw>,
+    /// Fixed flaws (kept for history/UI display)
+    pub fixed_flaws: Vec<Flaw>,
     /// Whether flaws have been generated for this engine
     pub flaws_generated: bool,
 }
@@ -204,23 +224,46 @@ impl EngineSpec {
         // Generate engine flaws for this engine type
         // Fixed count per engine type (not scaled by usage)
         let engine_type_index = self.engine_type.to_index();
-        self.flaws = generator.generate_engine_flaws_for_type(engine_type_index);
+        self.active_flaws = generator.generate_engine_flaws_for_type(engine_type_index);
+        self.fixed_flaws.clear();
         self.flaws_generated = true;
     }
 
     /// Get active (unfixed) flaws for this engine
-    pub fn active_flaws(&self) -> Vec<&Flaw> {
-        self.flaws.iter().filter(|f| f.is_active()).collect()
+    pub fn get_active_flaws(&self) -> &[Flaw] {
+        &self.active_flaws
     }
 
-    /// Find a flaw by ID
+    /// Get fixed flaws for this engine
+    pub fn get_fixed_flaws(&self) -> &[Flaw] {
+        &self.fixed_flaws
+    }
+
+    /// Get total flaw count (active + fixed)
+    pub fn get_flaw_count(&self) -> usize {
+        self.active_flaws.len() + self.fixed_flaws.len()
+    }
+
+    /// Find a flaw by ID in active flaws
     pub fn get_flaw(&self, id: u32) -> Option<&Flaw> {
-        self.flaws.iter().find(|f| f.id == id)
+        self.active_flaws.iter().find(|f| f.id == id)
     }
 
-    /// Find a flaw by ID (mutable)
+    /// Find a flaw by ID (mutable) in active flaws
     pub fn get_flaw_mut(&mut self, id: u32) -> Option<&mut Flaw> {
-        self.flaws.iter_mut().find(|f| f.id == id)
+        self.active_flaws.iter_mut().find(|f| f.id == id)
+    }
+
+    /// Fix a flaw by ID - moves it from active_flaws to fixed_flaws
+    /// Returns true if the flaw was fixed
+    pub fn fix_flaw(&mut self, id: u32) -> bool {
+        if let Some(index) = self.active_flaws.iter().position(|f| f.id == id && f.discovered) {
+            let mut flaw = self.active_flaws.remove(index);
+            flaw.fixed = true;
+            self.fixed_flaws.push(flaw);
+            return true;
+        }
+        false
     }
 }
 

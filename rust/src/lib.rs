@@ -9,6 +9,7 @@ pub mod rocket_design;
 pub mod stage;
 
 mod game_manager;
+mod player_finance;
 mod rocket_designer;
 mod rocket_launcher;
 mod test_node;

@@ -49,6 +49,7 @@ var success_count = 0
 var has_custom_design = false
 var last_launch_success = false
 var free_launch_mode = false
+var skipped_designer = false  # True if user went directly from design selection to testing
 
 func _ready():
 	# Hide main content initially - show contract screen instead
@@ -180,6 +181,11 @@ func show_testing_screen():
 		add_child(design_screen)
 		design_screen.visible = false
 
+	# Sync design from game state to designer (important when skipping designer screen)
+	var designer = design_screen.get_designer()
+	if game_manager and designer:
+		game_manager.sync_design_to(designer)
+
 	# Create testing screen if not exists
 	if testing_screen == null:
 		testing_screen = testing_screen_scene.instantiate()
@@ -188,7 +194,6 @@ func show_testing_screen():
 		add_child(testing_screen)
 
 	# Pass the designer to the testing screen
-	var designer = design_screen.get_designer()
 	testing_screen.set_designer(designer)
 
 	# Hide other screens
@@ -219,7 +224,14 @@ func _on_free_launch_requested():
 func _on_design_selected(design_index: int):
 	# design_index is -1 for new design, otherwise the saved design index
 	hide_design_select_screen()
-	show_design_screen()
+	if design_index < 0:
+		# New design - go to designer
+		skipped_designer = false
+		show_design_screen()
+	else:
+		# Existing design - go straight to testing
+		skipped_designer = true
+		show_testing_screen()
 
 func _on_design_select_back_requested():
 	hide_design_select_screen()
@@ -245,6 +257,8 @@ func _on_design_launch_requested():
 	_on_design_testing_requested()
 
 func _on_design_testing_requested():
+	# Coming from designer, so back should go to designer
+	skipped_designer = false
 	# Hide design screen and show testing screen
 	if design_screen:
 		design_screen.visible = false
@@ -261,6 +275,10 @@ func _on_testing_launch_requested():
 		var designer = design_screen.get_designer()
 		launcher.copy_design_from(designer)
 		has_custom_design = true
+		# Ensure the design is saved before launching (so flaws persist)
+		if game_manager:
+			game_manager.ensure_design_saved()
+			game_manager.sync_design_from(designer)
 
 	# Hide testing screen
 	hide_testing_screen()
@@ -273,9 +291,16 @@ func _on_testing_launch_requested():
 	start_launch()
 
 func _on_testing_back_requested():
-	# Go back to design screen
+	# Sync design changes (including flaw fixes) back to game state
+	if design_screen and game_manager:
+		var designer = design_screen.get_designer()
+		game_manager.sync_design_from(designer)
+	# Go back to where we came from
 	hide_testing_screen()
-	show_design_screen()
+	if skipped_designer:
+		show_design_select_screen()
+	else:
+		show_design_screen()
 
 func start_launch():
 	# Update state
@@ -433,6 +458,8 @@ func run_launch_with_delays():
 			reward = game_manager.complete_contract()
 		else:
 			game_manager.fail_contract()
+		# Save updated design state (testing_spent reset) to saved design
+		game_manager.update_current_saved_design()
 
 	# Show result panel
 	status_panel.visible = false

@@ -377,73 +377,6 @@ impl FlawGenerator {
             .collect()
     }
 
-    /// Generate flaws for a rocket based on its configuration (legacy method)
-    /// Returns a vector of flaws
-    #[deprecated(note = "Use generate_design_flaws instead; engine flaws are now on EngineSpec")]
-    pub fn generate_flaws(&mut self, total_engines: u32, stage_count: usize) -> Vec<Flaw> {
-        // Call the extended version with empty engine types (backward compatible)
-        self.generate_flaws_with_engine_types(total_engines, stage_count, &[])
-    }
-
-    /// Generate flaws for a rocket with specific engine types (legacy method)
-    /// engine_types is a list of (engine_type_index, engine_count) pairs
-    #[deprecated(note = "Use generate_design_flaws instead; engine flaws are now on EngineSpec")]
-    pub fn generate_flaws_with_engine_types(
-        &mut self,
-        total_engines: u32,
-        stage_count: usize,
-        engine_types: &[(i32, u32)],
-    ) -> Vec<Flaw> {
-        let mut rng = rand::thread_rng();
-        let mut flaws = Vec::new();
-
-        // If we have engine type info, generate flaws per engine type
-        // More flaws than before, but the log-normal distribution means many
-        // will have low failure rates (long tail of low-likelihood flaws)
-        if !engine_types.is_empty() {
-            for &(engine_type, count) in engine_types {
-                // 2-4 flaws per engine type, scaled by engine count
-                let flaw_count = 2 + (count / 2).min(2) as usize;
-                let templates = self.select_random_templates(
-                    ENGINE_FLAW_TEMPLATES,
-                    flaw_count,
-                    &mut rng,
-                );
-                for template in templates {
-                    flaws.push(Flaw::from_template_with_engine(template, self.next_id, engine_type));
-                    self.next_id += 1;
-                }
-            }
-        } else {
-            // Fallback: generate engine flaws without type association
-            let engine_flaw_count = 3 + (total_engines / 4).min(3) as usize;
-            let engine_templates = self.select_random_templates(
-                ENGINE_FLAW_TEMPLATES,
-                engine_flaw_count,
-                &mut rng,
-            );
-            for template in engine_templates {
-                flaws.push(Flaw::from_template(template, self.next_id));
-                self.next_id += 1;
-            }
-        }
-
-        // Design flaws: 3-6 based on stage count
-        // More flaws with long tail distribution for varied gameplay
-        let design_flaw_count = 3 + stage_count.min(3);
-        let design_templates = self.select_random_templates(
-            DESIGN_FLAW_TEMPLATES,
-            design_flaw_count,
-            &mut rng,
-        );
-        for template in design_templates {
-            flaws.push(Flaw::from_template(template, self.next_id));
-            self.next_id += 1;
-        }
-
-        flaws
-    }
-
     /// Select random templates without replacement
     fn select_random_templates<'a>(
         &self,
@@ -701,17 +634,26 @@ mod tests {
     #[test]
     fn test_flaw_generator() {
         let mut generator = FlawGenerator::new();
-        let flaws = generator.generate_flaws(5, 2);
 
-        // Should generate some engine flaws and some design flaws
-        let engine_flaws = flaws.iter().filter(|f| f.flaw_type == FlawType::Engine).count();
-        let design_flaws = flaws.iter().filter(|f| f.flaw_type == FlawType::Design).count();
+        // Generate engine flaws for a specific engine type
+        let engine_flaws = generator.generate_engine_flaws_for_type(0);
 
-        assert!(engine_flaws >= 2);
-        assert!(design_flaws >= 2);
+        // Generate design flaws for a 2-stage rocket
+        let design_flaws = generator.generate_design_flaws(2);
+
+        // Should generate the expected counts
+        assert!(engine_flaws.len() >= 3); // 3-4 per engine type
+        assert!(design_flaws.len() >= 3); // 3+ based on stage count
+
+        // All engine flaws should be of type Engine
+        assert!(engine_flaws.iter().all(|f| f.flaw_type == FlawType::Engine));
+
+        // All design flaws should be of type Design
+        assert!(design_flaws.iter().all(|f| f.flaw_type == FlawType::Design));
 
         // All flaws should have unique IDs
-        let ids: Vec<u32> = flaws.iter().map(|f| f.id).collect();
+        let all_flaws: Vec<&Flaw> = engine_flaws.iter().chain(design_flaws.iter()).collect();
+        let ids: Vec<u32> = all_flaws.iter().map(|f| f.id).collect();
         let unique_ids: std::collections::HashSet<u32> = ids.iter().cloned().collect();
         assert_eq!(ids.len(), unique_ids.len());
     }
@@ -719,14 +661,15 @@ mod tests {
     #[test]
     fn test_calculate_flaw_failure_rate() {
         let mut generator = FlawGenerator::new();
-        // Generate flaws with engine type info
-        let flaws = generator.generate_flaws_with_engine_types(3, 2, &[(0, 3)]);
+
+        // Generate engine flaws for engine type 0
+        let engine_flaws = generator.generate_engine_flaws_for_type(0);
 
         // Get ignition failure rate for engine type 0
-        let ignition_rate = calculate_flaw_failure_rate(&flaws, "Stage 1 Ignition", Some(0));
+        let ignition_rate = calculate_flaw_failure_rate(&engine_flaws, "Stage 1 Ignition", Some(0));
 
         // Should be sum of all engine flaw failure rates for engine type 0
-        let expected: f64 = flaws
+        let expected: f64 = engine_flaws
             .iter()
             .filter(|f| f.flaw_type == FlawType::Engine && f.engine_type_index == Some(0))
             .map(|f| f.failure_rate)
@@ -738,7 +681,9 @@ mod tests {
     #[test]
     fn test_estimate_success_rate() {
         let mut generator = FlawGenerator::new();
-        let flaws = generator.generate_flaws(3, 2);
+
+        // Generate design flaws for a 2-stage rocket
+        let flaws = generator.generate_design_flaws(2);
 
         let success = estimate_success_rate(&flaws, 0.9);
 

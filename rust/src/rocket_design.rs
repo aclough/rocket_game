@@ -108,12 +108,16 @@ pub struct RocketDesign {
 
     // Flaw system fields
 
-    /// Hidden flaws in this rocket design
-    pub flaws: Vec<Flaw>,
+    /// Active (unfixed) flaws in this rocket design
+    pub active_flaws: Vec<Flaw>,
+    /// Fixed flaws (kept for history/UI display)
+    pub fixed_flaws: Vec<Flaw>,
     /// Whether flaws have been generated for this design
     pub flaws_generated: bool,
     /// Budget spent on testing and fixing (deducted from remaining budget)
     pub testing_spent: f64,
+    /// Available budget for this design (defaults to STARTING_BUDGET, updated from game state)
+    pub budget: f64,
     /// Signature of the design when flaws were generated
     /// Used to detect when the design has changed significantly
     flaw_design_signature: String,
@@ -128,9 +132,11 @@ impl RocketDesign {
             target_delta_v: TARGET_DELTA_V_MS,
             name: "Unnamed Rocket".to_string(),
             launch_count: 0,
-            flaws: Vec::new(),
+            active_flaws: Vec::new(),
+            fixed_flaws: Vec::new(),
             flaws_generated: false,
             testing_spent: 0.0,
+            budget: costs::STARTING_BUDGET,
             flaw_design_signature: String::new(),
         }
     }
@@ -164,7 +170,8 @@ impl RocketDesign {
 
     /// Reset flaws and testing state (call when design changes significantly)
     pub fn reset_flaws(&mut self) {
-        self.flaws.clear();
+        self.active_flaws.clear();
+        self.fixed_flaws.clear();
         self.flaws_generated = false;
         self.testing_spent = 0.0;
         self.flaw_design_signature.clear();
@@ -983,12 +990,12 @@ impl RocketDesign {
 
     /// Calculate remaining budget after subtracting rocket cost and testing expenses
     pub fn remaining_budget(&self) -> f64 {
-        costs::STARTING_BUDGET - self.total_cost() - self.testing_spent
+        self.budget - self.total_cost() - self.testing_spent
     }
 
     /// Check if the design is within budget (including testing expenses)
     pub fn is_within_budget(&self) -> bool {
-        self.total_cost() + self.testing_spent <= costs::STARTING_BUDGET
+        self.total_cost() + self.testing_spent <= self.budget
     }
 
     /// Check if the design is both sufficient (delta-v) and affordable (budget)
@@ -1015,25 +1022,25 @@ impl RocketDesign {
         costs::FLAW_FIX_COST
     }
 
-    /// Generate flaws for this rocket design
-    /// Should be called when the design is finalized (before testing/launching)
-    pub fn generate_flaws(&mut self) {
+    /// Generate design flaws for this rocket design.
+    /// Engine flaws are stored on EngineSpec via EngineRegistry, not here.
+    /// Should be called when the design is finalized (before testing/launching).
+    ///
+    /// # Arguments
+    /// * `generator` - The flaw generator to use (typically from EngineRegistry)
+    pub fn generate_flaws(&mut self, generator: &mut FlawGenerator) {
         if self.flaws_generated {
             return;
         }
 
-        let total_engines: u32 = self.stages.iter().map(|s| s.engine_count).sum();
         let stage_count = self.stages.len();
-
-        if total_engines == 0 || stage_count == 0 {
+        if stage_count == 0 {
             return;
         }
 
-        // Collect engine types and their counts
-        let engine_types = self.get_engine_type_counts();
-
-        let mut generator = FlawGenerator::new();
-        self.flaws = generator.generate_flaws_with_engine_types(total_engines, stage_count, &engine_types);
+        // Only generate design flaws - engine flaws are on EngineSpec
+        self.active_flaws = generator.generate_design_flaws(stage_count);
+        self.fixed_flaws.clear();
         self.flaws_generated = true;
         // Save the design signature so we can detect changes
         self.flaw_design_signature = self.compute_design_signature();
@@ -1072,39 +1079,64 @@ impl RocketDesign {
         self.flaws_generated
     }
 
-    /// Get all flaws
-    pub fn get_flaws(&self) -> &[Flaw] {
-        &self.flaws
+    /// Get the stored flaw design signature (for debugging)
+    pub fn get_flaw_design_signature(&self) -> &str {
+        &self.flaw_design_signature
     }
 
-    /// Get the total number of flaws
+    /// Get active (unfixed) flaws
+    pub fn get_active_flaws(&self) -> &[Flaw] {
+        &self.active_flaws
+    }
+
+    /// Get fixed flaws
+    pub fn get_fixed_flaws(&self) -> &[Flaw] {
+        &self.fixed_flaws
+    }
+
+    /// Get the total number of flaws (active + fixed)
     pub fn get_flaw_count(&self) -> usize {
-        self.flaws.len()
+        self.active_flaws.len() + self.fixed_flaws.len()
     }
 
-    /// Get the number of discovered flaws
+    /// Get the number of active flaws
+    pub fn get_active_flaw_count(&self) -> usize {
+        self.active_flaws.len()
+    }
+
+    /// Get the number of discovered but unfixed flaws
     pub fn get_discovered_flaw_count(&self) -> usize {
-        self.flaws.iter().filter(|f| f.discovered).count()
+        self.active_flaws.iter().filter(|f| f.discovered).count()
     }
 
     /// Get the number of fixed flaws
     pub fn get_fixed_flaw_count(&self) -> usize {
-        self.flaws.iter().filter(|f| f.fixed).count()
+        self.fixed_flaws.len()
     }
 
-    /// Get the number of undiscovered, unfixed flaws (unknown issues)
+    /// Get the number of undiscovered flaws (unknown issues)
     pub fn get_unknown_flaw_count(&self) -> usize {
-        self.flaws.iter().filter(|f| !f.discovered && !f.fixed).count()
+        self.active_flaws.iter().filter(|f| !f.discovered).count()
     }
 
-    /// Get a flaw by index
+    /// Get a flaw by index (searches active flaws first, then fixed)
     pub fn get_flaw(&self, index: usize) -> Option<&Flaw> {
-        self.flaws.get(index)
+        let active_len = self.active_flaws.len();
+        if index < active_len {
+            self.active_flaws.get(index)
+        } else {
+            self.fixed_flaws.get(index - active_len)
+        }
     }
 
-    /// Get a mutable flaw by index
+    /// Get a mutable flaw by index (searches active flaws first, then fixed)
     pub fn get_flaw_mut(&mut self, index: usize) -> Option<&mut Flaw> {
-        self.flaws.get_mut(index)
+        let active_len = self.active_flaws.len();
+        if index < active_len {
+            self.active_flaws.get_mut(index)
+        } else {
+            self.fixed_flaws.get_mut(index - active_len)
+        }
     }
 
     /// Run an engine test - returns names of newly discovered flaws
@@ -1115,7 +1147,7 @@ impl RocketDesign {
         }
 
         self.testing_spent += costs::ENGINE_TEST_COST;
-        run_test(&mut self.flaws, FlawType::Engine)
+        run_test(&mut self.active_flaws, FlawType::Engine)
     }
 
     /// Run an engine test for a specific engine type - returns names of newly discovered flaws
@@ -1126,7 +1158,7 @@ impl RocketDesign {
         }
 
         self.testing_spent += costs::ENGINE_TEST_COST;
-        crate::flaw::run_engine_test_for_type(&mut self.flaws, engine_type_index)
+        crate::flaw::run_engine_test_for_type(&mut self.active_flaws, engine_type_index)
     }
 
     /// Run a rocket test - returns names of newly discovered flaws
@@ -1137,39 +1169,50 @@ impl RocketDesign {
         }
 
         self.testing_spent += costs::ROCKET_TEST_COST;
-        run_test(&mut self.flaws, FlawType::Design)
+        run_test(&mut self.active_flaws, FlawType::Design)
+    }
+
+    /// Run a rocket test without cost handling (cost managed externally)
+    pub fn run_rocket_test_no_cost(&mut self) -> Vec<String> {
+        run_test(&mut self.active_flaws, FlawType::Design)
     }
 
     /// Fix a flaw by ID
     /// Costs FLAW_FIX_COST from budget
+    /// Moves the flaw from active_flaws to fixed_flaws
     /// Returns true if the flaw was fixed
     pub fn fix_flaw(&mut self, flaw_id: u32) -> bool {
         if self.remaining_budget() < costs::FLAW_FIX_COST {
             return false;
         }
 
-        for flaw in &mut self.flaws {
-            if flaw.id == flaw_id && flaw.discovered && !flaw.fixed {
-                flaw.fixed = true;
-                self.testing_spent += costs::FLAW_FIX_COST;
-                return true;
-            }
+        // Find the index of the flaw to fix
+        if let Some(index) = self.active_flaws.iter().position(|f| f.id == flaw_id && f.discovered) {
+            let mut flaw = self.active_flaws.remove(index);
+            flaw.fixed = true;
+            self.fixed_flaws.push(flaw);
+            self.testing_spent += costs::FLAW_FIX_COST;
+            return true;
         }
 
         false
     }
 
-    /// Fix a flaw by index
+    /// Fix a flaw by index (within active_flaws)
     /// Costs FLAW_FIX_COST from budget
+    /// Moves the flaw from active_flaws to fixed_flaws
     /// Returns true if the flaw was fixed
     pub fn fix_flaw_by_index(&mut self, index: usize) -> bool {
         if self.remaining_budget() < costs::FLAW_FIX_COST {
             return false;
         }
 
-        if let Some(flaw) = self.flaws.get_mut(index) {
-            if flaw.discovered && !flaw.fixed {
+        // Check if the flaw at this index is discovered and can be fixed
+        if index < self.active_flaws.len() {
+            if self.active_flaws[index].discovered {
+                let mut flaw = self.active_flaws.remove(index);
                 flaw.fixed = true;
+                self.fixed_flaws.push(flaw);
                 self.testing_spent += costs::FLAW_FIX_COST;
                 return true;
             }
@@ -1178,21 +1221,37 @@ impl RocketDesign {
         false
     }
 
+    /// Fix a flaw by index without cost handling (cost managed externally)
+    pub fn fix_flaw_by_index_no_cost(&mut self, index: usize) -> bool {
+        if index < self.active_flaws.len() {
+            if self.active_flaws[index].discovered {
+                let mut flaw = self.active_flaws.remove(index);
+                flaw.fixed = true;
+                self.fixed_flaws.push(flaw);
+                return true;
+            }
+        }
+        false
+    }
+
     /// Get the additional failure rate from flaws for a given event
     /// stage_engine_type: the engine type index of the stage (for filtering engine flaws)
+    /// Only considers active (unfixed) flaws
     pub fn get_flaw_failure_contribution(&self, event_name: &str, stage_engine_type: Option<i32>) -> f64 {
-        calculate_flaw_failure_rate(&self.flaws, event_name, stage_engine_type)
+        calculate_flaw_failure_rate(&self.active_flaws, event_name, stage_engine_type)
     }
 
     /// Estimate success rate including flaw contributions
+    /// Only considers active (unfixed) flaws
     pub fn estimate_success_rate_with_flaws(&self) -> f64 {
         let base_success = self.mission_success_probability();
-        estimate_success_rate(&self.flaws, base_success)
+        estimate_success_rate(&self.active_flaws, base_success)
     }
 
     /// Get estimated range of unknown flaw count (fuzzy, not exact)
+    /// Only considers active (unfixed) flaws
     pub fn estimate_unknown_flaws(&self) -> (usize, usize) {
-        estimate_unknown_flaw_count(&self.flaws)
+        estimate_unknown_flaw_count(&self.active_flaws)
     }
 
     /// Check if a flaw can be afforded
@@ -1211,8 +1270,9 @@ impl RocketDesign {
     }
 
     /// Mark a flaw as discovered (used when failure occurs during launch)
+    /// Only searches active flaws since fixed flaws can't be discovered
     pub fn discover_flaw(&mut self, flaw_id: u32) {
-        for flaw in &mut self.flaws {
+        for flaw in &mut self.active_flaws {
             if flaw.id == flaw_id {
                 flaw.discovered = true;
                 break;
@@ -1223,19 +1283,22 @@ impl RocketDesign {
     /// Check if any flaw triggers at a given event, and return the flaw ID if it caused a failure
     /// stage_engine_type: the engine type index of the stage that failed
     /// Returns Some(flaw_id) if a flaw triggered failure, None otherwise
+    /// Only checks active (unfixed) flaws
     pub fn check_flaw_trigger(&self, event_name: &str, stage_engine_type: Option<i32>) -> Option<u32> {
-        crate::flaw::check_flaw_trigger(&self.flaws, event_name, stage_engine_type)
+        crate::flaw::check_flaw_trigger(&self.active_flaws, event_name, stage_engine_type)
     }
 
     /// Mark a flaw as discovered and return its name
     /// Used when a flaw causes a failure during launch
+    /// Only searches active flaws
     pub fn discover_flaw_by_id(&mut self, flaw_id: u32) -> Option<String> {
-        crate::flaw::mark_flaw_discovered(&mut self.flaws, flaw_id)
+        crate::flaw::mark_flaw_discovered(&mut self.active_flaws, flaw_id)
     }
 
     /// Get the engine type index for a flaw (None for design flaws)
+    /// Searches active flaws first, then fixed flaws
     pub fn get_flaw_engine_type_index(&self, index: usize) -> Option<i32> {
-        self.flaws.get(index).and_then(|f| f.engine_type_index)
+        self.get_flaw(index).and_then(|f| f.engine_type_index)
     }
 
     /// Get total testing spent
@@ -1446,10 +1509,10 @@ mod tests {
         design.stages.push(stage2);
 
         // Mass above stage 1 (bottom): stage 2 + payload
-        // Stage 2: 300 kg engine + 240 kg tank (3000 × 0.08) + 3000 kg prop = 3540 kg
-        // + 1000 kg payload = 4540 kg
+        // Stage 2: 300 kg engine + 300 kg tank (3000 × 0.10 Hydrolox) + 3000 kg prop = 3600 kg
+        // + 1000 kg payload = 4600 kg
         let mass_above_0 = design.mass_above_stage(0);
-        assert_eq!(mass_above_0, 4540.0);
+        assert_eq!(mass_above_0, 4600.0);
 
         // Mass above stage 2 (top): just payload
         let mass_above_1 = design.mass_above_stage(1);
@@ -1618,12 +1681,12 @@ mod tests {
         // Hand calculation for a single stage rocket:
         // Hydrolox engine: Ve = 4500 m/s, engine mass = 300 kg
         // Propellant: 9000 kg
-        // Tank mass: 9000 × 0.08 = 720 kg
+        // Tank mass: 9000 × 0.10 = 900 kg (Hydrolox uses 10% tank mass ratio)
         // Payload: 1000 kg
         //
-        // Wet mass (m0) = 300 + 720 + 9000 + 1000 = 11020 kg
-        // Dry mass (mf) = 300 + 720 + 1000 = 2020 kg
-        // Δv = 4500 * ln(11020/2020) = 4500 * ln(5.455) = 4500 * 1.697 = 7637 m/s
+        // Wet mass (m0) = 300 + 900 + 9000 + 1000 = 11200 kg
+        // Dry mass (mf) = 300 + 900 + 1000 = 2200 kg
+        // Δv = 4500 * ln(11200/2200) = 4500 * ln(5.091) = 4500 * 1.627 = 7322 m/s
 
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
@@ -1632,7 +1695,7 @@ mod tests {
         design.stages[0].propellant_mass_kg = 9000.0;
 
         let dv = design.total_delta_v();
-        let expected = 4500.0 * (11020.0_f64 / 2020.0).ln();
+        let expected = 4500.0 * (11200.0_f64 / 2200.0).ln();
 
         assert!(
             (dv - expected).abs() < 1.0,
@@ -1644,25 +1707,27 @@ mod tests {
 
     #[test]
     fn test_delta_v_hand_calculated_two_stage() {
-        // Two-stage rocket calculation (with tank structural mass = 8% of propellant):
+        // Two-stage rocket calculation with per-propellant tank mass ratios:
+        // - Kerolox: 6% tank mass ratio
+        // - Hydrolox: 10% tank mass ratio
         //
         // Stage 2 (upper, fires second):
         //   Hydrolox: Ve = 4500 m/s, engine = 300 kg
-        //   Propellant: 3000 kg, Tank: 3000 × 0.08 = 240 kg
+        //   Propellant: 3000 kg, Tank: 3000 × 0.10 = 300 kg
         //   Payload: 1000 kg
-        //   m0 = 300 + 240 + 3000 + 1000 = 4540 kg
-        //   mf = 300 + 240 + 1000 = 1540 kg
-        //   Δv2 = 4500 * ln(4540/1540) = 4500 * ln(2.948) = 4500 * 1.082 = 4868 m/s
+        //   m0 = 300 + 300 + 3000 + 1000 = 4600 kg
+        //   mf = 300 + 300 + 1000 = 1600 kg
+        //   Δv2 = 4500 * ln(4600/1600) = 4500 * ln(2.875) = 4500 * 1.056 = 4752 m/s
         //
         // Stage 1 (lower, fires first):
         //   Kerolox: Ve = 3000 m/s, engine = 450 kg
-        //   Propellant: 10000 kg, Tank: 10000 × 0.08 = 800 kg
-        //   Payload above = stage 2 wet mass = 4540 kg
-        //   m0 = 450 + 800 + 10000 + 4540 = 15790 kg
-        //   mf = 450 + 800 + 4540 = 5790 kg
-        //   Δv1 = 3000 * ln(15790/5790) = 3000 * ln(2.727) = 3000 * 1.003 = 3010 m/s
+        //   Propellant: 10000 kg, Tank: 10000 × 0.06 = 600 kg
+        //   Payload above = stage 2 wet mass = 4600 kg
+        //   m0 = 450 + 600 + 10000 + 4600 = 15650 kg
+        //   mf = 450 + 600 + 4600 = 5650 kg
+        //   Δv1 = 3000 * ln(15650/5650) = 3000 * ln(2.770) = 3000 * 1.019 = 3056 m/s
         //
-        // Total Δv = 4868 + 3010 = 7878 m/s
+        // Total Δv = 4752 + 3056 = 7808 m/s
 
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
@@ -1683,8 +1748,8 @@ mod tests {
         let dv2 = design.stage_delta_v(1);
         let total = design.total_delta_v();
 
-        let expected_dv2 = 4500.0 * (4540.0_f64 / 1540.0).ln();
-        let expected_dv1 = 3000.0 * (15790.0_f64 / 5790.0).ln();
+        let expected_dv2 = 4500.0 * (4600.0_f64 / 1600.0).ln();
+        let expected_dv1 = 3000.0 * (15650.0_f64 / 5650.0).ln();
         let expected_total = expected_dv1 + expected_dv2;
 
         assert!(
@@ -1814,19 +1879,19 @@ mod tests {
         design.add_stage(EngineType::Kerolox);
         design.stages[0].engine_count = 2;
         design.stages[0].propellant_mass_kg = 5000.0;
-        // Engine: 2 × 450 = 900 kg, Tank: 5000 × 0.08 = 400 kg
-        // Dry: 1300 kg, Wet: 6300 kg
+        // Engine: 2 × 450 = 900 kg, Tank: 5000 × 0.06 = 300 kg (Kerolox)
+        // Dry: 1200 kg, Wet: 6200 kg
 
         design.add_stage(EngineType::Hydrolox);
         design.stages[1].engine_count = 1;
         design.stages[1].propellant_mass_kg = 2000.0;
-        // Engine: 300 kg, Tank: 2000 × 0.08 = 160 kg
-        // Dry: 460 kg, Wet: 2460 kg
+        // Engine: 300 kg, Tank: 2000 × 0.10 = 200 kg (Hydrolox)
+        // Dry: 500 kg, Wet: 2500 kg
 
-        // Total dry = 1300 + 460 + 1000 = 2760 kg
-        // Total wet = 6300 + 2460 + 1000 = 9760 kg
-        assert_eq!(design.total_dry_mass_kg(), 2760.0);
-        assert_eq!(design.total_wet_mass_kg(), 9760.0);
+        // Total dry = 1200 + 500 + 1000 = 2700 kg
+        // Total wet = 6200 + 2500 + 1000 = 9700 kg
+        assert_eq!(design.total_dry_mass_kg(), 2700.0);
+        assert_eq!(design.total_wet_mass_kg(), 9700.0);
     }
 
     #[test]
@@ -1875,9 +1940,9 @@ mod tests {
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
         design.add_stage(EngineType::Hydrolox);
-        design.stages[0].propellant_mass_kg = 12000.0; // Enough to exceed 100%
+        design.stages[0].propellant_mass_kg = 14000.0; // Enough to exceed 100%
         design.stages[0].engine_count = 1;
-        // With tank mass at 8%, this gives ~8400 m/s ideal (>100% of 8100 target)
+        // With tank mass at 10% (Hydrolox), this gives ~8300 m/s ideal (>100% of 8100 target)
         // Effective delta-v is lower due to gravity losses
 
         // Test that effective percentage is less than ideal

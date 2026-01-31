@@ -36,8 +36,9 @@ impl RocketStage {
     }
 
     /// Calculate the structural mass of tanks (walls, insulation, plumbing)
+    /// Uses engine-type-specific ratio (Hydrolox needs bigger tanks for low-density LH2)
     pub fn tank_mass_kg(&self) -> f64 {
-        self.propellant_mass_kg * costs::TANK_STRUCTURAL_MASS_RATIO
+        self.propellant_mass_kg * self.engine_type.tank_mass_ratio()
     }
 
     /// Calculate the dry mass of this stage (engines + tank structure, no propellant)
@@ -93,7 +94,7 @@ impl RocketStage {
     /// * `payload_mass_kg` - Mass above this stage
     pub fn set_mass_fraction(&mut self, fraction: f64, payload_mass_kg: f64) {
         // mass_fraction = propellant / (engine_mass + tank_mass + propellant + payload)
-        // where tank_mass = propellant * TANK_STRUCTURAL_MASS_RATIO (let's call it t)
+        // where tank_mass = propellant * tank_ratio (engine-type specific)
         //
         // Let e = engine_mass, p = propellant, L = payload, t = tank ratio
         // fraction = p / (e + t*p + p + L) = p / (e + p*(1+t) + L)
@@ -105,7 +106,7 @@ impl RocketStage {
 
         let fraction = fraction.clamp(0.01, 0.99); // Prevent division by zero
         let engine_mass = self.engine_mass_kg();
-        let t = costs::TANK_STRUCTURAL_MASS_RATIO;
+        let t = self.engine_type.tank_mass_ratio();
         let denominator = 1.0 - fraction * (1.0 + t);
 
         if denominator > 0.01 {
@@ -217,12 +218,7 @@ impl RocketStage {
     pub fn mass_ratio(&self, payload_mass_kg: f64) -> f64 {
         let m0 = self.wet_mass_kg() + payload_mass_kg;
         let mf = self.dry_mass_kg() + payload_mass_kg;
-
-        if mf > 0.0 {
-            m0 / mf
-        } else {
-            1.0
-        }
+        m0 / mf
     }
 
     /// Calculate the burn time for this stage in seconds
@@ -328,11 +324,11 @@ mod tests {
         let mut stage = RocketStage::new(EngineType::Kerolox);
         stage.engine_count = 3;
         // 3 Kerolox engines at 450 kg each = 1350 kg
-        // Default propellant 1000 kg, tank mass = 1000 × 0.08 = 80 kg
-        // Total dry = 1350 + 80 = 1430 kg
-        assert_eq!(stage.dry_mass_kg(), 1430.0);
+        // Default propellant 1000 kg, tank mass = 1000 × 0.06 = 60 kg (Kerolox)
+        // Total dry = 1350 + 60 = 1410 kg
+        assert_eq!(stage.dry_mass_kg(), 1410.0);
         assert_eq!(stage.engine_mass_kg(), 1350.0);
-        assert_eq!(stage.tank_mass_kg(), 80.0);
+        assert_eq!(stage.tank_mass_kg(), 60.0);
     }
 
     #[test]
@@ -341,10 +337,10 @@ mod tests {
         stage.engine_count = 2;
         stage.propellant_mass_kg = 5000.0;
         // 2 Hydrolox at 300 kg each = 600 kg engines
-        // Tank mass = 5000 × 0.08 = 400 kg
-        // Dry mass = 600 + 400 = 1000 kg
-        // Wet mass = 1000 + 5000 = 6000 kg
-        assert_eq!(stage.wet_mass_kg(), 6000.0);
+        // Tank mass = 5000 × 0.10 = 500 kg (Hydrolox has higher ratio)
+        // Dry mass = 600 + 500 = 1100 kg
+        // Wet mass = 1100 + 5000 = 6100 kg
+        assert_eq!(stage.wet_mass_kg(), 6100.0);
     }
 
     #[test]
@@ -377,15 +373,15 @@ mod tests {
         stage.propellant_mass_kg = 4050.0;
 
         // Engine mass: 450 kg
-        // Tank mass: 4050 × 0.08 = 324 kg
-        // Dry mass: 450 + 324 = 774 kg
-        // Wet mass: 774 + 4050 = 4824 kg
-        // With 500 kg payload: total = 5324 kg
-        // Fraction = 4050 / 5324 ≈ 0.761
+        // Tank mass: 4050 × 0.06 = 243 kg (Kerolox)
+        // Dry mass: 450 + 243 = 693 kg
+        // Wet mass: 693 + 4050 = 4743 kg
+        // With 500 kg payload: total = 5243 kg
+        // Fraction = 4050 / 5243 ≈ 0.772
         let fraction = stage.mass_fraction(500.0);
         assert!(
-            (fraction - 0.761).abs() < 0.01,
-            "Expected ~0.761, got {}",
+            (fraction - 0.772).abs() < 0.01,
+            "Expected ~0.772, got {}",
             fraction
         );
     }
@@ -539,17 +535,17 @@ mod tests {
         stage.engine_count = 1;
         stage.propellant_mass_kg = 9000.0;
         // Engine mass: 450 kg
-        // Tank mass: 9000 × 0.08 = 720 kg
-        // Dry mass: 1170 kg
-        // Wet mass: 10170 kg
+        // Tank mass: 9000 × 0.06 = 540 kg (Kerolox)
+        // Dry mass: 990 kg
+        // Wet mass: 9990 kg
         // With 550 kg payload:
-        // m0 = 10720 kg, mf = 1720 kg
-        // R = 10720 / 1720 = 6.23
+        // m0 = 10540 kg, mf = 1540 kg
+        // R = 10540 / 1540 = 6.84
 
         let ratio = stage.mass_ratio(550.0);
         assert!(
-            (ratio - 6.23).abs() < 0.1,
-            "Mass ratio should be ~6.23: {}",
+            (ratio - 6.84).abs() < 0.1,
+            "Mass ratio should be ~6.84: {}",
             ratio
         );
     }

@@ -130,10 +130,19 @@ impl GameState {
     }
 
     /// Called after a successful launch
+    /// Deducts the rocket cost, testing costs, and adds the reward
     /// Returns the reward earned
     pub fn complete_contract(&mut self) -> f64 {
         self.total_launches += 1;
         self.successful_launches += 1;
+
+        // Deduct the rocket cost and testing costs
+        let rocket_cost = self.get_rocket_cost();
+        let testing_cost = self.rocket_design.get_testing_spent();
+        self.money -= rocket_cost + testing_cost;
+
+        // Reset testing_spent so we don't double-charge if design is reused
+        self.rocket_design.testing_spent = 0.0;
 
         if let Some(contract) = self.active_contract.take() {
             let reward = contract.reward;
@@ -160,12 +169,19 @@ impl GameState {
     }
 
     /// Called after a failed launch
-    /// The rocket cost is already deducted, this just records the failure
+    /// Deducts the rocket cost and testing costs, records the failure
     pub fn fail_contract(&mut self) {
         self.total_launches += 1;
 
+        // Deduct the rocket cost and testing costs - failed launches still cost money
+        let rocket_cost = self.get_rocket_cost();
+        let testing_cost = self.rocket_design.get_testing_spent();
+        self.money -= rocket_cost + testing_cost;
+
+        // Reset testing_spent so we don't double-charge on retry
+        self.rocket_design.testing_spent = 0.0;
+
         // Don't remove the active contract - player can retry
-        // The rocket cost should already be deducted elsewhere
     }
 
     /// Abandon the current contract without launching
@@ -372,12 +388,14 @@ mod tests {
         state.select_contract(contract_id);
 
         let initial_money = state.money;
+        let rocket_cost = state.get_rocket_cost();
         let reward = state.active_contract.as_ref().unwrap().reward;
 
         let earned = state.complete_contract();
 
         assert_eq!(earned, reward);
-        assert_eq!(state.money, initial_money + reward);
+        // Money = initial - rocket_cost + reward
+        assert_eq!(state.money, initial_money - rocket_cost + reward);
         assert!(state.active_contract.is_none());
         assert_eq!(state.completed_contracts.len(), 1);
         assert_eq!(state.turn, 2);
