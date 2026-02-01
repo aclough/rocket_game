@@ -1,7 +1,9 @@
 use crate::contract::{Contract, Destination};
 use crate::engine::{costs, EngineRegistry};
+use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, WorkEvent};
 use crate::launch_site::LaunchSite;
 use crate::rocket_design::RocketDesign;
+use crate::time_system::TimeSystem;
 
 /// Cost to refresh the contract list
 pub const CONTRACT_REFRESH_COST: f64 = 10_000_000.0; // $10M
@@ -46,6 +48,12 @@ pub struct GameState {
     pub successful_launches: u32,
     /// Engine registry with engine specs and their flaws
     pub engine_registry: EngineRegistry,
+    /// Time system for continuous simulation
+    pub time_system: TimeSystem,
+    /// Engineering teams that work on designs/engines
+    pub teams: Vec<EngineeringTeam>,
+    /// Next team ID to assign
+    next_team_id: u32,
 }
 
 impl GameState {
@@ -69,10 +77,17 @@ impl GameState {
             total_launches: 0,
             successful_launches: 0,
             engine_registry: EngineRegistry::new(),
+            time_system: TimeSystem::new(),
+            teams: Vec::new(),
+            next_team_id: 1,
         };
 
         // Generate initial contracts
         state.generate_contracts(CONTRACTS_TO_SHOW);
+
+        // Start with one engineering team
+        state.hire_team();
+
         state
     }
 
@@ -380,29 +395,29 @@ impl GameState {
     }
 
     // ==========================================
-    // Date/Time Management
+    // Date/Time Management (Legacy API - delegates to time_system)
     // ==========================================
 
-    /// Advance game time by a number of days
+    /// Advance game time by a number of days (legacy API)
+    /// For continuous time, use advance_time() instead
     pub fn advance_days(&mut self, days: u32) {
         self.current_day += days;
+        self.time_system.current_day = self.current_day;
     }
 
     /// Get formatted date string (e.g., "Day 45, Year 2001")
     pub fn get_date_string(&self) -> String {
-        let year = self.start_year + (self.current_day - 1) / 365;
-        let day_of_year = ((self.current_day - 1) % 365) + 1;
-        format!("Day {}, Year {}", day_of_year, year)
+        self.time_system.get_date_string()
     }
 
     /// Get current year
     pub fn get_current_year(&self) -> u32 {
-        self.start_year + (self.current_day - 1) / 365
+        self.time_system.get_current_year()
     }
 
     /// Get day of the current year (1-365)
     pub fn get_day_of_year(&self) -> u32 {
-        ((self.current_day - 1) % 365) + 1
+        self.time_system.get_day_of_year()
     }
 
     // ==========================================
@@ -457,6 +472,341 @@ impl GameState {
         } else {
             false
         }
+    }
+
+    // ==========================================
+    // Time System Management
+    // ==========================================
+
+    /// Advance time by delta_seconds and process work
+    /// Returns events that occurred during this time
+    pub fn advance_time(&mut self, delta_seconds: f64) -> Vec<WorkEvent> {
+        let days_passed = self.time_system.advance(delta_seconds);
+
+        // Keep current_day in sync with time_system
+        self.current_day = self.time_system.current_day;
+
+        let mut events = Vec::new();
+
+        // Process each day
+        for _ in 0..days_passed {
+            let day_events = self.process_day();
+            events.extend(day_events);
+        }
+
+        events
+    }
+
+    /// Process a single day of work
+    /// Returns events that occurred
+    pub fn process_day(&mut self) -> Vec<WorkEvent> {
+        let mut events = Vec::new();
+
+        // Process team ramp-up
+        for team in &mut self.teams {
+            let was_ramping = team.is_ramping_up();
+            team.process_day();
+            if was_ramping && !team.is_ramping_up() {
+                events.push(WorkEvent::TeamRampedUp { team_id: team.id });
+            }
+        }
+
+        // Check for salary payments
+        if self.time_system.check_salary_due() {
+            let salary_total = self.deduct_salaries();
+            if salary_total > 0.0 {
+                events.push(WorkEvent::SalaryDeducted {
+                    amount: salary_total,
+                });
+            }
+        }
+
+        // Process work on designs
+        let design_events = self.process_design_work();
+        events.extend(design_events);
+
+        // Process work on engines
+        let engine_events = self.process_engine_work();
+        events.extend(engine_events);
+
+        events
+    }
+
+    /// Process work progress on all designs
+    fn process_design_work(&mut self) -> Vec<WorkEvent> {
+        use crate::rocket_design::DesignStatus;
+
+        let mut events = Vec::new();
+
+        // Calculate efficiency for each design being worked on
+        let design_efficiencies: Vec<(usize, f64)> = (0..self.saved_designs.len())
+            .map(|idx| (idx, self.get_design_team_efficiency(idx)))
+            .filter(|(_, eff)| *eff > 0.0)
+            .collect();
+
+        // Process work for each design with teams assigned
+        for (design_index, efficiency) in design_efficiencies {
+            let design = &mut self.saved_designs[design_index];
+
+            // Skip designs not in a work phase
+            if !design.design_status.is_working() {
+                continue;
+            }
+
+            let phase_before = design.design_status.name();
+            let phase_completed = design.advance_work(efficiency);
+
+            if phase_completed {
+                events.push(WorkEvent::DesignPhaseComplete {
+                    design_index,
+                    phase_name: phase_before.to_string(),
+                });
+
+                // Check for flaw discovery during Refining
+                if matches!(design.design_status, DesignStatus::Refining { .. }) {
+                    // Discover flaws probabilistically
+                    if design.check_flaw_discovery() && !design.active_flaws.is_empty() {
+                        // Mark a flaw as discovered
+                        if let Some(flaw) = design.active_flaws.iter_mut().find(|f| !f.discovered) {
+                            flaw.discovered = true;
+                            events.push(WorkEvent::DesignFlawDiscovered {
+                                design_index,
+                                flaw_name: flaw.name.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        events
+    }
+
+    /// Process work progress on all engines
+    fn process_engine_work(&mut self) -> Vec<WorkEvent> {
+        use crate::engine::EngineStatus;
+
+        let mut events = Vec::new();
+
+        // Get all engine type indices that have teams working on them
+        let engine_efficiencies: Vec<(i32, f64)> = (0..3)
+            .map(|idx| (idx, self.get_engine_team_efficiency(idx)))
+            .filter(|(_, eff)| *eff > 0.0)
+            .collect();
+
+        // Process work for each engine with teams assigned
+        for (engine_type_index, efficiency) in engine_efficiencies {
+            let spec = self.engine_registry.get_mut(
+                crate::engine::EngineType::from_index(engine_type_index).unwrap()
+            );
+
+            match &mut spec.status {
+                EngineStatus::Testing { progress, total } => {
+                    *progress += efficiency;
+                    if *progress >= *total {
+                        // Testing complete, move to TestedCycle
+                        spec.status = EngineStatus::TestedCycle;
+                        events.push(WorkEvent::DesignPhaseComplete {
+                            design_index: engine_type_index as usize,
+                            phase_name: "Testing".to_string(),
+                        });
+                    }
+                }
+                EngineStatus::Revamping { flaw_id, progress, total } => {
+                    let flaw_id_copy = *flaw_id;
+                    *progress += efficiency;
+                    if *progress >= *total {
+                        // Revamp complete, fix the flaw
+                        if let Some(flaw) = spec.get_flaw_mut(flaw_id_copy) {
+                            let flaw_name = flaw.name.clone();
+                            spec.fix_flaw(flaw_id_copy);
+                            events.push(WorkEvent::EngineFlawFixed {
+                                engine_type_index,
+                                flaw_name,
+                            });
+                        }
+                        spec.status = EngineStatus::TestedCycle;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        events
+    }
+
+    /// Toggle time pause state
+    pub fn toggle_time_pause(&mut self) {
+        self.time_system.toggle_pause();
+    }
+
+    /// Check if time is paused
+    pub fn is_time_paused(&self) -> bool {
+        self.time_system.paused
+    }
+
+    /// Set time pause state explicitly
+    pub fn set_time_paused(&mut self, paused: bool) {
+        self.time_system.set_paused(paused);
+    }
+
+    /// Get days until next salary payment
+    pub fn days_until_salary(&self) -> u32 {
+        self.time_system.days_until_salary()
+    }
+
+    // ==========================================
+    // Engineering Team Management
+    // ==========================================
+
+    /// Hire a new engineering team
+    /// Returns the team ID
+    pub fn hire_team(&mut self) -> u32 {
+        let team = EngineeringTeam::new(self.next_team_id);
+        let id = team.id;
+        self.teams.push(team);
+        self.next_team_id += 1;
+        id
+    }
+
+    /// Fire a team by ID
+    /// Returns true if team was found and removed
+    pub fn fire_team(&mut self, team_id: u32) -> bool {
+        if let Some(idx) = self.teams.iter().position(|t| t.id == team_id) {
+            self.teams.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the number of teams
+    pub fn get_team_count(&self) -> usize {
+        self.teams.len()
+    }
+
+    /// Get a team by ID
+    pub fn get_team(&self, team_id: u32) -> Option<&EngineeringTeam> {
+        self.teams.iter().find(|t| t.id == team_id)
+    }
+
+    /// Get a mutable reference to a team by ID
+    pub fn get_team_mut(&mut self, team_id: u32) -> Option<&mut EngineeringTeam> {
+        self.teams.iter_mut().find(|t| t.id == team_id)
+    }
+
+    /// Assign a team to work on a design
+    pub fn assign_team_to_design(&mut self, team_id: u32, design_index: usize) -> bool {
+        if design_index >= self.saved_designs.len() {
+            return false;
+        }
+
+        if let Some(team) = self.get_team_mut(team_id) {
+            team.assign(TeamAssignment::RocketDesign {
+                design_index,
+                work_phase: crate::engineering_team::DesignWorkPhase::DetailedEngineering {
+                    progress: 0.0,
+                    total_work: crate::engineering_team::DETAILED_ENGINEERING_WORK,
+                },
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Assign a team to work on an engine type
+    pub fn assign_team_to_engine(&mut self, team_id: u32, engine_type_index: i32) -> bool {
+        if let Some(team) = self.get_team_mut(team_id) {
+            team.assign(TeamAssignment::EngineType {
+                engine_type_index,
+                work_phase: crate::engineering_team::EngineWorkPhase::Testing {
+                    progress: 0.0,
+                    total_work: crate::engineering_team::ENGINE_TESTING_WORK,
+                },
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Unassign a team from its current work
+    pub fn unassign_team(&mut self, team_id: u32) -> bool {
+        if let Some(team) = self.get_team_mut(team_id) {
+            team.unassign();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get IDs of unassigned teams
+    pub fn get_unassigned_team_ids(&self) -> Vec<u32> {
+        self.teams
+            .iter()
+            .filter(|t| t.assignment.is_none())
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// Get teams working on a specific design
+    pub fn get_teams_on_design(&self, design_index: usize) -> Vec<&EngineeringTeam> {
+        self.teams
+            .iter()
+            .filter(|t| {
+                matches!(
+                    &t.assignment,
+                    Some(TeamAssignment::RocketDesign { design_index: idx, .. }) if *idx == design_index
+                )
+            })
+            .collect()
+    }
+
+    /// Get teams working on a specific engine type
+    pub fn get_teams_on_engine(&self, engine_type_index: i32) -> Vec<&EngineeringTeam> {
+        self.teams
+            .iter()
+            .filter(|t| {
+                matches!(
+                    &t.assignment,
+                    Some(TeamAssignment::EngineType { engine_type_index: idx, .. }) if *idx == engine_type_index
+                )
+            })
+            .collect()
+    }
+
+    /// Calculate total team efficiency for teams on a design
+    pub fn get_design_team_efficiency(&self, design_index: usize) -> f64 {
+        let productive_teams: Vec<_> = self
+            .get_teams_on_design(design_index)
+            .into_iter()
+            .filter(|t| !t.is_ramping_up())
+            .collect();
+        team_efficiency(productive_teams.len())
+    }
+
+    /// Calculate total team efficiency for teams on an engine
+    pub fn get_engine_team_efficiency(&self, engine_type_index: i32) -> f64 {
+        let productive_teams: Vec<_> = self
+            .get_teams_on_engine(engine_type_index)
+            .into_iter()
+            .filter(|t| !t.is_ramping_up())
+            .collect();
+        team_efficiency(productive_teams.len())
+    }
+
+    /// Deduct salaries for all teams
+    /// Returns total amount deducted
+    pub fn deduct_salaries(&mut self) -> f64 {
+        let total_salary: f64 = self.teams.iter().map(|t| t.monthly_salary).sum();
+        self.money -= total_salary;
+        total_salary
+    }
+
+    /// Get total monthly salary for all teams
+    pub fn get_total_monthly_salary(&self) -> f64 {
+        self.teams.iter().map(|t| t.monthly_salary).sum()
     }
 }
 

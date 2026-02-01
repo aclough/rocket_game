@@ -3,6 +3,7 @@ extends Control
 signal launch_requested
 signal back_requested
 signal testing_requested
+signal submit_to_engineering_requested
 signal design_saved
 
 # Game manager reference (set by parent)
@@ -669,12 +670,38 @@ func _update_budget_display():
 		remaining_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
 
 func _update_launch_button():
-	# Rocket must have sufficient delta-v AND be within budget to launch
-	launch_button.disabled = not designer.is_launchable()
+	# Check design status to determine button behavior
+	var status = ""
+	if game_manager:
+		status = game_manager.get_current_design_status()
+
+	# Default: not launchable
+	launch_button.disabled = true
+
+	if status == "Specification" or status == "":
+		# Design needs to be submitted to engineering
+		launch_button.text = "SUBMIT TO ENGINEERING"
+		launch_button.disabled = not designer.is_launchable()
+	elif status == "Complete":
+		# Design is complete, can proceed to testing
+		launch_button.text = "CONTINUE TO TESTING"
+		launch_button.disabled = not designer.is_launchable()
+	else:
+		# Design is in Engineering or Refining - can't proceed yet
+		launch_button.text = status.to_upper() + " IN PROGRESS"
+		launch_button.disabled = true
 
 func _on_launch_button_pressed():
-	# Go to testing screen instead of launching directly
-	testing_requested.emit()
+	var status = ""
+	if game_manager:
+		status = game_manager.get_current_design_status()
+
+	if status == "Specification" or status == "":
+		# Submit to engineering
+		submit_to_engineering_requested.emit()
+	elif status == "Complete":
+		# Go to testing screen
+		testing_requested.emit()
 
 func _on_payload_decrease_pressed():
 	var current = designer.get_payload_mass()

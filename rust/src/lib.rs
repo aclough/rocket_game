@@ -2,12 +2,14 @@ use godot::prelude::*;
 
 pub mod contract;
 pub mod engine;
+pub mod engineering_team;
 pub mod flaw;
 pub mod game_state;
 pub mod launch_site;
 pub mod launcher;
 pub mod rocket_design;
 pub mod stage;
+pub mod time_system;
 
 mod game_manager;
 mod player_finance;

@@ -1,4 +1,85 @@
-use crate::flaw::FlawCategory;
+use crate::engineering_team::{ENGINE_TESTING_WORK, REVAMP_WORK};
+use crate::flaw::{Flaw, FlawCategory, FlawGenerator};
+use std::collections::HashMap;
+
+/// Status of an engine in the testing/revamp workflow
+#[derive(Debug, Clone, PartialEq)]
+pub enum EngineStatus {
+    /// Engine has not been tested yet
+    Untested,
+    /// Teams are testing the engine for flaws
+    Testing {
+        /// Work progress (0.0 to total)
+        progress: f64,
+        /// Total work required
+        total: f64,
+    },
+    /// Teams are revamping (fixing) a discovered flaw
+    Revamping {
+        /// ID of the flaw being fixed
+        flaw_id: u32,
+        /// Work progress (0.0 to total)
+        progress: f64,
+        /// Total work required
+        total: f64,
+    },
+    /// Current testing cycle is complete
+    TestedCycle,
+}
+
+impl Default for EngineStatus {
+    fn default() -> Self {
+        EngineStatus::Untested
+    }
+}
+
+impl EngineStatus {
+    /// Get the status name for display
+    pub fn name(&self) -> &'static str {
+        match self {
+            EngineStatus::Untested => "Untested",
+            EngineStatus::Testing { .. } => "Testing",
+            EngineStatus::Revamping { .. } => "Revamping",
+            EngineStatus::TestedCycle => "Tested",
+        }
+    }
+
+    /// Get progress as a fraction (0.0 to 1.0)
+    pub fn progress_fraction(&self) -> f64 {
+        match self {
+            EngineStatus::Untested => 0.0,
+            EngineStatus::Testing { progress, total } => {
+                if *total > 0.0 { progress / total } else { 0.0 }
+            }
+            EngineStatus::Revamping { progress, total, .. } => {
+                if *total > 0.0 { progress / total } else { 0.0 }
+            }
+            EngineStatus::TestedCycle => 1.0,
+        }
+    }
+
+    /// Check if engine is being worked on
+    pub fn is_working(&self) -> bool {
+        matches!(self, EngineStatus::Testing { .. } | EngineStatus::Revamping { .. })
+    }
+
+    /// Start testing this engine
+    pub fn start_testing(&mut self) {
+        *self = EngineStatus::Testing {
+            progress: 0.0,
+            total: ENGINE_TESTING_WORK,
+        };
+    }
+
+    /// Start revamping a flaw
+    pub fn start_revamping(&mut self, flaw_id: u32) {
+        *self = EngineStatus::Revamping {
+            flaw_id,
+            progress: 0.0,
+            total: REVAMP_WORK,
+        };
+    }
+}
 
 /// Engine types available for rocket design
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -193,6 +274,7 @@ impl EngineType {
                 active_flaws: Vec::new(),
                 fixed_flaws: Vec::new(),
                 flaws_generated: false,
+                status: EngineStatus::Untested,
             },
             EngineType::Kerolox => EngineSpec {
                 engine_type: *self,
@@ -207,6 +289,7 @@ impl EngineType {
                 active_flaws: Vec::new(),
                 fixed_flaws: Vec::new(),
                 flaws_generated: false,
+                status: EngineStatus::Untested,
             },
             EngineType::Solid => EngineSpec {
                 engine_type: *self,
@@ -221,13 +304,11 @@ impl EngineType {
                 active_flaws: Vec::new(),
                 fixed_flaws: Vec::new(),
                 flaws_generated: false,
+                status: EngineStatus::Untested,
             },
         }
     }
 }
-
-use crate::flaw::{Flaw, FlawGenerator};
-use std::collections::HashMap;
 
 /// Specification for a rocket engine
 /// Note: Engine failures are handled through the flaw system stored on EngineSpec.
@@ -263,6 +344,8 @@ pub struct EngineSpec {
     pub fixed_flaws: Vec<Flaw>,
     /// Whether flaws have been generated for this engine
     pub flaws_generated: bool,
+    /// Current status in the testing workflow
+    pub status: EngineStatus,
 }
 
 impl EngineSpec {

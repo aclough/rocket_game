@@ -29,10 +29,8 @@ impl INode for GameManager {
     }
 
     fn ready(&mut self) {
-        // Connect PlayerFinance money_changed signal to forward through GameManager
-        let mut finance = self.finance.clone();
-        let callable = self.base().callable("_on_finance_money_changed");
-        finance.connect("money_changed", &callable);
+        // Signal forwarding removed - we emit money_changed directly from GameManager
+        // to avoid re-entrancy issues with Gd<T>::bind_mut()
     }
 }
 
@@ -66,14 +64,27 @@ impl GameManager {
     #[signal]
     fn fame_changed(new_fame: f64);
 
+    #[signal]
+    fn time_paused();
+
+    #[signal]
+    fn time_resumed();
+
+    #[signal]
+    fn work_event_occurred(event_type: GString, data: Dictionary);
+
+    #[signal]
+    fn teams_changed();
+
     // ==========================================
     // Money and Budget
     // ==========================================
 
-    /// Callback to forward money_changed signal from PlayerFinance
-    #[func]
-    fn _on_finance_money_changed(&mut self, new_amount: f64) {
-        self.base_mut().emit_signal("money_changed", &[Variant::from(new_amount)]);
+    /// Emit money_changed signal with current amount
+    fn emit_money_changed(&mut self) {
+        let amount = self.finance.bind().get_money();
+        self.base_mut()
+            .emit_signal("money_changed", &[Variant::from(amount)]);
     }
 
     /// Get the PlayerFinance resource (single source of truth for money)
@@ -372,7 +383,7 @@ impl GameManager {
         if reward > 0.0 {
             self.sync_money_from_state();
             // Launch takes 30 days
-            self.advance_time(30);
+            self.advance_time_days(30);
             // Successful launch increases fame (more fame for harder missions)
             let fame_gain = 10.0 + (reward / 10_000_000.0); // Base 10 + scaled by reward
             self.adjust_fame(fame_gain);
@@ -390,7 +401,7 @@ impl GameManager {
         self.state.fail_contract();
         self.sync_money_from_state();
         // Launch takes 30 days even on failure
-        self.advance_time(30);
+        self.advance_time_days(30);
         // Failed launch decreases fame
         self.adjust_fame(-15.0);
         self.base_mut().emit_signal("contract_failed", &[]);
@@ -399,13 +410,18 @@ impl GameManager {
     /// Pay for the rocket (deduct cost from money)
     #[func]
     pub fn pay_for_rocket(&mut self, cost: f64) -> bool {
-        self.finance.bind_mut().deduct(cost)
+        let result = self.finance.bind_mut().deduct(cost);
+        if result {
+            self.emit_money_changed();
+        }
+        result
     }
 
     /// Add money (for testing or cheats)
     #[func]
     pub fn add_money(&mut self, amount: f64) {
         self.finance.bind_mut().add(amount);
+        self.emit_money_changed();
     }
 
     // ==========================================
@@ -749,6 +765,115 @@ impl GameManager {
     }
 
     // ==========================================
+    // Design Status Management
+    // ==========================================
+
+    /// Get the status name of a saved design
+    #[func]
+    pub fn get_design_status(&self, index: i32) -> GString {
+        if index < 0 {
+            return GString::from("");
+        }
+        self.state
+            .get_saved_design(index as usize)
+            .map(|d| GString::from(d.design_status.name()))
+            .unwrap_or_default()
+    }
+
+    /// Get the work progress of a saved design (0.0 to 1.0)
+    #[func]
+    pub fn get_design_progress(&self, index: i32) -> f64 {
+        if index < 0 {
+            return 0.0;
+        }
+        self.state
+            .get_saved_design(index as usize)
+            .map(|d| d.design_status.progress_fraction())
+            .unwrap_or(0.0)
+    }
+
+    /// Check if a saved design can be edited
+    #[func]
+    pub fn can_edit_design(&self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        self.state
+            .get_saved_design(index as usize)
+            .map(|d| d.design_status.can_edit())
+            .unwrap_or(false)
+    }
+
+    /// Check if a saved design can be launched
+    #[func]
+    pub fn can_launch_design(&self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        self.state
+            .get_saved_design(index as usize)
+            .map(|d| d.design_status.can_launch())
+            .unwrap_or(false)
+    }
+
+    /// Get the index of the currently edited design (-1 if none)
+    #[func]
+    pub fn get_current_design_index(&self) -> i32 {
+        self.current_saved_design_index.map(|i| i as i32).unwrap_or(-1)
+    }
+
+    /// Get the status of the currently edited design
+    #[func]
+    pub fn get_current_design_status(&self) -> GString {
+        self.get_design_status(self.get_current_design_index())
+    }
+
+    /// Check if the current design can be submitted to engineering
+    #[func]
+    pub fn can_submit_current_to_engineering(&self) -> bool {
+        let index = self.get_current_design_index();
+        if index < 0 {
+            return false;
+        }
+        self.get_design_status(index) == GString::from("Specification")
+    }
+
+    /// Submit the current design to engineering
+    #[func]
+    pub fn submit_current_to_engineering(&mut self) -> bool {
+        let index = self.get_current_design_index();
+        if index < 0 {
+            return false;
+        }
+        self.submit_design_to_engineering(index)
+    }
+
+    /// Submit a saved design to engineering
+    /// Returns true if successful
+    #[func]
+    pub fn submit_design_to_engineering(&mut self, index: i32) -> bool {
+        if index < 0 || index >= self.state.saved_designs.len() as i32 {
+            return false;
+        }
+        let result = self.state.saved_designs[index as usize].submit_to_engineering();
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Reset a saved design back to Specification status
+    #[func]
+    pub fn reset_design_to_specification(&mut self, index: i32) -> bool {
+        if index < 0 || index >= self.state.saved_designs.len() as i32 {
+            return false;
+        }
+        self.state.saved_designs[index as usize].reset_to_specification();
+        self.base_mut().emit_signal("designs_changed", &[]);
+        true
+    }
+
+    // ==========================================
     // Date/Time Management
     // ==========================================
 
@@ -770,12 +895,173 @@ impl GameManager {
         self.state.get_current_year() as i32
     }
 
-    /// Advance game time by a number of days and emit signal
-    fn advance_time(&mut self, days: u32) {
+    /// Advance game time by a number of days and emit signal (legacy API)
+    fn advance_time_days(&mut self, days: u32) {
         self.state.advance_days(days);
         let new_day = self.state.current_day as i32;
         self.base_mut()
             .emit_signal("date_changed", &[Variant::from(new_day)]);
+    }
+
+    // ==========================================
+    // Continuous Time System
+    // ==========================================
+
+    /// Advance time by delta_seconds (called from _process)
+    /// Returns an array of work event dictionaries
+    #[func]
+    pub fn advance_time(&mut self, delta_seconds: f64) -> Array<Dictionary> {
+        let events = self.state.advance_time(delta_seconds);
+
+        // Emit date_changed if day changed
+        let new_day = self.state.current_day as i32;
+        self.base_mut()
+            .emit_signal("date_changed", &[Variant::from(new_day)]);
+
+        // Sync money from state in case salaries were deducted
+        self.sync_money_from_state();
+
+        // Check if salary was deducted and emit money_changed
+        let had_salary_event = events
+            .iter()
+            .any(|e| matches!(e, crate::engineering_team::WorkEvent::SalaryDeducted { .. }));
+        if had_salary_event {
+            self.emit_money_changed();
+        }
+
+        // Convert events to Godot dictionaries
+        let mut result = Array::new();
+        for event in events {
+            let dict = self.work_event_to_dict(&event);
+            result.push(&dict);
+
+            // Emit signal for each event
+            self.emit_work_event(&event);
+        }
+
+        result
+    }
+
+    /// Toggle time pause state
+    #[func]
+    pub fn toggle_time_pause(&mut self) {
+        self.state.toggle_time_pause();
+        if self.state.is_time_paused() {
+            self.base_mut().emit_signal("time_paused", &[]);
+        } else {
+            self.base_mut().emit_signal("time_resumed", &[]);
+        }
+    }
+
+    /// Check if time is paused
+    #[func]
+    pub fn is_time_paused(&self) -> bool {
+        self.state.is_time_paused()
+    }
+
+    /// Set time pause state explicitly
+    #[func]
+    pub fn set_time_paused(&mut self, paused: bool) {
+        let was_paused = self.state.is_time_paused();
+        self.state.set_time_paused(paused);
+        if paused != was_paused {
+            if paused {
+                self.base_mut().emit_signal("time_paused", &[]);
+            } else {
+                self.base_mut().emit_signal("time_resumed", &[]);
+            }
+        }
+    }
+
+    /// Get days until next salary payment
+    #[func]
+    pub fn days_until_salary(&self) -> i32 {
+        self.state.days_until_salary() as i32
+    }
+
+    /// Convert a WorkEvent to a Godot Dictionary
+    fn work_event_to_dict(&self, event: &crate::engineering_team::WorkEvent) -> Dictionary {
+        use crate::engineering_team::WorkEvent;
+
+        let mut dict = Dictionary::new();
+        match event {
+            WorkEvent::DesignPhaseComplete {
+                design_index,
+                phase_name,
+            } => {
+                dict.set("type", "design_phase_complete");
+                dict.set("design_index", *design_index as i32);
+                dict.set("phase_name", GString::from(phase_name.as_str()));
+            }
+            WorkEvent::DesignFlawDiscovered {
+                design_index,
+                flaw_name,
+            } => {
+                dict.set("type", "design_flaw_discovered");
+                dict.set("design_index", *design_index as i32);
+                dict.set("flaw_name", GString::from(flaw_name.as_str()));
+            }
+            WorkEvent::DesignFlawFixed {
+                design_index,
+                flaw_name,
+            } => {
+                dict.set("type", "design_flaw_fixed");
+                dict.set("design_index", *design_index as i32);
+                dict.set("flaw_name", GString::from(flaw_name.as_str()));
+            }
+            WorkEvent::EngineFlawDiscovered {
+                engine_type_index,
+                flaw_name,
+            } => {
+                dict.set("type", "engine_flaw_discovered");
+                dict.set("engine_type_index", *engine_type_index);
+                dict.set("flaw_name", GString::from(flaw_name.as_str()));
+            }
+            WorkEvent::EngineFlawFixed {
+                engine_type_index,
+                flaw_name,
+            } => {
+                dict.set("type", "engine_flaw_fixed");
+                dict.set("engine_type_index", *engine_type_index);
+                dict.set("flaw_name", GString::from(flaw_name.as_str()));
+            }
+            WorkEvent::TeamRampedUp { team_id } => {
+                dict.set("type", "team_ramped_up");
+                dict.set("team_id", *team_id as i32);
+            }
+            WorkEvent::SalaryDeducted { amount } => {
+                dict.set("type", "salary_deducted");
+                dict.set("amount", *amount);
+            }
+        }
+        dict
+    }
+
+    /// Emit a signal for a work event
+    fn emit_work_event(&mut self, event: &crate::engineering_team::WorkEvent) {
+        let dict = self.work_event_to_dict(event);
+        let event_type = match event {
+            crate::engineering_team::WorkEvent::DesignPhaseComplete { .. } => {
+                "design_phase_complete"
+            }
+            crate::engineering_team::WorkEvent::DesignFlawDiscovered { .. } => {
+                "design_flaw_discovered"
+            }
+            crate::engineering_team::WorkEvent::DesignFlawFixed { .. } => "design_flaw_fixed",
+            crate::engineering_team::WorkEvent::EngineFlawDiscovered { .. } => {
+                "engine_flaw_discovered"
+            }
+            crate::engineering_team::WorkEvent::EngineFlawFixed { .. } => "engine_flaw_fixed",
+            crate::engineering_team::WorkEvent::TeamRampedUp { .. } => "team_ramped_up",
+            crate::engineering_team::WorkEvent::SalaryDeducted { .. } => "salary_deducted",
+        };
+        self.base_mut().emit_signal(
+            "work_event_occurred",
+            &[
+                Variant::from(GString::from(event_type)),
+                Variant::from(dict),
+            ],
+        );
     }
 
     // ==========================================
@@ -876,7 +1162,9 @@ impl GameManager {
     pub fn upgrade_pad(&mut self) -> bool {
         let cost = self.state.launch_site.pad_upgrade_cost();
         if cost > 0.0 && self.finance.bind_mut().deduct(cost) {
-            self.state.launch_site.upgrade_pad()
+            let result = self.state.launch_site.upgrade_pad();
+            self.emit_money_changed();
+            result
         } else {
             false
         }
@@ -895,6 +1183,175 @@ impl GameManager {
     }
 
     // ==========================================
+    // Engineering Team Management
+    // ==========================================
+
+    /// Get the number of engineering teams
+    #[func]
+    pub fn get_team_count(&self) -> i32 {
+        self.state.get_team_count() as i32
+    }
+
+    /// Hire a new engineering team
+    /// Returns the team ID
+    #[func]
+    pub fn hire_team(&mut self) -> i32 {
+        let id = self.state.hire_team();
+        self.base_mut().emit_signal("teams_changed", &[]);
+        id as i32
+    }
+
+    /// Fire a team by ID
+    /// Returns true if team was found and removed
+    #[func]
+    pub fn fire_team(&mut self, team_id: i32) -> bool {
+        let result = self.state.fire_team(team_id as u32);
+        if result {
+            self.base_mut().emit_signal("teams_changed", &[]);
+        }
+        result
+    }
+
+    /// Get team name by ID
+    #[func]
+    pub fn get_team_name(&self, team_id: i32) -> GString {
+        self.state
+            .get_team(team_id as u32)
+            .map(|t| GString::from(t.name.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Check if a team is ramping up
+    #[func]
+    pub fn is_team_ramping_up(&self, team_id: i32) -> bool {
+        self.state
+            .get_team(team_id as u32)
+            .map(|t| t.is_ramping_up())
+            .unwrap_or(false)
+    }
+
+    /// Get team's ramp-up days remaining
+    #[func]
+    pub fn get_team_ramp_up_days(&self, team_id: i32) -> i32 {
+        self.state
+            .get_team(team_id as u32)
+            .map(|t| t.ramp_up_days_remaining as i32)
+            .unwrap_or(0)
+    }
+
+    /// Assign a team to work on a design
+    #[func]
+    pub fn assign_team_to_design(&mut self, team_id: i32, design_index: i32) -> bool {
+        if design_index < 0 {
+            return false;
+        }
+        let result = self.state.assign_team_to_design(team_id as u32, design_index as usize);
+        if result {
+            self.base_mut().emit_signal("teams_changed", &[]);
+        }
+        result
+    }
+
+    /// Assign a team to work on an engine type
+    #[func]
+    pub fn assign_team_to_engine(&mut self, team_id: i32, engine_type_index: i32) -> bool {
+        let result = self.state.assign_team_to_engine(team_id as u32, engine_type_index);
+        if result {
+            self.base_mut().emit_signal("teams_changed", &[]);
+        }
+        result
+    }
+
+    /// Unassign a team from its current work
+    #[func]
+    pub fn unassign_team(&mut self, team_id: i32) -> bool {
+        let result = self.state.unassign_team(team_id as u32);
+        if result {
+            self.base_mut().emit_signal("teams_changed", &[]);
+        }
+        result
+    }
+
+    /// Get IDs of unassigned teams
+    #[func]
+    pub fn get_unassigned_team_ids(&self) -> Array<i32> {
+        let mut result = Array::new();
+        for id in self.state.get_unassigned_team_ids() {
+            result.push(id as i32);
+        }
+        result
+    }
+
+    /// Get number of teams working on a design
+    #[func]
+    pub fn get_teams_on_design_count(&self, design_index: i32) -> i32 {
+        if design_index < 0 {
+            return 0;
+        }
+        self.state.get_teams_on_design(design_index as usize).len() as i32
+    }
+
+    /// Get total monthly salary for all teams
+    #[func]
+    pub fn get_total_monthly_salary(&self) -> f64 {
+        self.state.get_total_monthly_salary()
+    }
+
+    /// Get total monthly salary formatted
+    #[func]
+    pub fn get_total_monthly_salary_formatted(&self) -> GString {
+        GString::from(format_money(self.state.get_total_monthly_salary()).as_str())
+    }
+
+    /// Get all team IDs
+    #[func]
+    pub fn get_all_team_ids(&self) -> Array<i32> {
+        let mut result = Array::new();
+        for team in &self.state.teams {
+            result.push(team.id as i32);
+        }
+        result
+    }
+
+    /// Check if a team is assigned to anything
+    #[func]
+    pub fn is_team_assigned(&self, team_id: i32) -> bool {
+        self.state
+            .get_team(team_id as u32)
+            .map(|t| t.assignment.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Get what a team is assigned to (returns a dictionary)
+    /// Keys: "type" (string: "none", "design", "engine"), and type-specific data
+    #[func]
+    pub fn get_team_assignment(&self, team_id: i32) -> Dictionary {
+        use crate::engineering_team::TeamAssignment;
+
+        let mut dict = Dictionary::new();
+
+        if let Some(team) = self.state.get_team(team_id as u32) {
+            match &team.assignment {
+                None => {
+                    dict.set("type", "none");
+                }
+                Some(TeamAssignment::RocketDesign { design_index, .. }) => {
+                    dict.set("type", "design");
+                    dict.set("design_index", *design_index as i32);
+                }
+                Some(TeamAssignment::EngineType { engine_type_index, .. }) => {
+                    dict.set("type", "engine");
+                    dict.set("engine_type_index", *engine_type_index);
+                }
+            }
+        } else {
+            dict.set("type", "none");
+        }
+
+        dict
+    }
+
+    // ==========================================
     // Game Management
     // ==========================================
 
@@ -904,6 +1361,7 @@ impl GameManager {
         self.state = GameState::new();
         self.current_saved_design_index = None;
         self.finance.bind_mut().reset();
+        self.emit_money_changed();
         self.base_mut().emit_signal("contracts_changed", &[]);
     }
 

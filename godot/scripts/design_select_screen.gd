@@ -6,6 +6,27 @@ signal back_requested
 # Game manager reference (set by parent)
 var game_manager: GameManager = null
 
+## Helper class for design cards that can receive team drops
+class DesignCardWrapper extends Control:
+	var design_index: int = -1
+	var game_manager: GameManager = null
+	signal team_assigned(design_index: int, team_id: int)
+
+	func _ready():
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	func _can_drop_data(_at_position: Vector2, data) -> bool:
+		if data is Dictionary and data.get("type") == "team":
+			return true
+		return false
+
+	func _drop_data(_at_position: Vector2, data) -> void:
+		if data is Dictionary and data.get("type") == "team":
+			var team_id = data.get("team_id", -1)
+			if team_id >= 0:
+				team_assigned.emit(design_index, team_id)
+
 # Delete confirmation
 var pending_delete_index: int = -1
 var confirm_dialog: ConfirmationDialog = null
@@ -74,7 +95,7 @@ func _rebuild_designs_list():
 		var card = _create_design_card(i, required_dv)
 		designs_list.add_child(card)
 
-func _create_design_card(index: int, required_dv: float) -> PanelContainer:
+func _create_design_card(index: int, required_dv: float) -> Control:
 	var name = game_manager.get_saved_design_name(index)
 	var delta_v = game_manager.get_saved_design_delta_v(index)
 	var cost = game_manager.get_saved_design_cost(index)
@@ -84,8 +105,18 @@ func _create_design_card(index: int, required_dv: float) -> PanelContainer:
 	var has_flaws = game_manager.saved_design_has_flaws(index)
 	var discovered = game_manager.get_saved_design_discovered_flaw_count(index)
 	var fixed = game_manager.get_saved_design_fixed_flaw_count(index)
+	var status = game_manager.get_design_status(index)
+	var progress = game_manager.get_design_progress(index)
+	var teams_count = game_manager.get_teams_on_design_count(index)
+
+	# Use a custom script to handle drag-drop
+	var wrapper = DesignCardWrapper.new()
+	wrapper.design_index = index
+	wrapper.game_manager = game_manager
+	wrapper.team_assigned.connect(_on_team_assigned_to_design)
 
 	var panel = PanelContainer.new()
+	wrapper.add_child(panel)
 
 	# Color-code based on whether it meets requirements
 	var meets_requirements = required_dv <= 0 or delta_v >= required_dv
@@ -167,6 +198,10 @@ func _create_design_card(index: int, required_dv: float) -> PanelContainer:
 	success_title.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
 	success_vbox.add_child(success_title)
 
+	# Get edit/launch status before building buttons
+	var can_edit = game_manager.can_edit_design(index)
+	var can_launch = game_manager.can_launch_design(index)
+
 	# Buttons
 	var buttons_vbox = VBoxContainer.new()
 	buttons_vbox.add_theme_constant_override("separation", 5)
@@ -177,10 +212,14 @@ func _create_design_card(index: int, required_dv: float) -> PanelContainer:
 	select_btn.custom_minimum_size = Vector2(100, 35)
 	select_btn.add_theme_font_size_override("font_size", 14)
 	select_btn.pressed.connect(_on_select_design_pressed.bind(index))
-	# Disable selection if rocket doesn't meet delta-v requirements
+	# Disable selection if rocket doesn't meet delta-v requirements or is not complete
 	if not meets_requirements:
 		select_btn.disabled = true
 		select_btn.tooltip_text = "Insufficient delta-v for this mission"
+	elif not can_launch and status != "Specification" and status != "":
+		# Design is in Engineering or Refining - not ready for launch
+		select_btn.disabled = true
+		select_btn.tooltip_text = "Design must complete Engineering before launch"
 	buttons_vbox.add_child(select_btn)
 
 	var edit_btn = Button.new()
@@ -188,7 +227,22 @@ func _create_design_card(index: int, required_dv: float) -> PanelContainer:
 	edit_btn.custom_minimum_size = Vector2(100, 30)
 	edit_btn.add_theme_font_size_override("font_size", 12)
 	edit_btn.pressed.connect(_on_edit_design_pressed.bind(index))
+	# Disable editing if design is in Engineering/Refining phase
+	if not can_edit:
+		edit_btn.disabled = true
+		edit_btn.tooltip_text = "Cannot edit while in Engineering/Refining phase"
 	buttons_vbox.add_child(edit_btn)
+
+	# Show "Submit to Engineering" for designs in Specification status
+	if status == "Specification" or status == "":
+		var submit_btn = Button.new()
+		submit_btn.text = "SUBMIT"
+		submit_btn.custom_minimum_size = Vector2(100, 28)
+		submit_btn.add_theme_font_size_override("font_size", 11)
+		submit_btn.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+		submit_btn.tooltip_text = "Submit to Engineering"
+		submit_btn.pressed.connect(_on_submit_to_engineering_pressed.bind(index))
+		buttons_vbox.add_child(submit_btn)
 
 	var delete_btn = Button.new()
 	delete_btn.text = "DELETE"
@@ -197,7 +251,38 @@ func _create_design_card(index: int, required_dv: float) -> PanelContainer:
 	delete_btn.pressed.connect(_on_delete_design_pressed.bind(index))
 	buttons_vbox.add_child(delete_btn)
 
-	return panel
+	# Add design status info
+	if status != "Specification" and status != "":
+		var status_label = Label.new()
+		status_label.text = "%s" % status
+		if teams_count > 0:
+			status_label.text += " (%d teams)" % teams_count
+		status_label.add_theme_font_size_override("font_size", 11)
+		if status == "Complete":
+			status_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+		elif status == "Engineering" or status == "Refining":
+			status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+		info_vbox.add_child(status_label)
+
+		# Progress bar for work phases
+		if progress > 0 and progress < 1:
+			var progress_bar = ProgressBar.new()
+			progress_bar.value = progress * 100
+			progress_bar.custom_minimum_size = Vector2(0, 8)
+			progress_bar.show_percentage = false
+			info_vbox.add_child(progress_bar)
+
+	return wrapper
+
+func _on_team_assigned_to_design(design_index: int, team_id: int):
+	if game_manager:
+		game_manager.assign_team_to_design(team_id, design_index)
+		_update_ui()
+
+func _on_submit_to_engineering_pressed(index: int):
+	if game_manager:
+		game_manager.submit_design_to_engineering(index)
+		_update_ui()
 
 func _on_select_design_pressed(index: int):
 	if game_manager:

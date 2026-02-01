@@ -1,6 +1,77 @@
 use crate::engine::{costs, EngineType};
+use crate::engineering_team::{DETAILED_ENGINEERING_WORK, REFINING_WORK_PER_FLAW};
 use crate::flaw::{calculate_flaw_failure_rate, estimate_success_rate, estimate_unknown_flaw_count, run_test, Flaw, FlawGenerator, FlawType};
 use crate::stage::RocketStage;
+
+/// Status of a rocket design in the engineering workflow
+#[derive(Debug, Clone, PartialEq)]
+pub enum DesignStatus {
+    /// Player is editing the specification
+    Specification,
+    /// Teams are doing detailed engineering work
+    Engineering {
+        /// Work progress (0.0 to total)
+        progress: f64,
+        /// Total work required
+        total: f64,
+    },
+    /// Teams are refining and looking for flaws
+    Refining {
+        /// Work progress (0.0 to total)
+        progress: f64,
+        /// Total work required
+        total: f64,
+    },
+    /// Design is complete and ready for launch
+    Complete,
+}
+
+impl Default for DesignStatus {
+    fn default() -> Self {
+        DesignStatus::Specification
+    }
+}
+
+impl DesignStatus {
+    /// Get the status name for display
+    pub fn name(&self) -> &'static str {
+        match self {
+            DesignStatus::Specification => "Specification",
+            DesignStatus::Engineering { .. } => "Engineering",
+            DesignStatus::Refining { .. } => "Refining",
+            DesignStatus::Complete => "Complete",
+        }
+    }
+
+    /// Get progress as a fraction (0.0 to 1.0)
+    pub fn progress_fraction(&self) -> f64 {
+        match self {
+            DesignStatus::Specification => 0.0,
+            DesignStatus::Engineering { progress, total } => {
+                if *total > 0.0 { progress / total } else { 0.0 }
+            }
+            DesignStatus::Refining { progress, total } => {
+                if *total > 0.0 { progress / total } else { 0.0 }
+            }
+            DesignStatus::Complete => 1.0,
+        }
+    }
+
+    /// Check if design is in a work phase (Engineering or Refining)
+    pub fn is_working(&self) -> bool {
+        matches!(self, DesignStatus::Engineering { .. } | DesignStatus::Refining { .. })
+    }
+
+    /// Check if design can be edited
+    pub fn can_edit(&self) -> bool {
+        matches!(self, DesignStatus::Specification)
+    }
+
+    /// Check if design is ready for launch
+    pub fn can_launch(&self) -> bool {
+        matches!(self, DesignStatus::Complete)
+    }
+}
 
 /// Represents a group of stages that fire simultaneously
 /// A core stage with zero or more boosters attached to it
@@ -138,6 +209,8 @@ pub struct RocketDesign {
     /// Signature of the design when flaws were generated
     /// Used to detect when the design has changed significantly
     flaw_design_signature: String,
+    /// Current status in the engineering workflow
+    pub design_status: DesignStatus,
 }
 
 impl RocketDesign {
@@ -155,7 +228,80 @@ impl RocketDesign {
             testing_spent: 0.0,
             budget: costs::STARTING_BUDGET,
             flaw_design_signature: String::new(),
+            design_status: DesignStatus::Specification,
         }
+    }
+
+    /// Submit design from Specification to Engineering phase
+    /// Returns false if design is not in Specification state
+    pub fn submit_to_engineering(&mut self) -> bool {
+        if !matches!(self.design_status, DesignStatus::Specification) {
+            return false;
+        }
+        self.design_status = DesignStatus::Engineering {
+            progress: 0.0,
+            total: DETAILED_ENGINEERING_WORK,
+        };
+        true
+    }
+
+    /// Advance work on this design by one day's worth of work
+    /// efficiency is the combined team efficiency working on this design
+    /// Returns true if work phase completed
+    pub fn advance_work(&mut self, efficiency: f64) -> bool {
+        match &mut self.design_status {
+            DesignStatus::Engineering { progress, total } => {
+                *progress += efficiency;
+                if *progress >= *total {
+                    // Move to Refining phase
+                    // Calculate total refining work based on potential flaws
+                    let potential_flaws = self.count_potential_flaws();
+                    let refining_total = potential_flaws as f64 * REFINING_WORK_PER_FLAW;
+                    self.design_status = DesignStatus::Refining {
+                        progress: 0.0,
+                        total: refining_total.max(REFINING_WORK_PER_FLAW), // At least one cycle
+                    };
+                    return true;
+                }
+            }
+            DesignStatus::Refining { progress, total } => {
+                *progress += efficiency;
+                if *progress >= *total {
+                    self.design_status = DesignStatus::Complete;
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Count potential flaws based on design complexity
+    fn count_potential_flaws(&self) -> usize {
+        // Base: 2 flaws per stage, +1 for each additional engine
+        let mut count = 0;
+        for stage in &self.stages {
+            count += 2;
+            count += (stage.engine_count.saturating_sub(1)) as usize;
+        }
+        count.max(1)
+    }
+
+    /// Check if a flaw should be discovered during refining
+    /// This is probabilistic based on progress
+    pub fn check_flaw_discovery(&self) -> bool {
+        if let DesignStatus::Refining { .. } = &self.design_status {
+            // Each work unit has a chance to discover a flaw
+            let discovery_chance = 0.1; // 10% per work unit on average
+            rand::random::<f64>() < discovery_chance
+        } else {
+            false
+        }
+    }
+
+    /// Return design to Specification state (e.g., after significant changes)
+    pub fn reset_to_specification(&mut self) {
+        self.design_status = DesignStatus::Specification;
     }
 
     /// Compute a signature string that captures the essential design characteristics
