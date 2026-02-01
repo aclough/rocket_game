@@ -1,8 +1,5 @@
 extends Control
 
-signal launch_requested
-signal back_requested
-
 # Designer node reference (passed from design screen)
 var designer: RocketDesigner = null
 
@@ -22,10 +19,6 @@ var designer: RocketDesigner = null
 # UI references - Flaws
 @onready var flaws_list = $MarginContainer/VBox/ContentHBox/FlawsPanel/FlawsMargin/FlawsVBox/FlawsScroll/FlawsList
 @onready var test_result_label = $MarginContainer/VBox/ContentHBox/FlawsPanel/FlawsMargin/FlawsVBox/TestResultLabel
-
-# UI references - Footer
-@onready var back_button = $MarginContainer/VBox/FooterPanel/FooterMargin/ButtonsHBox/BackButton
-@onready var launch_button = $MarginContainer/VBox/FooterPanel/FooterMargin/ButtonsHBox/LaunchButton
 
 # Track dynamically created engine test buttons
 var engine_test_buttons: Dictionary = {}
@@ -91,9 +84,6 @@ func _update_ui():
 
 	# Update flaws list
 	_rebuild_flaws_list()
-
-	# Update launch button
-	launch_button.disabled = not designer.is_launchable()
 
 func _rebuild_engine_test_cards():
 	# Clear existing engine test cards
@@ -299,12 +289,6 @@ func _on_rocket_test_pressed():
 	else:
 		test_result_label.text = "Rocket test complete. No new issues found."
 		test_result_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-
-func _on_back_button_pressed():
-	back_requested.emit()
-
-func _on_launch_button_pressed():
-	launch_requested.emit()
 
 # Helper to format money values with commas
 func _format_money(value: float) -> String:

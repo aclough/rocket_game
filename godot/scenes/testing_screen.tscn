@@ -233,35 +233,4 @@ theme_override_colors/font_color = Color(0.7, 0.7, 0.3, 1)
 text = ""
 horizontal_alignment = 1
 
-[node name="FooterPanel" type="PanelContainer" parent="MarginContainer/VBox"]
-layout_mode = 2
-
-[node name="FooterMargin" type="MarginContainer" parent="MarginContainer/VBox/FooterPanel"]
-layout_mode = 2
-theme_override_constants/margin_left = 20
-theme_override_constants/margin_top = 15
-theme_override_constants/margin_right = 20
-theme_override_constants/margin_bottom = 15
-
-[node name="ButtonsHBox" type="HBoxContainer" parent="MarginContainer/VBox/FooterPanel/FooterMargin"]
-layout_mode = 2
-theme_override_constants/separation = 20
-
-[node name="BackButton" type="Button" parent="MarginContainer/VBox/FooterPanel/FooterMargin/ButtonsHBox"]
-layout_mode = 2
-size_flags_horizontal = 3
-custom_minimum_size = Vector2(0, 50)
-theme_override_font_sizes/font_size = 18
-text = "BACK TO DESIGN"
-
-[node name="LaunchButton" type="Button" parent="MarginContainer/VBox/FooterPanel/FooterMargin/ButtonsHBox"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_stretch_ratio = 2.0
-custom_minimum_size = Vector2(0, 50)
-theme_override_font_sizes/font_size = 20
-text = "PROCEED TO LAUNCH"
-
 [connection signal="pressed" from="MarginContainer/VBox/ContentHBox/TestsPanel/TestsMargin/TestsVBox/RocketTestPanel/RocketTestMargin/RocketTestVBox/RocketTestButton" to="." method="_on_rocket_test_pressed"]
-[connection signal="pressed" from="MarginContainer/VBox/FooterPanel/FooterMargin/ButtonsHBox/BackButton" to="." method="_on_back_button_pressed"]
-[connection signal="pressed" from="MarginContainer/VBox/FooterPanel/FooterMargin/ButtonsHBox/LaunchButton" to="." method="_on_launch_button_pressed"]

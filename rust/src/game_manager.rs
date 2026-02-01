@@ -509,6 +509,18 @@ impl GameManager {
             .unwrap_or(0.0)
     }
 
+    /// Get design total wet mass at index (in kg)
+    #[func]
+    pub fn get_saved_design_mass(&self, index: i32) -> f64 {
+        if index < 0 {
+            return 0.0;
+        }
+        self.state
+            .get_saved_design(index as usize)
+            .map(|d| d.total_wet_mass_kg())
+            .unwrap_or(0.0)
+    }
+
     /// Get design estimated success rate at index
     #[func]
     pub fn get_saved_design_success_rate(&self, index: i32) -> f64 {

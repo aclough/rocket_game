@@ -8,29 +8,51 @@ extends Control
 var is_launching = false
 var current_stage = 0
 var total_stages = 7
-var start_position = Vector2.ZERO
-var target_position = Vector2.ZERO
 
 # Gravity turn animation - rocket pitches from vertical to horizontal
 # 0 radians = vertical (pointing up), PI/2 = horizontal (orbiting parallel to Earth)
 const LAUNCH_ROTATION = 0.0  # Start vertical
 const ORBIT_ROTATION = PI / 2.0  # End horizontal (90 degrees)
 
+# Continuous animation progress (0 to 1)
+var animation_progress: float = 0.0
+
 # Particle effect references
 var engine_particles: CPUParticles2D = null
 var success_particles: CPUParticles2D = null
 
 # Animation settings
-const STAGE_DURATION = 0.3  # Time to move between stages
 const EXPLOSION_DURATION = 1.0
 const SUCCESS_DURATION = 1.5
+const ANIMATION_SPEED = 0.15  # How fast position/rotation progress per second
+const MAX_Y_OFFSET = -200.0  # How far up the rocket travels during launch
 
 func _ready():
 	reset()
 
+func _process(delta):
+	if not is_launching or not rocket_image:
+		return
+
+	# Continuously advance animation progress
+	animation_progress = min(animation_progress + delta * ANIMATION_SPEED, 1.0)
+
+	# Position: move upward with slight easing
+	var position_progress = ease(animation_progress, 0.8)
+	rocket_image.position.y = MAX_Y_OFFSET * position_progress
+
+	# Rotation: gravity turn with different easing (more gradual at start)
+	var pitch_progress = ease(animation_progress, 0.5)
+	var target_rotation = lerp(LAUNCH_ROTATION, ORBIT_ROTATION, pitch_progress)
+
+	# Add subtle wobble for realism
+	var wobble = sin(Time.get_ticks_msec() * 0.01) * 0.015
+	rocket_image.rotation = target_rotation + wobble
+
 func reset():
 	is_launching = false
 	current_stage = 0
+	animation_progress = 0.0
 
 	# Clean up particles
 	if engine_particles:
@@ -56,6 +78,7 @@ func set_total_stages(count: int):
 func start_launch():
 	is_launching = true
 	current_stage = 0
+	animation_progress = 0.0
 
 	if rocket_image:
 		rocket_image.visible = true
@@ -70,32 +93,8 @@ func start_launch():
 func advance_stage():
 	if not is_launching:
 		return
-
 	current_stage += 1
-
-	# Move rocket up as stages progress
-	var progress = float(current_stage) / float(total_stages)
-	var target_y = -200 * progress  # Move up to -200 pixels
-
-	# Gravity turn: gradually pitch from vertical (0) to horizontal (PI/2)
-	# Use an easing curve so the turn is more gradual at first, then steeper
-	# This simulates a real gravity turn where the rocket starts vertical
-	# and progressively tilts toward horizontal as it gains altitude
-	var pitch_progress = ease(progress, 0.5)  # Ease-in curve for gradual start
-	var target_rotation = lerp(LAUNCH_ROTATION, ORBIT_ROTATION, pitch_progress)
-
-	# Add slight wobble for realism (reduced since we have real rotation now)
-	var wobble = randf_range(-0.02, 0.02)
-	target_rotation += wobble
-
-	# Animate movement
-	var tween = create_tween()
-	tween.set_ease(Tween.EASE_OUT)
-	tween.set_trans(Tween.TRANS_QUAD)
-
-	if rocket_image:
-		tween.tween_property(rocket_image, "position:y", target_y, STAGE_DURATION)
-		tween.parallel().tween_property(rocket_image, "rotation", target_rotation, STAGE_DURATION)
+	# Position and rotation are now handled continuously in _process()
 
 func show_explosion():
 	is_launching = false

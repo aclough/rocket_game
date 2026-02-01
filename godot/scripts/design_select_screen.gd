@@ -6,6 +6,10 @@ signal back_requested
 # Game manager reference (set by parent)
 var game_manager: GameManager = null
 
+# Delete confirmation
+var pending_delete_index: int = -1
+var confirm_dialog: ConfirmationDialog = null
+
 # UI references
 @onready var mission_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/TitleVBox/MissionLabel
 @onready var requirements_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/TitleVBox/RequirementsLabel
@@ -74,6 +78,7 @@ func _create_design_card(index: int, required_dv: float) -> PanelContainer:
 	var name = game_manager.get_saved_design_name(index)
 	var delta_v = game_manager.get_saved_design_delta_v(index)
 	var cost = game_manager.get_saved_design_cost(index)
+	var mass = game_manager.get_saved_design_mass(index)
 	var success_rate = game_manager.get_saved_design_success_rate(index) * 100
 	var stages = game_manager.get_saved_design_stage_count(index)
 	var has_flaws = game_manager.saved_design_has_flaws(index)
@@ -110,12 +115,12 @@ func _create_design_card(index: int, required_dv: float) -> PanelContainer:
 
 	var name_label = Label.new()
 	name_label.text = name
-	name_label.add_theme_font_size_override("font_size", 16)
+	name_label.add_theme_font_size_override("font_size", 20)
 	info_vbox.add_child(name_label)
 
 	var stats_label = Label.new()
-	stats_label.text = "%d stages | %.0f m/s | $%s" % [stages, delta_v, _format_money(cost)]
-	stats_label.add_theme_font_size_override("font_size", 12)
+	stats_label.text = "%d stages | %.0f m/s | %s | $%s" % [stages, delta_v, _format_mass(mass), _format_money(cost)]
+	stats_label.add_theme_font_size_override("font_size", 16)
 	stats_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	info_vbox.add_child(stats_label)
 
@@ -206,8 +211,30 @@ func _on_edit_design_pressed(index: int):
 	design_selected.emit(index)
 
 func _on_delete_design_pressed(index: int):
-	if game_manager:
-		game_manager.delete_saved_design(index)
+	if not game_manager:
+		return
+
+	pending_delete_index = index
+	var design_name = game_manager.get_saved_design_name(index)
+
+	# Create confirmation dialog if needed
+	if not confirm_dialog:
+		confirm_dialog = ConfirmationDialog.new()
+		confirm_dialog.confirmed.connect(_on_delete_confirmed)
+		confirm_dialog.canceled.connect(_on_delete_canceled)
+		add_child(confirm_dialog)
+
+	confirm_dialog.title = "Delete Design"
+	confirm_dialog.dialog_text = "Are you sure you want to delete \"%s\"?\nThis cannot be undone." % design_name
+	confirm_dialog.popup_centered()
+
+func _on_delete_confirmed():
+	if game_manager and pending_delete_index >= 0:
+		game_manager.delete_saved_design(pending_delete_index)
+	pending_delete_index = -1
+
+func _on_delete_canceled():
+	pending_delete_index = -1
 
 func _on_new_default_pressed():
 	if game_manager:
@@ -232,3 +259,12 @@ func _format_money(value: float) -> String:
 		return "%.0fK" % (value / 1_000)
 	else:
 		return "%.0f" % value
+
+# Helper to format mass values
+func _format_mass(kg: float) -> String:
+	if kg >= 1_000_000:
+		return "%.1f kt" % (kg / 1_000_000)
+	elif kg >= 1_000:
+		return "%.1f t" % (kg / 1_000)
+	else:
+		return "%.0f kg" % kg
