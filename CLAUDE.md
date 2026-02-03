@@ -9,3 +9,7 @@ stuff in ./rust
 
 Make sure to avoid duplication of calculation and sources of truth for things like time or the money the player has.
 
+After finishing changes to the Godot sections, run
+flatpak run org.godotengine.Godot --headless --quit --path /path/to/changes on them.
+
+Ask clarifying questions when the architecture is unclear.
