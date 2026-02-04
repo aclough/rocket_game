@@ -156,7 +156,7 @@ func _update_refresh_button():
 	refresh_button.text = "REFRESH - " + cost
 	refresh_button.disabled = not game_manager.can_refresh_contracts()
 
-func _on_money_changed(new_amount: float):
+func _on_money_changed(_new_amount: float):
 	_update_header()
 	_update_refresh_button()
 

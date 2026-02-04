@@ -3,6 +3,9 @@ use crate::engineering_team::{DETAILED_ENGINEERING_WORK, REFINING_WORK_PER_FLAW}
 use crate::flaw::{calculate_flaw_failure_rate, estimate_success_rate, estimate_unknown_flaw_count, run_test, Flaw, FlawGenerator, FlawType};
 use crate::stage::RocketStage;
 
+/// Work required to fix a discovered flaw (14 days with 1 team)
+pub const FLAW_FIX_WORK: f64 = 14.0;
+
 /// Status of a rocket design in the engineering workflow
 #[derive(Debug, Clone, PartialEq)]
 pub enum DesignStatus {
@@ -17,6 +20,17 @@ pub enum DesignStatus {
     },
     /// Teams are refining and looking for flaws
     Refining {
+        /// Work progress (0.0 to total)
+        progress: f64,
+        /// Total work required
+        total: f64,
+    },
+    /// Teams are fixing a discovered flaw
+    Fixing {
+        /// Name of the flaw being fixed
+        flaw_name: String,
+        /// Index of the flaw in active_flaws
+        flaw_index: usize,
         /// Work progress (0.0 to total)
         progress: f64,
         /// Total work required
@@ -39,7 +53,16 @@ impl DesignStatus {
             DesignStatus::Specification => "Specification",
             DesignStatus::Engineering { .. } => "Engineering",
             DesignStatus::Refining { .. } => "Refining",
+            DesignStatus::Fixing { .. } => "Fixing",
             DesignStatus::Complete => "Complete",
+        }
+    }
+
+    /// Get the full status string for display (includes flaw name if Fixing)
+    pub fn display_name(&self) -> String {
+        match self {
+            DesignStatus::Fixing { flaw_name, .. } => format!("Fixing: {}", flaw_name),
+            other => other.name().to_string(),
         }
     }
 
@@ -50,16 +73,17 @@ impl DesignStatus {
             DesignStatus::Engineering { progress, total } => {
                 if *total > 0.0 { progress / total } else { 0.0 }
             }
-            DesignStatus::Refining { progress, total } => {
+            DesignStatus::Refining { .. } => 1.0, // Always show 100% for Refining
+            DesignStatus::Fixing { progress, total, .. } => {
                 if *total > 0.0 { progress / total } else { 0.0 }
             }
             DesignStatus::Complete => 1.0,
         }
     }
 
-    /// Check if design is in a work phase (Engineering or Refining)
+    /// Check if design is in a work phase (Engineering, Refining, or Fixing)
     pub fn is_working(&self) -> bool {
-        matches!(self, DesignStatus::Engineering { .. } | DesignStatus::Refining { .. })
+        matches!(self, DesignStatus::Engineering { .. } | DesignStatus::Refining { .. } | DesignStatus::Fixing { .. })
     }
 
     /// Check if design can be edited
@@ -68,8 +92,9 @@ impl DesignStatus {
     }
 
     /// Check if design is ready for launch
+    /// Designs in Refining or Fixing can still be launched (with known risks)
     pub fn can_launch(&self) -> bool {
-        matches!(self, DesignStatus::Complete)
+        matches!(self, DesignStatus::Complete | DesignStatus::Refining { .. } | DesignStatus::Fixing { .. })
     }
 }
 
@@ -264,16 +289,76 @@ impl RocketDesign {
                     return true;
                 }
             }
-            DesignStatus::Refining { progress, total } => {
+            DesignStatus::Refining { .. } => {
+                // Refining doesn't advance progress - it just enables flaw discovery
+                // Progress is always shown as 100% in UI
+            }
+            DesignStatus::Fixing { progress, total, .. } => {
                 *progress += efficiency;
                 if *progress >= *total {
-                    self.design_status = DesignStatus::Complete;
+                    // Fixing complete - will be handled by complete_flaw_fix()
                     return true;
                 }
             }
             _ => {}
         }
         false
+    }
+
+    /// Start fixing a discovered flaw
+    /// Transitions from Refining to Fixing state
+    pub fn start_fixing_flaw(&mut self, flaw_index: usize) -> bool {
+        if !matches!(self.design_status, DesignStatus::Refining { .. }) {
+            return false;
+        }
+        if flaw_index >= self.active_flaws.len() {
+            return false;
+        }
+        let flaw = &self.active_flaws[flaw_index];
+        if !flaw.discovered || flaw.fixed {
+            return false;
+        }
+
+        self.design_status = DesignStatus::Fixing {
+            flaw_name: flaw.name.clone(),
+            flaw_index,
+            progress: 0.0,
+            total: FLAW_FIX_WORK,
+        };
+        true
+    }
+
+    /// Complete the current flaw fix and return to Refining
+    /// Returns the name of the fixed flaw, or None if not in Fixing state
+    pub fn complete_flaw_fix(&mut self) -> Option<String> {
+        if let DesignStatus::Fixing { flaw_index, flaw_name, .. } = &self.design_status {
+            let flaw_name = flaw_name.clone();
+            let flaw_index = *flaw_index;
+
+            // Mark flaw as fixed
+            if flaw_index < self.active_flaws.len() {
+                self.active_flaws[flaw_index].fixed = true;
+            }
+
+            // Return to Refining
+            let potential_flaws = self.count_potential_flaws();
+            let refining_total = potential_flaws as f64 * REFINING_WORK_PER_FLAW;
+            self.design_status = DesignStatus::Refining {
+                progress: refining_total, // Start at 100% since we're continuing
+                total: refining_total.max(REFINING_WORK_PER_FLAW),
+            };
+
+            Some(flaw_name)
+        } else {
+            None
+        }
+    }
+
+    /// Get the index of the first discovered but unfixed flaw
+    pub fn get_next_unfixed_flaw(&self) -> Option<usize> {
+        self.active_flaws
+            .iter()
+            .position(|f| f.discovered && !f.fixed)
     }
 
     /// Count potential flaws based on design complexity
@@ -285,18 +370,6 @@ impl RocketDesign {
             count += (stage.engine_count.saturating_sub(1)) as usize;
         }
         count.max(1)
-    }
-
-    /// Check if a flaw should be discovered during refining
-    /// This is probabilistic based on progress
-    pub fn check_flaw_discovery(&self) -> bool {
-        if let DesignStatus::Refining { .. } = &self.design_status {
-            // Each work unit has a chance to discover a flaw
-            let discovery_chance = 0.1; // 10% per work unit on average
-            rand::random::<f64>() < discovery_chance
-        } else {
-            false
-        }
     }
 
     /// Return design to Specification state (e.g., after significant changes)

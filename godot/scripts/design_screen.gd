@@ -558,7 +558,7 @@ func _on_slider_drag_started(stage_index: int):
 	_slider_dragging = true
 	_slider_stage_index = stage_index
 
-func _on_slider_drag_ended(value_changed: bool, stage_index: int):
+func _on_slider_drag_ended(value_changed: bool, _stage_index: int):
 	_slider_dragging = false
 	_slider_stage_index = -1
 	# Do a full rebuild now that dragging is done

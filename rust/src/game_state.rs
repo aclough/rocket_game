@@ -1,9 +1,11 @@
 use crate::contract::{Contract, Destination};
 use crate::engine::{costs, EngineRegistry};
 use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, WorkEvent};
+use crate::flaw::FlawGenerator;
 use crate::launch_site::LaunchSite;
 use crate::rocket_design::RocketDesign;
 use crate::time_system::TimeSystem;
+use rand::Rng;
 
 /// Cost to refresh the contract list
 pub const CONTRACT_REFRESH_COST: f64 = 10_000_000.0; // $10M
@@ -54,6 +56,8 @@ pub struct GameState {
     pub teams: Vec<EngineeringTeam>,
     /// Next team ID to assign
     next_team_id: u32,
+    /// Flaw generator for creating design flaws
+    pub flaw_generator: FlawGenerator,
 }
 
 impl GameState {
@@ -80,6 +84,7 @@ impl GameState {
             time_system: TimeSystem::new(),
             teams: Vec::new(),
             next_team_id: 1,
+            flaw_generator: FlawGenerator::new(),
         };
 
         // Generate initial contracts
@@ -554,20 +559,40 @@ impl GameState {
             }
 
             let phase_before = design.design_status.name();
+            let is_refining = matches!(design.design_status, DesignStatus::Refining { .. });
+            let is_fixing = matches!(design.design_status, DesignStatus::Fixing { .. });
+
+            // Advance work
             let phase_completed = design.advance_work(efficiency);
 
             if phase_completed {
-                events.push(WorkEvent::DesignPhaseComplete {
-                    design_index,
-                    phase_name: phase_before.to_string(),
-                });
+                if is_fixing {
+                    // Fixing complete - mark flaw as fixed and return to Refining
+                    if let Some(flaw_name) = design.complete_flaw_fix() {
+                        events.push(WorkEvent::DesignFlawFixed {
+                            design_index,
+                            flaw_name,
+                        });
+                    }
+                } else {
+                    // Engineering phase completed
+                    events.push(WorkEvent::DesignPhaseComplete {
+                        design_index,
+                        phase_name: phase_before.to_string(),
+                    });
+                }
+            }
 
-                // Check for flaw discovery during Refining
-                if matches!(design.design_status, DesignStatus::Refining { .. }) {
-                    // Discover flaws probabilistically
-                    if design.check_flaw_discovery() && !design.active_flaws.is_empty() {
-                        // Mark a flaw as discovered
-                        if let Some(flaw) = design.active_flaws.iter_mut().find(|f| !f.discovered) {
+            // Only discover flaws during Refining (not during Fixing)
+            if is_refining {
+                // Check each undiscovered flaw using its individual discovery probability
+                // Divide by 30 to convert from per-test to per-day probability (roughly monthly)
+                let mut rng = rand::thread_rng();
+                for flaw in design.active_flaws.iter_mut() {
+                    if !flaw.discovered && !flaw.fixed {
+                        let daily_discovery_chance = flaw.discovery_probability() / 30.0;
+                        let roll = rng.gen::<f64>();
+                        if roll < daily_discovery_chance {
                             flaw.discovered = true;
                             events.push(WorkEvent::DesignFlawDiscovered {
                                 design_index,
@@ -577,9 +602,47 @@ impl GameState {
                     }
                 }
             }
+
+            // After Refining or completing a fix, check if there are unfixed flaws to work on
+            let now_refining = matches!(design.design_status, DesignStatus::Refining { .. });
+            if now_refining {
+                if let Some(flaw_index) = design.get_next_unfixed_flaw() {
+                    let flaw_name = design.active_flaws[flaw_index].name.clone();
+                    design.start_fixing_flaw(flaw_index);
+                    events.push(WorkEvent::DesignPhaseComplete {
+                        design_index,
+                        phase_name: format!("Started fixing: {}", flaw_name),
+                    });
+                }
+            }
         }
 
+        // Auto-unassign teams from completed designs
+        self.auto_unassign_completed_designs();
+
         events
+    }
+
+    /// Unassign all teams from designs that are Complete
+    fn auto_unassign_completed_designs(&mut self) {
+        use crate::rocket_design::DesignStatus;
+
+        // Collect completed design indices
+        let completed_indices: Vec<usize> = self.saved_designs
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| matches!(d.design_status, DesignStatus::Complete))
+            .map(|(i, _)| i)
+            .collect();
+
+        // Unassign teams working on completed designs
+        for team in &mut self.teams {
+            if let Some(TeamAssignment::RocketDesign { design_index, .. }) = &team.assignment {
+                if completed_indices.contains(design_index) {
+                    team.unassign();
+                }
+            }
+        }
     }
 
     /// Process work progress on all engines
@@ -600,35 +663,63 @@ impl GameState {
                 crate::engine::EngineType::from_index(engine_type_index).unwrap()
             );
 
-            match &mut spec.status {
-                EngineStatus::Testing { progress, total } => {
+            // Skip engines not in a work phase
+            if !spec.status.is_working() {
+                continue;
+            }
+
+            let is_refining = matches!(spec.status, EngineStatus::Refining { .. });
+            let is_fixing = matches!(spec.status, EngineStatus::Fixing { .. });
+
+            // Handle Fixing phase
+            if is_fixing {
+                if let EngineStatus::Fixing { flaw_index, progress, total, .. } = &mut spec.status {
                     *progress += efficiency;
                     if *progress >= *total {
-                        // Testing complete, move to TestedCycle
-                        spec.status = EngineStatus::TestedCycle;
-                        events.push(WorkEvent::DesignPhaseComplete {
-                            design_index: engine_type_index as usize,
-                            phase_name: "Testing".to_string(),
-                        });
-                    }
-                }
-                EngineStatus::Revamping { flaw_id, progress, total } => {
-                    let flaw_id_copy = *flaw_id;
-                    *progress += efficiency;
-                    if *progress >= *total {
-                        // Revamp complete, fix the flaw
-                        if let Some(flaw) = spec.get_flaw_mut(flaw_id_copy) {
-                            let flaw_name = flaw.name.clone();
-                            spec.fix_flaw(flaw_id_copy);
+                        let flaw_index_copy = *flaw_index;
+                        // Fix complete - mark flaw as fixed and return to Refining
+                        if let Some(flaw_name) = spec.fix_flaw_by_index(flaw_index_copy) {
                             events.push(WorkEvent::EngineFlawFixed {
                                 engine_type_index,
                                 flaw_name,
                             });
                         }
-                        spec.status = EngineStatus::TestedCycle;
+                        spec.status.return_to_refining();
                     }
                 }
-                _ => {}
+            }
+
+            // Handle Refining phase - discover flaws
+            if is_refining {
+                // Check each undiscovered flaw using its individual discovery probability
+                // Divide by 30 to convert from per-test to per-day probability
+                let mut rng = rand::thread_rng();
+                for flaw in spec.active_flaws.iter_mut() {
+                    if !flaw.discovered && !flaw.fixed {
+                        let daily_discovery_chance = flaw.discovery_probability() / 30.0;
+                        let roll = rng.gen::<f64>();
+                        if roll < daily_discovery_chance {
+                            flaw.discovered = true;
+                            events.push(WorkEvent::EngineFlawDiscovered {
+                                engine_type_index,
+                                flaw_name: flaw.name.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            // After Refining or completing a fix, check if there are unfixed flaws to work on
+            let now_refining = matches!(spec.status, EngineStatus::Refining { .. });
+            if now_refining {
+                if let Some(flaw_index) = spec.get_next_unfixed_flaw() {
+                    let flaw_name = spec.active_flaws[flaw_index].name.clone();
+                    spec.status.start_fixing(flaw_name.clone(), flaw_index);
+                    events.push(WorkEvent::DesignPhaseComplete {
+                        design_index: engine_type_index as usize,
+                        phase_name: format!("Started fixing: {}", flaw_name),
+                    });
+                }
             }
         }
 
@@ -720,9 +811,9 @@ impl GameState {
         if let Some(team) = self.get_team_mut(team_id) {
             team.assign(TeamAssignment::EngineType {
                 engine_type_index,
-                work_phase: crate::engineering_team::EngineWorkPhase::Testing {
+                work_phase: crate::engineering_team::EngineWorkPhase::Refining {
                     progress: 0.0,
-                    total_work: crate::engineering_team::ENGINE_TESTING_WORK,
+                    total_work: crate::engineering_team::ENGINE_REFINING_WORK,
                 },
             });
             true

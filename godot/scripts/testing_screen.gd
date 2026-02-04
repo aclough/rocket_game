@@ -9,8 +9,12 @@ var designer: RocketDesigner = null
 # UI references - Tests panel (will hold dynamic engine test cards)
 @onready var tests_vbox = $MarginContainer/VBox/ContentHBox/TestsPanel/TestsMargin/TestsVBox
 @onready var engine_tests_container = $MarginContainer/VBox/ContentHBox/TestsPanel/TestsMargin/TestsVBox/EngineTestsContainer
+@onready var rocket_test_panel = $MarginContainer/VBox/ContentHBox/TestsPanel/TestsMargin/TestsVBox/RocketTestPanel
 @onready var rocket_test_button = $MarginContainer/VBox/ContentHBox/TestsPanel/TestsMargin/TestsVBox/RocketTestPanel/RocketTestMargin/RocketTestVBox/RocketTestButton
 @onready var rocket_test_cost_label = $MarginContainer/VBox/ContentHBox/TestsPanel/TestsMargin/TestsVBox/RocketTestPanel/RocketTestMargin/RocketTestVBox/RocketTestCost
+
+# Whether to show testing options (false when embedded in launch site)
+var show_testing_options: bool = false
 
 # UI references - Stats
 @onready var unknown_label = $MarginContainer/VBox/ContentHBox/TestsPanel/TestsMargin/TestsVBox/StatsPanel/StatsMargin/StatsVBox/UnknownLabel
@@ -54,12 +58,19 @@ func _update_ui():
 	# Update header
 	design_name_label.text = "Design: " + designer.get_design_name()
 
-	# Rebuild engine test cards for each engine type
-	_rebuild_engine_test_cards()
+	# Hide testing options when embedded in launch site (testing happens in engineering)
+	if rocket_test_panel:
+		rocket_test_panel.visible = show_testing_options
+	if engine_tests_container:
+		engine_tests_container.visible = show_testing_options
 
-	# Update rocket test costs
-	rocket_test_cost_label.text = "Cost: $" + _format_money(designer.get_rocket_test_cost())
-	rocket_test_button.disabled = not designer.can_afford_rocket_test()
+	# Rebuild engine test cards for each engine type (only if showing)
+	if show_testing_options:
+		_rebuild_engine_test_cards()
+
+		# Update rocket test costs
+		rocket_test_cost_label.text = "Cost: $" + _format_money(designer.get_rocket_test_cost())
+		rocket_test_button.disabled = not designer.can_afford_rocket_test()
 
 	# Update stats
 	var flaw_range = designer.get_estimated_unknown_flaw_range()

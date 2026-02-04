@@ -1,30 +1,32 @@
-use crate::engineering_team::{ENGINE_TESTING_WORK, REVAMP_WORK};
 use crate::flaw::{Flaw, FlawCategory, FlawGenerator};
 use std::collections::HashMap;
 
-/// Status of an engine in the testing/revamp workflow
+/// Work required to fix a discovered engine flaw (14 days with 1 team)
+pub const ENGINE_FLAW_FIX_WORK: f64 = 14.0;
+
+/// Status of an engine in the refining workflow
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineStatus {
-    /// Engine has not been tested yet
+    /// Engine has not been submitted for refining yet (future: Designing phase)
     Untested,
-    /// Teams are testing the engine for flaws
-    Testing {
+    /// Teams are refining the engine and looking for flaws
+    Refining {
+        /// Work progress (not used for completion, just for tracking)
+        progress: f64,
+        /// Total work (for reference)
+        total: f64,
+    },
+    /// Teams are fixing a discovered flaw
+    Fixing {
+        /// Name of the flaw being fixed
+        flaw_name: String,
+        /// Index of the flaw in the flaws list
+        flaw_index: usize,
         /// Work progress (0.0 to total)
         progress: f64,
         /// Total work required
         total: f64,
     },
-    /// Teams are revamping (fixing) a discovered flaw
-    Revamping {
-        /// ID of the flaw being fixed
-        flaw_id: u32,
-        /// Work progress (0.0 to total)
-        progress: f64,
-        /// Total work required
-        total: f64,
-    },
-    /// Current testing cycle is complete
-    TestedCycle,
 }
 
 impl Default for EngineStatus {
@@ -34,13 +36,20 @@ impl Default for EngineStatus {
 }
 
 impl EngineStatus {
-    /// Get the status name for display
+    /// Get the base status name for display
     pub fn name(&self) -> &'static str {
         match self {
             EngineStatus::Untested => "Untested",
-            EngineStatus::Testing { .. } => "Testing",
-            EngineStatus::Revamping { .. } => "Revamping",
-            EngineStatus::TestedCycle => "Tested",
+            EngineStatus::Refining { .. } => "Refining",
+            EngineStatus::Fixing { .. } => "Fixing",
+        }
+    }
+
+    /// Get the full status string for display (includes flaw name if Fixing)
+    pub fn display_name(&self) -> String {
+        match self {
+            EngineStatus::Fixing { flaw_name, .. } => format!("Fixing: {}", flaw_name),
+            other => other.name().to_string(),
         }
     }
 
@@ -48,35 +57,41 @@ impl EngineStatus {
     pub fn progress_fraction(&self) -> f64 {
         match self {
             EngineStatus::Untested => 0.0,
-            EngineStatus::Testing { progress, total } => {
+            EngineStatus::Refining { .. } => 1.0, // Always show 100% for Refining
+            EngineStatus::Fixing { progress, total, .. } => {
                 if *total > 0.0 { progress / total } else { 0.0 }
             }
-            EngineStatus::Revamping { progress, total, .. } => {
-                if *total > 0.0 { progress / total } else { 0.0 }
-            }
-            EngineStatus::TestedCycle => 1.0,
         }
     }
 
     /// Check if engine is being worked on
     pub fn is_working(&self) -> bool {
-        matches!(self, EngineStatus::Testing { .. } | EngineStatus::Revamping { .. })
+        matches!(self, EngineStatus::Refining { .. } | EngineStatus::Fixing { .. })
     }
 
-    /// Start testing this engine
-    pub fn start_testing(&mut self) {
-        *self = EngineStatus::Testing {
+    /// Start refining this engine
+    pub fn start_refining(&mut self) {
+        *self = EngineStatus::Refining {
             progress: 0.0,
-            total: ENGINE_TESTING_WORK,
+            total: 30.0, // Reference value
         };
     }
 
-    /// Start revamping a flaw
-    pub fn start_revamping(&mut self, flaw_id: u32) {
-        *self = EngineStatus::Revamping {
-            flaw_id,
+    /// Start fixing a flaw
+    pub fn start_fixing(&mut self, flaw_name: String, flaw_index: usize) {
+        *self = EngineStatus::Fixing {
+            flaw_name,
+            flaw_index,
             progress: 0.0,
-            total: REVAMP_WORK,
+            total: ENGINE_FLAW_FIX_WORK,
+        };
+    }
+
+    /// Return to Refining after fixing a flaw
+    pub fn return_to_refining(&mut self) {
+        *self = EngineStatus::Refining {
+            progress: 30.0, // Start at 100%
+            total: 30.0,
         };
     }
 }
@@ -409,6 +424,55 @@ impl EngineSpec {
             return true;
         }
         false
+    }
+
+    /// Fix a flaw by index - moves it from active_flaws to fixed_flaws
+    /// Returns the flaw name if successful
+    pub fn fix_flaw_by_index(&mut self, index: usize) -> Option<String> {
+        if index < self.active_flaws.len() && self.active_flaws[index].discovered {
+            let mut flaw = self.active_flaws.remove(index);
+            let name = flaw.name.clone();
+            flaw.fixed = true;
+            self.fixed_flaws.push(flaw);
+            return Some(name);
+        }
+        None
+    }
+
+    /// Get count of discovered (but not yet fixed) flaws
+    pub fn get_discovered_unfixed_count(&self) -> usize {
+        self.active_flaws.iter().filter(|f| f.discovered).count()
+    }
+
+    /// Get the index of the first discovered but unfixed flaw
+    pub fn get_next_unfixed_flaw(&self) -> Option<usize> {
+        self.active_flaws.iter().position(|f| f.discovered && !f.fixed)
+    }
+
+    /// Get names of discovered (but not fixed) flaws
+    pub fn get_unfixed_flaw_names(&self) -> Vec<String> {
+        self.active_flaws
+            .iter()
+            .filter(|f| f.discovered)
+            .map(|f| f.name.clone())
+            .collect()
+    }
+
+    /// Get names of fixed flaws
+    pub fn get_fixed_flaw_names(&self) -> Vec<String> {
+        self.fixed_flaws.iter().map(|f| f.name.clone()).collect()
+    }
+
+    /// Submit engine for refining (generates flaws if needed)
+    pub fn submit_to_refining(&mut self, generator: &mut FlawGenerator) -> bool {
+        if !matches!(self.status, EngineStatus::Untested) {
+            return false;
+        }
+        if !self.flaws_generated {
+            self.generate_flaws(generator);
+        }
+        self.status.start_refining();
+        true
     }
 }
 

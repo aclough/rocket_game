@@ -7,14 +7,14 @@ signal back_requested
 var game_manager: GameManager = null
 
 ## Helper class for design cards that can receive team drops
-class DesignCardWrapper extends Control:
+## Extends MarginContainer to properly propagate child sizing
+class DesignCardWrapper extends MarginContainer:
 	var design_index: int = -1
 	var game_manager: GameManager = null
 	signal team_assigned(design_index: int, team_id: int)
 
 	func _ready():
 		mouse_filter = Control.MOUSE_FILTER_PASS
-		size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	func _can_drop_data(_at_position: Vector2, data) -> bool:
 		if data is Dictionary and data.get("type") == "team":
@@ -106,13 +106,15 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 	var discovered = game_manager.get_saved_design_discovered_flaw_count(index)
 	var fixed = game_manager.get_saved_design_fixed_flaw_count(index)
 	var status = game_manager.get_design_status(index)
+	var base_status = game_manager.get_design_status_base(index)
 	var progress = game_manager.get_design_progress(index)
 	var teams_count = game_manager.get_teams_on_design_count(index)
 
-	# Use a custom script to handle drag-drop
+	# Use a MarginContainer wrapper to handle drag-drop and proper sizing
 	var wrapper = DesignCardWrapper.new()
 	wrapper.design_index = index
 	wrapper.game_manager = game_manager
+	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	wrapper.team_assigned.connect(_on_team_assigned_to_design)
 
 	var panel = PanelContainer.new()
@@ -212,12 +214,12 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 	select_btn.custom_minimum_size = Vector2(100, 35)
 	select_btn.add_theme_font_size_override("font_size", 14)
 	select_btn.pressed.connect(_on_select_design_pressed.bind(index))
-	# Disable selection if rocket doesn't meet delta-v requirements or is not complete
+	# Disable selection if rocket doesn't meet delta-v requirements or is not ready
 	if not meets_requirements:
 		select_btn.disabled = true
 		select_btn.tooltip_text = "Insufficient delta-v for this mission"
-	elif not can_launch and status != "Specification" and status != "":
-		# Design is in Engineering or Refining - not ready for launch
+	elif not can_launch and base_status != "Specification" and base_status != "":
+		# Design is in Engineering phase - not ready for launch
 		select_btn.disabled = true
 		select_btn.tooltip_text = "Design must complete Engineering before launch"
 	buttons_vbox.add_child(select_btn)
@@ -234,7 +236,7 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 	buttons_vbox.add_child(edit_btn)
 
 	# Show "Submit to Engineering" for designs in Specification status
-	if status == "Specification" or status == "":
+	if base_status == "Specification" or base_status == "":
 		var submit_btn = Button.new()
 		submit_btn.text = "SUBMIT"
 		submit_btn.custom_minimum_size = Vector2(100, 28)
@@ -252,24 +254,47 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 	buttons_vbox.add_child(delete_btn)
 
 	# Add design status info
-	if status != "Specification" and status != "":
+	if base_status != "Specification" and base_status != "":
 		var status_label = Label.new()
 		status_label.text = "%s" % status
 		if teams_count > 0:
 			status_label.text += " (%d teams)" % teams_count
 		status_label.add_theme_font_size_override("font_size", 11)
-		if status == "Complete":
-			status_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-		elif status == "Engineering" or status == "Refining":
+		if base_status == "Refining":
+			status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
+		elif base_status == "Fixing":
+			status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
+		elif base_status == "Engineering":
 			status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 		info_vbox.add_child(status_label)
 
 		# Progress bar for work phases
-		if progress > 0 and progress < 1:
+		if base_status == "Engineering" and progress > 0 and progress < 1:
 			var progress_bar = ProgressBar.new()
 			progress_bar.value = progress * 100
 			progress_bar.custom_minimum_size = Vector2(0, 8)
 			progress_bar.show_percentage = false
+			info_vbox.add_child(progress_bar)
+		elif base_status == "Fixing":
+			var progress_bar = ProgressBar.new()
+			progress_bar.value = progress * 100
+			progress_bar.custom_minimum_size = Vector2(0, 8)
+			progress_bar.show_percentage = false
+			var fill_style = StyleBoxFlat.new()
+			fill_style.set_bg_color(Color(0.9, 0.6, 0.3))
+			fill_style.set_corner_radius_all(2)
+			progress_bar.add_theme_stylebox_override("fill", fill_style)
+			info_vbox.add_child(progress_bar)
+		elif base_status == "Refining":
+			# Blue bar at 100% for Refining
+			var progress_bar = ProgressBar.new()
+			progress_bar.value = 100
+			progress_bar.custom_minimum_size = Vector2(0, 8)
+			progress_bar.show_percentage = false
+			var fill_style = StyleBoxFlat.new()
+			fill_style.set_bg_color(Color(0.3, 0.5, 0.9))
+			fill_style.set_corner_radius_all(2)
+			progress_bar.add_theme_stylebox_override("fill", fill_style)
 			info_vbox.add_child(progress_bar)
 
 	return wrapper
