@@ -1,5 +1,7 @@
 use crate::contract::{Contract, Destination};
-use crate::engine::{costs, EngineRegistry};
+use crate::design_lineage::DesignLineage;
+use crate::engine::costs;
+use crate::engine_design::{default_engine_lineages, EngineDesign};
 use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, WorkEvent};
 use crate::flaw::FlawGenerator;
 use crate::launch_site::LaunchSite;
@@ -42,8 +44,8 @@ pub struct Company {
     pub total_launches: u32,
     /// Successful launches
     pub successful_launches: u32,
-    /// Engine registry with engine specs and their flaws
-    pub engine_registry: EngineRegistry,
+    /// Engine design lineages (head + frozen revisions)
+    pub engine_designs: Vec<DesignLineage<EngineDesign>>,
     /// Engineering teams that work on designs/engines
     pub teams: Vec<EngineeringTeam>,
     /// Next team ID to assign
@@ -69,7 +71,7 @@ impl Company {
             next_design_id: 1,
             total_launches: 0,
             successful_launches: 0,
-            engine_registry: EngineRegistry::new(),
+            engine_designs: default_engine_lineages(),
             teams: Vec::new(),
             next_team_id: 1,
             flaw_generator: FlawGenerator::new(),
@@ -505,11 +507,11 @@ impl Company {
         }
     }
 
-    /// Assign a team to work on an engine type
-    pub fn assign_team_to_engine(&mut self, team_id: u32, engine_type_index: i32) -> bool {
+    /// Assign a team to work on an engine design
+    pub fn assign_team_to_engine(&mut self, team_id: u32, engine_design_id: usize) -> bool {
         if let Some(team) = self.get_team_mut(team_id) {
-            team.assign(TeamAssignment::EngineType {
-                engine_type_index,
+            team.assign(TeamAssignment::EngineDesign {
+                engine_design_id,
                 work_phase: crate::engineering_team::EngineWorkPhase::Refining {
                     progress: 0.0,
                     total_work: crate::engineering_team::ENGINE_REFINING_WORK,
@@ -553,14 +555,14 @@ impl Company {
             .collect()
     }
 
-    /// Get teams working on a specific engine type
-    pub fn get_teams_on_engine(&self, engine_type_index: i32) -> Vec<&EngineeringTeam> {
+    /// Get teams working on a specific engine design
+    pub fn get_teams_on_engine(&self, engine_design_id: usize) -> Vec<&EngineeringTeam> {
         self.teams
             .iter()
             .filter(|t| {
                 matches!(
                     &t.assignment,
-                    Some(TeamAssignment::EngineType { engine_type_index: idx, .. }) if *idx == engine_type_index
+                    Some(TeamAssignment::EngineDesign { engine_design_id: idx, .. }) if *idx == engine_design_id
                 )
             })
             .collect()
@@ -576,10 +578,10 @@ impl Company {
         team_efficiency(productive_teams.len())
     }
 
-    /// Calculate total team efficiency for teams on an engine
-    pub fn get_engine_team_efficiency(&self, engine_type_index: i32) -> f64 {
+    /// Calculate total team efficiency for teams on an engine design
+    pub fn get_engine_team_efficiency(&self, engine_design_id: usize) -> f64 {
         let productive_teams: Vec<_> = self
-            .get_teams_on_engine(engine_type_index)
+            .get_teams_on_engine(engine_design_id)
             .into_iter()
             .filter(|t| !t.is_ramping_up())
             .collect();
@@ -754,40 +756,38 @@ impl Company {
 
         let mut events = Vec::new();
 
-        // Get all engine type indices that have teams working on them
-        let engine_efficiencies: Vec<(i32, f64)> = (0..3)
+        // Get all engine design indices that have teams working on them
+        let engine_efficiencies: Vec<(usize, f64)> = (0..self.engine_designs.len())
             .map(|idx| (idx, self.get_engine_team_efficiency(idx)))
             .filter(|(_, eff)| *eff > 0.0)
             .collect();
 
         // Process work for each engine with teams assigned
-        for (engine_type_index, efficiency) in engine_efficiencies {
-            let spec = self.engine_registry.get_mut(
-                crate::engine::EngineType::from_index(engine_type_index).unwrap()
-            );
+        for (engine_design_id, efficiency) in engine_efficiencies {
+            let design = self.engine_designs[engine_design_id].head_mut();
 
             // Skip engines not in a work phase
-            if !spec.status.is_working() {
+            if !design.status.is_working() {
                 continue;
             }
 
-            let is_refining = matches!(spec.status, EngineStatus::Refining { .. });
-            let is_fixing = matches!(spec.status, EngineStatus::Fixing { .. });
+            let is_refining = matches!(design.status, EngineStatus::Refining { .. });
+            let is_fixing = matches!(design.status, EngineStatus::Fixing { .. });
 
             // Handle Fixing phase
             if is_fixing {
-                if let EngineStatus::Fixing { flaw_index, progress, total, .. } = &mut spec.status {
+                if let EngineStatus::Fixing { flaw_index, progress, total, .. } = &mut design.status {
                     *progress += efficiency;
                     if *progress >= *total {
                         let flaw_index_copy = *flaw_index;
                         // Fix complete - mark flaw as fixed and return to Refining
-                        if let Some(flaw_name) = spec.fix_flaw_by_index(flaw_index_copy) {
+                        if let Some(flaw_name) = design.fix_flaw_by_index(flaw_index_copy) {
                             events.push(WorkEvent::EngineFlawFixed {
-                                engine_type_index,
+                                engine_design_id,
                                 flaw_name,
                             });
                         }
-                        spec.status.return_to_refining();
+                        design.status.return_to_refining();
                     }
                 }
             }
@@ -797,14 +797,14 @@ impl Company {
                 // Check each undiscovered flaw using its individual discovery probability
                 // Divide by 30 to convert from per-test to per-day probability
                 let mut rng = rand::thread_rng();
-                for flaw in spec.active_flaws.iter_mut() {
+                for flaw in design.active_flaws.iter_mut() {
                     if !flaw.discovered && !flaw.fixed {
                         let daily_discovery_chance = flaw.discovery_probability() / 30.0;
                         let roll = rng.gen::<f64>();
                         if roll < daily_discovery_chance {
                             flaw.discovered = true;
                             events.push(WorkEvent::EngineFlawDiscovered {
-                                engine_type_index,
+                                engine_design_id,
                                 flaw_name: flaw.name.clone(),
                             });
                         }
@@ -813,13 +813,13 @@ impl Company {
             }
 
             // After Refining or completing a fix, check if there are unfixed flaws to work on
-            let now_refining = matches!(spec.status, EngineStatus::Refining { .. });
+            let now_refining = matches!(design.status, EngineStatus::Refining { .. });
             if now_refining {
-                if let Some(flaw_index) = spec.get_next_unfixed_flaw() {
-                    let flaw_name = spec.active_flaws[flaw_index].name.clone();
-                    spec.status.start_fixing(flaw_name.clone(), flaw_index);
+                if let Some(flaw_index) = design.get_next_unfixed_flaw() {
+                    let flaw_name = design.active_flaws[flaw_index].name.clone();
+                    design.status.start_fixing(flaw_name.clone(), flaw_index);
                     events.push(WorkEvent::DesignPhaseComplete {
-                        design_index: engine_type_index as usize,
+                        design_index: engine_design_id,
                         phase_name: format!("Started fixing: {}", flaw_name),
                     });
                 }

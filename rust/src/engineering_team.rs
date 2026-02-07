@@ -87,9 +87,9 @@ pub enum TeamAssignment {
         design_index: usize,
         work_phase: DesignWorkPhase,
     },
-    /// Working on an engine type
-    EngineType {
-        engine_type_index: i32,
+    /// Working on an engine design
+    EngineDesign {
+        engine_design_id: usize,
         work_phase: EngineWorkPhase,
     },
 }
@@ -139,12 +139,12 @@ pub enum WorkEvent {
     },
     /// An engine flaw was discovered during testing
     EngineFlawDiscovered {
-        engine_type_index: i32,
+        engine_design_id: usize,
         flaw_name: String,
     },
     /// An engine flaw was fixed during revamp
     EngineFlawFixed {
-        engine_type_index: i32,
+        engine_design_id: usize,
         flaw_name: String,
     },
     /// A team finished ramping up

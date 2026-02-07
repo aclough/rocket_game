@@ -1,6 +1,6 @@
 use godot::prelude::*;
 
-use crate::engine::EngineType;
+use crate::engine_design::default_snapshot;
 use crate::launcher::{LaunchResult, LaunchSimulator, LaunchStage};
 use crate::rocket_design::{LaunchEvent, RocketDesign};
 use crate::stage::RocketStage;
@@ -82,10 +82,9 @@ impl RocketLauncher {
                     .and_then(|v| v.try_to::<f64>().ok())
                     .unwrap_or(1000.0);
 
-                let engine_type =
-                    EngineType::from_index(engine_type_idx).unwrap_or(EngineType::Kerolox);
+                let snapshot = default_snapshot(engine_type_idx.max(0) as usize);
 
-                let mut stage = RocketStage::new(engine_type);
+                let mut stage = RocketStage::new(snapshot);
                 stage.engine_count = engine_count.max(1) as u32;
                 stage.propellant_mass_kg = propellant_mass.max(0.0);
 
@@ -115,11 +114,10 @@ impl RocketLauncher {
             let engine_count = designer_ref.get_stage_engine_count(i);
             let propellant_mass = designer_ref.get_stage_propellant_mass(i);
 
-            let engine_type =
-                EngineType::from_index(engine_type_idx).unwrap_or(EngineType::Kerolox);
+            let snapshot = default_snapshot(engine_type_idx.max(0) as usize);
             let is_booster = designer_ref.is_stage_booster(i);
 
-            let mut stage = RocketStage::new(engine_type);
+            let mut stage = RocketStage::new(snapshot);
             stage.engine_count = engine_count.max(1) as u32;
             stage.propellant_mass_kg = propellant_mass.max(0.0);
             stage.is_booster = is_booster;
@@ -137,7 +135,7 @@ impl RocketLauncher {
             let fixed = designer_ref.is_flaw_fixed(i);
             let is_engine = designer_ref.is_flaw_engine_type(i);
             let failure_rate = designer_ref.get_flaw_failure_rate(i);
-            let engine_type_idx = designer_ref.get_flaw_engine_type_index(i);
+            let engine_type_idx = designer_ref.get_flaw_engine_design_id(i);
             let trigger_type_idx = designer_ref.get_flaw_trigger_type(i);
 
             let trigger = crate::flaw::FlawTrigger::from_index(trigger_type_idx)
@@ -160,7 +158,7 @@ impl RocketLauncher {
                 trigger_event_type: trigger,
                 discovered,
                 fixed,
-                engine_type_index: if engine_type_idx >= 0 { Some(engine_type_idx) } else { None },
+                engine_design_id: if engine_type_idx >= 0 { Some(engine_type_idx as usize) } else { None },
             };
             // Add to appropriate vector based on fixed status
             if fixed {
@@ -260,14 +258,14 @@ impl RocketLauncher {
                 let event = &self.cached_events[index as usize];
                 let event_name = &event.name;
 
-                // Get the engine type for this stage
-                let stage_engine_type = design.stages
+                // Get the engine design ID for this stage
+                let stage_engine_design_id = design.stages
                     .get(event.rocket_stage)
-                    .map(|s| s.engine_type.to_index());
+                    .map(|s| s.engine_design_id);
 
                 // All flaws (design + engine) are in the copied design
                 // Don't use self.engine_registry - those flaws weren't fixed by the user
-                return design.get_flaw_failure_contribution(event_name, stage_engine_type);
+                return design.get_flaw_failure_contribution(event_name, stage_engine_design_id);
             }
         }
         0.0

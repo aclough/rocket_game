@@ -239,7 +239,7 @@ func _create_flaw_card(index: int, flaw_name: String, is_engine: bool, is_fixed:
 	var type_str = "(Design)"
 	if is_engine:
 		# Get the specific engine type name for this flaw
-		var engine_type_idx = designer.get_flaw_engine_type_index(index)
+		var engine_type_idx = designer.get_flaw_engine_design_id(index)
 		if engine_type_idx >= 0:
 			var engine_name = designer.get_engine_name(engine_type_idx)
 			type_str = "(%s)" % engine_name

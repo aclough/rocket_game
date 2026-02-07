@@ -796,6 +796,43 @@ impl GameManager {
         }
     }
 
+    /// Sync engine flaw data from designer back to Company
+    /// Call this after testing in the designer to persist flaw discoveries
+    #[func]
+    pub fn sync_engine_flaws_from_designer(&mut self, designer: Gd<RocketDesigner>) {
+        // The designer's get_design_clone() already merges engine flaws into the design.
+        // Engine flaws with engine_design_id are restored to the Company's engine_designs
+        // when the design is loaded back. For direct sync we extract from the design clone.
+        let design = designer.bind().get_design_clone();
+        for flaw in &design.active_flaws {
+            if flaw.flaw_type == crate::flaw::FlawType::Engine {
+                if let Some(idx) = flaw.engine_design_id {
+                    if idx < self.state.player_company.engine_designs.len() {
+                        let engine_design = self.state.player_company.engine_designs[idx].head_mut();
+                        if let Some(existing) = engine_design.active_flaws.iter_mut().find(|f| f.id == flaw.id) {
+                            existing.discovered = flaw.discovered;
+                        }
+                    }
+                }
+            }
+        }
+        for flaw in &design.fixed_flaws {
+            if flaw.flaw_type == crate::flaw::FlawType::Engine {
+                if let Some(idx) = flaw.engine_design_id {
+                    if idx < self.state.player_company.engine_designs.len() {
+                        let engine_design = self.state.player_company.engine_designs[idx].head_mut();
+                        // Move from active to fixed if not already there
+                        if let Some(pos) = engine_design.active_flaws.iter().position(|f| f.id == flaw.id) {
+                            let mut f = engine_design.active_flaws.remove(pos);
+                            f.fixed = true;
+                            engine_design.fixed_flaws.push(f);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Save the current design if it hasn't been saved yet
     /// Call this before launching a new (unsaved) design
     /// Returns the index of the saved design
@@ -826,10 +863,27 @@ impl GameManager {
     /// Copy design from game state to a RocketDesigner node
     /// Call this after loading a design to update the designer
     /// Sets the design's budget to the current player money
+    /// Also syncs engine data (snapshots + flaws) from Company
     #[func]
     pub fn sync_design_to(&self, mut designer: Gd<RocketDesigner>) {
         let mut design = self.state.player_company.rocket_design.clone();
         design.budget = self.finance.bind().get_money();
+
+        // Sync engine data from Company to Designer
+        let snapshots: Vec<_> = self.state.player_company.engine_designs
+            .iter()
+            .enumerate()
+            .map(|(i, lineage)| lineage.head().snapshot(i, &lineage.name))
+            .collect();
+        let flaws: Vec<_> = self.state.player_company.engine_designs
+            .iter()
+            .map(|lineage| {
+                let head = lineage.head();
+                (head.active_flaws.clone(), head.fixed_flaws.clone())
+            })
+            .collect();
+        designer.bind_mut().sync_engine_data(snapshots, flaws);
+
         designer.bind_mut().set_design(design);
         designer.bind_mut().set_finance(self.finance.clone());
     }
@@ -1100,19 +1154,19 @@ impl GameManager {
                 dict.set("flaw_name", GString::from(flaw_name.as_str()));
             }
             WorkEvent::EngineFlawDiscovered {
-                engine_type_index,
+                engine_design_id,
                 flaw_name,
             } => {
                 dict.set("type", "engine_flaw_discovered");
-                dict.set("engine_type_index", *engine_type_index);
+                dict.set("engine_design_id", *engine_design_id as i32);
                 dict.set("flaw_name", GString::from(flaw_name.as_str()));
             }
             WorkEvent::EngineFlawFixed {
-                engine_type_index,
+                engine_design_id,
                 flaw_name,
             } => {
                 dict.set("type", "engine_flaw_fixed");
-                dict.set("engine_type_index", *engine_type_index);
+                dict.set("engine_design_id", *engine_design_id as i32);
                 dict.set("flaw_name", GString::from(flaw_name.as_str()));
             }
             WorkEvent::TeamRampedUp { team_id } => {
@@ -1345,10 +1399,13 @@ impl GameManager {
         result
     }
 
-    /// Assign a team to work on an engine type
+    /// Assign a team to work on an engine design
     #[func]
-    pub fn assign_team_to_engine(&mut self, team_id: i32, engine_type_index: i32) -> bool {
-        let result = self.state.player_company.assign_team_to_engine(team_id as u32, engine_type_index);
+    pub fn assign_team_to_engine(&mut self, team_id: i32, engine_design_id: i32) -> bool {
+        if engine_design_id < 0 {
+            return false;
+        }
+        let result = self.state.player_company.assign_team_to_engine(team_id as u32, engine_design_id as usize);
         if result {
             self.base_mut().emit_signal("teams_changed", &[]);
         }
@@ -1433,9 +1490,9 @@ impl GameManager {
                     dict.set("type", "design");
                     dict.set("design_index", *design_index as i32);
                 }
-                Some(TeamAssignment::EngineType { engine_type_index, .. }) => {
+                Some(TeamAssignment::EngineDesign { engine_design_id, .. }) => {
                     dict.set("type", "engine");
-                    dict.set("engine_type_index", *engine_type_index);
+                    dict.set("engine_design_id", *engine_design_id as i32);
                 }
             }
         } else {
@@ -1449,89 +1506,89 @@ impl GameManager {
     // Engine Management (for Research UI)
     // ==========================================
 
-    /// Get the number of engine types
+    /// Get the number of engine designs
     #[func]
     pub fn get_engine_type_count(&self) -> i32 {
-        3 // Hydrolox, Kerolox, Solid
+        self.state.player_company.engine_designs.len() as i32
     }
 
-    /// Get the name of an engine type
+    /// Get the name of an engine design
     #[func]
     pub fn get_engine_type_name(&self, index: i32) -> GString {
-        match index {
-            0 => GString::from("Hydrolox"),
-            1 => GString::from("Kerolox"),
-            2 => GString::from("Solid"),
-            _ => GString::from(""),
-        }
-    }
-
-    /// Get the status of an engine type (includes flaw name if Fixing)
-    #[func]
-    pub fn get_engine_status(&mut self, index: i32) -> GString {
-        if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
-            GString::from(spec.status.display_name().as_str())
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            GString::from(self.state.player_company.engine_designs[index as usize].name.as_str())
         } else {
             GString::from("")
         }
     }
 
-    /// Get the base status of an engine type (without flaw name)
+    /// Get the status of an engine design (includes flaw name if Fixing)
     #[func]
-    pub fn get_engine_status_base(&mut self, index: i32) -> GString {
-        if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
-            GString::from(spec.status.name())
+    pub fn get_engine_status(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let design = self.state.player_company.engine_designs[index as usize].head();
+            GString::from(design.status.display_name().as_str())
         } else {
             GString::from("")
         }
     }
 
-    /// Get the progress of an engine type (0.0 to 1.0)
+    /// Get the base status of an engine design (without flaw name)
     #[func]
-    pub fn get_engine_progress(&mut self, index: i32) -> f64 {
-        if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
-            spec.status.progress_fraction()
+    pub fn get_engine_status_base(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let design = self.state.player_company.engine_designs[index as usize].head();
+            GString::from(design.status.name())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Get the progress of an engine design (0.0 to 1.0)
+    #[func]
+    pub fn get_engine_progress(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let design = self.state.player_company.engine_designs[index as usize].head();
+            design.status.progress_fraction()
         } else {
             0.0
         }
     }
 
-    /// Get names of discovered (unfixed) flaws for an engine type
+    /// Get names of discovered (unfixed) flaws for an engine design
     #[func]
-    pub fn get_engine_unfixed_flaw_names(&mut self, index: i32) -> Array<GString> {
+    pub fn get_engine_unfixed_flaw_names(&self, index: i32) -> Array<GString> {
         let mut result = Array::new();
-        if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
-            for name in spec.get_unfixed_flaw_names() {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let design = self.state.player_company.engine_designs[index as usize].head();
+            for name in design.get_unfixed_flaw_names() {
                 result.push(&GString::from(name.as_str()));
             }
         }
         result
     }
 
-    /// Get names of fixed flaws for an engine type
+    /// Get names of fixed flaws for an engine design
     #[func]
-    pub fn get_engine_fixed_flaw_names(&mut self, index: i32) -> Array<GString> {
+    pub fn get_engine_fixed_flaw_names(&self, index: i32) -> Array<GString> {
         let mut result = Array::new();
-        if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
-            for name in spec.get_fixed_flaw_names() {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let design = self.state.player_company.engine_designs[index as usize].head();
+            for name in design.get_fixed_flaw_names() {
                 result.push(&GString::from(name.as_str()));
             }
         }
         result
     }
 
-    /// Submit an engine type to refining (generates flaws if needed)
+    /// Submit an engine design to refining (generates flaws if needed)
     #[func]
     pub fn submit_engine_to_refining(&mut self, index: i32) -> bool {
-        if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let idx = index as usize;
             let flaw_gen = &mut self.state.player_company.flaw_generator;
-            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
-            let result = spec.submit_to_refining(flaw_gen);
+            let design = self.state.player_company.engine_designs[idx].head_mut();
+            let result = design.submit_to_refining(flaw_gen, idx);
             if result {
                 self.base_mut().emit_signal("designs_changed", &[]);
             }
@@ -1541,7 +1598,7 @@ impl GameManager {
         }
     }
 
-    /// Discover an engine flaw by ID in the game state's engine registry
+    /// Discover an engine flaw by ID in the game state's engine designs
     /// Called when a launch failure reveals an engine flaw
     /// Also auto-submits the engine to Refining if still Untested
     /// Returns the flaw name if found and newly discovered
@@ -1553,13 +1610,13 @@ impl GameManager {
             return GString::from("");
         }
 
-        for engine_type in crate::engine::EngineType::all() {
+        for idx in 0..self.state.player_company.engine_designs.len() {
             let flaw_gen = &mut self.state.player_company.flaw_generator;
-            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
+            let design = self.state.player_company.engine_designs[idx].head_mut();
 
-            // Check if this flaw belongs to this engine type
+            // Check if this flaw belongs to this engine design
             let mut found_flaw_name = None;
-            for flaw in spec.active_flaws.iter_mut() {
+            for flaw in design.active_flaws.iter_mut() {
                 if flaw.id == flaw_id as u32 && !flaw.discovered {
                     flaw.discovered = true;
                     found_flaw_name = Some(flaw.name.clone());
@@ -1569,8 +1626,8 @@ impl GameManager {
 
             if let Some(name) = found_flaw_name {
                 // Auto-submit to refining if still Untested so teams can fix it
-                if matches!(spec.status, EngineStatus::Untested) {
-                    spec.submit_to_refining(flaw_gen);
+                if matches!(design.status, EngineStatus::Untested) {
+                    design.submit_to_refining(flaw_gen, idx);
                 }
                 self.base_mut().emit_signal("designs_changed", &[]);
                 return GString::from(name.as_str());
@@ -1580,10 +1637,13 @@ impl GameManager {
         GString::from("")
     }
 
-    /// Get number of teams working on an engine type
+    /// Get number of teams working on an engine design
     #[func]
-    pub fn get_teams_on_engine_count(&self, engine_type_index: i32) -> i32 {
-        self.state.player_company.get_teams_on_engine(engine_type_index).len() as i32
+    pub fn get_teams_on_engine_count(&self, engine_design_id: i32) -> i32 {
+        if engine_design_id < 0 {
+            return 0;
+        }
+        self.state.player_company.get_teams_on_engine(engine_design_id as usize).len() as i32
     }
 
     // ==========================================

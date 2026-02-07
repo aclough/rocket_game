@@ -2,7 +2,9 @@ use godot::prelude::*;
 
 pub mod company;
 pub mod contract;
+pub mod design_lineage;
 pub mod engine;
+pub mod engine_design;
 pub mod engineering_team;
 pub mod flaw;
 pub mod game_state;

@@ -793,7 +793,7 @@ func _on_unassign_engine_teams_pressed(engine_index: int):
 	var team_ids = game_manager.get_all_team_ids()
 	for id in team_ids:
 		var assignment = game_manager.get_team_assignment(id)
-		if assignment.get("type") == "engine" and assignment.get("engine_type_index") == engine_index:
+		if assignment.get("type") == "engine" and assignment.get("engine_design_id") == engine_index:
 			game_manager.unassign_team(id)
 	_update_research_ui()
 

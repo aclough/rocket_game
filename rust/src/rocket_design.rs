@@ -1,4 +1,5 @@
-use crate::engine::{costs, EngineType};
+use crate::engine::costs;
+use crate::engine_design::{default_snapshot, EngineDesignSnapshot};
 use crate::engineering_team::{DETAILED_ENGINEERING_WORK, REFINING_WORK_PER_FLAW};
 use crate::flaw::{calculate_flaw_failure_rate, estimate_success_rate, estimate_unknown_flaw_count, run_test, Flaw, FlawGenerator, FlawType};
 use crate::stage::RocketStage;
@@ -378,7 +379,7 @@ impl RocketDesign {
     }
 
     /// Compute a signature string that captures the essential design characteristics
-    /// Changes to engine types, counts, or propellant masses will change the signature
+    /// Changes to engine designs, counts, or propellant masses will change the signature
     pub fn compute_design_signature(&self) -> String {
         let mut signature = String::new();
         signature.push_str(&format!("stages:{};", self.stages.len()));
@@ -386,7 +387,7 @@ impl RocketDesign {
             signature.push_str(&format!(
                 "s{}:{}x{}:{:.0}kg,b:{};",
                 i,
-                stage.engine_type.to_index(),
+                stage.engine_design_id,
                 stage.engine_count,
                 stage.propellant_mass_kg,
                 if stage.is_booster { 1 } else { 0 }
@@ -440,12 +441,12 @@ impl RocketDesign {
         design.name = "Default Rocket".to_string();
 
         // First stage: 5 Kerolox engines, large propellant load
-        let mut stage1 = RocketStage::new(EngineType::Kerolox);
+        let mut stage1 = RocketStage::new(default_snapshot(1)); // Kerolox
         stage1.engine_count = 5;
         stage1.propellant_mass_kg = 100000.0;
 
         // Second stage: 1 Hydrolox engine
-        let mut stage2 = RocketStage::new(EngineType::Hydrolox);
+        let mut stage2 = RocketStage::new(default_snapshot(0)); // Hydrolox
         stage2.engine_count = 1;
         stage2.propellant_mass_kg = 20000.0;
 
@@ -456,8 +457,8 @@ impl RocketDesign {
     }
 
     /// Add a new stage to the top of the rocket
-    pub fn add_stage(&mut self, engine_type: EngineType) -> usize {
-        let stage = RocketStage::new(engine_type);
+    pub fn add_stage(&mut self, snapshot: EngineDesignSnapshot) -> usize {
+        let stage = RocketStage::new(snapshot);
         self.stages.push(stage);
         self.stages.len() - 1
     }
@@ -1304,11 +1305,11 @@ impl RocketDesign {
     }
 
     /// Generate design flaws for this rocket design.
-    /// Engine flaws are stored on EngineSpec via EngineRegistry, not here.
+    /// Engine flaws are stored on EngineDesign via Company.engine_designs, not here.
     /// Should be called when the design is finalized (before testing/launching).
     ///
     /// # Arguments
-    /// * `generator` - The flaw generator to use (typically from EngineRegistry)
+    /// * `generator` - The flaw generator to use
     pub fn generate_flaws(&mut self, generator: &mut FlawGenerator) {
         if self.flaws_generated {
             return;
@@ -1319,7 +1320,7 @@ impl RocketDesign {
             return;
         }
 
-        // Only generate design flaws - engine flaws are on EngineSpec
+        // Only generate design flaws - engine flaws are on EngineDesign
         self.active_flaws = generator.generate_design_flaws(stage_count);
         self.fixed_flaws.clear();
         self.flaws_generated = true;
@@ -1327,30 +1328,29 @@ impl RocketDesign {
         self.flaw_design_signature = self.compute_design_signature();
     }
 
-    /// Get a list of unique engine types and their total counts in the design
-    /// Returns a vector of (engine_type_index, engine_count) pairs
-    pub fn get_engine_type_counts(&self) -> Vec<(i32, u32)> {
+    /// Get a list of unique engine designs and their total counts in the design
+    /// Returns a vector of (engine_design_id, engine_count) pairs
+    pub fn get_engine_design_id_counts(&self) -> Vec<(usize, u32)> {
         use std::collections::HashMap;
-        let mut counts: HashMap<i32, u32> = HashMap::new();
+        let mut counts: HashMap<usize, u32> = HashMap::new();
 
         for stage in &self.stages {
-            let engine_idx = stage.engine_type.to_index();
-            *counts.entry(engine_idx).or_insert(0) += stage.engine_count;
+            *counts.entry(stage.engine_design_id).or_insert(0) += stage.engine_count;
         }
 
         counts.into_iter().collect()
     }
 
-    /// Get the list of unique engine type indices in the design
-    pub fn get_unique_engine_types(&self) -> Vec<i32> {
+    /// Get the list of unique engine design IDs in the design
+    pub fn get_unique_engine_design_ids(&self) -> Vec<usize> {
         use std::collections::HashSet;
-        let mut types: HashSet<i32> = HashSet::new();
+        let mut ids: HashSet<usize> = HashSet::new();
 
         for stage in &self.stages {
-            types.insert(stage.engine_type.to_index());
+            ids.insert(stage.engine_design_id);
         }
 
-        let mut result: Vec<i32> = types.into_iter().collect();
+        let mut result: Vec<usize> = ids.into_iter().collect();
         result.sort();
         result
     }
@@ -1431,15 +1431,15 @@ impl RocketDesign {
         run_test(&mut self.active_flaws, FlawType::Engine)
     }
 
-    /// Run an engine test for a specific engine type - returns names of newly discovered flaws
+    /// Run an engine test for a specific engine design - returns names of newly discovered flaws
     /// Costs ENGINE_TEST_COST from budget
-    pub fn run_engine_test_for_type(&mut self, engine_type_index: i32) -> Vec<String> {
+    pub fn run_engine_test_for_design(&mut self, engine_design_id: usize) -> Vec<String> {
         if self.remaining_budget() < costs::ENGINE_TEST_COST {
             return Vec::new();
         }
 
         self.testing_spent += costs::ENGINE_TEST_COST;
-        crate::flaw::run_engine_test_for_type(&mut self.active_flaws, engine_type_index)
+        crate::flaw::run_engine_test_for_type(&mut self.active_flaws, engine_design_id)
     }
 
     /// Run a rocket test - returns names of newly discovered flaws
@@ -1516,10 +1516,10 @@ impl RocketDesign {
     }
 
     /// Get the additional failure rate from flaws for a given event
-    /// stage_engine_type: the engine type index of the stage (for filtering engine flaws)
+    /// stage_engine_design_id: the engine design ID of the stage (for filtering engine flaws)
     /// Only considers active (unfixed) flaws
-    pub fn get_flaw_failure_contribution(&self, event_name: &str, stage_engine_type: Option<i32>) -> f64 {
-        calculate_flaw_failure_rate(&self.active_flaws, event_name, stage_engine_type)
+    pub fn get_flaw_failure_contribution(&self, event_name: &str, stage_engine_design_id: Option<usize>) -> f64 {
+        calculate_flaw_failure_rate(&self.active_flaws, event_name, stage_engine_design_id)
     }
 
     /// Estimate success rate including flaw contributions
@@ -1562,11 +1562,11 @@ impl RocketDesign {
     }
 
     /// Check if any flaw triggers at a given event, and return the flaw ID if it caused a failure
-    /// stage_engine_type: the engine type index of the stage that failed
+    /// stage_engine_design_id: the engine design ID of the stage that failed
     /// Returns Some(flaw_id) if a flaw triggered failure, None otherwise
     /// Only checks active (unfixed) flaws
-    pub fn check_flaw_trigger(&self, event_name: &str, stage_engine_type: Option<i32>) -> Option<u32> {
-        crate::flaw::check_flaw_trigger(&self.active_flaws, event_name, stage_engine_type)
+    pub fn check_flaw_trigger(&self, event_name: &str, stage_engine_design_id: Option<usize>) -> Option<u32> {
+        crate::flaw::check_flaw_trigger(&self.active_flaws, event_name, stage_engine_design_id)
     }
 
     /// Mark a flaw as discovered and return its name
@@ -1576,10 +1576,10 @@ impl RocketDesign {
         crate::flaw::mark_flaw_discovered(&mut self.active_flaws, flaw_id)
     }
 
-    /// Get the engine type index for a flaw (None for design flaws)
+    /// Get the engine design ID for a flaw (None for design flaws)
     /// Searches active flaws first, then fixed flaws
-    pub fn get_flaw_engine_type_index(&self, index: usize) -> Option<i32> {
-        self.get_flaw(index).and_then(|f| f.engine_type_index)
+    pub fn get_flaw_engine_design_id(&self, index: usize) -> Option<usize> {
+        self.get_flaw(index).and_then(|f| f.engine_design_id)
     }
 
     /// Get total testing spent
@@ -1721,6 +1721,18 @@ impl RocketDesign {
 mod tests {
     use super::*;
 
+    fn kerolox_snap() -> EngineDesignSnapshot {
+        default_snapshot(1)
+    }
+
+    fn hydrolox_snap() -> EngineDesignSnapshot {
+        default_snapshot(0)
+    }
+
+    fn solid_snap() -> EngineDesignSnapshot {
+        default_snapshot(2)
+    }
+
     #[test]
     fn test_new_design() {
         let design = RocketDesign::new();
@@ -1731,11 +1743,11 @@ mod tests {
     #[test]
     fn test_add_stage() {
         let mut design = RocketDesign::new();
-        let idx = design.add_stage(EngineType::Kerolox);
+        let idx = design.add_stage(kerolox_snap());
         assert_eq!(idx, 0);
         assert_eq!(design.stages.len(), 1);
 
-        let idx2 = design.add_stage(EngineType::Hydrolox);
+        let idx2 = design.add_stage(hydrolox_snap());
         assert_eq!(idx2, 1);
         assert_eq!(design.stages.len(), 2);
     }
@@ -1743,25 +1755,25 @@ mod tests {
     #[test]
     fn test_remove_stage() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(kerolox_snap());
+        design.add_stage(hydrolox_snap());
 
         let removed = design.remove_stage(0);
         assert!(removed.is_some());
-        assert_eq!(removed.unwrap().engine_type, EngineType::Kerolox);
+        assert_eq!(removed.unwrap().engine_design_id, 1); // Kerolox = index 1
         assert_eq!(design.stages.len(), 1);
-        assert_eq!(design.stages[0].engine_type, EngineType::Hydrolox);
+        assert_eq!(design.stages[0].engine_design_id, 0); // Hydrolox = index 0
     }
 
     #[test]
     fn test_move_stage() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(kerolox_snap());
+        design.add_stage(hydrolox_snap());
 
         design.move_stage(0, 1);
-        assert_eq!(design.stages[0].engine_type, EngineType::Hydrolox);
-        assert_eq!(design.stages[1].engine_type, EngineType::Kerolox);
+        assert_eq!(design.stages[0].engine_design_id, 0); // Hydrolox
+        assert_eq!(design.stages[1].engine_design_id, 1); // Kerolox
     }
 
     #[test]
@@ -1769,10 +1781,10 @@ mod tests {
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
 
-        let mut stage1 = RocketStage::new(EngineType::Kerolox);
+        let mut stage1 = RocketStage::new(kerolox_snap());
         stage1.propellant_mass_kg = 10000.0;
 
-        let mut stage2 = RocketStage::new(EngineType::Hydrolox);
+        let mut stage2 = RocketStage::new(hydrolox_snap());
         stage2.propellant_mass_kg = 3000.0;
 
         design.stages.push(stage1);
@@ -1808,7 +1820,7 @@ mod tests {
     #[test]
     fn test_generate_launch_events_single_stage() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
 
         let events = design.generate_launch_events();
 
@@ -1823,8 +1835,8 @@ mod tests {
     #[test]
     fn test_generate_launch_events_two_stage() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(kerolox_snap());
+        design.add_stage(hydrolox_snap());
 
         let events = design.generate_launch_events();
 
@@ -1844,9 +1856,9 @@ mod tests {
     #[test]
     fn test_generate_launch_events_three_stage() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
-        design.add_stage(EngineType::Kerolox);
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(kerolox_snap());
+        design.add_stage(kerolox_snap());
+        design.add_stage(hydrolox_snap());
 
         let events = design.generate_launch_events();
 
@@ -1863,18 +1875,18 @@ mod tests {
         let mut design = RocketDesign::new();
 
         // Stage 1 (core) - index 0
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 3;
         design.stages[0].propellant_mass_kg = 100000.0;
 
         // Stage 1 Booster - index 1
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[1].engine_count = 2;
         design.stages[1].propellant_mass_kg = 20000.0; // Less propellant, shorter burn
         design.stages[1].is_booster = true;
 
         // Stage 2 (upper stage) - index 2
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(hydrolox_snap());
         design.stages[2].engine_count = 1;
         design.stages[2].propellant_mass_kg = 20000.0;
 
@@ -1913,11 +1925,11 @@ mod tests {
 
         // Add powerful stages (need significant propellant with 8000 kg payload)
         // Must account for gravity losses reducing effective delta-v
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 9;
         design.stages[0].propellant_mass_kg = 200000.0;
 
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(hydrolox_snap());
         design.stages[1].engine_count = 2;
         design.stages[1].propellant_mass_kg = 50000.0;
 
@@ -1946,7 +1958,7 @@ mod tests {
 
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(hydrolox_snap());
         design.stages[0].engine_count = 1;
         design.stages[0].propellant_mass_kg = 9000.0;
 
@@ -1989,13 +2001,13 @@ mod tests {
         design.payload_mass_kg = 1000.0;
 
         // Stage 1 (index 0, fires first)
-        let mut stage1 = RocketStage::new(EngineType::Kerolox);
+        let mut stage1 = RocketStage::new(kerolox_snap());
         stage1.engine_count = 1;
         stage1.propellant_mass_kg = 10000.0;
         design.stages.push(stage1);
 
         // Stage 2 (index 1, fires second)
-        let mut stage2 = RocketStage::new(EngineType::Hydrolox);
+        let mut stage2 = RocketStage::new(hydrolox_snap());
         stage2.engine_count = 1;
         stage2.propellant_mass_kg = 3000.0;
         design.stages.push(stage2);
@@ -2033,7 +2045,7 @@ mod tests {
         // Test that setting mass fraction and reading it back works
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 2;
 
         // Set to 85% mass fraction
@@ -2050,11 +2062,11 @@ mod tests {
     #[test]
     fn test_reorder_preserves_stage_properties() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 3;
         design.stages[0].propellant_mass_kg = 20000.0;
 
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(hydrolox_snap());
         design.stages[1].engine_count = 1;
         design.stages[1].propellant_mass_kg = 5000.0;
 
@@ -2062,12 +2074,12 @@ mod tests {
         design.move_stage(0, 1);
 
         // Hydrolox should now be at index 0
-        assert_eq!(design.stages[0].engine_type, EngineType::Hydrolox);
+        assert_eq!(design.stages[0].engine_design_id, 0); // Hydrolox
         assert_eq!(design.stages[0].engine_count, 1);
         assert_eq!(design.stages[0].propellant_mass_kg, 5000.0);
 
         // Kerolox should now be at index 1
-        assert_eq!(design.stages[1].engine_type, EngineType::Kerolox);
+        assert_eq!(design.stages[1].engine_design_id, 1); // Kerolox
         assert_eq!(design.stages[1].engine_count, 3);
         assert_eq!(design.stages[1].propellant_mass_kg, 20000.0);
     }
@@ -2076,7 +2088,7 @@ mod tests {
     fn test_delta_v_changes_with_engine_count() {
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].propellant_mass_kg = 10000.0;
 
         // With 1 engine
@@ -2102,12 +2114,12 @@ mod tests {
         design.payload_mass_kg = 1000.0;
 
         // First stage: 3 Kerolox engines, lots of fuel
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 3;
         design.stages[0].propellant_mass_kg = 40000.0;
 
         // Second stage: 1 Hydrolox engine
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(hydrolox_snap());
         design.stages[1].engine_count = 1;
         design.stages[1].propellant_mass_kg = 8000.0;
 
@@ -2132,13 +2144,13 @@ mod tests {
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
 
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 2;
         design.stages[0].propellant_mass_kg = 5000.0;
         // Engine: 2 × 450 = 900 kg, Tank: 5000 × 0.06 = 300 kg (Kerolox)
         // Dry: 1200 kg, Wet: 6200 kg
 
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(hydrolox_snap());
         design.stages[1].engine_count = 1;
         design.stages[1].propellant_mass_kg = 2000.0;
         // Engine: 300 kg, Tank: 2000 × 0.10 = 200 kg (Hydrolox)
@@ -2156,7 +2168,7 @@ mod tests {
         design.payload_mass_kg = 1000.0;
 
         // Single Kerolox engine: 500 kN thrust
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 1;
         design.stages[0].propellant_mass_kg = 10000.0;
         // Engine: 450 kg, Tank: 800 kg, Propellant: 10000 kg, Payload: 1000 kg
@@ -2175,7 +2187,7 @@ mod tests {
         design.payload_mass_kg = 1000.0;
 
         // Build insufficient rocket
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].propellant_mass_kg = 5000.0;
 
         let margin = design.delta_v_margin();
@@ -2184,7 +2196,7 @@ mod tests {
         // Build sufficient rocket (need more propellant and engines for adequate TWR)
         design.stages[0].propellant_mass_kg = 50000.0;
         design.stages[0].engine_count = 3; // More engines for better TWR
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(hydrolox_snap());
         design.stages[1].propellant_mass_kg = 15000.0;
 
         let margin2 = design.delta_v_margin();
@@ -2195,7 +2207,7 @@ mod tests {
     fn test_delta_v_percentage() {
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(hydrolox_snap());
         // Need enough propellant to exceed 100% ideal delta-v even with 2 engines
         design.stages[0].propellant_mass_kg = 17000.0;
         // Need multiple engines to achieve TWR > 1 for liftoff
@@ -2228,7 +2240,7 @@ mod tests {
     #[test]
     fn test_mission_success_probability() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 1;
 
         // All base failure rates are now 0% - failures come only from flaws
@@ -2272,7 +2284,7 @@ mod tests {
     #[test]
     fn test_rocket_overhead_cost() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         // Rocket overhead should be $10M when there's at least one stage
         assert_eq!(design.rocket_overhead_cost(), 10_000_000.0);
     }
@@ -2306,7 +2318,7 @@ mod tests {
 
         // Add 35 expensive Hydrolox engines (35 × $15M = $525M engine cost alone)
         // This should exceed the $500M budget
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(hydrolox_snap());
         design.stages[0].engine_count = 35;
 
         assert!(!design.is_within_budget(),
@@ -2339,7 +2351,7 @@ mod tests {
     #[test]
     fn test_stage_cost_calculation() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 2;
         design.stages[0].propellant_mass_kg = 10200.0; // 10 m³
 
@@ -2405,11 +2417,11 @@ mod tests {
     #[test]
     fn test_gravity_loss_first_stage_higher() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 3;
         design.stages[0].propellant_mass_kg = 25000.0;
 
-        design.add_stage(EngineType::Hydrolox);
+        design.add_stage(hydrolox_snap());
         design.stages[1].engine_count = 1;
         design.stages[1].propellant_mass_kg = 5000.0;
 
@@ -2452,7 +2464,7 @@ mod tests {
     #[test]
     fn test_is_sufficient_uses_effective_dv() {
         let mut design = RocketDesign::new();
-        design.add_stage(EngineType::Kerolox);
+        design.add_stage(kerolox_snap());
         design.stages[0].engine_count = 1;  // Low TWR = high gravity losses
         design.stages[0].propellant_mass_kg = 50000.0;
 
@@ -2477,12 +2489,12 @@ mod tests {
     #[test]
     fn test_more_engines_reduces_gravity_loss() {
         let mut design1 = RocketDesign::new();
-        design1.add_stage(EngineType::Kerolox);
+        design1.add_stage(kerolox_snap());
         design1.stages[0].engine_count = 1;
         design1.stages[0].propellant_mass_kg = 20000.0;
 
         let mut design2 = RocketDesign::new();
-        design2.add_stage(EngineType::Kerolox);
+        design2.add_stage(kerolox_snap());
         design2.stages[0].engine_count = 5;
         design2.stages[0].propellant_mass_kg = 20000.0;
 
@@ -2505,13 +2517,13 @@ mod tests {
         design.payload_mass_kg = 1000.0;
 
         // First stage: 5 Kerolox engines
-        let mut stage1 = RocketStage::new(EngineType::Kerolox);
+        let mut stage1 = RocketStage::new(kerolox_snap());
         stage1.engine_count = 5;
         stage1.propellant_mass_kg = 100000.0;
         design.stages.push(stage1);
 
         // Second stage: 1 Hydrolox engine
-        let mut stage2 = RocketStage::new(EngineType::Hydrolox);
+        let mut stage2 = RocketStage::new(hydrolox_snap());
         stage2.engine_count = 1;
         stage2.propellant_mass_kg = 20000.0;
         design.stages.push(stage2);
@@ -2527,7 +2539,7 @@ mod tests {
 
         // Add solid booster - must be inserted at index 1 to attach to stage 0
         // Boosters attach to the stage at index-1
-        let mut booster = RocketStage::new(EngineType::Solid);
+        let mut booster = RocketStage::new(solid_snap());
         booster.set_engine_count(2);  // Use setter to trigger propellant update
         booster.is_booster = true;
         design.stages.insert(1, booster);  // Insert at index 1, attaches to stage 0

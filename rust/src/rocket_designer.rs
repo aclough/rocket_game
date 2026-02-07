@@ -1,7 +1,8 @@
 use godot::prelude::*;
 
-use crate::engine::{costs, EngineRegistry, EngineType};
-use crate::flaw::check_flaw_trigger;
+use crate::engine::costs;
+use crate::engine_design::{default_snapshot, EngineDesignSnapshot};
+use crate::flaw::{check_flaw_trigger, Flaw};
 use crate::player_finance::PlayerFinance;
 use crate::rocket_design::{RocketDesign, DEFAULT_PAYLOAD_KG, TARGET_DELTA_V_MS};
 
@@ -11,7 +12,12 @@ use crate::rocket_design::{RocketDesign, DEFAULT_PAYLOAD_KG, TARGET_DELTA_V_MS};
 #[class(base=Node)]
 pub struct RocketDesigner {
     design: RocketDesign,
-    engine_registry: EngineRegistry,
+    /// Cached engine snapshots (synced from Company via GameManager)
+    engine_snapshots: Vec<EngineDesignSnapshot>,
+    /// Engine flaw data (active_flaws, fixed_flaws) per engine design (synced from Company)
+    engine_designs_flaws: Vec<(Vec<Flaw>, Vec<Flaw>)>,
+    /// Whether engine flaws have been synced from Company
+    engine_flaws_synced: bool,
     base: Base<Node>,
     /// Reference to player finances (single source of truth for money)
     finance: Option<Gd<PlayerFinance>>,
@@ -21,9 +27,17 @@ pub struct RocketDesigner {
 impl INode for RocketDesigner {
     fn init(base: Base<Node>) -> Self {
         godot_print!("RocketDesigner initialized");
+        // Initialize with default snapshots
+        let snapshots = vec![
+            default_snapshot(0),
+            default_snapshot(1),
+            default_snapshot(2),
+        ];
         Self {
             design: RocketDesign::new(),
-            engine_registry: EngineRegistry::new(),
+            engine_snapshots: snapshots,
+            engine_designs_flaws: vec![(Vec::new(), Vec::new()); 3],
+            engine_flaws_synced: false,
             base,
             finance: None,
         }
@@ -39,43 +53,48 @@ impl RocketDesigner {
     /// Returns the number of available engine types
     #[func]
     pub fn get_engine_type_count(&self) -> i32 {
-        EngineType::all().len() as i32
+        // 3 default engine designs: 0=Hydrolox, 1=Kerolox, 2=Solid
+        3
     }
 
     /// Returns the name of an engine type by index
     /// 0 = Hydrolox, 1 = Kerolox, 2 = Solid
     #[func]
     pub fn get_engine_name(&self, engine_type: i32) -> GString {
-        match EngineType::from_index(engine_type) {
-            Some(et) => GString::from(et.spec().name.as_str()),
-            None => GString::from("Unknown"),
+        if engine_type >= 0 && (engine_type as usize) < 3 {
+            GString::from(default_snapshot(engine_type as usize).name.as_str())
+        } else {
+            GString::from("Unknown")
         }
     }
 
     /// Returns the mass of an engine type in kg
     #[func]
     pub fn get_engine_mass(&self, engine_type: i32) -> f64 {
-        match EngineType::from_index(engine_type) {
-            Some(et) => et.spec().mass_kg,
-            None => 0.0,
+        if engine_type >= 0 && (engine_type as usize) < 3 {
+            default_snapshot(engine_type as usize).mass_kg
+        } else {
+            0.0
         }
     }
 
     /// Returns the thrust of an engine type in kN
     #[func]
     pub fn get_engine_thrust(&self, engine_type: i32) -> f64 {
-        match EngineType::from_index(engine_type) {
-            Some(et) => et.spec().thrust_kn,
-            None => 0.0,
+        if engine_type >= 0 && (engine_type as usize) < 3 {
+            default_snapshot(engine_type as usize).thrust_kn
+        } else {
+            0.0
         }
     }
 
     /// Returns the exhaust velocity of an engine type in m/s
     #[func]
     pub fn get_engine_exhaust_velocity(&self, engine_type: i32) -> f64 {
-        match EngineType::from_index(engine_type) {
-            Some(et) => et.spec().exhaust_velocity_ms,
-            None => 0.0,
+        if engine_type >= 0 && (engine_type as usize) < 3 {
+            default_snapshot(engine_type as usize).exhaust_velocity_ms
+        } else {
+            0.0
         }
     }
 
@@ -90,9 +109,10 @@ impl RocketDesigner {
     /// Check if an engine type is a solid rocket motor
     #[func]
     pub fn is_engine_type_solid(&self, engine_type: i32) -> bool {
-        match EngineType::from_index(engine_type) {
-            Some(et) => et.is_solid(),
-            None => false,
+        if engine_type >= 0 && (engine_type as usize) < 3 {
+            default_snapshot(engine_type as usize).is_solid
+        } else {
+            false
         }
     }
 
@@ -163,8 +183,12 @@ impl RocketDesigner {
     /// Returns the index of the new stage
     #[func]
     pub fn add_stage(&mut self, engine_type: i32) -> i32 {
-        let et = EngineType::from_index(engine_type).unwrap_or(EngineType::Kerolox);
-        let index = self.design.add_stage(et) as i32;
+        let id = if engine_type >= 0 && (engine_type as usize) < 3 {
+            engine_type as usize
+        } else {
+            1 // Default to Kerolox
+        };
+        let index = self.design.add_stage(default_snapshot(id)) as i32;
         self.emit_design_changed();
         index
     }
@@ -199,7 +223,7 @@ impl RocketDesigner {
         if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
             return -1;
         }
-        self.design.stages[stage_index as usize].engine_type.to_index()
+        self.design.stages[stage_index as usize].engine_design_id as i32
     }
 
     /// Gets the engine type name for a stage (e.g., "Kerolox", "Hydrolox", "Solid")
@@ -208,8 +232,7 @@ impl RocketDesigner {
         if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
             return GString::from("");
         }
-        let engine_type = self.design.stages[stage_index as usize].engine_type;
-        GString::from(engine_type.spec().name.as_str())
+        GString::from(self.design.stages[stage_index as usize].engine_snapshot().name.as_str())
     }
 
     /// Check if a stage uses solid rocket motors
@@ -218,7 +241,7 @@ impl RocketDesigner {
         if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
             return false;
         }
-        self.design.stages[stage_index as usize].engine_type.is_solid()
+        self.design.stages[stage_index as usize].is_solid()
     }
 
     // ==========================================
@@ -539,18 +562,20 @@ impl RocketDesigner {
     /// Gets the cost of a single engine of the given type in dollars
     #[func]
     pub fn get_engine_cost(&self, engine_type: i32) -> f64 {
-        match EngineType::from_index(engine_type) {
-            Some(et) => et.engine_cost(),
-            None => 0.0,
+        if engine_type >= 0 && (engine_type as usize) < 3 {
+            default_snapshot(engine_type as usize).base_cost
+        } else {
+            0.0
         }
     }
 
     /// Gets the propellant density for an engine type in kg/m³
     #[func]
     pub fn get_propellant_density(&self, engine_type: i32) -> f64 {
-        match EngineType::from_index(engine_type) {
-            Some(et) => et.propellant_density(),
-            None => 0.0,
+        if engine_type >= 0 && (engine_type as usize) < 3 {
+            default_snapshot(engine_type as usize).propellant_density
+        } else {
+            0.0
         }
     }
 
@@ -779,9 +804,9 @@ impl RocketDesigner {
             godot_print!("ensure_flaws_generated: FLAWS WERE RESET!");
         }
 
-        // Then generate design flaws if needed (engine flaws are on EngineRegistry)
-        let generator = self.engine_registry.flaw_generator_mut();
-        self.design.generate_flaws(generator);
+        // Then generate design flaws if needed (engine flaws are synced from Company)
+        let mut generator = crate::flaw::FlawGenerator::new();
+        self.design.generate_flaws(&mut generator);
 
         // Debug: log flaw state after
         godot_print!(
@@ -789,12 +814,6 @@ impl RocketDesigner {
             self.design.active_flaws.len(),
             self.design.fixed_flaws.len()
         );
-
-        // Also ensure engine flaws are generated for engine types used in this design
-        for engine_type in EngineType::all() {
-            // Access each engine type to trigger flaw generation if needed
-            self.engine_registry.get(engine_type);
-        }
     }
 
     /// Check if flaws have been generated
@@ -821,23 +840,26 @@ impl RocketDesigner {
     // ==========================================
     // Flaws are stored in two places:
     // - Design flaws: on self.design (active_flaws + fixed_flaws)
-    // - Engine flaws: on self.engine_registry for each engine type
+    // - Engine flaws: on self.engine_designs_flaws for each engine design
     // The Godot API presents these as a unified list.
 
     /// Get the total count of all flaws (design + engine)
     fn get_total_flaw_count(&self) -> usize {
         let design_count = self.design.get_flaw_count();
-        let engine_count: usize = self.design.get_unique_engine_types()
+        let engine_count: usize = self.design.get_unique_engine_design_ids()
             .iter()
-            .filter_map(|&et_idx| EngineType::from_index(et_idx))
-            .map(|et| self.engine_registry.get_spec_readonly(et).get_flaw_count())
+            .filter(|&&id| id < self.engine_designs_flaws.len())
+            .map(|&id| {
+                let (ref active, ref fixed) = self.engine_designs_flaws[id];
+                active.len() + fixed.len()
+            })
             .sum();
         design_count + engine_count
     }
 
     /// Get a flaw by combined index (design flaws first, then engine flaws)
-    /// Returns (flaw_ref, is_engine_flaw, engine_type_if_engine)
-    fn get_flaw_by_combined_index(&self, index: usize) -> Option<(&crate::flaw::Flaw, bool, Option<EngineType>)> {
+    /// Returns (flaw_ref, is_engine_flaw, engine_design_id_if_engine)
+    fn get_flaw_by_combined_index(&self, index: usize) -> Option<(&crate::flaw::Flaw, bool, Option<usize>)> {
         let design_count = self.design.get_flaw_count();
 
         if index < design_count {
@@ -845,22 +867,20 @@ impl RocketDesigner {
             return self.design.get_flaw(index).map(|f| (f, false, None));
         }
 
-        // It's an engine flaw - find which engine type
+        // It's an engine flaw - find which engine design
         let mut offset = design_count;
-        for et_idx in self.design.get_unique_engine_types() {
-            if let Some(et) = EngineType::from_index(et_idx) {
-                let spec = self.engine_registry.get_spec_readonly(et);
-                let et_flaw_count = spec.get_flaw_count();
+        for id in self.design.get_unique_engine_design_ids() {
+            if id < self.engine_designs_flaws.len() {
+                let (ref active, ref fixed) = self.engine_designs_flaws[id];
+                let et_flaw_count = active.len() + fixed.len();
                 if index < offset + et_flaw_count {
                     let local_idx = index - offset;
-                    // Get from active or fixed
-                    let active_len = spec.active_flaws.len();
-                    let flaw = if local_idx < active_len {
-                        &spec.active_flaws[local_idx]
+                    let flaw = if local_idx < active.len() {
+                        &active[local_idx]
                     } else {
-                        &spec.fixed_flaws[local_idx - active_len]
+                        &fixed[local_idx - active.len()]
                     };
-                    return Some((flaw, true, Some(et)));
+                    return Some((flaw, true, Some(id)));
                 }
                 offset += et_flaw_count;
             }
@@ -878,12 +898,11 @@ impl RocketDesigner {
     #[func]
     pub fn get_discovered_flaw_count(&self) -> i32 {
         let design_discovered = self.design.get_discovered_flaw_count();
-        let engine_discovered: usize = self.design.get_unique_engine_types()
+        let engine_discovered: usize = self.design.get_unique_engine_design_ids()
             .iter()
-            .filter_map(|&et_idx| EngineType::from_index(et_idx))
-            .map(|et| {
-                let spec = self.engine_registry.get_spec_readonly(et);
-                spec.active_flaws.iter().filter(|f| f.discovered).count()
+            .filter(|&&id| id < self.engine_designs_flaws.len())
+            .map(|&id| {
+                self.engine_designs_flaws[id].0.iter().filter(|f| f.discovered).count()
             })
             .sum();
         (design_discovered + engine_discovered) as i32
@@ -893,10 +912,10 @@ impl RocketDesigner {
     #[func]
     pub fn get_fixed_flaw_count(&self) -> i32 {
         let design_fixed = self.design.get_fixed_flaw_count();
-        let engine_fixed: usize = self.design.get_unique_engine_types()
+        let engine_fixed: usize = self.design.get_unique_engine_design_ids()
             .iter()
-            .filter_map(|&et_idx| EngineType::from_index(et_idx))
-            .map(|et| self.engine_registry.get_spec_readonly(et).fixed_flaws.len())
+            .filter(|&&id| id < self.engine_designs_flaws.len())
+            .map(|&id| self.engine_designs_flaws[id].1.len())
             .sum();
         (design_fixed + engine_fixed) as i32
     }
@@ -905,12 +924,11 @@ impl RocketDesigner {
     #[func]
     pub fn get_unknown_flaw_count(&self) -> i32 {
         let design_unknown = self.design.get_unknown_flaw_count();
-        let engine_unknown: usize = self.design.get_unique_engine_types()
+        let engine_unknown: usize = self.design.get_unique_engine_design_ids()
             .iter()
-            .filter_map(|&et_idx| EngineType::from_index(et_idx))
-            .map(|et| {
-                let spec = self.engine_registry.get_spec_readonly(et);
-                spec.active_flaws.iter().filter(|f| !f.discovered).count()
+            .filter(|&&id| id < self.engine_designs_flaws.len())
+            .map(|&id| {
+                self.engine_designs_flaws[id].0.iter().filter(|f| !f.discovered).count()
             })
             .sum();
         (design_unknown + engine_unknown) as i32
@@ -997,12 +1015,14 @@ impl RocketDesigner {
             return Array::new();
         }
 
-        // Test engine flaws in the registry for each engine type used
+        // Test engine flaws for each engine design used
         let mut all_discovered = Vec::new();
-        for et_idx in self.design.get_unique_engine_types() {
-            if let Some(et) = EngineType::from_index(et_idx) {
-                let spec = self.engine_registry.get_mut(et);
-                let discovered = crate::flaw::run_engine_test_for_type(&mut spec.active_flaws, et_idx);
+        for id in self.design.get_unique_engine_design_ids() {
+            if id < self.engine_designs_flaws.len() {
+                let discovered = crate::flaw::run_engine_test_for_type(
+                    &mut self.engine_designs_flaws[id].0,
+                    id,
+                );
                 all_discovered.extend(discovered);
             }
         }
@@ -1015,7 +1035,7 @@ impl RocketDesigner {
         result
     }
 
-    /// Run an engine test for a specific engine type - returns array of discovered flaw names
+    /// Run an engine test for a specific engine design - returns array of discovered flaw names
     #[func]
     pub fn run_engine_test_for_type(&mut self, engine_type: i32) -> Array<GString> {
         // Check and deduct cost via PlayerFinance
@@ -1023,11 +1043,14 @@ impl RocketDesigner {
             return Array::new();
         }
 
-        // Test engine flaws in the registry for this specific engine type
+        // Test engine flaws for this specific engine design
         let mut result = Array::new();
-        if let Some(et) = EngineType::from_index(engine_type) {
-            let spec = self.engine_registry.get_mut(et);
-            let discovered = crate::flaw::run_engine_test_for_type(&mut spec.active_flaws, engine_type);
+        let id = engine_type as usize;
+        if engine_type >= 0 && id < self.engine_designs_flaws.len() {
+            let discovered = crate::flaw::run_engine_test_for_type(
+                &mut self.engine_designs_flaws[id].0,
+                id,
+            );
             for name in discovered {
                 result.push(&GString::from(name.as_str()));
             }
@@ -1038,30 +1061,30 @@ impl RocketDesigner {
     }
 
     /// Get the list of unique engine types in the design
-    /// Returns array of engine type indices
+    /// Returns array of engine type indices (engine_design_ids as i32)
     #[func]
     pub fn get_unique_engine_types(&self) -> Array<i32> {
-        let types = self.design.get_unique_engine_types();
+        let ids = self.design.get_unique_engine_design_ids();
         let mut result = Array::new();
-        for t in types {
-            result.push(t);
+        for id in ids {
+            result.push(id as i32);
         }
         result
     }
 
-    /// Get the engine type index for a flaw (returns -1 if not an engine flaw or invalid index)
+    /// Get the engine design id for a flaw (returns -1 if not an engine flaw or invalid index)
     #[func]
-    pub fn get_flaw_engine_type_index(&self, index: i32) -> i32 {
+    pub fn get_flaw_engine_design_id(&self, index: i32) -> i32 {
         if index < 0 {
             return -1;
         }
         match self.get_flaw_by_combined_index(index as usize) {
-            Some((flaw, _, engine_type)) => {
-                // For engine flaws, return the engine type index from the flaw or from context
-                if let Some(et) = engine_type {
-                    et.to_index()
+            Some((flaw, _, engine_design_id)) => {
+                // For engine flaws, return the engine design id from context or from the flaw
+                if let Some(id) = engine_design_id {
+                    id as i32
                 } else {
-                    flaw.engine_type_index.unwrap_or(-1)
+                    flaw.engine_design_id.map(|id| id as i32).unwrap_or(-1)
                 }
             }
             None => -1,
@@ -1069,28 +1092,28 @@ impl RocketDesigner {
     }
 
     /// Check if any flaw triggers at a given event
-    /// Checks both design flaws and engine flaws from the registry.
-    /// stage_engine_type: the engine type index of the stage that failed (-1 if unknown)
+    /// Checks both design flaws and engine flaws.
+    /// stage_engine_design_id: the engine design id of the stage that failed (-1 if unknown)
     /// Returns the flaw ID if a flaw caused failure, or -1 if no flaw triggered
     #[func]
-    pub fn check_flaw_trigger(&mut self, event_name: GString, stage_engine_type: i32) -> i32 {
+    pub fn check_flaw_trigger(&mut self, event_name: GString, stage_engine_design_id: i32) -> i32 {
         let event = event_name.to_string();
-        let engine_type = if stage_engine_type >= 0 {
-            Some(stage_engine_type)
+        let engine_id = if stage_engine_design_id >= 0 {
+            Some(stage_engine_design_id as usize)
         } else {
             None
         };
 
         // First check design flaws
-        if let Some(id) = self.design.check_flaw_trigger(&event, engine_type) {
+        if let Some(id) = self.design.check_flaw_trigger(&event, engine_id) {
             return id as i32;
         }
 
-        // Then check engine flaws from registry (if we have an engine type)
-        if let Some(et_index) = engine_type {
-            if let Some(et) = EngineType::from_index(et_index) {
-                let spec = self.engine_registry.get(et);
-                if let Some(id) = check_flaw_trigger(spec.get_active_flaws(), &event, engine_type) {
+        // Then check engine flaws (if we have an engine design id)
+        if let Some(idx) = engine_id {
+            if idx < self.engine_designs_flaws.len() {
+                let active = &self.engine_designs_flaws[idx].0;
+                if let Some(id) = check_flaw_trigger(active, &event, engine_id) {
                     return id as i32;
                 }
             }
@@ -1100,7 +1123,7 @@ impl RocketDesigner {
     }
 
     /// Mark a flaw as discovered by its ID (used when failure occurs)
-    /// Checks both design flaws and engine flaws from the registry.
+    /// Checks both design flaws and engine flaws.
     /// Returns the flaw name if found, or empty string
     #[func]
     pub fn discover_flaw_by_id(&mut self, flaw_id: i32) -> GString {
@@ -1114,11 +1137,10 @@ impl RocketDesigner {
             return GString::from(name.as_str());
         }
 
-        // Then try engine flaws in the registry
-        for engine_type in EngineType::all() {
-            let spec = self.engine_registry.get_mut(engine_type);
-            if let Some(flaw) = spec.get_flaw_mut(flaw_id as u32) {
-                if !flaw.discovered {
+        // Then try engine flaws
+        for (_, (ref mut active, _)) in self.engine_designs_flaws.iter_mut().enumerate() {
+            for flaw in active.iter_mut() {
+                if flaw.id == flaw_id as u32 && !flaw.discovered {
                     flaw.discovered = true;
                     let name = GString::from(flaw.name.as_str());
                     self.emit_design_changed();
@@ -1185,19 +1207,24 @@ impl RocketDesigner {
             return result;
         }
 
-        // It's an engine flaw - find which engine type and fix it there
+        // It's an engine flaw - find which engine design and fix it there
         let mut offset = design_flaw_count;
-        for et_idx in self.design.get_unique_engine_types() {
-            if let Some(et) = EngineType::from_index(et_idx) {
-                let spec = self.engine_registry.get_mut(et);
-                let et_active_count = spec.active_flaws.len();
+        for id in self.design.get_unique_engine_design_ids() {
+            if id < self.engine_designs_flaws.len() {
+                let (ref active, ref fixed) = self.engine_designs_flaws[id];
+                let et_active_count = active.len();
 
                 if (index as usize) < offset + et_active_count {
-                    // Found the right engine type - get the flaw id and fix it
+                    // Found the right engine design - get the flaw id and fix it
                     let local_idx = (index as usize) - offset;
-                    if local_idx < spec.active_flaws.len() && spec.active_flaws[local_idx].discovered {
-                        let flaw_id = spec.active_flaws[local_idx].id;
-                        if spec.fix_flaw(flaw_id) {
+                    if local_idx < active.len() && active[local_idx].discovered {
+                        let flaw_id = active[local_idx].id;
+                        // Fix: remove from active, add to fixed
+                        let (ref mut active_mut, ref mut fixed_mut) = self.engine_designs_flaws[id];
+                        if let Some(pos) = active_mut.iter().position(|f| f.id == flaw_id && f.discovered) {
+                            let mut flaw = active_mut.remove(pos);
+                            flaw.fixed = true;
+                            fixed_mut.push(flaw);
                             self.deduct_cost(costs::FLAW_FIX_COST);
                             self.emit_design_changed();
                             return true;
@@ -1206,7 +1233,7 @@ impl RocketDesigner {
                     return false;
                 }
                 // Skip fixed flaws in the count since we only fix active ones
-                offset += et_active_count + spec.fixed_flaws.len();
+                offset += et_active_count + fixed.len();
             }
         }
 
@@ -1262,13 +1289,12 @@ impl RocketDesigner {
             .map(|f| 1.0 - f.failure_rate)
             .product();
 
-        // Multiply by engine flaw success rates for each engine type used
-        let engine_flaw_success: f64 = self.design.get_unique_engine_types()
+        // Multiply by engine flaw success rates for each engine design used
+        let engine_flaw_success: f64 = self.design.get_unique_engine_design_ids()
             .iter()
-            .filter_map(|&et_idx| EngineType::from_index(et_idx))
-            .map(|et| {
-                let spec = self.engine_registry.get_spec_readonly(et);
-                spec.active_flaws
+            .filter(|&&id| id < self.engine_designs_flaws.len())
+            .map(|&id| {
+                self.engine_designs_flaws[id].0
                     .iter()
                     .filter(|f| !f.fixed)
                     .map(|f| 1.0 - f.failure_rate)
@@ -1309,7 +1335,7 @@ impl RocketDesigner {
     }
 
     /// Get a clone of the internal design (for syncing with GameState)
-    /// This merges engine flaws from the registry into the design clone
+    /// This merges engine flaws from the synced data into the design clone
     /// so that engine flaw state is preserved when saving
     pub fn get_design_clone(&self) -> crate::rocket_design::RocketDesign {
         let mut design = self.design.clone();
@@ -1321,21 +1347,21 @@ impl RocketDesigner {
             design.fixed_flaws.len()
         );
 
-        // Merge engine flaws from the registry into the design clone
+        // Merge engine flaws into the design clone
         // This ensures engine flaws are saved with the design
-        for et_idx in self.design.get_unique_engine_types() {
-            if let Some(et) = EngineType::from_index(et_idx) {
-                let spec = self.engine_registry.get_spec_readonly(et);
+        for id in self.design.get_unique_engine_design_ids() {
+            if id < self.engine_designs_flaws.len() {
+                let (ref active, ref fixed) = self.engine_designs_flaws[id];
 
                 // Add active engine flaws that aren't already in the design
-                for flaw in &spec.active_flaws {
+                for flaw in active {
                     if !design.active_flaws.iter().any(|f| f.id == flaw.id) {
                         design.active_flaws.push(flaw.clone());
                     }
                 }
 
                 // Add fixed engine flaws that aren't already in the design
-                for flaw in &spec.fixed_flaws {
+                for flaw in fixed {
                     if !design.fixed_flaws.iter().any(|f| f.id == flaw.id) {
                         design.fixed_flaws.push(flaw.clone());
                     }
@@ -1354,7 +1380,7 @@ impl RocketDesigner {
     }
 
     /// Set the internal design from an external source
-    /// This also restores engine flaws from the design to the registry
+    /// This also restores engine flaws from the design to the synced flaw data
     pub fn set_design(&mut self, design: crate::rocket_design::RocketDesign) {
         // Debug: log incoming design
         godot_print!(
@@ -1370,8 +1396,7 @@ impl RocketDesigner {
             godot_print!("  fixed[{}]: {} type={:?}", i, flaw.name, flaw.flaw_type);
         }
 
-        // Extract and restore engine flaws to the registry before setting the design
-        // This ensures engine flaws are restored when loading a saved design
+        // Extract engine flaws from the design
         let engine_active_flaws: Vec<_> = design
             .active_flaws
             .iter()
@@ -1391,19 +1416,17 @@ impl RocketDesigner {
             engine_fixed_flaws.len()
         );
 
-        // Restore engine flaws to the registry by engine type
+        // Restore engine flaws to the synced flaw data by engine design id
         for flaw in &engine_active_flaws {
-            if let Some(et_idx) = flaw.engine_type_index {
-                if let Some(et) = EngineType::from_index(et_idx) {
-                    let spec = self.engine_registry.get_mut(et);
-                    // Mark flaws as generated since we're restoring them
-                    spec.flaws_generated = true;
+            if let Some(idx) = flaw.engine_design_id {
+                if idx < self.engine_designs_flaws.len() {
+                    let (ref mut active, ref fixed) = self.engine_designs_flaws[idx];
                     // Only add if not already present
-                    if !spec.active_flaws.iter().any(|f| f.id == flaw.id)
-                        && !spec.fixed_flaws.iter().any(|f| f.id == flaw.id)
+                    if !active.iter().any(|f| f.id == flaw.id)
+                        && !fixed.iter().any(|f| f.id == flaw.id)
                     {
-                        spec.active_flaws.push(flaw.clone());
-                    } else if let Some(existing) = spec.active_flaws.iter_mut().find(|f| f.id == flaw.id) {
+                        active.push(flaw.clone());
+                    } else if let Some(existing) = active.iter_mut().find(|f| f.id == flaw.id) {
                         // Update discovered state
                         existing.discovered = flaw.discovered;
                     }
@@ -1411,15 +1434,13 @@ impl RocketDesigner {
             }
         }
         for flaw in &engine_fixed_flaws {
-            if let Some(et_idx) = flaw.engine_type_index {
-                if let Some(et) = EngineType::from_index(et_idx) {
-                    let spec = self.engine_registry.get_mut(et);
-                    // Mark flaws as generated since we're restoring them
-                    spec.flaws_generated = true;
+            if let Some(idx) = flaw.engine_design_id {
+                if idx < self.engine_designs_flaws.len() {
+                    let (ref mut active, ref mut fixed) = self.engine_designs_flaws[idx];
                     // Remove from active if present, add to fixed if not present
-                    spec.active_flaws.retain(|f| f.id != flaw.id);
-                    if !spec.fixed_flaws.iter().any(|f| f.id == flaw.id) {
-                        spec.fixed_flaws.push(flaw.clone());
+                    active.retain(|f| f.id != flaw.id);
+                    if !fixed.iter().any(|f| f.id == flaw.id) {
+                        fixed.push(flaw.clone());
                     }
                 }
             }
@@ -1447,6 +1468,18 @@ impl RocketDesigner {
 
         self.design = clean_design;
         self.emit_design_changed();
+    }
+
+    /// Sync engine data from Company (called by GameManager)
+    /// Updates engine snapshots and flaw data
+    pub fn sync_engine_data(
+        &mut self,
+        snapshots: Vec<EngineDesignSnapshot>,
+        flaws: Vec<(Vec<Flaw>, Vec<Flaw>)>,
+    ) {
+        self.engine_snapshots = snapshots;
+        self.engine_designs_flaws = flaws;
+        self.engine_flaws_synced = true;
     }
 
     /// Set the PlayerFinance reference
