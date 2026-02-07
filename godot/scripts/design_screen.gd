@@ -752,7 +752,7 @@ func _on_save_button_pressed():
 			designer.set_design_name(new_name)
 			# Sync design from designer to game state before saving
 			game_manager.sync_design_from(designer)
-			game_manager.save_current_design()
+			game_manager.save_current_design(designer)
 			design_saved.emit()
 			dialog.queue_free()
 			_show_save_notification(new_name)

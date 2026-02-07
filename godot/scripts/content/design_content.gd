@@ -86,7 +86,7 @@ func _on_editor_submit_to_engineering():
 	if game_manager:
 		var designer = editor_view.get_designer()
 		game_manager.sync_design_from(designer)
-		game_manager.ensure_design_saved()
+		game_manager.ensure_design_saved(designer)
 		game_manager.submit_current_to_engineering()
 	# Go back to select view to show updated status
 	show_select_view()

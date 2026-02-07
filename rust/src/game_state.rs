@@ -153,10 +153,10 @@ mod tests {
         state.player_company.select_contract(contract_id);
 
         let initial_money = state.player_company.money;
-        let rocket_cost = state.player_company.get_rocket_cost();
+        let rocket_cost = state.player_company.rocket_designs[0].head().total_cost();
         let reward = state.player_company.active_contract.as_ref().unwrap().reward;
 
-        let earned = state.player_company.complete_contract();
+        let earned = state.player_company.complete_contract(0);
 
         assert_eq!(earned, reward);
         // Money = initial - rocket_cost + reward

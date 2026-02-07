@@ -34,10 +34,8 @@ pub struct Company {
     pub completed_contracts: Vec<u32>,
     /// IDs of failed contracts
     pub failed_contracts: Vec<u32>,
-    /// Current rocket design (the one being worked on)
-    pub rocket_design: RocketDesign,
-    /// Saved rocket designs that can be reused
-    pub saved_designs: Vec<RocketDesign>,
+    /// Rocket design lineages (head + frozen revisions)
+    pub rocket_designs: Vec<DesignLineage<RocketDesign>>,
     /// Next design ID to assign
     next_design_id: u32,
     /// Total launches attempted
@@ -57,6 +55,7 @@ pub struct Company {
 impl Company {
     /// Create a new company with starting conditions
     pub fn new() -> Self {
+        let default_design = RocketDesign::default_design();
         let mut company = Self {
             money: costs::STARTING_BUDGET,
             fame: 0.0,
@@ -66,9 +65,8 @@ impl Company {
             active_contract: None,
             completed_contracts: Vec::new(),
             failed_contracts: Vec::new(),
-            rocket_design: RocketDesign::default_design(),
-            saved_designs: Vec::new(),
-            next_design_id: 1,
+            rocket_designs: vec![DesignLineage::new("Default Rocket", default_design)],
+            next_design_id: 2,
             total_launches: 0,
             successful_launches: 0,
             engine_designs: default_engine_lineages(),
@@ -121,14 +119,6 @@ impl Company {
             .position(|c| c.id == contract_id)
         {
             self.active_contract = Some(self.available_contracts.remove(idx));
-
-            // Update rocket design for new contract
-            // Set payload and target delta-v from contract requirements
-            if let Some(ref contract) = self.active_contract {
-                self.rocket_design.payload_mass_kg = contract.payload_mass_kg;
-                self.rocket_design.target_delta_v = contract.destination.required_delta_v();
-            }
-
             true
         } else {
             false
@@ -154,23 +144,24 @@ impl Company {
         self.active_contract
             .as_ref()
             .map(|c| c.payload_mass_kg)
-            .unwrap_or(self.rocket_design.payload_mass_kg)
+            .unwrap_or(self.rocket_designs[0].head().payload_mass_kg)
     }
 
     /// Called after a successful launch
     /// Deducts the rocket cost, testing costs, and adds the reward
     /// Returns the reward earned and increments turn
-    pub fn complete_contract(&mut self) -> f64 {
+    pub fn complete_contract(&mut self, rocket_design_id: usize) -> f64 {
         self.total_launches += 1;
         self.successful_launches += 1;
 
         // Deduct the rocket cost and testing costs
-        let rocket_cost = self.get_rocket_cost();
-        let testing_cost = self.rocket_design.get_testing_spent();
+        let design = self.rocket_designs[rocket_design_id].head();
+        let rocket_cost = design.total_cost();
+        let testing_cost = design.get_testing_spent();
         self.money -= rocket_cost + testing_cost;
 
         // Reset testing_spent so we don't double-charge if design is reused
-        self.rocket_design.testing_spent = 0.0;
+        self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
 
         if let Some(contract) = self.active_contract.take() {
             let reward = contract.reward;
@@ -194,16 +185,17 @@ impl Company {
 
     /// Called after a failed launch
     /// Deducts the rocket cost and testing costs, records the failure
-    pub fn fail_contract(&mut self) {
+    pub fn fail_contract(&mut self, rocket_design_id: usize) {
         self.total_launches += 1;
 
         // Deduct the rocket cost and testing costs - failed launches still cost money
-        let rocket_cost = self.get_rocket_cost();
-        let testing_cost = self.rocket_design.get_testing_spent();
+        let design = self.rocket_designs[rocket_design_id].head();
+        let rocket_cost = design.total_cost();
+        let testing_cost = design.get_testing_spent();
         self.money -= rocket_cost + testing_cost;
 
         // Reset testing_spent so we don't double-charge on retry
-        self.rocket_design.testing_spent = 0.0;
+        self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
 
         // Don't remove the active contract - player can retry
     }
@@ -219,28 +211,6 @@ impl Company {
     // ==========================================
     // Rocket Cost & Budget
     // ==========================================
-
-    /// Calculate the cost of the current rocket design
-    pub fn get_rocket_cost(&self) -> f64 {
-        self.rocket_design.total_cost()
-    }
-
-    /// Check if company can afford to build their current rocket
-    pub fn can_afford_rocket(&self) -> bool {
-        self.money >= self.get_rocket_cost()
-    }
-
-    /// Deduct rocket cost from money
-    /// Returns true if successful, false if not enough money
-    pub fn pay_for_rocket(&mut self) -> bool {
-        let cost = self.get_rocket_cost();
-        if self.money >= cost {
-            self.money -= cost;
-            true
-        } else {
-            false
-        }
-    }
 
     /// Get success rate as a percentage
     pub fn success_rate(&self) -> f64 {
@@ -258,139 +228,116 @@ impl Company {
         self.money < 25_000_000.0
     }
 
-    /// Get remaining budget after testing expenses
-    pub fn get_remaining_budget(&self) -> f64 {
-        self.money - self.rocket_design.total_cost() - self.rocket_design.get_testing_spent()
-    }
-
     // ==========================================
     // Design Management
     // ==========================================
 
-    /// Get the number of saved designs
-    pub fn get_saved_design_count(&self) -> usize {
-        self.saved_designs.len()
+    /// Get the number of rocket designs (lineages)
+    pub fn get_rocket_design_count(&self) -> usize {
+        self.rocket_designs.len()
     }
 
-    /// Get a saved design by index
-    pub fn get_saved_design(&self, index: usize) -> Option<&RocketDesign> {
-        self.saved_designs.get(index)
+    /// Get a rocket design head by index
+    pub fn get_rocket_design(&self, index: usize) -> Option<&RocketDesign> {
+        self.rocket_designs.get(index).map(|l| l.head())
     }
 
-    /// Save the current design to the saved designs list
-    /// Returns the index of the saved design
-    pub fn save_current_design(&mut self) -> usize {
-        let mut design = self.rocket_design.clone();
-        // Assign a unique ID if it doesn't have one
-        if design.name == "Unnamed Rocket" || design.name == "Default Rocket" {
-            design.name = format!("Design #{}", self.next_design_id);
+    /// Save a new design as a new lineage
+    /// Returns the index of the new lineage
+    pub fn save_new_design(&mut self, design: RocketDesign) -> usize {
+        let mut d = design;
+        if d.name == "Unnamed Rocket" || d.name == "Default Rocket" {
+            d.name = format!("Design #{}", self.next_design_id);
             self.next_design_id += 1;
         }
-        self.saved_designs.push(design);
-        self.saved_designs.len() - 1
+        let name = d.name.clone();
+        self.rocket_designs.push(DesignLineage::new(&name, d));
+        self.rocket_designs.len() - 1
     }
 
-    /// Save a copy of a design with a new name
-    pub fn save_design_as(&mut self, name: &str) -> usize {
-        let mut design = self.rocket_design.clone();
-        design.name = name.to_string();
-        self.saved_designs.push(design);
-        self.saved_designs.len() - 1
+    /// Save a new design with a specific name as a new lineage
+    /// Returns the index of the new lineage
+    pub fn save_new_design_as(&mut self, design: RocketDesign, name: &str) -> usize {
+        let mut d = design;
+        d.name = name.to_string();
+        self.rocket_designs.push(DesignLineage::new(name, d));
+        self.rocket_designs.len() - 1
     }
 
-    /// Load a saved design into the current working design
-    /// The saved design is cloned, preserving the original
-    /// If there's an active contract, the payload and target delta-v are set from the contract
-    pub fn load_design(&mut self, index: usize) -> bool {
-        if let Some(design) = self.saved_designs.get(index) {
-            self.rocket_design = design.clone();
+    /// Get a clone of a rocket design's head (for loading into designer)
+    pub fn load_rocket_design(&self, index: usize) -> Option<RocketDesign> {
+        self.rocket_designs.get(index).map(|l| l.head().clone())
+    }
 
-            // If there's an active contract, override payload and target delta-v
-            if let Some(ref contract) = self.active_contract {
-                self.rocket_design.payload_mass_kg = contract.payload_mass_kg;
-                self.rocket_design.target_delta_v = contract.destination.required_delta_v();
-            }
-
+    /// Update a rocket design's head with the given design
+    pub fn update_rocket_design(&mut self, index: usize, design: RocketDesign) -> bool {
+        if let Some(lineage) = self.rocket_designs.get_mut(index) {
+            let name = lineage.head().name.clone();
+            *lineage.head_mut() = design;
+            lineage.head_mut().name = name;
             true
         } else {
             false
         }
     }
 
-    /// Update a saved design with the current working design
-    pub fn update_saved_design(&mut self, index: usize) -> bool {
-        if index < self.saved_designs.len() {
-            // Preserve the original name
-            let name = self.saved_designs[index].name.clone();
-            self.saved_designs[index] = self.rocket_design.clone();
-            self.saved_designs[index].name = name;
+    /// Delete a rocket design lineage by index
+    /// Prevents deleting the last design
+    pub fn delete_rocket_design(&mut self, index: usize) -> bool {
+        if index < self.rocket_designs.len() && self.rocket_designs.len() > 1 {
+            self.rocket_designs.remove(index);
             true
         } else {
             false
         }
     }
 
-    /// Delete a saved design by index
-    pub fn delete_saved_design(&mut self, index: usize) -> bool {
-        if index < self.saved_designs.len() {
-            self.saved_designs.remove(index);
+    /// Rename a rocket design lineage
+    pub fn rename_rocket_design(&mut self, index: usize, new_name: &str) -> bool {
+        if let Some(lineage) = self.rocket_designs.get_mut(index) {
+            lineage.name = new_name.to_string();
+            lineage.head_mut().name = new_name.to_string();
             true
         } else {
             false
         }
     }
 
-    /// Rename a saved design
-    pub fn rename_saved_design(&mut self, index: usize, new_name: &str) -> bool {
-        if let Some(design) = self.saved_designs.get_mut(index) {
-            design.name = new_name.to_string();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Duplicate a saved design
-    /// Returns the index of the new design
-    pub fn duplicate_saved_design(&mut self, index: usize) -> Option<usize> {
-        if let Some(design) = self.saved_designs.get(index) {
-            let mut new_design = design.clone();
-            new_design.name = format!("{} (Copy)", design.name);
-            // Reset flaws on the copy so it's fresh
+    /// Duplicate a rocket design lineage
+    /// Returns the index of the new lineage
+    pub fn duplicate_rocket_design(&mut self, index: usize) -> Option<usize> {
+        if let Some(lineage) = self.rocket_designs.get(index) {
+            let mut new_design = lineage.head().clone();
+            new_design.name = format!("{} (Copy)", lineage.name);
             new_design.reset_flaws();
-            self.saved_designs.push(new_design);
-            Some(self.saved_designs.len() - 1)
+            let new_name = new_design.name.clone();
+            self.rocket_designs.push(DesignLineage::new(&new_name, new_design));
+            Some(self.rocket_designs.len() - 1)
         } else {
             None
         }
     }
 
-    /// Create a new empty design and set it as current
-    /// If there's an active contract, sets payload and target delta-v from it
-    pub fn create_new_design(&mut self) {
-        self.rocket_design = RocketDesign::new();
-        self.rocket_design.name = format!("Design #{}", self.next_design_id);
+    /// Create a new empty design lineage
+    /// Returns the index of the new lineage
+    pub fn create_new_design(&mut self) -> usize {
+        let mut design = RocketDesign::new();
+        design.name = format!("Design #{}", self.next_design_id);
         self.next_design_id += 1;
-
-        // Apply contract requirements if active
-        if let Some(ref contract) = self.active_contract {
-            self.rocket_design.payload_mass_kg = contract.payload_mass_kg;
-            self.rocket_design.target_delta_v = contract.destination.required_delta_v();
-        }
+        let name = design.name.clone();
+        self.rocket_designs.push(DesignLineage::new(&name, design));
+        self.rocket_designs.len() - 1
     }
 
-    /// Create a new design based on the default template
-    /// If there's an active contract, sets payload and target delta-v from it
-    pub fn create_default_design(&mut self) {
-        self.rocket_design = RocketDesign::default_design();
-        self.rocket_design.name = format!("Design #{}", self.next_design_id);
+    /// Create a new design lineage based on the default template
+    /// Returns the index of the new lineage
+    pub fn create_default_design(&mut self) -> usize {
+        let mut design = RocketDesign::default_design();
+        design.name = format!("Design #{}", self.next_design_id);
         self.next_design_id += 1;
-
-        // Apply contract requirements if active
-        if let Some(ref contract) = self.active_contract {
-            self.rocket_design.payload_mass_kg = contract.payload_mass_kg;
-            self.rocket_design.target_delta_v = contract.destination.required_delta_v();
-        }
+        let name = design.name.clone();
+        self.rocket_designs.push(DesignLineage::new(&name, design));
+        self.rocket_designs.len() - 1
     }
 
     // ==========================================
@@ -430,10 +377,13 @@ impl Company {
     // Launch Site Management
     // ==========================================
 
-    /// Check if a rocket can be launched at the current launch site
-    pub fn can_launch_rocket_at_site(&self) -> bool {
-        let rocket_mass = self.rocket_design.total_wet_mass_kg();
-        self.launch_site.can_launch_rocket(rocket_mass)
+    /// Check if a rocket design can be launched at the current launch site
+    pub fn can_launch_rocket_at_site(&self, rocket_design_id: usize) -> bool {
+        if let Some(design) = self.get_rocket_design(rocket_design_id) {
+            self.launch_site.can_launch_rocket(design.total_wet_mass_kg())
+        } else {
+            false
+        }
     }
 
     /// Upgrade the launch pad (returns true if successful)
@@ -487,15 +437,15 @@ impl Company {
         self.teams.iter_mut().find(|t| t.id == team_id)
     }
 
-    /// Assign a team to work on a design
-    pub fn assign_team_to_design(&mut self, team_id: u32, design_index: usize) -> bool {
-        if design_index >= self.saved_designs.len() {
+    /// Assign a team to work on a rocket design
+    pub fn assign_team_to_design(&mut self, team_id: u32, rocket_design_id: usize) -> bool {
+        if rocket_design_id >= self.rocket_designs.len() {
             return false;
         }
 
         if let Some(team) = self.get_team_mut(team_id) {
             team.assign(TeamAssignment::RocketDesign {
-                design_index,
+                rocket_design_id,
                 work_phase: crate::engineering_team::DesignWorkPhase::DetailedEngineering {
                     progress: 0.0,
                     total_work: crate::engineering_team::DETAILED_ENGINEERING_WORK,
@@ -543,13 +493,13 @@ impl Company {
     }
 
     /// Get teams working on a specific design
-    pub fn get_teams_on_design(&self, design_index: usize) -> Vec<&EngineeringTeam> {
+    pub fn get_teams_on_design(&self, rocket_design_id: usize) -> Vec<&EngineeringTeam> {
         self.teams
             .iter()
             .filter(|t| {
                 matches!(
                     &t.assignment,
-                    Some(TeamAssignment::RocketDesign { design_index: idx, .. }) if *idx == design_index
+                    Some(TeamAssignment::RocketDesign { rocket_design_id: idx, .. }) if *idx == rocket_design_id
                 )
             })
             .collect()
@@ -569,9 +519,9 @@ impl Company {
     }
 
     /// Calculate total team efficiency for teams on a design
-    pub fn get_design_team_efficiency(&self, design_index: usize) -> f64 {
+    pub fn get_design_team_efficiency(&self, rocket_design_id: usize) -> f64 {
         let productive_teams: Vec<_> = self
-            .get_teams_on_design(design_index)
+            .get_teams_on_design(rocket_design_id)
             .into_iter()
             .filter(|t| !t.is_ramping_up())
             .collect();
@@ -649,14 +599,14 @@ impl Company {
         let mut events = Vec::new();
 
         // Calculate efficiency for each design being worked on
-        let design_efficiencies: Vec<(usize, f64)> = (0..self.saved_designs.len())
+        let design_efficiencies: Vec<(usize, f64)> = (0..self.rocket_designs.len())
             .map(|idx| (idx, self.get_design_team_efficiency(idx)))
             .filter(|(_, eff)| *eff > 0.0)
             .collect();
 
         // Process work for each design with teams assigned
-        for (design_index, efficiency) in design_efficiencies {
-            let design = &mut self.saved_designs[design_index];
+        for (rocket_design_id, efficiency) in design_efficiencies {
+            let design = self.rocket_designs[rocket_design_id].head_mut();
 
             // Skip designs not in a work phase
             if !design.design_status.is_working() {
@@ -675,14 +625,14 @@ impl Company {
                     // Fixing complete - mark flaw as fixed and return to Refining
                     if let Some(flaw_name) = design.complete_flaw_fix() {
                         events.push(WorkEvent::DesignFlawFixed {
-                            design_index,
+                            rocket_design_id,
                             flaw_name,
                         });
                     }
                 } else {
                     // Engineering phase completed
                     events.push(WorkEvent::DesignPhaseComplete {
-                        design_index,
+                        rocket_design_id,
                         phase_name: phase_before.to_string(),
                     });
                 }
@@ -700,7 +650,7 @@ impl Company {
                         if roll < daily_discovery_chance {
                             flaw.discovered = true;
                             events.push(WorkEvent::DesignFlawDiscovered {
-                                design_index,
+                                rocket_design_id,
                                 flaw_name: flaw.name.clone(),
                             });
                         }
@@ -715,7 +665,7 @@ impl Company {
                     let flaw_name = design.active_flaws[flaw_index].name.clone();
                     design.start_fixing_flaw(flaw_index);
                     events.push(WorkEvent::DesignPhaseComplete {
-                        design_index,
+                        rocket_design_id,
                         phase_name: format!("Started fixing: {}", flaw_name),
                     });
                 }
@@ -733,17 +683,17 @@ impl Company {
         use crate::rocket_design::DesignStatus;
 
         // Collect completed design indices
-        let completed_indices: Vec<usize> = self.saved_designs
+        let completed_indices: Vec<usize> = self.rocket_designs
             .iter()
             .enumerate()
-            .filter(|(_, d)| matches!(d.design_status, DesignStatus::Complete))
+            .filter(|(_, l)| matches!(l.head().design_status, DesignStatus::Complete))
             .map(|(i, _)| i)
             .collect();
 
         // Unassign teams working on completed designs
         for team in &mut self.teams {
-            if let Some(TeamAssignment::RocketDesign { design_index, .. }) = &team.assignment {
-                if completed_indices.contains(design_index) {
+            if let Some(TeamAssignment::RocketDesign { rocket_design_id, .. }) = &team.assignment {
+                if completed_indices.contains(rocket_design_id) {
                     team.unassign();
                 }
             }
@@ -819,7 +769,7 @@ impl Company {
                     let flaw_name = design.active_flaws[flaw_index].name.clone();
                     design.status.start_fixing(flaw_name.clone(), flaw_index);
                     events.push(WorkEvent::DesignPhaseComplete {
-                        design_index: engine_design_id,
+                        rocket_design_id: engine_design_id,
                         phase_name: format!("Started fixing: {}", flaw_name),
                     });
                 }

@@ -348,7 +348,7 @@ func _create_team_card(team_id: int) -> PanelContainer:
 		if atype == "design":
 			var design_index = assignment.get("design_index", -1)
 			if design_index >= 0:
-				var design_name = game_manager.get_saved_design_name(design_index)
+				var design_name = game_manager.get_rocket_design_name(design_index)
 				status_label.text = "Working on: %s" % design_name
 			else:
 				status_label.text = "Working on design"
@@ -386,7 +386,7 @@ func _update_research_designs():
 	for child in _research_designs_container.get_children():
 		child.queue_free()
 
-	var design_count = game_manager.get_saved_design_count()
+	var design_count = game_manager.get_rocket_design_count()
 	var has_work_items = false
 
 	for i in range(design_count):
@@ -400,7 +400,7 @@ func _update_research_designs():
 		_research_no_designs_label.visible = not has_work_items
 
 func _create_design_work_card(index: int) -> PanelContainer:
-	var design_name = game_manager.get_saved_design_name(index)
+	var design_name = game_manager.get_rocket_design_name(index)
 	var status = game_manager.get_design_status(index)
 	var base_status = game_manager.get_design_status_base(index)
 	var progress = game_manager.get_design_progress(index)
@@ -521,8 +521,8 @@ func _create_design_work_card(index: int) -> PanelContainer:
 		vbox.add_child(flaws_section)
 
 		# Get flaw lists
-		var unfixed_flaws = game_manager.get_saved_design_unfixed_flaw_names(index)
-		var fixed_flaws = game_manager.get_saved_design_fixed_flaw_names(index)
+		var unfixed_flaws = game_manager.get_rocket_design_unfixed_flaw_names(index)
+		var fixed_flaws = game_manager.get_rocket_design_fixed_flaw_names(index)
 
 		if unfixed_flaws.size() == 0 and fixed_flaws.size() == 0:
 			var no_flaws_label = Label.new()
@@ -1033,7 +1033,7 @@ func _on_launch_requested():
 	# Ensure design is saved before launch
 	if designer:
 		game_manager.sync_design_from(designer)
-		game_manager.ensure_design_saved()
+		game_manager.ensure_design_saved(designer)
 
 	# Show launch overlay
 	launch_overlay.show_launch(game_manager, designer)

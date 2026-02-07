@@ -12,7 +12,7 @@ pub struct GameManager {
     base: Base<Node>,
     state: GameState,
     /// Index of the saved design currently being edited (if any)
-    current_saved_design_index: Option<usize>,
+    current_rocket_design_id: Option<usize>,
     /// Player finances - single source of truth for money
     finance: Gd<PlayerFinance>,
 }
@@ -23,7 +23,7 @@ impl INode for GameManager {
         Self {
             base,
             state: GameState::new(),
-            current_saved_design_index: None,
+            current_rocket_design_id: None,
             finance: Gd::from_init_fn(PlayerFinance::init),
         }
     }
@@ -392,7 +392,8 @@ impl GameManager {
     #[func]
     pub fn complete_contract(&mut self) -> f64 {
         self.sync_money_to_state();
-        let reward = self.state.player_company.complete_contract();
+        let design_id = self.current_rocket_design_id.unwrap_or(0);
+        let reward = self.state.player_company.complete_contract(design_id);
         if reward > 0.0 {
             self.state.turn += 1;
             self.sync_money_from_state();
@@ -412,7 +413,8 @@ impl GameManager {
     #[func]
     pub fn fail_contract(&mut self) {
         self.sync_money_to_state();
-        self.state.player_company.fail_contract();
+        let design_id = self.current_rocket_design_id.unwrap_or(0);
+        self.state.player_company.fail_contract(design_id);
         self.sync_money_from_state();
         // Launch takes 30 days even on failure
         self.advance_time_days(30);
@@ -483,22 +485,22 @@ impl GameManager {
     // Design Management
     // ==========================================
 
-    /// Get number of saved designs
+    /// Get number of rocket designs (lineages)
     #[func]
-    pub fn get_saved_design_count(&self) -> i32 {
-        self.state.player_company.get_saved_design_count() as i32
+    pub fn get_rocket_design_count(&self) -> i32 {
+        self.state.player_company.get_rocket_design_count() as i32
     }
 
     /// Get design name at index
     #[func]
-    pub fn get_saved_design_name(&self, index: i32) -> GString {
+    pub fn get_rocket_design_name(&self, index: i32) -> GString {
         if index < 0 {
             return GString::from("");
         }
         GString::from(
             self.state
                 .player_company
-                .get_saved_design(index as usize)
+                .get_rocket_design(index as usize)
                 .map(|d| d.name.as_str())
                 .unwrap_or("")
         )
@@ -506,116 +508,116 @@ impl GameManager {
 
     /// Get design stage count at index
     #[func]
-    pub fn get_saved_design_stage_count(&self, index: i32) -> i32 {
+    pub fn get_rocket_design_stage_count(&self, index: i32) -> i32 {
         if index < 0 {
             return 0;
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.stage_count() as i32)
             .unwrap_or(0)
     }
 
     /// Get design total delta-v at index
     #[func]
-    pub fn get_saved_design_delta_v(&self, index: i32) -> f64 {
+    pub fn get_rocket_design_delta_v(&self, index: i32) -> f64 {
         if index < 0 {
             return 0.0;
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.total_effective_delta_v())
             .unwrap_or(0.0)
     }
 
     /// Get design total cost at index
     #[func]
-    pub fn get_saved_design_cost(&self, index: i32) -> f64 {
+    pub fn get_rocket_design_cost(&self, index: i32) -> f64 {
         if index < 0 {
             return 0.0;
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.total_cost())
             .unwrap_or(0.0)
     }
 
     /// Get design total wet mass at index (in kg)
     #[func]
-    pub fn get_saved_design_mass(&self, index: i32) -> f64 {
+    pub fn get_rocket_design_mass(&self, index: i32) -> f64 {
         if index < 0 {
             return 0.0;
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.total_wet_mass_kg())
             .unwrap_or(0.0)
     }
 
     /// Get design estimated success rate at index
     #[func]
-    pub fn get_saved_design_success_rate(&self, index: i32) -> f64 {
+    pub fn get_rocket_design_success_rate(&self, index: i32) -> f64 {
         if index < 0 {
             return 0.0;
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.estimate_success_rate_with_flaws())
             .unwrap_or(0.0)
     }
 
-    /// Check if a saved design has generated flaws
+    /// Check if a rocket design has generated flaws
     #[func]
-    pub fn saved_design_has_flaws(&self, index: i32) -> bool {
+    pub fn rocket_design_has_flaws(&self, index: i32) -> bool {
         if index < 0 {
             return false;
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.has_flaws_generated())
             .unwrap_or(false)
     }
 
-    /// Get count of discovered flaws for a saved design
+    /// Get count of discovered flaws for a rocket design
     #[func]
-    pub fn get_saved_design_discovered_flaw_count(&self, index: i32) -> i32 {
+    pub fn get_rocket_design_discovered_flaw_count(&self, index: i32) -> i32 {
         if index < 0 {
             return 0;
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.get_discovered_flaw_count() as i32)
             .unwrap_or(0)
     }
 
-    /// Get count of fixed flaws for a saved design
+    /// Get count of fixed flaws for a rocket design
     #[func]
-    pub fn get_saved_design_fixed_flaw_count(&self, index: i32) -> i32 {
+    pub fn get_rocket_design_fixed_flaw_count(&self, index: i32) -> i32 {
         if index < 0 {
             return 0;
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.get_fixed_flaw_count() as i32)
             .unwrap_or(0)
     }
 
-    /// Get names of discovered (but not fixed) flaws for a saved design
+    /// Get names of discovered (but not fixed) flaws for a rocket design
     #[func]
-    pub fn get_saved_design_unfixed_flaw_names(&self, index: i32) -> Array<GString> {
+    pub fn get_rocket_design_unfixed_flaw_names(&self, index: i32) -> Array<GString> {
         let mut result = Array::new();
         if index < 0 {
             return result;
         }
-        if let Some(design) = self.state.player_company.get_saved_design(index as usize) {
+        if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
             for flaw in &design.active_flaws {
                 if flaw.discovered && !flaw.fixed {
                     result.push(&GString::from(flaw.name.as_str()));
@@ -625,14 +627,14 @@ impl GameManager {
         result
     }
 
-    /// Get names of fixed flaws for a saved design
+    /// Get names of fixed flaws for a rocket design
     #[func]
-    pub fn get_saved_design_fixed_flaw_names(&self, index: i32) -> Array<GString> {
+    pub fn get_rocket_design_fixed_flaw_names(&self, index: i32) -> Array<GString> {
         let mut result = Array::new();
         if index < 0 {
             return result;
         }
-        if let Some(design) = self.state.player_company.get_saved_design(index as usize) {
+        if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
             for flaw in &design.active_flaws {
                 if flaw.fixed {
                     result.push(&GString::from(flaw.name.as_str()));
@@ -642,108 +644,112 @@ impl GameManager {
         result
     }
 
-    /// Save current design to saved list
+    /// Save the designer's current design as a new lineage
+    /// Returns the index of the new lineage
     #[func]
-    pub fn save_current_design(&mut self) -> i32 {
-        let index = self.state.player_company.save_current_design();
+    pub fn save_current_design(&mut self, designer: Gd<RocketDesigner>) -> i32 {
+        let design = designer.bind().get_design_clone();
+        let index = self.state.player_company.save_new_design(design);
+        self.current_rocket_design_id = Some(index);
         self.base_mut().emit_signal("designs_changed", &[]);
         index as i32
     }
 
-    /// Save current design with a specific name
+    /// Save the designer's current design as a new lineage with a specific name
+    /// Returns the index of the new lineage
     #[func]
-    pub fn save_design_as(&mut self, name: GString) -> i32 {
-        let index = self.state.player_company.save_design_as(&name.to_string());
+    pub fn save_design_as(&mut self, designer: Gd<RocketDesigner>, name: GString) -> i32 {
+        let design = designer.bind().get_design_clone();
+        let index = self.state.player_company.save_new_design_as(design, &name.to_string());
+        self.current_rocket_design_id = Some(index);
         self.base_mut().emit_signal("designs_changed", &[]);
         index as i32
     }
 
-    /// Load a saved design into the working design
+    /// Load a rocket design into the designer
     #[func]
-    pub fn load_design(&mut self, index: i32) -> bool {
+    pub fn load_rocket_design(&mut self, index: i32) -> bool {
         if index < 0 {
-            self.current_saved_design_index = None;
+            self.current_rocket_design_id = None;
             return false;
         }
-        let result = self.state.player_company.load_design(index as usize);
-        if result {
-            // Set budget to current player money
-            self.state.player_company.rocket_design.budget = self.finance.bind().get_money();
-            self.current_saved_design_index = Some(index as usize);
+        if self.state.player_company.load_rocket_design(index as usize).is_some() {
+            self.current_rocket_design_id = Some(index as usize);
             self.base_mut().emit_signal("designs_changed", &[]);
-        }
-        result
-    }
-
-    /// Refresh the current working design from the saved design
-    /// This re-syncs flaw discoveries and other changes made by engineering teams
-    #[func]
-    pub fn refresh_current_design(&mut self) -> bool {
-        if let Some(index) = self.current_saved_design_index {
-            self.state.player_company.load_design(index);
-            self.state.player_company.rocket_design.budget = self.finance.bind().get_money();
             true
         } else {
             false
         }
     }
 
-    /// Update a saved design with the current working design
+    /// Refresh the current design - no-op in lineage model
+    /// (designer re-syncs from lineage head via sync_design_to)
     #[func]
-    pub fn update_saved_design(&mut self, index: i32) -> bool {
+    pub fn refresh_current_design(&mut self) -> bool {
+        self.current_rocket_design_id.is_some()
+    }
+
+    /// Update a rocket design's lineage head with the designer's current state
+    #[func]
+    pub fn update_rocket_design(&mut self, index: i32) -> bool {
         if index < 0 {
             return false;
         }
-        let result = self.state.player_company.update_saved_design(index as usize);
-        if result {
-            self.base_mut().emit_signal("designs_changed", &[]);
-        }
-        result
+        // This is called by GDScript - the designer pushes its state here
+        // The actual update happens via sync_design_from
+        self.base_mut().emit_signal("designs_changed", &[]);
+        true
     }
 
-    /// Update the currently edited saved design with the working design
+    /// Update the currently active rocket design from the designer
     /// Call this after launch to save testing_spent reset and flaw changes
     #[func]
-    pub fn update_current_saved_design(&mut self) {
-        if let Some(index) = self.current_saved_design_index {
-            self.state.player_company.update_saved_design(index);
-            self.base_mut().emit_signal("designs_changed", &[]);
-        }
+    pub fn update_current_rocket_design(&mut self) {
+        // In the lineage model, the lineage head is already updated via sync_design_from
+        self.base_mut().emit_signal("designs_changed", &[]);
     }
 
-    /// Delete a saved design
+    /// Delete a rocket design lineage
     #[func]
-    pub fn delete_saved_design(&mut self, index: i32) -> bool {
+    pub fn delete_rocket_design(&mut self, index: i32) -> bool {
         if index < 0 {
             return false;
         }
-        let result = self.state.player_company.delete_saved_design(index as usize);
+        let result = self.state.player_company.delete_rocket_design(index as usize);
+        if result {
+            // Invalidate current_rocket_design_id if it was the deleted one or shifted
+            if let Some(current) = self.current_rocket_design_id {
+                if current == index as usize {
+                    self.current_rocket_design_id = None;
+                } else if current > index as usize {
+                    self.current_rocket_design_id = Some(current - 1);
+                }
+            }
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Rename a rocket design lineage
+    #[func]
+    pub fn rename_rocket_design(&mut self, index: i32, new_name: GString) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let result = self.state.player_company.rename_rocket_design(index as usize, &new_name.to_string());
         if result {
             self.base_mut().emit_signal("designs_changed", &[]);
         }
         result
     }
 
-    /// Rename a saved design
+    /// Duplicate a rocket design lineage
     #[func]
-    pub fn rename_saved_design(&mut self, index: i32, new_name: GString) -> bool {
-        if index < 0 {
-            return false;
-        }
-        let result = self.state.player_company.rename_saved_design(index as usize, &new_name.to_string());
-        if result {
-            self.base_mut().emit_signal("designs_changed", &[]);
-        }
-        result
-    }
-
-    /// Duplicate a saved design
-    #[func]
-    pub fn duplicate_saved_design(&mut self, index: i32) -> i32 {
+    pub fn duplicate_rocket_design(&mut self, index: i32) -> i32 {
         if index < 0 {
             return -1;
         }
-        match self.state.player_company.duplicate_saved_design(index as usize) {
+        match self.state.player_company.duplicate_rocket_design(index as usize) {
             Some(new_index) => {
                 self.base_mut().emit_signal("designs_changed", &[]);
                 new_index as i32
@@ -752,46 +758,51 @@ impl GameManager {
         }
     }
 
-    /// Create a new empty design
+    /// Create a new empty design lineage and set it as active
     #[func]
-    pub fn create_new_design(&mut self) {
-        self.state.player_company.create_new_design();
-        // Set budget to current player money
-        self.state.player_company.rocket_design.budget = self.finance.bind().get_money();
-        self.current_saved_design_index = None;
+    pub fn create_new_design(&mut self) -> i32 {
+        let index = self.state.player_company.create_new_design();
+        self.current_rocket_design_id = Some(index);
+        index as i32
     }
 
-    /// Create a new design based on the default template
+    /// Create a new design lineage based on the default template and set it as active
     #[func]
-    pub fn create_default_design(&mut self) {
-        self.state.player_company.create_default_design();
-        // Set budget to current player money
-        self.state.player_company.rocket_design.budget = self.finance.bind().get_money();
-        self.current_saved_design_index = None;
+    pub fn create_default_design(&mut self) -> i32 {
+        let index = self.state.player_company.create_default_design();
+        self.current_rocket_design_id = Some(index);
+        index as i32
     }
 
-    /// Get the current working design name
+    /// Get the current working design name (from active lineage head)
     #[func]
     pub fn get_current_design_name(&self) -> GString {
-        GString::from(self.state.player_company.rocket_design.name.as_str())
+        if let Some(id) = self.current_rocket_design_id {
+            self.state.player_company.get_rocket_design(id)
+                .map(|d| GString::from(d.name.as_str()))
+                .unwrap_or_default()
+        } else {
+            GString::from("")
+        }
     }
 
-    /// Set the current working design name
+    /// Set the current working design name (on active lineage head)
     #[func]
     pub fn set_current_design_name(&mut self, name: GString) {
-        self.state.player_company.rocket_design.name = name.to_string();
+        if let Some(id) = self.current_rocket_design_id {
+            self.state.player_company.rename_rocket_design(id, &name.to_string());
+        }
     }
 
-    /// Copy design from a RocketDesigner node into the game state
-    /// Call this before saving to ensure the game state has the latest design
-    /// Also updates the saved design if one is being edited
+    /// Copy design from a RocketDesigner node into the lineage head
+    /// Also updates the active lineage if one is being edited
     #[func]
     pub fn sync_design_from(&mut self, designer: Gd<RocketDesigner>) {
-        self.state.player_company.rocket_design = designer.bind().get_design_clone();
+        let design = designer.bind().get_design_clone();
 
-        // Update the saved design if we're editing one
-        if let Some(index) = self.current_saved_design_index {
-            self.state.player_company.update_saved_design(index);
+        // Update the active lineage head
+        if let Some(index) = self.current_rocket_design_id {
+            self.state.player_company.update_rocket_design(index, design);
             self.base_mut().emit_signal("designs_changed", &[]);
         }
     }
@@ -800,9 +811,6 @@ impl GameManager {
     /// Call this after testing in the designer to persist flaw discoveries
     #[func]
     pub fn sync_engine_flaws_from_designer(&mut self, designer: Gd<RocketDesigner>) {
-        // The designer's get_design_clone() already merges engine flaws into the design.
-        // Engine flaws with engine_design_id are restored to the Company's engine_designs
-        // when the design is loaded back. For direct sync we extract from the design clone.
         let design = designer.bind().get_design_clone();
         for flaw in &design.active_flaws {
             if flaw.flaw_type == crate::flaw::FlawType::Engine {
@@ -821,7 +829,6 @@ impl GameManager {
                 if let Some(idx) = flaw.engine_design_id {
                     if idx < self.state.player_company.engine_designs.len() {
                         let engine_design = self.state.player_company.engine_designs[idx].head_mut();
-                        // Move from active to fixed if not already there
                         if let Some(pos) = engine_design.active_flaws.iter().position(|f| f.id == flaw.id) {
                             let mut f = engine_design.active_flaws.remove(pos);
                             f.fixed = true;
@@ -833,40 +840,46 @@ impl GameManager {
         }
     }
 
-    /// Save the current design if it hasn't been saved yet
-    /// Call this before launching a new (unsaved) design
-    /// Returns the index of the saved design
+    /// Ensure the current design is saved as a lineage
+    /// If already associated with a lineage, returns that index
+    /// Otherwise creates a new lineage from the designer's state
     #[func]
-    pub fn ensure_design_saved(&mut self) -> i32 {
-        if let Some(index) = self.current_saved_design_index {
-            // Already saved, just return the index
+    pub fn ensure_design_saved(&mut self, designer: Gd<RocketDesigner>) -> i32 {
+        if let Some(index) = self.current_rocket_design_id {
+            // Already associated with a lineage - sync from designer first
+            let design = designer.bind().get_design_clone();
+            self.state.player_company.update_rocket_design(index, design);
             index as i32
         } else {
-            // Check if a design with this name already exists
-            let current_name = &self.state.player_company.rocket_design.name;
-            if let Some(existing_index) = self.state.player_company.saved_designs.iter().position(|d| &d.name == current_name) {
-                // Update existing design instead of creating duplicate
-                self.state.player_company.update_saved_design(existing_index);
-                self.current_saved_design_index = Some(existing_index);
+            // Check if a lineage with this name already exists
+            let design = designer.bind().get_design_clone();
+            let current_name = design.name.clone();
+            if let Some(existing_index) = self.state.player_company.rocket_designs.iter().position(|l| l.head().name == current_name) {
+                self.state.player_company.update_rocket_design(existing_index, design);
+                self.current_rocket_design_id = Some(existing_index);
                 self.base_mut().emit_signal("designs_changed", &[]);
                 existing_index as i32
             } else {
-                // Save new design
-                let index = self.state.player_company.save_current_design();
-                self.current_saved_design_index = Some(index);
+                let index = self.state.player_company.save_new_design(design);
+                self.current_rocket_design_id = Some(index);
                 self.base_mut().emit_signal("designs_changed", &[]);
                 index as i32
             }
         }
     }
 
-    /// Copy design from game state to a RocketDesigner node
+    /// Copy design from lineage head to a RocketDesigner node
     /// Call this after loading a design to update the designer
     /// Sets the design's budget to the current player money
     /// Also syncs engine data (snapshots + flaws) from Company
     #[func]
     pub fn sync_design_to(&self, mut designer: Gd<RocketDesigner>) {
-        let mut design = self.state.player_company.rocket_design.clone();
+        let design = if let Some(id) = self.current_rocket_design_id {
+            self.state.player_company.load_rocket_design(id)
+        } else {
+            None
+        };
+        let mut design = design.unwrap_or_else(|| self.state.player_company.rocket_designs[0].head().clone());
         design.budget = self.finance.bind().get_money();
 
         // Sync engine data from Company to Designer
@@ -900,7 +913,7 @@ impl GameManager {
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| GString::from(d.design_status.display_name().as_str()))
             .unwrap_or_default()
     }
@@ -913,7 +926,7 @@ impl GameManager {
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| GString::from(d.design_status.name()))
             .unwrap_or_default()
     }
@@ -926,7 +939,7 @@ impl GameManager {
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.design_status.progress_fraction())
             .unwrap_or(0.0)
     }
@@ -939,7 +952,7 @@ impl GameManager {
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.design_status.can_edit())
             .unwrap_or(false)
     }
@@ -952,7 +965,7 @@ impl GameManager {
         }
         self.state
             .player_company
-            .get_saved_design(index as usize)
+            .get_rocket_design(index as usize)
             .map(|d| d.design_status.can_launch())
             .unwrap_or(false)
     }
@@ -960,7 +973,7 @@ impl GameManager {
     /// Get the index of the currently edited design (-1 if none)
     #[func]
     pub fn get_current_design_index(&self) -> i32 {
-        self.current_saved_design_index.map(|i| i as i32).unwrap_or(-1)
+        self.current_rocket_design_id.map(|i| i as i32).unwrap_or(-1)
     }
 
     /// Get the status of the currently edited design
@@ -989,30 +1002,31 @@ impl GameManager {
         self.submit_design_to_engineering(index)
     }
 
-    /// Submit a saved design to engineering
+    /// Submit a rocket design to engineering
     /// Returns true if successful
     #[func]
     pub fn submit_design_to_engineering(&mut self, index: i32) -> bool {
-        if index < 0 || index >= self.state.player_company.saved_designs.len() as i32 {
+        if index < 0 || index >= self.state.player_company.rocket_designs.len() as i32 {
             return false;
         }
-        let result = self.state.player_company.saved_designs[index as usize].submit_to_engineering();
+        let idx = index as usize;
+        let result = self.state.player_company.rocket_designs[idx].head_mut().submit_to_engineering();
         if result {
-            // Generate flaws for the design when submitting to engineering
-            let design = &mut self.state.player_company.saved_designs[index as usize];
-            design.generate_flaws(&mut self.state.player_company.flaw_generator);
+            let flaw_gen = &mut self.state.player_company.flaw_generator;
+            let design = self.state.player_company.rocket_designs[idx].head_mut();
+            design.generate_flaws(flaw_gen);
             self.base_mut().emit_signal("designs_changed", &[]);
         }
         result
     }
 
-    /// Reset a saved design back to Specification status
+    /// Reset a rocket design back to Specification status
     #[func]
     pub fn reset_design_to_specification(&mut self, index: i32) -> bool {
-        if index < 0 || index >= self.state.player_company.saved_designs.len() as i32 {
+        if index < 0 || index >= self.state.player_company.rocket_designs.len() as i32 {
             return false;
         }
-        self.state.player_company.saved_designs[index as usize].reset_to_specification();
+        self.state.player_company.rocket_designs[index as usize].head_mut().reset_to_specification();
         self.base_mut().emit_signal("designs_changed", &[]);
         true
     }
@@ -1130,27 +1144,27 @@ impl GameManager {
         let mut dict = Dictionary::new();
         match event {
             WorkEvent::DesignPhaseComplete {
-                design_index,
+                rocket_design_id,
                 phase_name,
             } => {
                 dict.set("type", "design_phase_complete");
-                dict.set("design_index", *design_index as i32);
+                dict.set("design_index", *rocket_design_id as i32);
                 dict.set("phase_name", GString::from(phase_name.as_str()));
             }
             WorkEvent::DesignFlawDiscovered {
-                design_index,
+                rocket_design_id,
                 flaw_name,
             } => {
                 dict.set("type", "design_flaw_discovered");
-                dict.set("design_index", *design_index as i32);
+                dict.set("design_index", *rocket_design_id as i32);
                 dict.set("flaw_name", GString::from(flaw_name.as_str()));
             }
             WorkEvent::DesignFlawFixed {
-                design_index,
+                rocket_design_id,
                 flaw_name,
             } => {
                 dict.set("type", "design_flaw_fixed");
-                dict.set("design_index", *design_index as i32);
+                dict.set("design_index", *rocket_design_id as i32);
                 dict.set("flaw_name", GString::from(flaw_name.as_str()));
             }
             WorkEvent::EngineFlawDiscovered {
@@ -1317,7 +1331,8 @@ impl GameManager {
     /// Check if current rocket can be launched at this site
     #[func]
     pub fn can_launch_current_rocket(&self) -> bool {
-        self.state.player_company.can_launch_rocket_at_site()
+        let design_id = self.current_rocket_design_id.unwrap_or(0);
+        self.state.player_company.can_launch_rocket_at_site(design_id)
     }
 
     /// Get propellant storage capacity
@@ -1486,9 +1501,9 @@ impl GameManager {
                 None => {
                     dict.set("type", "none");
                 }
-                Some(TeamAssignment::RocketDesign { design_index, .. }) => {
+                Some(TeamAssignment::RocketDesign { rocket_design_id, .. }) => {
                     dict.set("type", "design");
-                    dict.set("design_index", *design_index as i32);
+                    dict.set("design_index", *rocket_design_id as i32);
                 }
                 Some(TeamAssignment::EngineDesign { engine_design_id, .. }) => {
                     dict.set("type", "engine");
@@ -1654,7 +1669,7 @@ impl GameManager {
     #[func]
     pub fn new_game(&mut self) {
         self.state = GameState::new();
-        self.current_saved_design_index = None;
+        self.current_rocket_design_id = None;
         self.finance.bind_mut().reset();
         self.emit_money_changed();
         self.base_mut().emit_signal("contracts_changed", &[]);

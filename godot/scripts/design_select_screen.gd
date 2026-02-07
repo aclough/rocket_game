@@ -75,7 +75,7 @@ func _rebuild_designs_list():
 	if not game_manager:
 		return
 
-	var design_count = game_manager.get_saved_design_count()
+	var design_count = game_manager.get_rocket_design_count()
 
 	if design_count == 0:
 		var label = Label.new()
@@ -96,15 +96,15 @@ func _rebuild_designs_list():
 		designs_list.add_child(card)
 
 func _create_design_card(index: int, required_dv: float) -> Control:
-	var name = game_manager.get_saved_design_name(index)
-	var delta_v = game_manager.get_saved_design_delta_v(index)
-	var cost = game_manager.get_saved_design_cost(index)
-	var mass = game_manager.get_saved_design_mass(index)
-	var success_rate = game_manager.get_saved_design_success_rate(index) * 100
-	var stages = game_manager.get_saved_design_stage_count(index)
-	var has_flaws = game_manager.saved_design_has_flaws(index)
-	var discovered = game_manager.get_saved_design_discovered_flaw_count(index)
-	var fixed = game_manager.get_saved_design_fixed_flaw_count(index)
+	var name = game_manager.get_rocket_design_name(index)
+	var delta_v = game_manager.get_rocket_design_delta_v(index)
+	var cost = game_manager.get_rocket_design_cost(index)
+	var mass = game_manager.get_rocket_design_mass(index)
+	var success_rate = game_manager.get_rocket_design_success_rate(index) * 100
+	var stages = game_manager.get_rocket_design_stage_count(index)
+	var has_flaws = game_manager.rocket_design_has_flaws(index)
+	var discovered = game_manager.get_rocket_design_discovered_flaw_count(index)
+	var fixed = game_manager.get_rocket_design_fixed_flaw_count(index)
 	var status = game_manager.get_design_status(index)
 	var base_status = game_manager.get_design_status_base(index)
 	var progress = game_manager.get_design_progress(index)
@@ -311,12 +311,12 @@ func _on_submit_to_engineering_pressed(index: int):
 
 func _on_select_design_pressed(index: int):
 	if game_manager:
-		game_manager.load_design(index)
+		game_manager.load_rocket_design(index)
 	design_selected.emit(index)
 
 func _on_edit_design_pressed(index: int):
 	if game_manager:
-		game_manager.load_design(index)
+		game_manager.load_rocket_design(index)
 	# Emit with special value to indicate we want to edit
 	design_selected.emit(index)
 
@@ -325,7 +325,7 @@ func _on_delete_design_pressed(index: int):
 		return
 
 	pending_delete_index = index
-	var design_name = game_manager.get_saved_design_name(index)
+	var design_name = game_manager.get_rocket_design_name(index)
 
 	# Create confirmation dialog if needed
 	if not confirm_dialog:
@@ -340,7 +340,7 @@ func _on_delete_design_pressed(index: int):
 
 func _on_delete_confirmed():
 	if game_manager and pending_delete_index >= 0:
-		game_manager.delete_saved_design(pending_delete_index)
+		game_manager.delete_rocket_design(pending_delete_index)
 	pending_delete_index = -1
 
 func _on_delete_canceled():

@@ -283,7 +283,7 @@ func _on_testing_launch_requested():
 		# Then ensure it's saved (so flaws persist across sessions)
 		if game_manager:
 			game_manager.sync_design_from(designer)
-			game_manager.ensure_design_saved()
+			game_manager.ensure_design_saved(designer)
 
 	# Hide testing screen
 	hide_testing_screen()
@@ -464,7 +464,7 @@ func run_launch_with_delays():
 		else:
 			game_manager.fail_contract()
 		# Save updated design state (testing_spent reset) to saved design
-		game_manager.update_current_saved_design()
+		game_manager.update_current_rocket_design()
 
 	# Show result panel
 	status_panel.visible = false

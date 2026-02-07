@@ -84,7 +84,7 @@ impl EngineeringTeam {
 pub enum TeamAssignment {
     /// Working on a rocket design
     RocketDesign {
-        design_index: usize,
+        rocket_design_id: usize,
         work_phase: DesignWorkPhase,
     },
     /// Working on an engine design
@@ -124,17 +124,17 @@ pub enum EngineWorkPhase {
 pub enum WorkEvent {
     /// A design phase has completed
     DesignPhaseComplete {
-        design_index: usize,
+        rocket_design_id: usize,
         phase_name: String,
     },
     /// A design flaw was discovered during refining
     DesignFlawDiscovered {
-        design_index: usize,
+        rocket_design_id: usize,
         flaw_name: String,
     },
     /// A design flaw was fixed
     DesignFlawFixed {
-        design_index: usize,
+        rocket_design_id: usize,
         flaw_name: String,
     },
     /// An engine flaw was discovered during testing
@@ -204,7 +204,7 @@ mod tests {
 
         // Assignment triggers ramp-up
         team.assign(TeamAssignment::RocketDesign {
-            design_index: 0,
+            rocket_design_id: 0,
             work_phase: DesignWorkPhase::DetailedEngineering { progress: 0.0, total_work: 30.0 },
         });
         assert!(team.is_ramping_up());
@@ -246,7 +246,7 @@ mod tests {
 
         // Assign to new work
         team.assign(TeamAssignment::RocketDesign {
-            design_index: 0,
+            rocket_design_id: 0,
             work_phase: DesignWorkPhase::DetailedEngineering {
                 progress: 0.0,
                 total_work: DETAILED_ENGINEERING_WORK,

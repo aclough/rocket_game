@@ -179,7 +179,7 @@ func run_launch_with_delays():
 			reward = game_manager.complete_contract()
 		else:
 			game_manager.fail_contract()
-		game_manager.update_current_saved_design()
+		game_manager.update_current_rocket_design()
 
 	# Show result panel
 	result_panel.visible = true
