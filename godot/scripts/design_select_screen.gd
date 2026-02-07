@@ -2,6 +2,7 @@ extends Control
 
 signal design_selected(design_index: int)  # -1 for new design
 signal back_requested
+signal engine_edit_requested(engine_index: int)
 
 # Game manager reference (set by parent)
 var game_manager: GameManager = null
@@ -75,6 +76,13 @@ func _rebuild_designs_list():
 	if not game_manager:
 		return
 
+	# --- Rocket Designs Section ---
+	var rocket_header = Label.new()
+	rocket_header.text = "Rocket Designs"
+	rocket_header.add_theme_font_size_override("font_size", 18)
+	rocket_header.add_theme_color_override("font_color", Color(0.7, 0.8, 1.0))
+	designs_list.add_child(rocket_header)
+
 	var design_count = game_manager.get_rocket_design_count()
 
 	if design_count == 0:
@@ -84,15 +92,31 @@ func _rebuild_designs_list():
 		label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		designs_list.add_child(label)
-		return
+	else:
+		# Get mission requirements for comparison
+		var required_dv = 0.0
+		if game_manager.has_active_contract():
+			required_dv = game_manager.get_active_contract_delta_v()
 
-	# Get mission requirements for comparison
-	var required_dv = 0.0
-	if game_manager.has_active_contract():
-		required_dv = game_manager.get_active_contract_delta_v()
+		for i in range(design_count):
+			var card = _create_design_card(i, required_dv)
+			designs_list.add_child(card)
 
-	for i in range(design_count):
-		var card = _create_design_card(i, required_dv)
+	# --- Separator ---
+	var sep = HSeparator.new()
+	sep.add_theme_constant_override("separation", 20)
+	designs_list.add_child(sep)
+
+	# --- Engine Designs Section ---
+	var engine_header = Label.new()
+	engine_header.text = "Engine Designs"
+	engine_header.add_theme_font_size_override("font_size", 18)
+	engine_header.add_theme_color_override("font_color", Color(1.0, 0.8, 0.6))
+	designs_list.add_child(engine_header)
+
+	var engine_count = game_manager.get_engine_type_count()
+	for i in range(engine_count):
+		var card = _create_engine_design_card(i)
 		designs_list.add_child(card)
 
 func _create_design_card(index: int, required_dv: float) -> Control:
@@ -358,6 +382,135 @@ func _on_new_empty_pressed():
 
 func _on_back_pressed():
 	back_requested.emit()
+
+# ==========================================
+# Engine Design Cards
+# ==========================================
+
+func _create_engine_design_card(index: int) -> Control:
+	var name = game_manager.get_engine_type_name(index)
+	var fuel_type_name = game_manager.get_engine_design_fuel_type_name(index)
+	var scale = game_manager.get_engine_design_scale(index)
+	var thrust = game_manager.get_engine_design_thrust(index)
+	var ve = game_manager.get_engine_design_exhaust_velocity(index)
+	var mass = game_manager.get_engine_design_mass(index)
+	var cost = game_manager.get_engine_design_cost(index)
+	var status = game_manager.get_engine_status(index)
+	var base_status = game_manager.get_engine_status_base(index)
+	var can_modify = game_manager.can_modify_engine_design(index)
+	var teams_count = game_manager.get_teams_on_engine_count(index)
+
+	var wrapper = DesignCardWrapper.new()
+	wrapper.design_index = index
+	wrapper.game_manager = game_manager
+	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrapper.team_assigned.connect(_on_team_assigned_to_engine)
+
+	var panel = PanelContainer.new()
+	var style = StyleBoxFlat.new()
+	style.set_bg_color(Color(0.12, 0.10, 0.06))
+	style.set_border_width_all(1)
+	style.set_border_color(Color(0.6, 0.5, 0.3, 0.5))
+	panel.add_theme_stylebox_override("panel", style)
+	wrapper.add_child(panel)
+
+	var margin = MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 15)
+	margin.add_theme_constant_override("margin_right", 15)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	panel.add_child(margin)
+
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 15)
+	margin.add_child(hbox)
+
+	# Engine info
+	var info_vbox = VBoxContainer.new()
+	info_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info_vbox.add_theme_constant_override("separation", 3)
+	hbox.add_child(info_vbox)
+
+	var name_label = Label.new()
+	name_label.text = name
+	name_label.add_theme_font_size_override("font_size", 20)
+	info_vbox.add_child(name_label)
+
+	var stats_label = Label.new()
+	stats_label.text = "%s | %.0fx | %.0f kN | %.0f m/s | %s | $%s" % [
+		fuel_type_name, scale, thrust, ve, _format_mass(mass), _format_money(cost)
+	]
+	stats_label.add_theme_font_size_override("font_size", 14)
+	stats_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	info_vbox.add_child(stats_label)
+
+	# Status label
+	if base_status != "Untested":
+		var status_label = Label.new()
+		status_label.text = status
+		if teams_count > 0:
+			status_label.text += " (%d teams)" % teams_count
+		status_label.add_theme_font_size_override("font_size", 11)
+		if base_status == "Refining":
+			status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
+		elif base_status == "Fixing":
+			status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
+		info_vbox.add_child(status_label)
+	else:
+		var untested_label = Label.new()
+		untested_label.text = "Untested"
+		untested_label.add_theme_font_size_override("font_size", 11)
+		untested_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3))
+		info_vbox.add_child(untested_label)
+
+	# Buttons
+	var buttons_vbox = VBoxContainer.new()
+	buttons_vbox.add_theme_constant_override("separation", 5)
+	hbox.add_child(buttons_vbox)
+
+	var edit_btn = Button.new()
+	edit_btn.text = "EDIT"
+	edit_btn.custom_minimum_size = Vector2(100, 35)
+	edit_btn.add_theme_font_size_override("font_size", 14)
+	edit_btn.pressed.connect(_on_edit_engine_pressed.bind(index))
+	buttons_vbox.add_child(edit_btn)
+
+	var dup_btn = Button.new()
+	dup_btn.text = "DUPLICATE"
+	dup_btn.custom_minimum_size = Vector2(100, 28)
+	dup_btn.add_theme_font_size_override("font_size", 11)
+	dup_btn.pressed.connect(_on_duplicate_engine_pressed.bind(index))
+	buttons_vbox.add_child(dup_btn)
+
+	var del_btn = Button.new()
+	del_btn.text = "DELETE"
+	del_btn.custom_minimum_size = Vector2(100, 25)
+	del_btn.add_theme_font_size_override("font_size", 10)
+	del_btn.pressed.connect(_on_delete_engine_pressed.bind(index))
+	buttons_vbox.add_child(del_btn)
+
+	return wrapper
+
+func _on_team_assigned_to_engine(design_index: int, team_id: int):
+	if game_manager:
+		game_manager.assign_team_to_engine(team_id, design_index)
+		_update_ui()
+
+func _on_edit_engine_pressed(index: int):
+	engine_edit_requested.emit(index)
+
+func _on_duplicate_engine_pressed(index: int):
+	if game_manager:
+		var new_idx = game_manager.duplicate_engine_design(index)
+		if new_idx >= 0:
+			engine_edit_requested.emit(new_idx)
+
+func _on_delete_engine_pressed(index: int):
+	if game_manager:
+		game_manager.delete_engine_design(index)
+
+func _on_new_engine_pressed():
+	engine_edit_requested.emit(-1)
 
 # Helper to format money values
 func _format_money(value: float) -> String:

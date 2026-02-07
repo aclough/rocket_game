@@ -463,7 +463,9 @@ func run_launch_with_delays():
 			reward = game_manager.complete_contract()
 		else:
 			game_manager.fail_contract()
-		# Save updated design state (testing_spent reset) to saved design
+		# Sync discovered flaw state from designer back to company's rocket_designs
+		if designer:
+			game_manager.sync_design_from(designer)
 		game_manager.update_current_rocket_design()
 
 	# Show result panel

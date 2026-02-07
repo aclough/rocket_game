@@ -106,6 +106,7 @@ func _setup_design_content():
 	var design = content_areas[Tab.DESIGN]
 	design.set_game_manager(game_manager)
 	design.testing_requested.connect(_on_testing_requested)
+	design.back_requested.connect(_on_design_back_requested)
 
 func _setup_launch_site_content():
 	var launch_site = content_areas[Tab.LAUNCH_SITE]
@@ -1009,6 +1010,9 @@ func _on_contract_selected(_contract_id: int):
 func _on_design_requested():
 	# When design is requested from active contract, switch to design tab
 	_show_tab(Tab.DESIGN)
+
+func _on_design_back_requested():
+	_show_tab(Tab.MISSIONS)
 
 # Design content signal handlers
 func _on_testing_requested():

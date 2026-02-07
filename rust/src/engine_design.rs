@@ -1,6 +1,54 @@
 use crate::engine::{costs, EngineStatus};
 use crate::flaw::{Flaw, FlawCategory, FlawGenerator};
 
+pub const ENGINE_SCALE_MIN: f64 = 0.25;
+pub const ENGINE_SCALE_MAX: f64 = 4.0;
+pub const ENGINE_SCALE_STEP: f64 = 0.25;
+
+/// Chemical engine fuel types.
+/// Future propulsion categories (nuclear pulse, sail) would be a separate enum.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FuelType {
+    Kerolox,
+    Hydrolox,
+    Solid,
+}
+
+impl FuelType {
+    pub fn components(&self) -> Vec<EngineComponent> {
+        match self {
+            FuelType::Kerolox => vec![EngineComponent::Kerolox, EngineComponent::Turbopump],
+            FuelType::Hydrolox => vec![EngineComponent::Hydrolox, EngineComponent::Turbopump],
+            FuelType::Solid => vec![EngineComponent::SolidMotor],
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            FuelType::Kerolox => "Kerolox",
+            FuelType::Hydrolox => "Hydrolox",
+            FuelType::Solid => "Solid",
+        }
+    }
+
+    pub fn from_index(i: usize) -> Option<FuelType> {
+        match i {
+            0 => Some(FuelType::Kerolox),
+            1 => Some(FuelType::Hydrolox),
+            2 => Some(FuelType::Solid),
+            _ => None,
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        match self {
+            FuelType::Kerolox => 0,
+            FuelType::Hydrolox => 1,
+            FuelType::Solid => 2,
+        }
+    }
+}
+
 /// Components that make up an engine design.
 /// Propellant chemistry determines base performance; Turbopump is required for liquids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -45,6 +93,40 @@ pub struct EngineDesignSnapshot {
 }
 
 impl EngineDesign {
+    /// Whether this engine can be modified (only when Untested)
+    pub fn can_modify(&self) -> bool {
+        matches!(self.status, EngineStatus::Untested)
+    }
+
+    /// Get the fuel type from current components
+    pub fn fuel_type(&self) -> FuelType {
+        if self.components.contains(&EngineComponent::SolidMotor) {
+            FuelType::Solid
+        } else if self.components.contains(&EngineComponent::Hydrolox) {
+            FuelType::Hydrolox
+        } else {
+            FuelType::Kerolox
+        }
+    }
+
+    /// Set fuel type by replacing components. Returns false if not modifiable.
+    pub fn set_fuel_type(&mut self, fuel: FuelType) -> bool {
+        if !self.can_modify() {
+            return false;
+        }
+        self.components = fuel.components();
+        true
+    }
+
+    /// Set scale (clamped to bounds). Returns false if not modifiable.
+    pub fn set_scale(&mut self, scale: f64) -> bool {
+        if !self.can_modify() {
+            return false;
+        }
+        self.scale = scale.clamp(ENGINE_SCALE_MIN, ENGINE_SCALE_MAX);
+        true
+    }
+
     /// Derive a snapshot of stats from this design's components and scale.
     pub fn snapshot(&self, id: usize, name: &str) -> EngineDesignSnapshot {
         let is_solid = self.components.contains(&EngineComponent::SolidMotor);
@@ -206,6 +288,22 @@ impl EngineDesign {
         }
         self.status.start_refining();
         true
+    }
+}
+
+// ==========================================
+// Engine Creation Functions
+// ==========================================
+
+/// Create an engine design with the given fuel type and scale
+pub fn create_engine(fuel: FuelType, scale: f64) -> EngineDesign {
+    EngineDesign {
+        components: fuel.components(),
+        scale: scale.clamp(ENGINE_SCALE_MIN, ENGINE_SCALE_MAX),
+        active_flaws: Vec::new(),
+        fixed_flaws: Vec::new(),
+        flaws_generated: false,
+        status: EngineStatus::Untested,
     }
 }
 
@@ -389,5 +487,90 @@ mod tests {
 
         // Can't submit again
         assert!(!design.submit_to_refining(&mut gen, 1));
+    }
+
+    #[test]
+    fn test_fuel_type_roundtrip() {
+        let design = default_kerolox();
+        assert_eq!(design.fuel_type(), FuelType::Kerolox);
+
+        let design = default_hydrolox();
+        assert_eq!(design.fuel_type(), FuelType::Hydrolox);
+
+        let design = default_solid();
+        assert_eq!(design.fuel_type(), FuelType::Solid);
+    }
+
+    #[test]
+    fn test_set_fuel_type() {
+        let mut design = default_kerolox();
+        assert!(design.set_fuel_type(FuelType::Hydrolox));
+        assert_eq!(design.fuel_type(), FuelType::Hydrolox);
+
+        // Verify snapshot uses new fuel type
+        let snap = design.snapshot(0, "Changed");
+        assert_eq!(snap.exhaust_velocity_ms, 4500.0);
+    }
+
+    #[test]
+    fn test_set_fuel_type_blocked_when_not_untested() {
+        let mut design = default_kerolox();
+        let mut gen = FlawGenerator::new();
+        design.submit_to_refining(&mut gen, 0);
+
+        assert!(!design.set_fuel_type(FuelType::Solid));
+        // Should still be kerolox
+        assert_eq!(design.fuel_type(), FuelType::Kerolox);
+    }
+
+    #[test]
+    fn test_can_modify() {
+        let mut design = default_kerolox();
+        assert!(design.can_modify());
+
+        let mut gen = FlawGenerator::new();
+        design.submit_to_refining(&mut gen, 0);
+        assert!(!design.can_modify());
+    }
+
+    #[test]
+    fn test_set_scale() {
+        let mut design = default_kerolox();
+        assert!(design.set_scale(2.0));
+        assert_eq!(design.scale, 2.0);
+
+        // Clamped to bounds
+        assert!(design.set_scale(0.1));
+        assert_eq!(design.scale, ENGINE_SCALE_MIN);
+
+        assert!(design.set_scale(10.0));
+        assert_eq!(design.scale, ENGINE_SCALE_MAX);
+    }
+
+    #[test]
+    fn test_set_scale_blocked_when_not_untested() {
+        let mut design = default_kerolox();
+        let mut gen = FlawGenerator::new();
+        design.submit_to_refining(&mut gen, 0);
+
+        assert!(!design.set_scale(2.0));
+        assert_eq!(design.scale, 1.0);
+    }
+
+    #[test]
+    fn test_create_engine() {
+        let engine = create_engine(FuelType::Hydrolox, 2.0);
+        assert_eq!(engine.fuel_type(), FuelType::Hydrolox);
+        assert_eq!(engine.scale, 2.0);
+        assert!(engine.can_modify());
+    }
+
+    #[test]
+    fn test_fuel_type_index_roundtrip() {
+        for i in 0..3 {
+            let ft = FuelType::from_index(i).unwrap();
+            assert_eq!(ft.index(), i);
+        }
+        assert!(FuelType::from_index(3).is_none());
     }
 }

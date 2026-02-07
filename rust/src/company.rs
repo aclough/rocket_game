@@ -1,7 +1,7 @@
 use crate::contract::{Contract, Destination};
 use crate::design_lineage::DesignLineage;
 use crate::engine::costs;
-use crate::engine_design::{default_engine_lineages, EngineDesign};
+use crate::engine_design::{default_engine_lineages, create_engine, EngineDesign, FuelType};
 use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, WorkEvent};
 use crate::flaw::FlawGenerator;
 use crate::launch_site::LaunchSite;
@@ -338,6 +338,76 @@ impl Company {
         let name = design.name.clone();
         self.rocket_designs.push(DesignLineage::new(&name, design));
         self.rocket_designs.len() - 1
+    }
+
+    // ==========================================
+    // Engine Design Management
+    // ==========================================
+
+    /// Create a new engine design with the given fuel type and scale
+    /// Returns the index of the new lineage
+    pub fn create_engine_design(&mut self, fuel_type: FuelType, scale: f64) -> usize {
+        let engine = create_engine(fuel_type, scale);
+        let name = format!("{} Engine #{}", fuel_type.display_name(), self.engine_designs.len() + 1);
+        self.engine_designs.push(DesignLineage::new(&name, engine));
+        self.engine_designs.len() - 1
+    }
+
+    /// Duplicate an engine design lineage
+    /// Returns the index of the new lineage
+    pub fn duplicate_engine_design(&mut self, index: usize) -> Option<usize> {
+        if let Some(lineage) = self.engine_designs.get(index) {
+            let mut new_engine = lineage.head().clone();
+            // Reset to untested so the copy can be modified
+            new_engine.status = crate::engine::EngineStatus::Untested;
+            new_engine.active_flaws.clear();
+            new_engine.fixed_flaws.clear();
+            new_engine.flaws_generated = false;
+            let new_name = format!("{} (Copy)", lineage.name);
+            self.engine_designs.push(DesignLineage::new(&new_name, new_engine));
+            Some(self.engine_designs.len() - 1)
+        } else {
+            None
+        }
+    }
+
+    /// Delete an engine design lineage by index
+    /// Prevents deleting the last engine
+    pub fn delete_engine_design(&mut self, index: usize) -> bool {
+        if index < self.engine_designs.len() && self.engine_designs.len() > 1 {
+            self.engine_designs.remove(index);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Rename an engine design lineage
+    pub fn rename_engine_design(&mut self, index: usize, new_name: &str) -> bool {
+        if let Some(lineage) = self.engine_designs.get_mut(index) {
+            lineage.name = new_name.to_string();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Set the scale of an engine design
+    pub fn set_engine_design_scale(&mut self, index: usize, scale: f64) -> bool {
+        if let Some(lineage) = self.engine_designs.get_mut(index) {
+            lineage.head_mut().set_scale(scale)
+        } else {
+            false
+        }
+    }
+
+    /// Set the fuel type of an engine design
+    pub fn set_engine_design_fuel_type(&mut self, index: usize, fuel_type: FuelType) -> bool {
+        if let Some(lineage) = self.engine_designs.get_mut(index) {
+            lineage.head_mut().set_fuel_type(fuel_type)
+        } else {
+            false
+        }
     }
 
     // ==========================================
@@ -783,5 +853,71 @@ impl Company {
 impl Default for Company {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine_design::FuelType;
+
+    #[test]
+    fn test_create_engine_design() {
+        let mut company = Company::new();
+        let initial_count = company.engine_designs.len();
+        let idx = company.create_engine_design(FuelType::Kerolox, 1.5);
+        assert_eq!(company.engine_designs.len(), initial_count + 1);
+        let snap = company.engine_designs[idx].head().snapshot(idx, &company.engine_designs[idx].name);
+        assert_eq!(snap.thrust_kn, 500.0 * 1.5);
+    }
+
+    #[test]
+    fn test_duplicate_engine_design() {
+        let mut company = Company::new();
+        let new_idx = company.duplicate_engine_design(0).unwrap();
+        assert!(company.engine_designs[new_idx].name.contains("Copy"));
+        // Duplicate should be untested and have no flaws
+        assert!(company.engine_designs[new_idx].head().can_modify());
+        assert!(!company.engine_designs[new_idx].head().flaws_generated);
+    }
+
+    #[test]
+    fn test_delete_engine_design() {
+        let mut company = Company::new();
+        let count = company.engine_designs.len();
+        assert!(company.delete_engine_design(0));
+        assert_eq!(company.engine_designs.len(), count - 1);
+    }
+
+    #[test]
+    fn test_cannot_delete_last_engine() {
+        let mut company = Company::new();
+        // Delete down to 1
+        while company.engine_designs.len() > 1 {
+            company.delete_engine_design(0);
+        }
+        assert!(!company.delete_engine_design(0));
+        assert_eq!(company.engine_designs.len(), 1);
+    }
+
+    #[test]
+    fn test_rename_engine_design() {
+        let mut company = Company::new();
+        assert!(company.rename_engine_design(0, "Custom Name"));
+        assert_eq!(company.engine_designs[0].name, "Custom Name");
+    }
+
+    #[test]
+    fn test_set_engine_design_scale() {
+        let mut company = Company::new();
+        assert!(company.set_engine_design_scale(0, 2.5));
+        assert_eq!(company.engine_designs[0].head().scale, 2.5);
+    }
+
+    #[test]
+    fn test_set_engine_design_fuel_type() {
+        let mut company = Company::new();
+        assert!(company.set_engine_design_fuel_type(0, FuelType::Solid));
+        assert_eq!(company.engine_designs[0].head().fuel_type(), FuelType::Solid);
     }
 }

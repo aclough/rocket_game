@@ -179,6 +179,27 @@ theme_override_colors/font_color = Color(0.5, 0.5, 0.5, 1)
 text = "Start from scratch with no stages"
 autowrap_mode = 2
 
+[node name="EngineSeparator" type="HSeparator" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox"]
+layout_mode = 2
+
+[node name="EngineTitle" type="Label" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "CREATE NEW ENGINE"
+
+[node name="NewEngineButton" type="Button" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 60)
+theme_override_font_sizes/font_size = 16
+text = "NEW ENGINE"
+
+[node name="EngineDesc" type="Label" parent="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.5, 0.5, 0.5, 1)
+text = "Design a new engine with custom fuel type and scale"
+autowrap_mode = 2
+
 [node name="FooterPanel" type="PanelContainer" parent="MarginContainer/VBox"]
 layout_mode = 2
 
@@ -205,4 +226,5 @@ size_flags_horizontal = 3
 
 [connection signal="pressed" from="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox/NewDefaultButton" to="." method="_on_new_default_pressed"]
 [connection signal="pressed" from="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox/NewEmptyButton" to="." method="_on_new_empty_pressed"]
+[connection signal="pressed" from="MarginContainer/VBox/ContentPanel/ContentMargin/ContentHBox/NewDesignPanel/NewMargin/NewVBox/NewEngineButton" to="." method="_on_new_engine_pressed"]
 [connection signal="pressed" from="MarginContainer/VBox/FooterPanel/FooterMargin/FooterHBox/BackButton" to="." method="_on_back_pressed"]

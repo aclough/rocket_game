@@ -27,7 +27,7 @@ const PAYLOAD_MAX: float = 50000.0
 
 # UI references - Main content
 @onready var stages_container = $MarginContainer/VBox/ContentHBox/StagesPanel/StagesMargin/StagesVBox/StagesScroll/StagesList
-@onready var engines_container = $MarginContainer/VBox/ContentHBox/EnginesPanel/EnginesMargin/EnginesVBox/EnginesList
+@onready var engines_container = $MarginContainer/VBox/ContentHBox/EnginesPanel/EnginesMargin/EnginesVBox/EnginesScroll/EnginesList
 @onready var stages_scroll = $MarginContainer/VBox/ContentHBox/StagesPanel/StagesMargin/StagesVBox/StagesScroll
 
 # UI references - Footer
@@ -75,6 +75,8 @@ func _on_visibility_changed():
 		# Update header when screen becomes visible (payload/target may have changed)
 		_update_header()
 		_update_dv_display()
+		# Refresh engine cards in case engines were added/modified
+		_setup_engine_cards()
 
 func _setup_engine_cards():
 	# Clear existing
@@ -202,7 +204,7 @@ func _update_stage_values_only():
 	# Update values in existing stage cards without rebuilding
 	var stage_count = designer.get_stage_count()
 	for i in range(min(stage_count, _stage_cards.size())):
-		var display_index = stage_count - 1 - i  # Reverse order
+		var _display_index = stage_count - 1 - i  # Reverse order
 		var card_data = _stage_cards[i]
 		if card_data.has("stage_index"):
 			var stage_index = card_data["stage_index"]
@@ -752,7 +754,7 @@ func _on_save_button_pressed():
 			designer.set_design_name(new_name)
 			# Sync design from designer to game state before saving
 			game_manager.sync_design_from(designer)
-			game_manager.save_current_design(designer)
+			game_manager.ensure_design_saved(designer)
 			design_saved.emit()
 			dialog.queue_free()
 			_show_save_notification(new_name)
@@ -780,6 +782,14 @@ func _show_save_notification(name: String):
 
 func set_game_manager(gm: GameManager):
 	game_manager = gm
+	if game_manager and not game_manager.is_connected("designs_changed", _on_designs_changed):
+		game_manager.connect("designs_changed", _on_designs_changed)
+
+func _on_designs_changed():
+	# Sync fresh engine data from Company to Designer, then rebuild cards
+	if game_manager:
+		game_manager.sync_engines_to_designer(designer)
+	_setup_engine_cards()
 
 # Called by main scene to get the designer node
 func get_designer() -> RocketDesigner:

@@ -53,16 +53,14 @@ impl RocketDesigner {
     /// Returns the number of available engine types
     #[func]
     pub fn get_engine_type_count(&self) -> i32 {
-        // 3 default engine designs: 0=Hydrolox, 1=Kerolox, 2=Solid
-        3
+        self.engine_snapshots.len() as i32
     }
 
     /// Returns the name of an engine type by index
-    /// 0 = Hydrolox, 1 = Kerolox, 2 = Solid
     #[func]
     pub fn get_engine_name(&self, engine_type: i32) -> GString {
-        if engine_type >= 0 && (engine_type as usize) < 3 {
-            GString::from(default_snapshot(engine_type as usize).name.as_str())
+        if engine_type >= 0 && (engine_type as usize) < self.engine_snapshots.len() {
+            GString::from(self.engine_snapshots[engine_type as usize].name.as_str())
         } else {
             GString::from("Unknown")
         }
@@ -71,8 +69,8 @@ impl RocketDesigner {
     /// Returns the mass of an engine type in kg
     #[func]
     pub fn get_engine_mass(&self, engine_type: i32) -> f64 {
-        if engine_type >= 0 && (engine_type as usize) < 3 {
-            default_snapshot(engine_type as usize).mass_kg
+        if engine_type >= 0 && (engine_type as usize) < self.engine_snapshots.len() {
+            self.engine_snapshots[engine_type as usize].mass_kg
         } else {
             0.0
         }
@@ -81,8 +79,8 @@ impl RocketDesigner {
     /// Returns the thrust of an engine type in kN
     #[func]
     pub fn get_engine_thrust(&self, engine_type: i32) -> f64 {
-        if engine_type >= 0 && (engine_type as usize) < 3 {
-            default_snapshot(engine_type as usize).thrust_kn
+        if engine_type >= 0 && (engine_type as usize) < self.engine_snapshots.len() {
+            self.engine_snapshots[engine_type as usize].thrust_kn
         } else {
             0.0
         }
@@ -91,8 +89,8 @@ impl RocketDesigner {
     /// Returns the exhaust velocity of an engine type in m/s
     #[func]
     pub fn get_engine_exhaust_velocity(&self, engine_type: i32) -> f64 {
-        if engine_type >= 0 && (engine_type as usize) < 3 {
-            default_snapshot(engine_type as usize).exhaust_velocity_ms
+        if engine_type >= 0 && (engine_type as usize) < self.engine_snapshots.len() {
+            self.engine_snapshots[engine_type as usize].exhaust_velocity_ms
         } else {
             0.0
         }
@@ -109,8 +107,8 @@ impl RocketDesigner {
     /// Check if an engine type is a solid rocket motor
     #[func]
     pub fn is_engine_type_solid(&self, engine_type: i32) -> bool {
-        if engine_type >= 0 && (engine_type as usize) < 3 {
-            default_snapshot(engine_type as usize).is_solid
+        if engine_type >= 0 && (engine_type as usize) < self.engine_snapshots.len() {
+            self.engine_snapshots[engine_type as usize].is_solid
         } else {
             false
         }
@@ -183,12 +181,13 @@ impl RocketDesigner {
     /// Returns the index of the new stage
     #[func]
     pub fn add_stage(&mut self, engine_type: i32) -> i32 {
-        let id = if engine_type >= 0 && (engine_type as usize) < 3 {
+        let id = if engine_type >= 0 && (engine_type as usize) < self.engine_snapshots.len() {
             engine_type as usize
         } else {
             1 // Default to Kerolox
         };
-        let index = self.design.add_stage(default_snapshot(id)) as i32;
+        let snapshot = self.engine_snapshots[id].clone();
+        let index = self.design.add_stage(snapshot) as i32;
         self.emit_design_changed();
         index
     }
@@ -562,8 +561,8 @@ impl RocketDesigner {
     /// Gets the cost of a single engine of the given type in dollars
     #[func]
     pub fn get_engine_cost(&self, engine_type: i32) -> f64 {
-        if engine_type >= 0 && (engine_type as usize) < 3 {
-            default_snapshot(engine_type as usize).base_cost
+        if engine_type >= 0 && (engine_type as usize) < self.engine_snapshots.len() {
+            self.engine_snapshots[engine_type as usize].base_cost
         } else {
             0.0
         }
@@ -572,8 +571,8 @@ impl RocketDesigner {
     /// Gets the propellant density for an engine type in kg/m³
     #[func]
     pub fn get_propellant_density(&self, engine_type: i32) -> f64 {
-        if engine_type >= 0 && (engine_type as usize) < 3 {
-            default_snapshot(engine_type as usize).propellant_density
+        if engine_type >= 0 && (engine_type as usize) < self.engine_snapshots.len() {
+            self.engine_snapshots[engine_type as usize].propellant_density
         } else {
             0.0
         }

@@ -901,6 +901,25 @@ impl GameManager {
         designer.bind_mut().set_finance(self.finance.clone());
     }
 
+    /// Sync only engine data (snapshots + flaws) from Company to a RocketDesigner
+    /// without resetting the rocket design. Use when engines change while user is editing.
+    #[func]
+    pub fn sync_engines_to_designer(&self, mut designer: Gd<RocketDesigner>) {
+        let snapshots: Vec<_> = self.state.player_company.engine_designs
+            .iter()
+            .enumerate()
+            .map(|(i, lineage)| lineage.head().snapshot(i, &lineage.name))
+            .collect();
+        let flaws: Vec<_> = self.state.player_company.engine_designs
+            .iter()
+            .map(|lineage| {
+                let head = lineage.head();
+                (head.active_flaws.clone(), head.fixed_flaws.clone())
+            })
+            .collect();
+        designer.bind_mut().sync_engine_data(snapshots, flaws);
+    }
+
     // ==========================================
     // Design Status Management
     // ==========================================
@@ -1515,6 +1534,184 @@ impl GameManager {
         }
 
         dict
+    }
+
+    // ==========================================
+    // Engine Design CRUD
+    // ==========================================
+
+    /// Create a new engine design with the given fuel type and scale
+    /// Returns the index of the new lineage
+    #[func]
+    pub fn create_engine_design(&mut self, fuel_type: i32, scale: f64) -> i32 {
+        let ft = crate::engine_design::FuelType::from_index(fuel_type as usize).unwrap_or(crate::engine_design::FuelType::Kerolox);
+        let idx = self.state.player_company.create_engine_design(ft, scale);
+        self.base_mut().emit_signal("designs_changed", &[]);
+        idx as i32
+    }
+
+    /// Duplicate an engine design lineage
+    /// Returns the new index or -1 on failure
+    #[func]
+    pub fn duplicate_engine_design(&mut self, index: i32) -> i32 {
+        if index < 0 {
+            return -1;
+        }
+        match self.state.player_company.duplicate_engine_design(index as usize) {
+            Some(new_index) => {
+                self.base_mut().emit_signal("designs_changed", &[]);
+                new_index as i32
+            }
+            None => -1,
+        }
+    }
+
+    /// Delete an engine design lineage
+    #[func]
+    pub fn delete_engine_design(&mut self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let result = self.state.player_company.delete_engine_design(index as usize);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Rename an engine design lineage
+    #[func]
+    pub fn rename_engine_design(&mut self, index: i32, new_name: GString) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let result = self.state.player_company.rename_engine_design(index as usize, &new_name.to_string());
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    // ==========================================
+    // Engine Design Modification
+    // ==========================================
+
+    /// Set the scale of an engine design
+    #[func]
+    pub fn set_engine_design_scale(&mut self, index: i32, scale: f64) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let result = self.state.player_company.set_engine_design_scale(index as usize, scale);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Set the fuel type of an engine design
+    #[func]
+    pub fn set_engine_design_fuel_type(&mut self, index: i32, fuel_type: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let ft = match crate::engine_design::FuelType::from_index(fuel_type as usize) {
+            Some(ft) => ft,
+            None => return false,
+        };
+        let result = self.state.player_company.set_engine_design_fuel_type(index as usize, ft);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Check if an engine design can be modified (only when Untested)
+    #[func]
+    pub fn can_modify_engine_design(&self, index: i32) -> bool {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            self.state.player_company.engine_designs[index as usize].head().can_modify()
+        } else {
+            false
+        }
+    }
+
+    // ==========================================
+    // Engine Design Stat Queries
+    // ==========================================
+
+    /// Get the scale of an engine design
+    #[func]
+    pub fn get_engine_design_scale(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            self.state.player_company.engine_designs[index as usize].head().scale
+        } else {
+            1.0
+        }
+    }
+
+    /// Get the fuel type index of an engine design (0=Kerolox, 1=Hydrolox, 2=Solid)
+    #[func]
+    pub fn get_engine_design_fuel_type(&self, index: i32) -> i32 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            self.state.player_company.engine_designs[index as usize].head().fuel_type().index() as i32
+        } else {
+            0
+        }
+    }
+
+    /// Get the fuel type display name of an engine design
+    #[func]
+    pub fn get_engine_design_fuel_type_name(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            GString::from(self.state.player_company.engine_designs[index as usize].head().fuel_type().display_name())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Get the thrust of an engine design (kN)
+    #[func]
+    pub fn get_engine_design_thrust(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let lineage = &self.state.player_company.engine_designs[index as usize];
+            lineage.head().snapshot(index as usize, &lineage.name).thrust_kn
+        } else {
+            0.0
+        }
+    }
+
+    /// Get the exhaust velocity of an engine design (m/s)
+    #[func]
+    pub fn get_engine_design_exhaust_velocity(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let lineage = &self.state.player_company.engine_designs[index as usize];
+            lineage.head().snapshot(index as usize, &lineage.name).exhaust_velocity_ms
+        } else {
+            0.0
+        }
+    }
+
+    /// Get the mass of an engine design (kg)
+    #[func]
+    pub fn get_engine_design_mass(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let lineage = &self.state.player_company.engine_designs[index as usize];
+            lineage.head().snapshot(index as usize, &lineage.name).mass_kg
+        } else {
+            0.0
+        }
+    }
+
+    /// Get the cost of an engine design ($)
+    #[func]
+    pub fn get_engine_design_cost(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let lineage = &self.state.player_company.engine_designs[index as usize];
+            lineage.head().snapshot(index as usize, &lineage.name).base_cost
+        } else {
+            0.0
+        }
     }
 
     // ==========================================
