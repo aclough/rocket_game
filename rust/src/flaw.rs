@@ -12,9 +12,9 @@ pub struct Flaw {
     pub name: String,
     /// Detailed description of the flaw
     pub description: String,
-    /// Base chance to cause failure (0.05 - 0.20)
+    /// Base chance to cause failure (0.005 - 1.0), drawn from global distribution
     pub failure_rate: f64,
-    /// Discovery modifier for testing (0.6 - 1.0)
+    /// Discovery modifier for testing (0.1 - 1.0), drawn uniformly
     /// Higher means easier to discover during testing
     pub testing_modifier: f64,
     /// Which launch event type triggers this flaw
@@ -102,14 +102,13 @@ impl FlawTrigger {
     }
 }
 
-/// Template for generating flaws
+/// Template for generating flaws — just names, descriptions, and trigger types.
+/// Numeric values (failure_rate, testing_modifier) are drawn from global distributions.
 #[derive(Clone, Debug)]
 pub struct FlawTemplate {
     pub name: &'static str,
     pub description: &'static str,
     pub flaw_type: FlawType,
-    pub failure_rate: f64,
-    pub testing_modifier: f64,
     pub trigger_event_type: FlawTrigger,
 }
 
@@ -120,56 +119,42 @@ pub const LIQUID_ENGINE_FLAW_TEMPLATES: &[FlawTemplate] = &[
         name: "Turbopump Bearing Defect",
         description: "Microscopic imperfections in turbopump bearings cause premature wear and potential seizure during high-speed operation.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.12,
-        testing_modifier: 0.9,
         trigger_event_type: FlawTrigger::Ignition,
     },
     FlawTemplate {
         name: "Combustion Chamber Crack",
         description: "Hairline fractures in the combustion chamber wall can propagate under thermal stress, leading to catastrophic failure.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.15,
-        testing_modifier: 0.7,
         trigger_event_type: FlawTrigger::Ignition,
     },
     FlawTemplate {
         name: "Fuel Injector Misalignment",
         description: "Slight misalignment in fuel injectors causes uneven combustion, hot spots, and potential burnthrough.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.10,
-        testing_modifier: 0.85,
         trigger_event_type: FlawTrigger::Ignition,
     },
     FlawTemplate {
         name: "Gimbal Actuator Weakness",
         description: "Hydraulic actuators for engine gimbaling have insufficient strength for the required thrust vector control loads.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.08,
-        testing_modifier: 0.95,
         trigger_event_type: FlawTrigger::Ignition,
     },
     FlawTemplate {
         name: "Propellant Valve Seal",
         description: "Main propellant valve seals degrade under cryogenic conditions, causing leaks and pressure loss.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.10,
-        testing_modifier: 0.8,
         trigger_event_type: FlawTrigger::Ignition,
     },
     FlawTemplate {
         name: "Igniter Reliability Issue",
         description: "Redundant igniters have common-mode failure vulnerability under certain environmental conditions.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.09,
-        testing_modifier: 0.88,
         trigger_event_type: FlawTrigger::Ignition,
     },
     FlawTemplate {
         name: "Turbine Blade Resonance",
         description: "Turbine blades resonate at certain RPM ranges, causing metal fatigue and eventual failure.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.11,
-        testing_modifier: 0.75,
         trigger_event_type: FlawTrigger::Ignition,
     },
 ];
@@ -181,40 +166,30 @@ pub const SOLID_MOTOR_FLAW_TEMPLATES: &[FlawTemplate] = &[
         name: "O-Ring Seal Defect",
         description: "Field joint O-rings lose elasticity in cold conditions, allowing hot gas blow-by and joint failure.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.12,
-        testing_modifier: 0.7,
         trigger_event_type: FlawTrigger::Ignition,
     },
     FlawTemplate {
         name: "Propellant Grain Crack",
         description: "Internal cracks in the solid propellant grain cause uneven burning and potential case burn-through.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.15,
-        testing_modifier: 0.6,
         trigger_event_type: FlawTrigger::Ignition,
     },
     FlawTemplate {
         name: "Nozzle Throat Erosion",
         description: "Excessive erosion of the nozzle throat causes loss of chamber pressure and thrust reduction.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.10,
-        testing_modifier: 0.85,
         trigger_event_type: FlawTrigger::Ignition,
     },
     FlawTemplate {
         name: "Case Insulation Failure",
         description: "Internal insulation fails to protect the motor case from combustion heat, causing structural failure.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.08,
-        testing_modifier: 0.8,
         trigger_event_type: FlawTrigger::Ignition,
     },
     FlawTemplate {
         name: "Igniter Squib Malfunction",
         description: "Pyrotechnic igniter fails to produce sufficient heat to reliably ignite the main propellant grain.",
         flaw_type: FlawType::Engine,
-        failure_rate: 0.09,
-        testing_modifier: 0.9,
         trigger_event_type: FlawTrigger::Ignition,
     },
 ];
@@ -225,128 +200,101 @@ pub const DESIGN_FLAW_TEMPLATES: &[FlawTemplate] = &[
         name: "Structural Resonance",
         description: "Vehicle natural frequency matches aerodynamic buffet frequency during max-Q, causing destructive oscillations.",
         flaw_type: FlawType::Design,
-        failure_rate: 0.15,
-        testing_modifier: 0.7,
         trigger_event_type: FlawTrigger::MaxQ,
     },
     FlawTemplate {
         name: "Stage Separation Bolt Defect",
         description: "Explosive bolts for stage separation have inconsistent charge, leading to asymmetric separation.",
         flaw_type: FlawType::Design,
-        failure_rate: 0.12,
-        testing_modifier: 0.85,
         trigger_event_type: FlawTrigger::Separation,
     },
     FlawTemplate {
         name: "Guidance Software Bug",
         description: "Edge case in guidance algorithms causes incorrect attitude determination under specific orbital conditions.",
         flaw_type: FlawType::Design,
-        failure_rate: 0.10,
-        testing_modifier: 0.6,
         trigger_event_type: FlawTrigger::PayloadRelease,
     },
     FlawTemplate {
         name: "Propellant Slosh Instability",
         description: "Propellant sloshing in partially-filled tanks couples with control system, causing loss of control.",
         flaw_type: FlawType::Design,
-        failure_rate: 0.08,
-        testing_modifier: 0.75,
         trigger_event_type: FlawTrigger::MaxQ,
     },
     FlawTemplate {
         name: "Thermal Protection Gap",
         description: "Gaps in aerodynamic heating protection allow hot gases to damage structure during ascent.",
         flaw_type: FlawType::Design,
-        failure_rate: 0.10,
-        testing_modifier: 0.8,
         trigger_event_type: FlawTrigger::MaxQ,
     },
     FlawTemplate {
         name: "Interstage Coupler Flaw",
         description: "Interstage structure has insufficient strength for the separation loads under all flight conditions.",
         flaw_type: FlawType::Design,
-        failure_rate: 0.12,
-        testing_modifier: 0.9,
         trigger_event_type: FlawTrigger::Separation,
     },
     FlawTemplate {
         name: "Avionics Thermal Margin",
         description: "Flight computer cooling is inadequate for extended powered flight, causing thermal shutdown.",
         flaw_type: FlawType::Design,
-        failure_rate: 0.07,
-        testing_modifier: 0.65,
         trigger_event_type: FlawTrigger::PayloadRelease,
     },
     FlawTemplate {
         name: "Fairing Separation Failure",
         description: "Payload fairing separation system has unreliable pyrotechnic actuators.",
         flaw_type: FlawType::Design,
-        failure_rate: 0.09,
-        testing_modifier: 0.85,
         trigger_event_type: FlawTrigger::Separation,
     },
     FlawTemplate {
         name: "Liftoff Clamp Release",
         description: "Hold-down clamps release sequence has timing issues that can tip the vehicle.",
         flaw_type: FlawType::Design,
-        failure_rate: 0.06,
-        testing_modifier: 0.92,
         trigger_event_type: FlawTrigger::Liftoff,
     },
     FlawTemplate {
         name: "Acoustic Vibration Damage",
         description: "Launch acoustic environment exceeds component qualification levels in some areas.",
         flaw_type: FlawType::Design,
-        failure_rate: 0.08,
-        testing_modifier: 0.78,
         trigger_event_type: FlawTrigger::Liftoff,
     },
 ];
 
 impl Flaw {
-    /// Generate a randomized failure rate based on a template value.
-    /// Uses a log-normal distribution to create a "long tail" of low-likelihood flaws.
-    /// Most flaws will be near the template value, but some will be much lower or higher.
-    fn randomize_failure_rate(base_rate: f64) -> f64 {
+    /// Generate a randomized failure rate from a global distribution.
+    /// Uses a log-normal distribution centered on ~25% failure rate.
+    /// Designs fresh off the blackboard are dangerous.
+    /// sigma = 0.8 gives wide spread for varied gameplay.
+    /// Clamped to [0.5%, 100%].
+    fn randomize_failure_rate() -> f64 {
         let mut rng = rand::thread_rng();
 
-        // Log-normal distribution centered on base_rate
-        // sigma = 0.6 gives good spread: ~68% of values between base_rate/1.8 and base_rate*1.8
-        // and a long tail of low-probability flaws
-        let mu = base_rate.ln();
-        let sigma = 0.6;
+        let mu = (0.25_f64).ln();
+        let sigma = 0.8;
 
         if let Ok(dist) = LogNormal::new(mu, sigma) {
-            let rate = dist.sample(&mut rng);
-            // Clamp to reasonable range: 0.5% to 30%
-            rate.clamp(0.005, 0.30)
+            dist.sample(&mut rng).clamp(0.005, 1.0)
         } else {
-            // Fallback to base rate if distribution creation fails
-            base_rate
+            0.25
         }
     }
 
-    /// Generate a randomized testing modifier.
+    /// Generate a randomized testing modifier from a uniform distribution.
     /// Higher values mean easier to discover during testing.
-    fn randomize_testing_modifier(base_modifier: f64) -> f64 {
+    /// Range: [0.1, 1.0]
+    fn randomize_testing_modifier() -> f64 {
         let mut rng = rand::thread_rng();
-
-        // Add some uniform noise to the testing modifier
-        // Range: base ± 0.2, clamped to [0.3, 1.0]
-        let noise = rng.gen_range(-0.2..0.2);
-        (base_modifier + noise).clamp(0.3, 1.0)
+        rng.gen_range(0.1..=1.0)
     }
 
-    /// Create a new flaw from a template with a unique ID
-    /// Failure rate and testing modifier are randomized around the template values
+    /// Create a new flaw from a template with a unique ID.
+    /// Failure rate and testing modifier are drawn from global distributions.
     pub fn from_template(template: &FlawTemplate, id: u32) -> Self {
         Self {
             id,
             flaw_type: template.flaw_type.clone(),
             name: template.name.to_string(),
             description: template.description.to_string(),
-            failure_rate: Self::randomize_failure_rate(template.failure_rate),
-            testing_modifier: Self::randomize_testing_modifier(template.testing_modifier),
+            failure_rate: Self::randomize_failure_rate(),
+            testing_modifier: Self::randomize_testing_modifier(),
             trigger_event_type: template.trigger_event_type.clone(),
             discovered: false,
             fixed: false,
@@ -354,16 +302,16 @@ impl Flaw {
         }
     }
 
-    /// Create a new engine flaw from a template with a specific engine type
-    /// Failure rate and testing modifier are randomized around the template values
+    /// Create a new engine flaw from a template with a specific engine type.
+    /// Failure rate and testing modifier are drawn from global distributions.
     pub fn from_template_with_engine(template: &FlawTemplate, id: u32, engine_type: i32) -> Self {
         Self {
             id,
             flaw_type: template.flaw_type.clone(),
             name: template.name.to_string(),
             description: template.description.to_string(),
-            failure_rate: Self::randomize_failure_rate(template.failure_rate),
-            testing_modifier: Self::randomize_testing_modifier(template.testing_modifier),
+            failure_rate: Self::randomize_failure_rate(),
+            testing_modifier: Self::randomize_testing_modifier(),
             trigger_event_type: template.trigger_event_type.clone(),
             discovered: false,
             fixed: false,
