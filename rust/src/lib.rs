@@ -1,5 +1,6 @@
 use godot::prelude::*;
 
+pub mod company;
 pub mod contract;
 pub mod engine;
 pub mod engineering_team;

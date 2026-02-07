@@ -95,12 +95,12 @@ impl GameManager {
 
     /// Sync money from PlayerFinance to GameState (call before GameState operations)
     fn sync_money_to_state(&mut self) {
-        self.state.money = self.finance.bind().get_money();
+        self.state.player_company.money = self.finance.bind().get_money();
     }
 
     /// Sync money from GameState to PlayerFinance (call after GameState operations that modify money)
     fn sync_money_from_state(&mut self) {
-        self.finance.bind_mut().set_money(self.state.money);
+        self.finance.bind_mut().set_money(self.state.player_company.money);
     }
 
     /// Get current money
@@ -124,25 +124,25 @@ impl GameManager {
     /// Get total launches
     #[func]
     pub fn get_total_launches(&self) -> i32 {
-        self.state.total_launches as i32
+        self.state.player_company.total_launches as i32
     }
 
     /// Get successful launches
     #[func]
     pub fn get_successful_launches(&self) -> i32 {
-        self.state.successful_launches as i32
+        self.state.player_company.successful_launches as i32
     }
 
     /// Get success rate as percentage
     #[func]
     pub fn get_success_rate(&self) -> f64 {
-        self.state.success_rate()
+        self.state.player_company.success_rate()
     }
 
     /// Check if player is bankrupt
     #[func]
     pub fn is_bankrupt(&self) -> bool {
-        self.state.is_bankrupt()
+        self.state.player_company.is_bankrupt()
     }
 
     // ==========================================
@@ -152,13 +152,14 @@ impl GameManager {
     /// Get the number of available contracts
     #[func]
     pub fn get_contract_count(&self) -> i32 {
-        self.state.available_contracts.len() as i32
+        self.state.player_company.available_contracts.len() as i32
     }
 
     /// Get contract ID at index
     #[func]
     pub fn get_contract_id(&self, index: i32) -> i32 {
         self.state
+            .player_company
             .available_contracts
             .get(index as usize)
             .map(|c| c.id as i32)
@@ -170,6 +171,7 @@ impl GameManager {
     pub fn get_contract_name(&self, index: i32) -> GString {
         GString::from(
             self.state
+                .player_company
                 .available_contracts
                 .get(index as usize)
                 .map(|c| c.name.as_str())
@@ -182,6 +184,7 @@ impl GameManager {
     pub fn get_contract_description(&self, index: i32) -> GString {
         GString::from(
             self.state
+                .player_company
                 .available_contracts
                 .get(index as usize)
                 .map(|c| c.description.as_str())
@@ -194,6 +197,7 @@ impl GameManager {
     pub fn get_contract_destination(&self, index: i32) -> GString {
         GString::from(
             self.state
+                .player_company
                 .available_contracts
                 .get(index as usize)
                 .map(|c| c.destination.display_name())
@@ -206,6 +210,7 @@ impl GameManager {
     pub fn get_contract_destination_short(&self, index: i32) -> GString {
         GString::from(
             self.state
+                .player_company
                 .available_contracts
                 .get(index as usize)
                 .map(|c| c.destination.short_name())
@@ -217,6 +222,7 @@ impl GameManager {
     #[func]
     pub fn get_contract_delta_v(&self, index: i32) -> f64 {
         self.state
+            .player_company
             .available_contracts
             .get(index as usize)
             .map(|c| c.destination.required_delta_v())
@@ -227,6 +233,7 @@ impl GameManager {
     #[func]
     pub fn get_contract_payload(&self, index: i32) -> f64 {
         self.state
+            .player_company
             .available_contracts
             .get(index as usize)
             .map(|c| c.payload_mass_kg)
@@ -237,6 +244,7 @@ impl GameManager {
     #[func]
     pub fn get_contract_reward(&self, index: i32) -> f64 {
         self.state
+            .player_company
             .available_contracts
             .get(index as usize)
             .map(|c| c.reward)
@@ -247,6 +255,7 @@ impl GameManager {
     #[func]
     pub fn get_contract_reward_formatted(&self, index: i32) -> GString {
         let reward_str = self.state
+            .player_company
             .available_contracts
             .get(index as usize)
             .map(|c| format_money(c.reward))
@@ -257,7 +266,7 @@ impl GameManager {
     /// Select a contract by ID
     #[func]
     pub fn select_contract(&mut self, contract_id: i32) -> bool {
-        if self.state.select_contract(contract_id as u32) {
+        if self.state.player_company.select_contract(contract_id as u32) {
             self.base_mut()
                 .emit_signal("contract_selected", &[Variant::from(contract_id)]);
             true
@@ -269,7 +278,7 @@ impl GameManager {
     /// Check if we can afford to refresh contracts
     #[func]
     pub fn can_refresh_contracts(&self) -> bool {
-        self.state.can_refresh_contracts()
+        self.state.player_company.can_refresh_contracts()
     }
 
     /// Get contract refresh cost
@@ -288,7 +297,7 @@ impl GameManager {
     #[func]
     pub fn refresh_contracts(&mut self) -> bool {
         self.sync_money_to_state();
-        if self.state.refresh_contracts() {
+        if self.state.player_company.refresh_contracts() {
             self.sync_money_from_state();
             self.base_mut().emit_signal("contracts_changed", &[]);
             true
@@ -304,7 +313,7 @@ impl GameManager {
     /// Check if there's an active contract
     #[func]
     pub fn has_active_contract(&self) -> bool {
-        self.state.active_contract.is_some()
+        self.state.player_company.active_contract.is_some()
     }
 
     /// Get active contract name
@@ -312,6 +321,7 @@ impl GameManager {
     pub fn get_active_contract_name(&self) -> GString {
         GString::from(
             self.state
+                .player_company
                 .active_contract
                 .as_ref()
                 .map(|c| c.name.as_str())
@@ -324,6 +334,7 @@ impl GameManager {
     pub fn get_active_contract_destination(&self) -> GString {
         GString::from(
             self.state
+                .player_company
                 .active_contract
                 .as_ref()
                 .map(|c| c.destination.display_name())
@@ -334,19 +345,20 @@ impl GameManager {
     /// Get active contract required delta-v
     #[func]
     pub fn get_active_contract_delta_v(&self) -> f64 {
-        self.state.get_target_delta_v()
+        self.state.player_company.get_target_delta_v()
     }
 
     /// Get active contract payload mass
     #[func]
     pub fn get_active_contract_payload(&self) -> f64 {
-        self.state.get_payload_mass()
+        self.state.player_company.get_payload_mass()
     }
 
     /// Get active contract reward
     #[func]
     pub fn get_active_contract_reward(&self) -> f64 {
         self.state
+            .player_company
             .active_contract
             .as_ref()
             .map(|c| c.reward)
@@ -357,6 +369,7 @@ impl GameManager {
     #[func]
     pub fn get_active_contract_reward_formatted(&self) -> GString {
         let reward_str = self.state
+            .player_company
             .active_contract
             .as_ref()
             .map(|c| format_money(c.reward))
@@ -367,7 +380,7 @@ impl GameManager {
     /// Abandon the current contract
     #[func]
     pub fn abandon_contract(&mut self) {
-        self.state.abandon_contract();
+        self.state.player_company.abandon_contract();
         self.base_mut().emit_signal("contracts_changed", &[]);
     }
 
@@ -379,8 +392,9 @@ impl GameManager {
     #[func]
     pub fn complete_contract(&mut self) -> f64 {
         self.sync_money_to_state();
-        let reward = self.state.complete_contract();
+        let reward = self.state.player_company.complete_contract();
         if reward > 0.0 {
+            self.state.turn += 1;
             self.sync_money_from_state();
             // Launch takes 30 days
             self.advance_time_days(30);
@@ -398,7 +412,7 @@ impl GameManager {
     #[func]
     pub fn fail_contract(&mut self) {
         self.sync_money_to_state();
-        self.state.fail_contract();
+        self.state.player_company.fail_contract();
         self.sync_money_from_state();
         // Launch takes 30 days even on failure
         self.advance_time_days(30);
@@ -472,7 +486,7 @@ impl GameManager {
     /// Get number of saved designs
     #[func]
     pub fn get_saved_design_count(&self) -> i32 {
-        self.state.get_saved_design_count() as i32
+        self.state.player_company.get_saved_design_count() as i32
     }
 
     /// Get design name at index
@@ -483,6 +497,7 @@ impl GameManager {
         }
         GString::from(
             self.state
+                .player_company
                 .get_saved_design(index as usize)
                 .map(|d| d.name.as_str())
                 .unwrap_or("")
@@ -496,6 +511,7 @@ impl GameManager {
             return 0;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.stage_count() as i32)
             .unwrap_or(0)
@@ -508,6 +524,7 @@ impl GameManager {
             return 0.0;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.total_effective_delta_v())
             .unwrap_or(0.0)
@@ -520,6 +537,7 @@ impl GameManager {
             return 0.0;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.total_cost())
             .unwrap_or(0.0)
@@ -532,6 +550,7 @@ impl GameManager {
             return 0.0;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.total_wet_mass_kg())
             .unwrap_or(0.0)
@@ -544,6 +563,7 @@ impl GameManager {
             return 0.0;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.estimate_success_rate_with_flaws())
             .unwrap_or(0.0)
@@ -556,6 +576,7 @@ impl GameManager {
             return false;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.has_flaws_generated())
             .unwrap_or(false)
@@ -568,6 +589,7 @@ impl GameManager {
             return 0;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.get_discovered_flaw_count() as i32)
             .unwrap_or(0)
@@ -580,6 +602,7 @@ impl GameManager {
             return 0;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.get_fixed_flaw_count() as i32)
             .unwrap_or(0)
@@ -592,7 +615,7 @@ impl GameManager {
         if index < 0 {
             return result;
         }
-        if let Some(design) = self.state.get_saved_design(index as usize) {
+        if let Some(design) = self.state.player_company.get_saved_design(index as usize) {
             for flaw in &design.active_flaws {
                 if flaw.discovered && !flaw.fixed {
                     result.push(&GString::from(flaw.name.as_str()));
@@ -609,7 +632,7 @@ impl GameManager {
         if index < 0 {
             return result;
         }
-        if let Some(design) = self.state.get_saved_design(index as usize) {
+        if let Some(design) = self.state.player_company.get_saved_design(index as usize) {
             for flaw in &design.active_flaws {
                 if flaw.fixed {
                     result.push(&GString::from(flaw.name.as_str()));
@@ -622,7 +645,7 @@ impl GameManager {
     /// Save current design to saved list
     #[func]
     pub fn save_current_design(&mut self) -> i32 {
-        let index = self.state.save_current_design();
+        let index = self.state.player_company.save_current_design();
         self.base_mut().emit_signal("designs_changed", &[]);
         index as i32
     }
@@ -630,7 +653,7 @@ impl GameManager {
     /// Save current design with a specific name
     #[func]
     pub fn save_design_as(&mut self, name: GString) -> i32 {
-        let index = self.state.save_design_as(&name.to_string());
+        let index = self.state.player_company.save_design_as(&name.to_string());
         self.base_mut().emit_signal("designs_changed", &[]);
         index as i32
     }
@@ -642,10 +665,10 @@ impl GameManager {
             self.current_saved_design_index = None;
             return false;
         }
-        let result = self.state.load_design(index as usize);
+        let result = self.state.player_company.load_design(index as usize);
         if result {
             // Set budget to current player money
-            self.state.rocket_design.budget = self.finance.bind().get_money();
+            self.state.player_company.rocket_design.budget = self.finance.bind().get_money();
             self.current_saved_design_index = Some(index as usize);
             self.base_mut().emit_signal("designs_changed", &[]);
         }
@@ -657,8 +680,8 @@ impl GameManager {
     #[func]
     pub fn refresh_current_design(&mut self) -> bool {
         if let Some(index) = self.current_saved_design_index {
-            self.state.load_design(index);
-            self.state.rocket_design.budget = self.finance.bind().get_money();
+            self.state.player_company.load_design(index);
+            self.state.player_company.rocket_design.budget = self.finance.bind().get_money();
             true
         } else {
             false
@@ -671,7 +694,7 @@ impl GameManager {
         if index < 0 {
             return false;
         }
-        let result = self.state.update_saved_design(index as usize);
+        let result = self.state.player_company.update_saved_design(index as usize);
         if result {
             self.base_mut().emit_signal("designs_changed", &[]);
         }
@@ -683,7 +706,7 @@ impl GameManager {
     #[func]
     pub fn update_current_saved_design(&mut self) {
         if let Some(index) = self.current_saved_design_index {
-            self.state.update_saved_design(index);
+            self.state.player_company.update_saved_design(index);
             self.base_mut().emit_signal("designs_changed", &[]);
         }
     }
@@ -694,7 +717,7 @@ impl GameManager {
         if index < 0 {
             return false;
         }
-        let result = self.state.delete_saved_design(index as usize);
+        let result = self.state.player_company.delete_saved_design(index as usize);
         if result {
             self.base_mut().emit_signal("designs_changed", &[]);
         }
@@ -707,7 +730,7 @@ impl GameManager {
         if index < 0 {
             return false;
         }
-        let result = self.state.rename_saved_design(index as usize, &new_name.to_string());
+        let result = self.state.player_company.rename_saved_design(index as usize, &new_name.to_string());
         if result {
             self.base_mut().emit_signal("designs_changed", &[]);
         }
@@ -720,7 +743,7 @@ impl GameManager {
         if index < 0 {
             return -1;
         }
-        match self.state.duplicate_saved_design(index as usize) {
+        match self.state.player_company.duplicate_saved_design(index as usize) {
             Some(new_index) => {
                 self.base_mut().emit_signal("designs_changed", &[]);
                 new_index as i32
@@ -732,31 +755,31 @@ impl GameManager {
     /// Create a new empty design
     #[func]
     pub fn create_new_design(&mut self) {
-        self.state.create_new_design();
+        self.state.player_company.create_new_design();
         // Set budget to current player money
-        self.state.rocket_design.budget = self.finance.bind().get_money();
+        self.state.player_company.rocket_design.budget = self.finance.bind().get_money();
         self.current_saved_design_index = None;
     }
 
     /// Create a new design based on the default template
     #[func]
     pub fn create_default_design(&mut self) {
-        self.state.create_default_design();
+        self.state.player_company.create_default_design();
         // Set budget to current player money
-        self.state.rocket_design.budget = self.finance.bind().get_money();
+        self.state.player_company.rocket_design.budget = self.finance.bind().get_money();
         self.current_saved_design_index = None;
     }
 
     /// Get the current working design name
     #[func]
     pub fn get_current_design_name(&self) -> GString {
-        GString::from(self.state.rocket_design.name.as_str())
+        GString::from(self.state.player_company.rocket_design.name.as_str())
     }
 
     /// Set the current working design name
     #[func]
     pub fn set_current_design_name(&mut self, name: GString) {
-        self.state.rocket_design.name = name.to_string();
+        self.state.player_company.rocket_design.name = name.to_string();
     }
 
     /// Copy design from a RocketDesigner node into the game state
@@ -764,11 +787,11 @@ impl GameManager {
     /// Also updates the saved design if one is being edited
     #[func]
     pub fn sync_design_from(&mut self, designer: Gd<RocketDesigner>) {
-        self.state.rocket_design = designer.bind().get_design_clone();
+        self.state.player_company.rocket_design = designer.bind().get_design_clone();
 
         // Update the saved design if we're editing one
         if let Some(index) = self.current_saved_design_index {
-            self.state.update_saved_design(index);
+            self.state.player_company.update_saved_design(index);
             self.base_mut().emit_signal("designs_changed", &[]);
         }
     }
@@ -783,16 +806,16 @@ impl GameManager {
             index as i32
         } else {
             // Check if a design with this name already exists
-            let current_name = &self.state.rocket_design.name;
-            if let Some(existing_index) = self.state.saved_designs.iter().position(|d| &d.name == current_name) {
+            let current_name = &self.state.player_company.rocket_design.name;
+            if let Some(existing_index) = self.state.player_company.saved_designs.iter().position(|d| &d.name == current_name) {
                 // Update existing design instead of creating duplicate
-                self.state.update_saved_design(existing_index);
+                self.state.player_company.update_saved_design(existing_index);
                 self.current_saved_design_index = Some(existing_index);
                 self.base_mut().emit_signal("designs_changed", &[]);
                 existing_index as i32
             } else {
                 // Save new design
-                let index = self.state.save_current_design();
+                let index = self.state.player_company.save_current_design();
                 self.current_saved_design_index = Some(index);
                 self.base_mut().emit_signal("designs_changed", &[]);
                 index as i32
@@ -805,7 +828,7 @@ impl GameManager {
     /// Sets the design's budget to the current player money
     #[func]
     pub fn sync_design_to(&self, mut designer: Gd<RocketDesigner>) {
-        let mut design = self.state.rocket_design.clone();
+        let mut design = self.state.player_company.rocket_design.clone();
         design.budget = self.finance.bind().get_money();
         designer.bind_mut().set_design(design);
         designer.bind_mut().set_finance(self.finance.clone());
@@ -822,6 +845,7 @@ impl GameManager {
             return GString::from("");
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| GString::from(d.design_status.display_name().as_str()))
             .unwrap_or_default()
@@ -834,6 +858,7 @@ impl GameManager {
             return GString::from("");
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| GString::from(d.design_status.name()))
             .unwrap_or_default()
@@ -846,6 +871,7 @@ impl GameManager {
             return 0.0;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.design_status.progress_fraction())
             .unwrap_or(0.0)
@@ -858,6 +884,7 @@ impl GameManager {
             return false;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.design_status.can_edit())
             .unwrap_or(false)
@@ -870,6 +897,7 @@ impl GameManager {
             return false;
         }
         self.state
+            .player_company
             .get_saved_design(index as usize)
             .map(|d| d.design_status.can_launch())
             .unwrap_or(false)
@@ -911,14 +939,14 @@ impl GameManager {
     /// Returns true if successful
     #[func]
     pub fn submit_design_to_engineering(&mut self, index: i32) -> bool {
-        if index < 0 || index >= self.state.saved_designs.len() as i32 {
+        if index < 0 || index >= self.state.player_company.saved_designs.len() as i32 {
             return false;
         }
-        let result = self.state.saved_designs[index as usize].submit_to_engineering();
+        let result = self.state.player_company.saved_designs[index as usize].submit_to_engineering();
         if result {
             // Generate flaws for the design when submitting to engineering
-            let design = &mut self.state.saved_designs[index as usize];
-            design.generate_flaws(&mut self.state.flaw_generator);
+            let design = &mut self.state.player_company.saved_designs[index as usize];
+            design.generate_flaws(&mut self.state.player_company.flaw_generator);
             self.base_mut().emit_signal("designs_changed", &[]);
         }
         result
@@ -927,10 +955,10 @@ impl GameManager {
     /// Reset a saved design back to Specification status
     #[func]
     pub fn reset_design_to_specification(&mut self, index: i32) -> bool {
-        if index < 0 || index >= self.state.saved_designs.len() as i32 {
+        if index < 0 || index >= self.state.player_company.saved_designs.len() as i32 {
             return false;
         }
-        self.state.saved_designs[index as usize].reset_to_specification();
+        self.state.player_company.saved_designs[index as usize].reset_to_specification();
         self.base_mut().emit_signal("designs_changed", &[]);
         true
     }
@@ -1133,31 +1161,31 @@ impl GameManager {
     /// Get current fame value
     #[func]
     pub fn get_fame(&self) -> f64 {
-        self.state.fame
+        self.state.player_company.fame
     }
 
     /// Get fame formatted as integer for display
     #[func]
     pub fn get_fame_formatted(&self) -> GString {
-        GString::from(format!("{:.0}", self.state.fame).as_str())
+        GString::from(format!("{:.0}", self.state.player_company.fame).as_str())
     }
 
     /// Get fame tier (0-5)
     #[func]
     pub fn get_fame_tier(&self) -> i32 {
-        self.state.get_fame_tier() as i32
+        self.state.player_company.get_fame_tier() as i32
     }
 
     /// Get fame tier name (Unknown, Newcomer, Established, etc.)
     #[func]
     pub fn get_fame_tier_name(&self) -> GString {
-        GString::from(self.state.get_fame_tier_name())
+        GString::from(self.state.player_company.get_fame_tier_name())
     }
 
     /// Adjust fame and emit signal
     fn adjust_fame(&mut self, delta: f64) {
-        self.state.adjust_fame(delta);
-        let new_fame = self.state.fame;
+        self.state.player_company.adjust_fame(delta);
+        let new_fame = self.state.player_company.fame;
         self.base_mut()
             .emit_signal("fame_changed", &[Variant::from(new_fame)]);
     }
@@ -1169,25 +1197,25 @@ impl GameManager {
     /// Get current pad level (1-5)
     #[func]
     pub fn get_pad_level(&self) -> i32 {
-        self.state.launch_site.pad_level as i32
+        self.state.player_company.launch_site.pad_level as i32
     }
 
     /// Get pad level name
     #[func]
     pub fn get_pad_level_name(&self) -> GString {
-        GString::from(self.state.launch_site.pad_level_name())
+        GString::from(self.state.player_company.launch_site.pad_level_name())
     }
 
     /// Get maximum launch mass for current pad
     #[func]
     pub fn get_max_launch_mass(&self) -> f64 {
-        self.state.launch_site.max_launch_mass_kg()
+        self.state.player_company.launch_site.max_launch_mass_kg()
     }
 
     /// Get maximum launch mass formatted (e.g., "200t")
     #[func]
     pub fn get_max_launch_mass_formatted(&self) -> GString {
-        let mass = self.state.launch_site.max_launch_mass_kg();
+        let mass = self.state.player_company.launch_site.max_launch_mass_kg();
         if mass >= 1_000_000.0 {
             GString::from(format!("{:.1}kt", mass / 1_000_000.0).as_str())
         } else {
@@ -1198,13 +1226,13 @@ impl GameManager {
     /// Get cost to upgrade pad
     #[func]
     pub fn get_pad_upgrade_cost(&self) -> f64 {
-        self.state.launch_site.pad_upgrade_cost()
+        self.state.player_company.launch_site.pad_upgrade_cost()
     }
 
     /// Get pad upgrade cost formatted
     #[func]
     pub fn get_pad_upgrade_cost_formatted(&self) -> GString {
-        let cost = self.state.launch_site.pad_upgrade_cost();
+        let cost = self.state.player_company.launch_site.pad_upgrade_cost();
         if cost > 0.0 {
             GString::from(format_money(cost).as_str())
         } else {
@@ -1215,16 +1243,16 @@ impl GameManager {
     /// Check if pad can be upgraded
     #[func]
     pub fn can_upgrade_pad(&self) -> bool {
-        let cost = self.state.launch_site.pad_upgrade_cost();
+        let cost = self.state.player_company.launch_site.pad_upgrade_cost();
         cost > 0.0 && self.finance.bind().get_money() >= cost
     }
 
     /// Upgrade the launch pad (deducts cost)
     #[func]
     pub fn upgrade_pad(&mut self) -> bool {
-        let cost = self.state.launch_site.pad_upgrade_cost();
+        let cost = self.state.player_company.launch_site.pad_upgrade_cost();
         if cost > 0.0 && self.finance.bind_mut().deduct(cost) {
-            let result = self.state.launch_site.upgrade_pad();
+            let result = self.state.player_company.launch_site.upgrade_pad();
             self.emit_money_changed();
             result
         } else {
@@ -1235,13 +1263,13 @@ impl GameManager {
     /// Check if current rocket can be launched at this site
     #[func]
     pub fn can_launch_current_rocket(&self) -> bool {
-        self.state.can_launch_rocket_at_site()
+        self.state.player_company.can_launch_rocket_at_site()
     }
 
     /// Get propellant storage capacity
     #[func]
     pub fn get_propellant_storage(&self) -> f64 {
-        self.state.launch_site.propellant_storage_kg
+        self.state.player_company.launch_site.propellant_storage_kg
     }
 
     // ==========================================
@@ -1251,14 +1279,14 @@ impl GameManager {
     /// Get the number of engineering teams
     #[func]
     pub fn get_team_count(&self) -> i32 {
-        self.state.get_team_count() as i32
+        self.state.player_company.get_team_count() as i32
     }
 
     /// Hire a new engineering team
     /// Returns the team ID
     #[func]
     pub fn hire_team(&mut self) -> i32 {
-        let id = self.state.hire_team();
+        let id = self.state.player_company.hire_team();
         self.base_mut().emit_signal("teams_changed", &[]);
         id as i32
     }
@@ -1267,7 +1295,7 @@ impl GameManager {
     /// Returns true if team was found and removed
     #[func]
     pub fn fire_team(&mut self, team_id: i32) -> bool {
-        let result = self.state.fire_team(team_id as u32);
+        let result = self.state.player_company.fire_team(team_id as u32);
         if result {
             self.base_mut().emit_signal("teams_changed", &[]);
         }
@@ -1278,6 +1306,7 @@ impl GameManager {
     #[func]
     pub fn get_team_name(&self, team_id: i32) -> GString {
         self.state
+            .player_company
             .get_team(team_id as u32)
             .map(|t| GString::from(t.name.as_str()))
             .unwrap_or_default()
@@ -1287,6 +1316,7 @@ impl GameManager {
     #[func]
     pub fn is_team_ramping_up(&self, team_id: i32) -> bool {
         self.state
+            .player_company
             .get_team(team_id as u32)
             .map(|t| t.is_ramping_up())
             .unwrap_or(false)
@@ -1296,6 +1326,7 @@ impl GameManager {
     #[func]
     pub fn get_team_ramp_up_days(&self, team_id: i32) -> i32 {
         self.state
+            .player_company
             .get_team(team_id as u32)
             .map(|t| t.ramp_up_days_remaining as i32)
             .unwrap_or(0)
@@ -1307,7 +1338,7 @@ impl GameManager {
         if design_index < 0 {
             return false;
         }
-        let result = self.state.assign_team_to_design(team_id as u32, design_index as usize);
+        let result = self.state.player_company.assign_team_to_design(team_id as u32, design_index as usize);
         if result {
             self.base_mut().emit_signal("teams_changed", &[]);
         }
@@ -1317,7 +1348,7 @@ impl GameManager {
     /// Assign a team to work on an engine type
     #[func]
     pub fn assign_team_to_engine(&mut self, team_id: i32, engine_type_index: i32) -> bool {
-        let result = self.state.assign_team_to_engine(team_id as u32, engine_type_index);
+        let result = self.state.player_company.assign_team_to_engine(team_id as u32, engine_type_index);
         if result {
             self.base_mut().emit_signal("teams_changed", &[]);
         }
@@ -1327,7 +1358,7 @@ impl GameManager {
     /// Unassign a team from its current work
     #[func]
     pub fn unassign_team(&mut self, team_id: i32) -> bool {
-        let result = self.state.unassign_team(team_id as u32);
+        let result = self.state.player_company.unassign_team(team_id as u32);
         if result {
             self.base_mut().emit_signal("teams_changed", &[]);
         }
@@ -1338,7 +1369,7 @@ impl GameManager {
     #[func]
     pub fn get_unassigned_team_ids(&self) -> Array<i32> {
         let mut result = Array::new();
-        for id in self.state.get_unassigned_team_ids() {
+        for id in self.state.player_company.get_unassigned_team_ids() {
             result.push(id as i32);
         }
         result
@@ -1350,26 +1381,26 @@ impl GameManager {
         if design_index < 0 {
             return 0;
         }
-        self.state.get_teams_on_design(design_index as usize).len() as i32
+        self.state.player_company.get_teams_on_design(design_index as usize).len() as i32
     }
 
     /// Get total monthly salary for all teams
     #[func]
     pub fn get_total_monthly_salary(&self) -> f64 {
-        self.state.get_total_monthly_salary()
+        self.state.player_company.get_total_monthly_salary()
     }
 
     /// Get total monthly salary formatted
     #[func]
     pub fn get_total_monthly_salary_formatted(&self) -> GString {
-        GString::from(format_money(self.state.get_total_monthly_salary()).as_str())
+        GString::from(format_money(self.state.player_company.get_total_monthly_salary()).as_str())
     }
 
     /// Get all team IDs
     #[func]
     pub fn get_all_team_ids(&self) -> Array<i32> {
         let mut result = Array::new();
-        for team in &self.state.teams {
+        for team in &self.state.player_company.teams {
             result.push(team.id as i32);
         }
         result
@@ -1379,6 +1410,7 @@ impl GameManager {
     #[func]
     pub fn is_team_assigned(&self, team_id: i32) -> bool {
         self.state
+            .player_company
             .get_team(team_id as u32)
             .map(|t| t.assignment.is_some())
             .unwrap_or(false)
@@ -1392,7 +1424,7 @@ impl GameManager {
 
         let mut dict = Dictionary::new();
 
-        if let Some(team) = self.state.get_team(team_id as u32) {
+        if let Some(team) = self.state.player_company.get_team(team_id as u32) {
             match &team.assignment {
                 None => {
                     dict.set("type", "none");
@@ -1438,7 +1470,7 @@ impl GameManager {
     #[func]
     pub fn get_engine_status(&mut self, index: i32) -> GString {
         if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let spec = self.state.engine_registry.get_mut(engine_type);
+            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
             GString::from(spec.status.display_name().as_str())
         } else {
             GString::from("")
@@ -1449,7 +1481,7 @@ impl GameManager {
     #[func]
     pub fn get_engine_status_base(&mut self, index: i32) -> GString {
         if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let spec = self.state.engine_registry.get_mut(engine_type);
+            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
             GString::from(spec.status.name())
         } else {
             GString::from("")
@@ -1460,7 +1492,7 @@ impl GameManager {
     #[func]
     pub fn get_engine_progress(&mut self, index: i32) -> f64 {
         if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let spec = self.state.engine_registry.get_mut(engine_type);
+            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
             spec.status.progress_fraction()
         } else {
             0.0
@@ -1472,7 +1504,7 @@ impl GameManager {
     pub fn get_engine_unfixed_flaw_names(&mut self, index: i32) -> Array<GString> {
         let mut result = Array::new();
         if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let spec = self.state.engine_registry.get_mut(engine_type);
+            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
             for name in spec.get_unfixed_flaw_names() {
                 result.push(&GString::from(name.as_str()));
             }
@@ -1485,7 +1517,7 @@ impl GameManager {
     pub fn get_engine_fixed_flaw_names(&mut self, index: i32) -> Array<GString> {
         let mut result = Array::new();
         if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let spec = self.state.engine_registry.get_mut(engine_type);
+            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
             for name in spec.get_fixed_flaw_names() {
                 result.push(&GString::from(name.as_str()));
             }
@@ -1497,8 +1529,8 @@ impl GameManager {
     #[func]
     pub fn submit_engine_to_refining(&mut self, index: i32) -> bool {
         if let Some(engine_type) = crate::engine::EngineType::from_index(index) {
-            let flaw_gen = &mut self.state.flaw_generator;
-            let spec = self.state.engine_registry.get_mut(engine_type);
+            let flaw_gen = &mut self.state.player_company.flaw_generator;
+            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
             let result = spec.submit_to_refining(flaw_gen);
             if result {
                 self.base_mut().emit_signal("designs_changed", &[]);
@@ -1522,8 +1554,8 @@ impl GameManager {
         }
 
         for engine_type in crate::engine::EngineType::all() {
-            let flaw_gen = &mut self.state.flaw_generator;
-            let spec = self.state.engine_registry.get_mut(engine_type);
+            let flaw_gen = &mut self.state.player_company.flaw_generator;
+            let spec = self.state.player_company.engine_registry.get_mut(engine_type);
 
             // Check if this flaw belongs to this engine type
             let mut found_flaw_name = None;
@@ -1551,7 +1583,7 @@ impl GameManager {
     /// Get number of teams working on an engine type
     #[func]
     pub fn get_teams_on_engine_count(&self, engine_type_index: i32) -> i32 {
-        self.state.get_teams_on_engine(engine_type_index).len() as i32
+        self.state.player_company.get_teams_on_engine(engine_type_index).len() as i32
     }
 
     // ==========================================
@@ -1575,9 +1607,9 @@ impl GameManager {
             "Turn: {} | Money: {} | Launches: {}/{} ({:.0}%)",
             self.state.turn,
             format_money(self.finance.bind().get_money()),
-            self.state.successful_launches,
-            self.state.total_launches,
-            self.state.success_rate()
+            self.state.player_company.successful_launches,
+            self.state.player_company.total_launches,
+            self.state.player_company.success_rate()
         );
         GString::from(summary.as_str())
     }
