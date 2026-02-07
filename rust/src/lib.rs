@@ -11,6 +11,7 @@ pub mod launcher;
 pub mod rocket_design;
 pub mod stage;
 pub mod time_system;
+pub mod world_seed;
 
 mod game_manager;
 mod player_finance;

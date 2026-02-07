@@ -1,0 +1,71 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/content/map_content.gd" id="1"]
+
+[node name="MapContent" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="OrbitDiagram" type="Control" parent="CenterContainer"]
+custom_minimum_size = Vector2(800, 600)
+layout_mode = 2
+
+[node name="Legend" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -200.0
+offset_top = -200.0
+offset_right = -20.0
+offset_bottom = -20.0
+grow_horizontal = 0
+grow_vertical = 0
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Legend"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Destinations"
+
+[node name="HSeparator" type="HSeparator" parent="Legend"]
+layout_mode = 2
+
+[node name="LEOLabel" type="Label" parent="Legend"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.3, 1, 0.3, 1)
+text = "LEO - 9.4 km/s"
+
+[node name="MEOLabel" type="Label" parent="Legend"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(1, 1, 0.3, 1)
+text = "MEO - 12.0 km/s"
+
+[node name="GEOLabel" type="Label" parent="Legend"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(1, 0.6, 0.2, 1)
+text = "GEO - 13.8 km/s"
+
+[node name="LunarLabel" type="Label" parent="Legend"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.8, 0.8, 1, 1)
+text = "Lunar - 15.5 km/s"

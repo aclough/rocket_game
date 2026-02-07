@@ -1,0 +1,131 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/content/missions_content.gd" id="1"]
+
+[node name="MissionsContent" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="MarginContainer" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 50
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 50
+theme_override_constants/margin_bottom = 20
+
+[node name="VBox" type="VBoxContainer" parent="MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 15
+
+[node name="TitlePanel" type="PanelContainer" parent="MarginContainer/VBox"]
+layout_mode = 2
+
+[node name="TitleMargin" type="MarginContainer" parent="MarginContainer/VBox/TitlePanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 10
+
+[node name="TitleHBox" type="HBoxContainer" parent="MarginContainer/VBox/TitlePanel/TitleMargin"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="MarginContainer/VBox/TitlePanel/TitleMargin/TitleHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 24
+text = "AVAILABLE CONTRACTS"
+
+[node name="RefreshButton" type="Button" parent="MarginContainer/VBox/TitlePanel/TitleMargin/TitleHBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "REFRESH - $10M"
+
+[node name="ContractsPanel" type="PanelContainer" parent="MarginContainer/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ContractsMargin" type="MarginContainer" parent="MarginContainer/VBox/ContractsPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 10
+
+[node name="ContractsScroll" type="ScrollContainer" parent="MarginContainer/VBox/ContractsPanel/ContractsMargin"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ContractsList" type="VBoxContainer" parent="MarginContainer/VBox/ContractsPanel/ContractsMargin/ContractsScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="ActiveContractPanel" type="PanelContainer" parent="MarginContainer/VBox"]
+visible = false
+layout_mode = 2
+
+[node name="ActiveMargin" type="MarginContainer" parent="MarginContainer/VBox/ActiveContractPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 15
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 15
+
+[node name="ActiveHBox" type="HBoxContainer" parent="MarginContainer/VBox/ActiveContractPanel/ActiveMargin"]
+layout_mode = 2
+theme_override_constants/separation = 30
+
+[node name="ActiveVBox" type="VBoxContainer" parent="MarginContainer/VBox/ActiveContractPanel/ActiveMargin/ActiveHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 5
+
+[node name="ActiveLabel" type="Label" parent="MarginContainer/VBox/ActiveContractPanel/ActiveMargin/ActiveHBox/ActiveVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+text = "ACTIVE CONTRACT"
+
+[node name="ActiveName" type="Label" parent="MarginContainer/VBox/ActiveContractPanel/ActiveMargin/ActiveHBox/ActiveVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "Contract Name"
+
+[node name="ActiveDetails" type="Label" parent="MarginContainer/VBox/ActiveContractPanel/ActiveMargin/ActiveHBox/ActiveVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.8, 0.8, 0.8, 1)
+text = "Destination - 0000 m/s"
+
+[node name="ButtonVBox" type="VBoxContainer" parent="MarginContainer/VBox/ActiveContractPanel/ActiveMargin/ActiveHBox"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 10
+
+[node name="DesignButton" type="Button" parent="MarginContainer/VBox/ActiveContractPanel/ActiveMargin/ActiveHBox/ButtonVBox"]
+custom_minimum_size = Vector2(150, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "DESIGN"
+
+[node name="AbandonButton" type="Button" parent="MarginContainer/VBox/ActiveContractPanel/ActiveMargin/ActiveHBox/ButtonVBox"]
+custom_minimum_size = Vector2(150, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "ABANDON"
+
+[connection signal="pressed" from="MarginContainer/VBox/TitlePanel/TitleMargin/TitleHBox/RefreshButton" to="." method="_on_refresh_button_pressed"]
+[connection signal="pressed" from="MarginContainer/VBox/ActiveContractPanel/ActiveMargin/ActiveHBox/ButtonVBox/DesignButton" to="." method="_on_design_button_pressed"]
+[connection signal="pressed" from="MarginContainer/VBox/ActiveContractPanel/ActiveMargin/ActiveHBox/ButtonVBox/AbandonButton" to="." method="_on_abandon_button_pressed"]

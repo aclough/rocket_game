@@ -1,0 +1,165 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/launch_overlay.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/starfield.gd" id="2"]
+[ext_resource type="PackedScene" path="res://scenes/rocket_sprite.tscn" id="3"]
+[ext_resource type="Script" path="res://scripts/screen_effects.gd" id="4"]
+
+[node name="LaunchOverlay" type="CanvasLayer"]
+layer = 10
+script = ExtResource("1")
+
+[node name="Background" type="ColorRect" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.4, 0.6, 0.9, 1)
+
+[node name="Starfield" type="Control" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2")
+
+[node name="ContentMargin" type="MarginContainer" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 40
+theme_override_constants/margin_top = 40
+theme_override_constants/margin_right = 40
+theme_override_constants/margin_bottom = 40
+
+[node name="VBox" type="VBoxContainer" parent="ContentMargin"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="HeaderPanel" type="PanelContainer" parent="ContentMargin/VBox"]
+layout_mode = 2
+
+[node name="HeaderMargin" type="MarginContainer" parent="ContentMargin/VBox/HeaderPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 15
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 15
+
+[node name="HeaderVBox" type="VBoxContainer" parent="ContentMargin/VBox/HeaderPanel/HeaderMargin"]
+layout_mode = 2
+theme_override_constants/separation = 5
+
+[node name="Title" type="Label" parent="ContentMargin/VBox/HeaderPanel/HeaderMargin/HeaderVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "LAUNCH IN PROGRESS"
+horizontal_alignment = 1
+
+[node name="MissionLabel" type="Label" parent="ContentMargin/VBox/HeaderPanel/HeaderMargin/HeaderVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+text = "Mission: Contract Name"
+horizontal_alignment = 1
+
+[node name="ContentCenter" type="CenterContainer" parent="ContentMargin/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ContentHBox" type="HBoxContainer" parent="ContentMargin/VBox/ContentCenter"]
+layout_mode = 2
+theme_override_constants/separation = 50
+
+[node name="RocketVisual" type="Control" parent="ContentMargin/VBox/ContentCenter/ContentHBox"]
+custom_minimum_size = Vector2(200, 400)
+layout_mode = 2
+
+[node name="RocketSprite" parent="ContentMargin/VBox/ContentCenter/ContentHBox/RocketVisual" instance=ExtResource("3")]
+position = Vector2(100, 350)
+
+[node name="StagesPanel" type="PanelContainer" parent="ContentMargin/VBox/ContentCenter/ContentHBox"]
+custom_minimum_size = Vector2(500, 400)
+layout_mode = 2
+
+[node name="StagesMargin" type="MarginContainer" parent="ContentMargin/VBox/ContentCenter/ContentHBox/StagesPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="StagesVBox" type="VBoxContainer" parent="ContentMargin/VBox/ContentCenter/ContentHBox/StagesPanel/StagesMargin"]
+layout_mode = 2
+theme_override_constants/separation = 15
+
+[node name="StatusLabel" type="Label" parent="ContentMargin/VBox/ContentCenter/ContentHBox/StagesPanel/StagesMargin/StagesVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "Launch Sequence"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="ContentMargin/VBox/ContentCenter/ContentHBox/StagesPanel/StagesMargin/StagesVBox"]
+layout_mode = 2
+
+[node name="StagesScroll" type="ScrollContainer" parent="ContentMargin/VBox/ContentCenter/ContentHBox/StagesPanel/StagesMargin/StagesVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="StagesList" type="VBoxContainer" parent="ContentMargin/VBox/ContentCenter/ContentHBox/StagesPanel/StagesMargin/StagesVBox/StagesScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="ResultPanel" type="PanelContainer" parent="ContentMargin/VBox"]
+visible = false
+layout_mode = 2
+
+[node name="ResultMargin" type="MarginContainer" parent="ContentMargin/VBox/ResultPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="ResultVBox" type="VBoxContainer" parent="ContentMargin/VBox/ResultPanel/ResultMargin"]
+layout_mode = 2
+theme_override_constants/separation = 15
+
+[node name="ResultLabel" type="Label" parent="ContentMargin/VBox/ResultPanel/ResultMargin/ResultVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 36
+text = "RESULT"
+horizontal_alignment = 1
+
+[node name="MessageLabel" type="Label" parent="ContentMargin/VBox/ResultPanel/ResultMargin/ResultVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Message goes here"
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="ContinueButton" type="Button" parent="ContentMargin/VBox/ResultPanel/ResultMargin/ResultVBox"]
+custom_minimum_size = Vector2(0, 50)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "CONTINUE"
+
+[node name="RocketLauncher" type="RocketLauncher" parent="."]
+
+[node name="ScreenEffects" type="ColorRect" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(1, 1, 1, 0)
+script = ExtResource("4")
+
+[connection signal="pressed" from="ContentMargin/VBox/ResultPanel/ResultMargin/ResultVBox/ContinueButton" to="." method="_on_continue_pressed"]

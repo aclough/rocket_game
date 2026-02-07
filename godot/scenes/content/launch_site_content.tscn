@@ -1,0 +1,132 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/content/launch_site_content.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/testing_screen.tscn" id="2"]
+
+[node name="LaunchSiteContent" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="MarginContainer" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 10
+
+[node name="HBox" type="HBoxContainer" parent="MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="InfrastructurePanel" type="PanelContainer" parent="MarginContainer/HBox"]
+custom_minimum_size = Vector2(280, 0)
+layout_mode = 2
+
+[node name="InfraMargin" type="MarginContainer" parent="MarginContainer/HBox/InfrastructurePanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 15
+theme_override_constants/margin_top = 15
+theme_override_constants/margin_right = 15
+theme_override_constants/margin_bottom = 15
+
+[node name="InfraVBox" type="VBoxContainer" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="InfraTitle" type="Label" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "LAUNCH SITE"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox"]
+layout_mode = 2
+
+[node name="PadSection" type="VBoxContainer" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="PadLabel" type="Label" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/PadSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Launch Pad"
+
+[node name="PadLevelLabel" type="Label" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/PadSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.7, 0.8, 1, 1)
+text = "Level: Small Pad"
+
+[node name="MaxMassLabel" type="Label" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/PadSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+text = "Max Mass: 200t"
+
+[node name="UpgradeButton" type="Button" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/PadSection"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "UPGRADE - $50M"
+
+[node name="HSeparator2" type="HSeparator" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox"]
+layout_mode = 2
+
+[node name="PropellantSection" type="VBoxContainer" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="PropellantLabel" type="Label" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/PropellantSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Propellant Storage"
+
+[node name="StorageLabel" type="Label" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/PropellantSection"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+text = "Capacity: 500,000 kg"
+
+[node name="Spacer" type="Control" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="LaunchReadiness" type="VBoxContainer" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ReadinessLabel" type="Label" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/LaunchReadiness"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Launch Readiness"
+horizontal_alignment = 1
+
+[node name="StatusLabel" type="Label" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/LaunchReadiness"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.3, 1, 0.3, 1)
+text = "Ready for launch"
+horizontal_alignment = 1
+
+[node name="LaunchButton" type="Button" parent="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/LaunchReadiness"]
+custom_minimum_size = Vector2(0, 50)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "LAUNCH"
+
+[node name="TestingView" parent="MarginContainer/HBox" instance=ExtResource("2")]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[connection signal="pressed" from="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/PadSection/UpgradeButton" to="." method="_on_upgrade_pressed"]
+[connection signal="pressed" from="MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/LaunchReadiness/LaunchButton" to="." method="_on_launch_pressed"]

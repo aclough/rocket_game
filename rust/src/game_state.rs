@@ -1,6 +1,7 @@
 use crate::company::Company;
 use crate::engineering_team::WorkEvent;
 use crate::time_system::TimeSystem;
+use crate::world_seed::WorldSeed;
 
 // Re-export for backwards compatibility with game_manager imports
 pub use crate::company::{CONTRACT_REFRESH_COST, CONTRACTS_TO_SHOW};
@@ -16,6 +17,8 @@ pub struct GameState {
     pub start_year: u32,
     /// Time system for continuous simulation
     pub time_system: TimeSystem,
+    /// Deterministic seed for world facts (moon water, tech difficulty, etc.)
+    pub world_seed: WorldSeed,
     /// The player's company
     pub player_company: Company,
 }
@@ -28,6 +31,7 @@ impl GameState {
             current_day: 1,
             start_year: 2001,
             time_system: TimeSystem::new(),
+            world_seed: WorldSeed::random(),
             player_company: Company::new(),
         }
     }
