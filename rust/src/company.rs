@@ -746,23 +746,20 @@ impl Company {
     }
 
     /// Start a rocket assembly order.
-    /// Requires a frozen revision and engines in inventory.
-    /// Returns Ok((order_id, material_cost)) or Err with a reason string.
+    /// Requires a frozen revision. If engines are not in inventory, the order
+    /// is created with `waiting_for_engines = true` and the caller should
+    /// auto-order the missing engines.
+    /// Returns Ok((order_id, material_cost, engines_consumed)) or Err with a reason string.
     pub fn start_rocket_order(
         &mut self,
         rocket_design_id: usize,
         revision_number: u32,
-    ) -> Result<(ManufacturingOrderId, f64), &'static str> {
+    ) -> Result<(ManufacturingOrderId, f64, bool), &'static str> {
         let lineage = self.rocket_designs.get(rocket_design_id)
             .ok_or("Invalid design")?;
         let revision = lineage.get_revision(revision_number)
             .ok_or("Invalid revision")?;
         let design_snapshot = revision.snapshot.clone();
-
-        // Check engines are available
-        if !self.manufacturing.has_engines_for_rocket(&design_snapshot) {
-            return Err("Not enough engines in inventory");
-        }
 
         // Check floor space
         let space_needed = crate::manufacturing::floor_space_for_rocket(&design_snapshot);
@@ -770,29 +767,75 @@ impl Company {
             return Err("Not enough floor space");
         }
 
+        // Create the order — initially waiting for engines
         let result = self.manufacturing.start_rocket_order(
             rocket_design_id,
             revision_number,
             design_snapshot.clone(),
+            true, // waiting_for_engines
         ).ok_or("Manufacturing order failed")?;
 
         // Deduct material cost
-        let (_, material_cost) = result;
+        let (order_id, material_cost) = result;
         if self.money < material_cost {
-            self.manufacturing.cancel_order(result.0);
+            self.manufacturing.cancel_order(order_id);
             return Err("Not enough funds for materials");
         }
         self.money -= material_cost;
 
-        // Consume engines from inventory
-        if !self.manufacturing.consume_engines_for_rocket(&design_snapshot) {
-            // This shouldn't happen since we checked above, but be safe
-            self.money += material_cost;
-            self.manufacturing.cancel_order(result.0);
-            return Err("Engine inventory changed unexpectedly");
+        // Try to consume engines immediately
+        let engines_consumed = if self.manufacturing.consume_engines_for_rocket(&design_snapshot) {
+            self.manufacturing.get_order_mut(order_id).unwrap().waiting_for_engines = false;
+            true
+        } else {
+            false
+        };
+
+        Ok((order_id, material_cost, engines_consumed))
+    }
+
+    /// Auto-order engines needed for a rocket design.
+    /// Accounts for engines already in inventory and pending in active orders.
+    /// Cuts revisions as needed and starts engine orders for deficit quantities.
+    /// Returns total engines ordered, or Err on failure.
+    pub fn auto_order_engines_for_rocket(
+        &mut self,
+        rocket_design_id: usize,
+    ) -> Result<u32, &'static str> {
+        let design = self.rocket_designs.get(rocket_design_id)
+            .ok_or("Invalid design")?
+            .head()
+            .clone();
+
+        let mut total_ordered: u32 = 0;
+
+        for (engine_design_id, needed) in design.engines_required() {
+            let available = self.manufacturing.get_engines_available(engine_design_id);
+            let pending = self.manufacturing.engines_pending_for_design(engine_design_id);
+            let deficit = (needed as i32) - (available as i32) - (pending as i32);
+            if deficit <= 0 {
+                continue;
+            }
+
+            if engine_design_id >= self.engine_designs.len() {
+                return Err("Invalid engine design");
+            }
+
+            // Cut a revision for manufacturing
+            let rev = self.engine_designs[engine_design_id].cut_revision("auto-mfg");
+
+            // Start the engine order
+            match self.start_engine_order(engine_design_id, rev, deficit as u32) {
+                Ok(_) => {
+                    total_ordered += deficit as u32;
+                }
+                Err(reason) => {
+                    return Err(reason);
+                }
+            }
         }
 
-        Ok(result)
+        Ok(total_ordered)
     }
 
     /// Cancel a manufacturing order by ID.
@@ -802,9 +845,11 @@ impl Company {
 
     /// Assign a team to work on a manufacturing order (manufacturing teams only)
     pub fn assign_team_to_manufacturing(&mut self, team_id: u32, order_id: ManufacturingOrderId) -> bool {
-        // Verify order exists
-        if self.manufacturing.get_order(order_id).is_none() {
-            return false;
+        // Verify order exists and is not waiting for engines
+        match self.manufacturing.get_order(order_id) {
+            Some(order) if order.waiting_for_engines => return false,
+            Some(_) => {},
+            None => return false,
         }
 
         if let Some(team) = self.get_team_mut(team_id) {
@@ -862,6 +907,7 @@ impl Company {
             // Find the order with the lowest teams/remaining_work ratio
             let best_order_id = self.manufacturing.active_orders.iter()
                 .filter(|o| !o.is_order_complete())
+                .filter(|o| !o.waiting_for_engines)
                 .filter(|o| o.remaining_work() > 0.0)
                 .map(|o| {
                     let teams_on = self.get_teams_on_order(o.id).len() as f64;
@@ -1151,9 +1197,16 @@ impl Company {
     fn process_manufacturing_work(&mut self) -> Vec<WorkEvent> {
         let mut events = Vec::new();
 
-        // Calculate efficiency for each active order
+        // Try to unblock rocket orders waiting for engines
+        let unblocked_ids = self.manufacturing.try_unblock_rocket_orders();
+        for order_id in unblocked_ids {
+            events.push(WorkEvent::RocketOrderUnblocked { order_id });
+        }
+
+        // Calculate efficiency for each active order (skip blocked ones)
         let order_efficiencies: Vec<(ManufacturingOrderId, f64)> = self.manufacturing.active_orders
             .iter()
+            .filter(|o| !o.waiting_for_engines)
             .map(|o| (o.id, self.get_manufacturing_order_efficiency(o.id)))
             .filter(|(_, eff)| *eff > 0.0)
             .collect();
@@ -1533,5 +1586,120 @@ mod tests {
         let order2_id = company.manufacturing.active_orders[1].id;
         assert_eq!(company.get_teams_on_order(order1_id).len(), 1);
         assert_eq!(company.get_teams_on_order(order2_id).len(), 1);
+    }
+
+    // ==========================================
+    // Queued Rocket Order Tests
+    // ==========================================
+
+    /// Helper: set up a company with a frozen rocket revision and engine revisions
+    fn company_with_rocket_revision() -> (Company, usize, u32) {
+        let mut company = Company::new();
+        // Cut revisions for the default engine designs so we can order them
+        for i in 0..company.engine_designs.len() {
+            company.engine_designs[i].cut_revision("v1");
+        }
+        // Cut a revision for the default rocket design
+        company.rocket_designs[0].cut_revision("v1");
+        let rev = company.rocket_designs[0].revisions.len() as u32;
+        (company, 0, rev)
+    }
+
+    #[test]
+    fn test_start_rocket_order_without_engines_queues() {
+        let (mut company, design_id, rev) = company_with_rocket_revision();
+
+        // No engines in inventory — order should succeed with waiting_for_engines = true
+        let result = company.start_rocket_order(design_id, rev);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let (order_id, _cost, engines_consumed) = result.unwrap();
+        assert!(!engines_consumed);
+
+        let order = company.manufacturing.get_order(order_id).unwrap();
+        assert!(order.waiting_for_engines);
+    }
+
+    #[test]
+    fn test_start_rocket_order_with_engines_consumes() {
+        let (mut company, design_id, rev) = company_with_rocket_revision();
+
+        // Stock engines: 5 kerolox (id=1) + 1 hydrolox (id=0)
+        let kerolox_snap = crate::engine_design::default_snapshot(1);
+        let hydrolox_snap = crate::engine_design::default_snapshot(0);
+        for _ in 0..5 {
+            company.manufacturing.add_engine_to_inventory(1, 1, kerolox_snap.clone());
+        }
+        company.manufacturing.add_engine_to_inventory(0, 1, hydrolox_snap.clone());
+
+        let result = company.start_rocket_order(design_id, rev);
+        assert!(result.is_ok());
+        let (order_id, _cost, engines_consumed) = result.unwrap();
+        assert!(engines_consumed);
+
+        let order = company.manufacturing.get_order(order_id).unwrap();
+        assert!(!order.waiting_for_engines);
+
+        // Engines should be consumed
+        assert_eq!(company.manufacturing.get_engines_available(1), 0);
+        assert_eq!(company.manufacturing.get_engines_available(0), 0);
+    }
+
+    #[test]
+    fn test_assign_team_to_blocked_order_fails() {
+        let (mut company, design_id, rev) = company_with_rocket_revision();
+        company.hire_manufacturing_team();
+        let mfg_team_id = company.get_manufacturing_team_ids()[0];
+
+        // Create a blocked rocket order
+        let (order_id, _, _) = company.start_rocket_order(design_id, rev).unwrap();
+
+        // Should not be able to assign team
+        assert!(!company.assign_team_to_manufacturing(mfg_team_id, order_id));
+    }
+
+    #[test]
+    fn test_auto_assign_skips_blocked_orders() {
+        let (mut company, design_id, rev) = company_with_rocket_revision();
+        company.hire_manufacturing_team();
+
+        // Create a blocked rocket order
+        let (order_id, _, _) = company.start_rocket_order(design_id, rev).unwrap();
+
+        // Auto-assign should not assign to blocked order
+        let assigned = company.auto_assign_manufacturing_teams();
+        assert_eq!(assigned, 0);
+        assert_eq!(company.get_teams_on_order(order_id).len(), 0);
+    }
+
+    #[test]
+    fn test_engine_manufactured_unblocks_rocket() {
+        let (mut company, design_id, rev) = company_with_rocket_revision();
+
+        // Create a blocked rocket order
+        let (order_id, _, engines_consumed) = company.start_rocket_order(design_id, rev).unwrap();
+        assert!(!engines_consumed);
+        assert!(company.manufacturing.get_order(order_id).unwrap().waiting_for_engines);
+
+        // Add engines to inventory (simulating completed manufacturing)
+        let kerolox_snap = crate::engine_design::default_snapshot(1);
+        let hydrolox_snap = crate::engine_design::default_snapshot(0);
+        for _ in 0..5 {
+            company.manufacturing.add_engine_to_inventory(1, 1, kerolox_snap.clone());
+        }
+        company.manufacturing.add_engine_to_inventory(0, 1, hydrolox_snap.clone());
+
+        // process_manufacturing_work should unblock the order
+        let events = company.process_manufacturing_work();
+        let unblock_events: Vec<_> = events.iter()
+            .filter(|e| matches!(e, WorkEvent::RocketOrderUnblocked { .. }))
+            .collect();
+        assert_eq!(unblock_events.len(), 1);
+
+        // Order should now be unblocked
+        assert!(!company.manufacturing.get_order(order_id).unwrap().waiting_for_engines);
+
+        // Engines should be consumed
+        assert_eq!(company.manufacturing.get_engines_available(1), 0);
+        assert_eq!(company.manufacturing.get_engines_available(0), 0);
     }
 }

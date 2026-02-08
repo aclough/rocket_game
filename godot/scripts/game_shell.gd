@@ -1549,13 +1549,18 @@ func _create_order_card(order_id: int) -> PanelContainer:
 	var display_name = info.get("display_name", "Unknown")
 	var is_engine = info.get("is_engine", false)
 	var progress = info.get("progress", 0.0)
+	var waiting_for_engines = info.get("waiting_for_engines", false)
 	var teams_count = game_manager.get_teams_on_order_count(order_id)
 
 	var panel = PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var style = StyleBoxFlat.new()
-	if is_engine:
+	if waiting_for_engines:
+		# Amber style for blocked orders waiting for engines
+		style.set_bg_color(Color(0.15, 0.12, 0.08))
+		style.set_border_color(Color(0.9, 0.6, 0.2, 0.5))
+	elif is_engine:
 		style.set_bg_color(Color(0.1, 0.08, 0.15))
 		style.set_border_color(Color(0.6, 0.4, 0.9, 0.5))
 	else:
@@ -1597,60 +1602,98 @@ func _create_order_card(order_id: int) -> PanelContainer:
 		qty_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 		header.add_child(qty_label)
 
-	# Teams info
-	if teams_count > 0:
-		var teams_on = _get_teams_on_order(order_id)
-		for tid in teams_on:
-			var tname_label = Label.new()
-			tname_label.text = game_manager.get_team_name(tid)
-			tname_label.add_theme_font_size_override("font_size", 12)
-			tname_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-			vbox.add_child(tname_label)
+	if waiting_for_engines:
+		# Show "Waiting for engines" status with per-engine stock info
+		var waiting_label = Label.new()
+		waiting_label.text = "Waiting for engines"
+		waiting_label.add_theme_color_override("font_color", Color(0.9, 0.6, 0.2))
+		waiting_label.add_theme_font_size_override("font_size", 13)
+		vbox.add_child(waiting_label)
+
+		# Show per-engine stock status
+		var rocket_design_id = info.get("rocket_design_id", -1)
+		if rocket_design_id >= 0:
+			var engines_req = game_manager.get_engines_required_for_rocket(rocket_design_id)
+			for req in engines_req:
+				var eng_name = req.get("name", "?")
+				var eng_count = req.get("count", 0)
+				var eng_design_id = req.get("engine_design_id", -1)
+				var in_stock = game_manager.get_engines_available_for_design(eng_design_id)
+				var stock_label = Label.new()
+				stock_label.text = "  %dx %s (%d/%d in stock)" % [eng_count, eng_name, in_stock, eng_count]
+				stock_label.add_theme_font_size_override("font_size", 11)
+				if in_stock >= eng_count:
+					stock_label.add_theme_color_override("font_color", Color(0.4, 0.8, 0.4))
+				else:
+					stock_label.add_theme_color_override("font_color", Color(0.9, 0.5, 0.3))
+				vbox.add_child(stock_label)
+
+		# Only show Cancel button for blocked orders (no assign, no progress bar)
+		var btn_hbox = HBoxContainer.new()
+		btn_hbox.add_theme_constant_override("separation", 10)
+		vbox.add_child(btn_hbox)
+
+		var cancel_btn = Button.new()
+		cancel_btn.text = "Cancel"
+		cancel_btn.add_theme_font_size_override("font_size", 12)
+		cancel_btn.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
+		cancel_btn.pressed.connect(_on_prod_cancel_order_pressed.bind(order_id))
+		btn_hbox.add_child(cancel_btn)
 	else:
-		var teams_label = Label.new()
-		teams_label.text = "No teams assigned - assign teams to start production"
-		teams_label.add_theme_color_override("font_color", Color(0.8, 0.6, 0.3))
-		teams_label.add_theme_font_size_override("font_size", 12)
-		vbox.add_child(teams_label)
+		# Normal order card — teams info, progress bar, buttons
+		if teams_count > 0:
+			var teams_on = _get_teams_on_order(order_id)
+			for tid in teams_on:
+				var tname_label = Label.new()
+				tname_label.text = game_manager.get_team_name(tid)
+				tname_label.add_theme_font_size_override("font_size", 12)
+				tname_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+				vbox.add_child(tname_label)
+		else:
+			var teams_label = Label.new()
+			teams_label.text = "No teams assigned - assign teams to start production"
+			teams_label.add_theme_color_override("font_color", Color(0.8, 0.6, 0.3))
+			teams_label.add_theme_font_size_override("font_size", 12)
+			vbox.add_child(teams_label)
 
-	# Progress bar
-	var progress_bar = ProgressBar.new()
-	progress_bar.value = progress * 100
-	progress_bar.custom_minimum_size = Vector2(0, 12)
-	progress_bar.show_percentage = true
-	var fill_style = StyleBoxFlat.new()
-	if is_engine:
-		fill_style.set_bg_color(Color(0.6, 0.4, 0.9))
-	else:
-		fill_style.set_bg_color(Color(0.3, 0.7, 0.9))
-	fill_style.set_corner_radius_all(3)
-	progress_bar.add_theme_stylebox_override("fill", fill_style)
-	vbox.add_child(progress_bar)
+		# Progress bar
+		var progress_bar = ProgressBar.new()
+		progress_bar.value = progress * 100
+		progress_bar.custom_minimum_size = Vector2(0, 12)
+		progress_bar.show_percentage = true
+		var fill_style = StyleBoxFlat.new()
+		if is_engine:
+			fill_style.set_bg_color(Color(0.6, 0.4, 0.9))
+		else:
+			fill_style.set_bg_color(Color(0.3, 0.7, 0.9))
+		fill_style.set_corner_radius_all(3)
+		progress_bar.add_theme_stylebox_override("fill", fill_style)
+		vbox.add_child(progress_bar)
 
-	# Buttons
-	var btn_hbox = HBoxContainer.new()
-	btn_hbox.add_theme_constant_override("separation", 10)
-	vbox.add_child(btn_hbox)
+		# Buttons
+		var btn_hbox = HBoxContainer.new()
+		btn_hbox.add_theme_constant_override("separation", 10)
+		vbox.add_child(btn_hbox)
 
-	var assign_btn = Button.new()
-	assign_btn.text = "Assign Team"
-	assign_btn.add_theme_font_size_override("font_size", 12)
-	assign_btn.pressed.connect(_on_prod_assign_team_pressed.bind(order_id))
-	btn_hbox.add_child(assign_btn)
+		var assign_btn = Button.new()
+		assign_btn.text = "Assign Team"
+		assign_btn.add_theme_font_size_override("font_size", 12)
+		assign_btn.pressed.connect(_on_prod_assign_team_pressed.bind(order_id))
+		btn_hbox.add_child(assign_btn)
 
-	if teams_count > 0:
-		var unassign_btn = Button.new()
-		unassign_btn.text = "Unassign Team"
-		unassign_btn.add_theme_font_size_override("font_size", 12)
-		unassign_btn.pressed.connect(_on_prod_unassign_teams_pressed.bind(order_id))
-		btn_hbox.add_child(unassign_btn)
+		if teams_count > 0:
+			var unassign_btn = Button.new()
+			unassign_btn.text = "Unassign Team"
+			unassign_btn.add_theme_font_size_override("font_size", 12)
+			unassign_btn.pressed.connect(_on_prod_unassign_teams_pressed.bind(order_id))
+			btn_hbox.add_child(unassign_btn)
 
-	var cancel_btn = Button.new()
-	cancel_btn.text = "Cancel"
-	cancel_btn.add_theme_font_size_override("font_size", 12)
-	cancel_btn.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
-	cancel_btn.pressed.connect(_on_prod_cancel_order_pressed.bind(order_id))
-	btn_hbox.add_child(cancel_btn)
+		var cancel_btn = Button.new()
+		cancel_btn.text = "Cancel"
+		cancel_btn.add_theme_font_size_override("font_size", 12)
+		cancel_btn.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
+		cancel_btn.pressed.connect(_on_prod_cancel_order_pressed.bind(order_id))
+		btn_hbox.add_child(cancel_btn)
 
 	return panel
 
@@ -1897,7 +1940,7 @@ func _on_prod_assemble_rocket_pressed():
 
 		var btn_text = "%s - $%sM material, ~%.0f team-days" % [design_name, _format_money_short(material_cost / 1_000_000.0), assembly_days]
 
-		# Check if we have sufficient engines
+		# Check if engines are missing — they'll be auto-ordered
 		var has_engines = game_manager.has_engines_for_rocket(i)
 		var missing_engines = game_manager.get_missing_engines_for_rocket(i)
 		var total_deficit = 0
@@ -1905,15 +1948,12 @@ func _on_prod_assemble_rocket_pressed():
 			total_deficit += m.get("deficit", 0)
 
 		if not has_engines:
-			btn_text += " [AUTO-BUILD %d ENGINE%s]" % [total_deficit, "S" if total_deficit != 1 else ""]
+			btn_text += " [+%d engine%s queued]" % [total_deficit, "s" if total_deficit != 1 else ""]
 
 		var btn = Button.new()
 		btn.text = btn_text
 		btn.add_theme_font_size_override("font_size", 13)
-		if has_engines:
-			btn.pressed.connect(_on_prod_rocket_selected.bind(i, dialog))
-		else:
-			btn.pressed.connect(_on_prod_auto_build_engines.bind(i, dialog))
+		btn.pressed.connect(_on_prod_rocket_selected.bind(i, dialog))
 		dialog_vbox.add_child(btn)
 
 		# Show engines required with inventory counts
@@ -1937,19 +1977,10 @@ func _on_prod_assemble_rocket_pressed():
 	add_child(dialog)
 	dialog.popup_centered()
 
-func _on_prod_auto_build_engines(rocket_index: int, dialog: AcceptDialog):
-	dialog.queue_free()
-	var result = game_manager.auto_order_engines_for_rocket(rocket_index)
-	if result > 0:
-		_show_toast("Queued %d engine(s) — assemble rocket when they're ready" % result)
-		_update_production_ui()
-	elif result == 0:
-		_show_toast("No engines needed")
-	else:
-		_show_toast("Cannot order engines: %s" % game_manager.get_last_order_error())
-
 func _on_prod_rocket_selected(rocket_index: int, dialog: AcceptDialog):
 	dialog.queue_free()
+	# Check if engines are available before starting
+	var has_engines = game_manager.has_engines_for_rocket(rocket_index)
 	# Cut a revision and start the order
 	var rev = game_manager.cut_rocket_revision(rocket_index, "mfg")
 	if rev < 0:
@@ -1957,7 +1988,10 @@ func _on_prod_rocket_selected(rocket_index: int, dialog: AcceptDialog):
 		return
 	var result = game_manager.start_rocket_order(rocket_index, rev)
 	if result >= 0:
-		_show_toast("Rocket assembly started!")
+		if has_engines:
+			_show_toast("Rocket assembly started!")
+		else:
+			_show_toast("Rocket queued — engines auto-ordered")
 		_update_production_ui()
 	else:
 		_show_toast("Cannot start rocket: %s" % game_manager.get_last_order_error())
@@ -2094,6 +2128,9 @@ func _on_work_event(event_type: String, data: Dictionary):
 		"floor_space_completed":
 			var units = data.get("units", 0)
 			message = "Floor space completed: %d units" % units
+			refresh_production = true
+		"rocket_order_unblocked":
+			message = "Engines arrived — rocket assembly can begin!"
 			refresh_production = true
 		_:
 			return  # Don't show toast for unknown events

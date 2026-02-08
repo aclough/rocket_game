@@ -94,6 +94,9 @@ pub struct ManufacturingOrder {
     pub material_cost_per_unit: f64,
     /// Floor space units consumed by this order
     pub floor_space_used: usize,
+    /// Whether this rocket order is waiting for engines to be manufactured
+    /// When true, no teams can be assigned and no work progresses
+    pub waiting_for_engines: bool,
 }
 
 impl ManufacturingOrder {
@@ -333,6 +336,7 @@ impl Manufacturing {
             base_total_work: build_work,
             material_cost_per_unit: material_cost,
             floor_space_used: space_needed,
+            waiting_for_engines: false,
         });
 
         Some((order_id, total_material))
@@ -340,12 +344,13 @@ impl Manufacturing {
 
     /// Start a new rocket assembly order.
     /// Returns the order ID and material cost, or None if insufficient floor space.
-    /// The caller must verify that required engines are in inventory.
+    /// If `waiting_for_engines` is true, the order is blocked until engines arrive.
     pub fn start_rocket_order(
         &mut self,
         rocket_design_id: usize,
         revision_number: u32,
         design_snapshot: RocketDesign,
+        waiting_for_engines: bool,
     ) -> Option<(ManufacturingOrderId, f64)> {
         let space_needed = floor_space_for_rocket(&design_snapshot);
         if !self.can_start_rocket_order_with_space(space_needed) {
@@ -370,6 +375,7 @@ impl Manufacturing {
             base_total_work: assembly_work,
             material_cost_per_unit: material_cost,
             floor_space_used: space_needed,
+            waiting_for_engines,
         });
 
         Some((order_id, material_cost))
@@ -510,6 +516,53 @@ impl Manufacturing {
             }
         }
         true
+    }
+
+    /// Sum remaining engine units (quantity - completed) from active engine orders
+    /// for a given design ID. Used to prevent double-ordering when multiple rockets
+    /// are queued.
+    pub fn engines_pending_for_design(&self, engine_design_id: usize) -> u32 {
+        self.active_orders.iter()
+            .filter_map(|o| match &o.order_type {
+                ManufacturingOrderType::Engine {
+                    engine_design_id: eid,
+                    quantity,
+                    completed,
+                    ..
+                } if *eid == engine_design_id => Some(quantity - completed),
+                _ => None,
+            })
+            .sum()
+    }
+
+    /// Try to unblock rocket orders that are waiting for engines.
+    /// Iterates in FIFO order. For each blocked order, checks if engines are
+    /// available; if so, consumes them and sets `waiting_for_engines = false`.
+    /// Returns list of unblocked order IDs.
+    pub fn try_unblock_rocket_orders(&mut self) -> Vec<ManufacturingOrderId> {
+        let mut unblocked = Vec::new();
+
+        // Collect indices of blocked rocket orders (FIFO = order in vec)
+        let blocked_indices: Vec<usize> = self.active_orders.iter()
+            .enumerate()
+            .filter(|(_, o)| o.waiting_for_engines)
+            .map(|(i, _)| i)
+            .collect();
+
+        for idx in blocked_indices {
+            let design = match &self.active_orders[idx].order_type {
+                ManufacturingOrderType::Rocket { design_snapshot, .. } => design_snapshot.clone(),
+                _ => continue,
+            };
+
+            if self.has_engines_for_rocket(&design) {
+                self.consume_engines_for_rocket(&design);
+                self.active_orders[idx].waiting_for_engines = false;
+                unblocked.push(self.active_orders[idx].id);
+            }
+        }
+
+        unblocked
     }
 }
 
@@ -989,7 +1042,7 @@ mod tests {
     fn test_remaining_work_rocket() {
         let mut mfg = Manufacturing::new();
         let design = RocketDesign::default_design();
-        let (order_id, _) = mfg.start_rocket_order(0, 1, design).unwrap();
+        let (order_id, _) = mfg.start_rocket_order(0, 1, design, false).unwrap();
 
         let order = mfg.get_order_mut(order_id).unwrap();
         let total_work = order.total_work;
@@ -1018,5 +1071,113 @@ mod tests {
         let remaining = order.remaining_work();
         assert!((remaining - 0.0).abs() < 0.1,
             "Completed order remaining should be 0, got {:.1}", remaining);
+    }
+
+    // ==========================================
+    // Waiting-for-Engines Tests
+    // ==========================================
+
+    #[test]
+    fn test_engine_order_waiting_for_engines_defaults_false() {
+        let mut mfg = Manufacturing::new();
+        let snap = kerolox_snapshot();
+        let (order_id, _) = mfg.start_engine_order(1, 1, snap, 1).unwrap();
+        let order = mfg.get_order(order_id).unwrap();
+        assert!(!order.waiting_for_engines);
+    }
+
+    #[test]
+    fn test_rocket_order_waiting_for_engines() {
+        let mut mfg = Manufacturing::new();
+        mfg.floor_space_total = 30; // Enough for two rocket orders
+        let design = RocketDesign::default_design();
+
+        // Create with waiting = true
+        let (order_id, _) = mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
+        let order = mfg.get_order(order_id).unwrap();
+        assert!(order.waiting_for_engines);
+
+        // Create with waiting = false
+        let (order_id2, _) = mfg.start_rocket_order(0, 1, design, false).unwrap();
+        let order2 = mfg.get_order(order_id2).unwrap();
+        assert!(!order2.waiting_for_engines);
+    }
+
+    #[test]
+    fn test_engines_pending_for_design() {
+        let mut mfg = Manufacturing::new();
+        let snap = kerolox_snapshot();
+
+        // Order 5 kerolox engines
+        mfg.start_engine_order(1, 1, snap.clone(), 5).unwrap();
+        assert_eq!(mfg.engines_pending_for_design(1), 5);
+        assert_eq!(mfg.engines_pending_for_design(0), 0); // Different design
+
+        // Order 3 more
+        mfg.start_engine_order(1, 1, snap, 3).unwrap();
+        assert_eq!(mfg.engines_pending_for_design(1), 8);
+
+        // Simulate completing 2 in the first order
+        if let ManufacturingOrderType::Engine { completed, .. } = &mut mfg.active_orders[0].order_type {
+            *completed = 2;
+        }
+        assert_eq!(mfg.engines_pending_for_design(1), 6); // 3 + 3
+    }
+
+    #[test]
+    fn test_try_unblock_rocket_orders_unblocks_when_engines_arrive() {
+        let mut mfg = Manufacturing::new();
+        let kerolox = kerolox_snapshot();
+        let hydrolox = hydrolox_snapshot();
+        let design = RocketDesign::default_design();
+
+        // Create a blocked rocket order
+        let (order_id, _) = mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
+        assert!(mfg.get_order(order_id).unwrap().waiting_for_engines);
+
+        // No engines yet — should not unblock
+        let unblocked = mfg.try_unblock_rocket_orders();
+        assert!(unblocked.is_empty());
+        assert!(mfg.get_order(order_id).unwrap().waiting_for_engines);
+
+        // Stock the required engines (5 kerolox + 1 hydrolox)
+        for _ in 0..5 {
+            mfg.add_engine_to_inventory(1, 1, kerolox.clone());
+        }
+        mfg.add_engine_to_inventory(0, 1, hydrolox.clone());
+
+        // Now it should unblock and consume engines
+        let unblocked = mfg.try_unblock_rocket_orders();
+        assert_eq!(unblocked, vec![order_id]);
+        assert!(!mfg.get_order(order_id).unwrap().waiting_for_engines);
+
+        // Engines should be consumed
+        assert_eq!(mfg.get_engines_available(1), 0);
+        assert_eq!(mfg.get_engines_available(0), 0);
+    }
+
+    #[test]
+    fn test_try_unblock_fifo_priority() {
+        let mut mfg = Manufacturing::new();
+        mfg.floor_space_total = 30; // Enough for two rocket orders
+        let kerolox = kerolox_snapshot();
+        let hydrolox = hydrolox_snapshot();
+        let design = RocketDesign::default_design();
+
+        // Create two blocked rocket orders
+        let (order1, _) = mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
+        let (order2, _) = mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
+
+        // Stock enough engines for only one rocket (5 kerolox + 1 hydrolox)
+        for _ in 0..5 {
+            mfg.add_engine_to_inventory(1, 1, kerolox.clone());
+        }
+        mfg.add_engine_to_inventory(0, 1, hydrolox.clone());
+
+        // First order should unblock (FIFO), second remains blocked
+        let unblocked = mfg.try_unblock_rocket_orders();
+        assert_eq!(unblocked, vec![order1]);
+        assert!(!mfg.get_order(order1).unwrap().waiting_for_engines);
+        assert!(mfg.get_order(order2).unwrap().waiting_for_engines);
     }
 }

@@ -1186,6 +1186,7 @@ impl GameManager {
                     | crate::engineering_team::WorkEvent::RocketAssembled { .. }
                     | crate::engineering_team::WorkEvent::ManufacturingOrderComplete { .. }
                     | crate::engineering_team::WorkEvent::FloorSpaceCompleted { .. }
+                    | crate::engineering_team::WorkEvent::RocketOrderUnblocked { .. }
             )
         });
         let has_inventory_event = events.iter().any(|e| {
@@ -1193,6 +1194,7 @@ impl GameManager {
                 e,
                 crate::engineering_team::WorkEvent::EngineManufactured { .. }
                     | crate::engineering_team::WorkEvent::RocketAssembled { .. }
+                    | crate::engineering_team::WorkEvent::RocketOrderUnblocked { .. }
             )
         });
 
@@ -1340,6 +1342,10 @@ impl GameManager {
                 dict.set("type", "floor_space_completed");
                 dict.set("units", *units as i32);
             }
+            WorkEvent::RocketOrderUnblocked { order_id } => {
+                dict.set("type", "rocket_order_unblocked");
+                dict.set("order_id", *order_id as i32);
+            }
         }
         dict
     }
@@ -1370,6 +1376,9 @@ impl GameManager {
             crate::engineering_team::WorkEvent::SalaryDeducted { .. } => "salary_deducted",
             crate::engineering_team::WorkEvent::FloorSpaceCompleted { .. } => {
                 "floor_space_completed"
+            }
+            crate::engineering_team::WorkEvent::RocketOrderUnblocked { .. } => {
+                "rocket_order_unblocked"
             }
         };
         self.base_mut().emit_signal(
@@ -2162,6 +2171,8 @@ impl GameManager {
     }
 
     /// Start a rocket assembly order.
+    /// If engines are missing, the order is created as "waiting for engines"
+    /// and missing engines are auto-ordered.
     /// Returns order_id (>0) on success, -1 on failure.
     /// On failure, call get_last_order_error() for the reason.
     #[func]
@@ -2175,12 +2186,24 @@ impl GameManager {
             rocket_design_id as usize,
             revision_number as u32,
         ) {
-            Ok((order_id, _)) => {
+            Ok((order_id, _, engines_consumed)) => {
                 self.last_order_error.clear();
+
+                // If engines weren't consumed, auto-order the missing ones
+                if !engines_consumed {
+                    if let Err(reason) = self.state.player_company.auto_order_engines_for_rocket(
+                        rocket_design_id as usize,
+                    ) {
+                        self.last_order_error = reason.to_string();
+                    }
+                }
+
                 self.sync_money_from_state();
                 self.emit_money_changed();
                 self.base_mut().emit_signal("manufacturing_changed", &[]);
-                self.base_mut().emit_signal("inventory_changed", &[]);
+                if engines_consumed {
+                    self.base_mut().emit_signal("inventory_changed", &[]);
+                }
                 order_id as i32
             }
             Err(reason) => {
@@ -2230,6 +2253,7 @@ impl GameManager {
             dict.set("is_engine", order.is_engine_order());
             dict.set("total_work", order.total_work);
             dict.set("current_progress", order.progress);
+            dict.set("waiting_for_engines", order.waiting_for_engines);
 
             match &order.order_type {
                 crate::manufacturing::ManufacturingOrderType::Engine { engine_design_id, quantity, completed, .. } => {
@@ -2396,60 +2420,30 @@ impl GameManager {
     }
 
     /// Auto-order engines needed for a rocket design.
-    /// Cuts revisions as needed and starts engine orders for deficit quantities.
+    /// Accounts for engines in inventory and pending in active orders.
     /// Returns total engines ordered, or -1 on failure.
     #[func]
     pub fn auto_order_engines_for_rocket(&mut self, index: i32) -> i32 {
         if index < 0 {
             return -1;
         }
-        let design = match self.state.player_company.get_rocket_design(index as usize) {
-            Some(d) => d.clone(),
-            None => return -1,
-        };
-
-        let mut total_ordered: i32 = 0;
-
-        for (engine_design_id, needed) in design.engines_required() {
-            let available = self.state.player_company.manufacturing.get_engines_available(engine_design_id);
-            let deficit = (needed as i32) - (available as i32);
-            if deficit <= 0 {
-                continue;
-            }
-
-            if engine_design_id >= self.state.player_company.engine_designs.len() {
-                return -1;
-            }
-
-            // Cut a revision for manufacturing
-            let rev = self.state.player_company.engine_designs[engine_design_id]
-                .cut_revision("auto-mfg");
-
-            // Start the engine order
-            self.sync_money_to_state();
-            match self.state.player_company.start_engine_order(
-                engine_design_id,
-                rev,
-                deficit as u32,
-            ) {
-                Ok(_) => {
-                    self.sync_money_from_state();
-                    self.emit_money_changed();
-                    total_ordered += deficit;
+        self.sync_money_to_state();
+        match self.state.player_company.auto_order_engines_for_rocket(index as usize) {
+            Ok(total_ordered) => {
+                self.sync_money_from_state();
+                self.emit_money_changed();
+                if total_ordered > 0 {
+                    self.base_mut().emit_signal("manufacturing_changed", &[]);
+                    self.base_mut().emit_signal("designs_changed", &[]);
                 }
-                Err(reason) => {
-                    self.last_order_error = reason.to_string();
-                    self.sync_money_from_state();
-                    return -1;
-                }
+                total_ordered as i32
+            }
+            Err(reason) => {
+                self.last_order_error = reason.to_string();
+                self.sync_money_from_state();
+                -1
             }
         }
-
-        if total_ordered > 0 {
-            self.base_mut().emit_signal("manufacturing_changed", &[]);
-            self.base_mut().emit_signal("designs_changed", &[]);
-        }
-        total_ordered
     }
 
     /// Assign a team to work on a manufacturing order

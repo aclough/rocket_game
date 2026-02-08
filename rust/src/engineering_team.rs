@@ -204,6 +204,10 @@ pub enum WorkEvent {
     FloorSpaceCompleted {
         units: usize,
     },
+    /// A rocket order was unblocked (engines arrived and were consumed)
+    RocketOrderUnblocked {
+        order_id: crate::manufacturing::ManufacturingOrderId,
+    },
 }
 
 /// Calculate total efficiency for multiple teams working on the same thing
