@@ -837,6 +837,53 @@ impl Company {
         manufacturing_team_efficiency(productive_teams.len())
     }
 
+    /// Auto-assign idle manufacturing teams across active orders.
+    /// Distributes one team at a time, always picking the order with the lowest
+    /// teams_on_order / remaining_work ratio (most understaffed relative to work).
+    /// Returns the number of teams assigned.
+    pub fn auto_assign_manufacturing_teams(&mut self) -> u32 {
+        let mut assigned_count: u32 = 0;
+
+        loop {
+            // Find the next idle manufacturing team
+            let idle_team_id = self.teams.iter()
+                .find(|t| t.team_type == TeamType::Manufacturing && t.assignment.is_none())
+                .map(|t| t.id);
+
+            let team_id = match idle_team_id {
+                Some(id) => id,
+                None => break, // No more idle manufacturing teams
+            };
+
+            // Find the order with the lowest teams/remaining_work ratio
+            let best_order_id = self.manufacturing.active_orders.iter()
+                .filter(|o| !o.is_order_complete())
+                .filter(|o| o.remaining_work() > 0.0)
+                .map(|o| {
+                    let teams_on = self.get_teams_on_order(o.id).len() as f64;
+                    let remaining = o.remaining_work();
+                    let ratio = teams_on / remaining;
+                    (o.id, ratio)
+                })
+                .min_by(|(id_a, ratio_a), (id_b, ratio_b)| {
+                    ratio_a.partial_cmp(ratio_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(id_a.cmp(id_b))
+                })
+                .map(|(id, _)| id);
+
+            match best_order_id {
+                Some(order_id) => {
+                    self.assign_team_to_manufacturing(team_id, order_id);
+                    assigned_count += 1;
+                }
+                None => break, // No eligible orders
+            }
+        }
+
+        assigned_count
+    }
+
     // ==========================================
     // Day Processing
     // ==========================================
@@ -1392,5 +1439,74 @@ mod tests {
         // Both lineage and head should have the new name
         assert_eq!(company.rocket_designs[0].name, "My Custom Rocket");
         assert_eq!(company.rocket_designs[0].head().name, "My Custom Rocket");
+    }
+
+    // ==========================================
+    // Auto-Assign Manufacturing Teams Tests
+    // ==========================================
+
+    #[test]
+    fn test_auto_assign_no_idle_teams() {
+        let mut company = Company::new();
+        // No manufacturing teams at all
+        let assigned = company.auto_assign_manufacturing_teams();
+        assert_eq!(assigned, 0);
+    }
+
+    #[test]
+    fn test_auto_assign_no_orders() {
+        let mut company = Company::new();
+        company.hire_manufacturing_team();
+        // No manufacturing orders
+        let assigned = company.auto_assign_manufacturing_teams();
+        assert_eq!(assigned, 0);
+    }
+
+    #[test]
+    fn test_auto_assign_one_order_two_teams() {
+        let mut company = Company::new();
+        company.hire_manufacturing_team();
+        company.hire_manufacturing_team();
+
+        // Create an engine order (need a frozen revision)
+        let idx = company.engine_designs.len() - 1;
+        company.engine_designs[idx].cut_revision("v1");
+        let rev = company.engine_designs[idx].revisions.len() as u32;
+        let result = company.start_engine_order(idx, rev, 3);
+        assert!(result.is_ok(), "Failed to start engine order: {:?}", result);
+
+        let assigned = company.auto_assign_manufacturing_teams();
+        assert_eq!(assigned, 2);
+
+        // Both teams should be on the order
+        let order_id = company.manufacturing.active_orders[0].id;
+        let teams_on = company.get_teams_on_order(order_id);
+        assert_eq!(teams_on.len(), 2);
+    }
+
+    #[test]
+    fn test_auto_assign_two_orders_distributed() {
+        let mut company = Company::new();
+        company.hire_manufacturing_team();
+        company.hire_manufacturing_team();
+
+        // Create two engine orders
+        let idx = company.engine_designs.len() - 1;
+        company.engine_designs[idx].cut_revision("v1");
+        let rev = company.engine_designs[idx].revisions.len() as u32;
+
+        let result1 = company.start_engine_order(idx, rev, 3);
+        assert!(result1.is_ok());
+        let result2 = company.start_engine_order(idx, rev, 3);
+        assert!(result2.is_ok());
+
+        let assigned = company.auto_assign_manufacturing_teams();
+        assert_eq!(assigned, 2);
+
+        // Each order should get one team (both have same remaining work)
+        let order1_id = company.manufacturing.active_orders[0].id;
+        let order2_id = company.manufacturing.active_orders[1].id;
+        assert_eq!(company.get_teams_on_order(order1_id).len(), 1);
+        assert_eq!(company.get_teams_on_order(order2_id).len(), 1);
     }
 }

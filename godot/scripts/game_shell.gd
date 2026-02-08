@@ -1360,6 +1360,12 @@ func _setup_production_content():
 	assemble_rocket_btn.pressed.connect(_on_prod_assemble_rocket_pressed)
 	order_btns_hbox.add_child(assemble_rocket_btn)
 
+	var auto_assign_btn = Button.new()
+	auto_assign_btn.text = "Auto-Assign Teams"
+	auto_assign_btn.add_theme_font_size_override("font_size", 14)
+	auto_assign_btn.pressed.connect(_on_prod_auto_assign_teams)
+	order_btns_hbox.add_child(auto_assign_btn)
+
 	# === Manufacturing Queue Section ===
 	var queue_panel = PanelContainer.new()
 	queue_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1879,17 +1885,22 @@ func _on_prod_assemble_rocket_pressed():
 			btn.pressed.connect(_on_prod_auto_build_engines.bind(i, dialog))
 		dialog_vbox.add_child(btn)
 
-		# Show engines required
+		# Show engines required with inventory counts
 		if engines_req.size() > 0:
-			var eng_info = Label.new()
+			var eng_info = RichTextLabel.new()
+			eng_info.bbcode_enabled = true
+			eng_info.fit_content = true
+			eng_info.scroll_active = false
+			eng_info.add_theme_font_size_override("normal_font_size", 11)
 			var parts = []
 			for req in engines_req:
 				var eng_name = req.get("name", "?")
 				var eng_count = req.get("count", 0)
-				parts.append("%dx %s" % [eng_count, eng_name])
-			eng_info.text = "  Engines needed: %s" % ", ".join(parts)
-			eng_info.add_theme_font_size_override("font_size", 11)
-			eng_info.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+				var eng_design_id = req.get("engine_design_id", -1)
+				var in_stock = game_manager.get_engines_available_for_design(eng_design_id)
+				var stock_color = "green" if in_stock >= eng_count else "red"
+				parts.append("%dx %s ([color=%s]%d in stock[/color])" % [eng_count, eng_name, stock_color, in_stock])
+			eng_info.text = "  Engines: %s" % ", ".join(parts)
 			dialog_vbox.add_child(eng_info)
 
 	add_child(dialog)
@@ -1919,6 +1930,14 @@ func _on_prod_rocket_selected(rocket_index: int, dialog: AcceptDialog):
 		_update_production_ui()
 	else:
 		_show_toast("Cannot start rocket: %s" % game_manager.get_last_order_error())
+
+func _on_prod_auto_assign_teams():
+	var assigned = game_manager.auto_assign_manufacturing_teams()
+	if assigned > 0:
+		_show_toast("Auto-assigned %d team%s" % [assigned, "s" if assigned != 1 else ""])
+		_update_production_ui()
+	else:
+		_show_toast("No idle manufacturing teams to assign")
 
 func _on_manufacturing_changed():
 	if current_tab == Tab.PRODUCTION:

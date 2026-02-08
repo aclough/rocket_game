@@ -2426,6 +2426,17 @@ impl GameManager {
         self.state.player_company.get_teams_on_order(order_id as u32).len() as i32
     }
 
+    /// Auto-assign idle manufacturing teams across active orders.
+    /// Returns the number of teams assigned.
+    #[func]
+    pub fn auto_assign_manufacturing_teams(&mut self) -> i32 {
+        let assigned = self.state.player_company.auto_assign_manufacturing_teams();
+        if assigned > 0 {
+            self.base_mut().emit_signal("manufacturing_changed", &[]);
+        }
+        assigned as i32
+    }
+
     /// Cut a revision for an engine design and return the revision number
     #[func]
     pub fn cut_engine_revision(&mut self, index: i32, label: GString) -> i32 {

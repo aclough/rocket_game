@@ -144,6 +144,18 @@ impl ManufacturingOrder {
     pub fn is_rocket_order(&self) -> bool {
         matches!(self.order_type, ManufacturingOrderType::Rocket { .. })
     }
+
+    /// Calculate total remaining work across all units (current + future)
+    pub fn remaining_work(&self) -> f64 {
+        let current_unit_remaining = (self.total_work - self.progress).max(0.0);
+        match &self.order_type {
+            ManufacturingOrderType::Engine { quantity, completed, .. } => {
+                let remaining_units = (*quantity as f64) - (*completed as f64) - 1.0;
+                current_unit_remaining + remaining_units.max(0.0) * self.total_work
+            }
+            ManufacturingOrderType::Rocket { .. } => current_unit_remaining,
+        }
+    }
 }
 
 // ==========================================
@@ -945,5 +957,66 @@ mod tests {
         // 60 + 4*5 = 80 days
         assert!((work - 80.0).abs() < 0.1,
             "Stage assembly work should be 80 days, got {}", work);
+    }
+
+    // ==========================================
+    // Remaining Work Tests
+    // ==========================================
+
+    #[test]
+    fn test_remaining_work_engine_partial_progress() {
+        let mut mfg = Manufacturing::new();
+        let snap = kerolox_snapshot();
+        let (order_id, _) = mfg.start_engine_order(1, 1, snap, 5).unwrap();
+
+        let order = mfg.get_order_mut(order_id).unwrap();
+        let total_work = order.total_work;
+        // 2 completed, 50% through current unit
+        if let ManufacturingOrderType::Engine { completed, .. } = &mut order.order_type {
+            *completed = 2;
+        }
+        order.progress = total_work * 0.5;
+
+        let remaining = order.remaining_work();
+        // Current unit: 0.5 * total_work remaining
+        // Future units: 5 - 2 - 1 = 2 full units
+        let expected = total_work * 0.5 + 2.0 * total_work;
+        assert!((remaining - expected).abs() < 0.1,
+            "Expected {:.1}, got {:.1}", expected, remaining);
+    }
+
+    #[test]
+    fn test_remaining_work_rocket() {
+        let mut mfg = Manufacturing::new();
+        let design = RocketDesign::default_design();
+        let (order_id, _) = mfg.start_rocket_order(0, 1, design).unwrap();
+
+        let order = mfg.get_order_mut(order_id).unwrap();
+        let total_work = order.total_work;
+        order.progress = total_work * 0.3;
+
+        let remaining = order.remaining_work();
+        let expected = total_work * 0.7;
+        assert!((remaining - expected).abs() < 0.1,
+            "Expected {:.1}, got {:.1}", expected, remaining);
+    }
+
+    #[test]
+    fn test_remaining_work_completed_order() {
+        let mut mfg = Manufacturing::new();
+        let snap = kerolox_snapshot();
+        let (order_id, _) = mfg.start_engine_order(1, 1, snap, 3).unwrap();
+
+        let order = mfg.get_order_mut(order_id).unwrap();
+        let total_work = order.total_work;
+        // All 3 completed
+        if let ManufacturingOrderType::Engine { completed, .. } = &mut order.order_type {
+            *completed = 3;
+        }
+        order.progress = total_work;
+
+        let remaining = order.remaining_work();
+        assert!((remaining - 0.0).abs() < 0.1,
+            "Completed order remaining should be 0, got {:.1}", remaining);
     }
 }
