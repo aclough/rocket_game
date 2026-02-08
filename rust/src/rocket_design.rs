@@ -1269,13 +1269,13 @@ impl RocketDesign {
         self.stages.iter().map(|s| s.total_cost_with_attachment()).sum()
     }
 
-    /// Calculate the rocket overhead cost in dollars
-    /// This is a fixed cost per rocket for integration, testing, and launch operations
+    /// Calculate the rocket integration cost in dollars
+    /// Fairing, flight computer, guidance, full-vehicle harness
     pub fn rocket_overhead_cost(&self) -> f64 {
         if self.stages.is_empty() {
             0.0
         } else {
-            costs::ROCKET_OVERHEAD_COST
+            crate::resources::rocket_integration_cost()
         }
     }
 
@@ -2300,20 +2300,23 @@ mod tests {
     fn test_rocket_overhead_cost() {
         let mut design = RocketDesign::new();
         design.add_stage(kerolox_snap());
-        // Rocket overhead should be $10M when there's at least one stage
-        assert_eq!(design.rocket_overhead_cost(), 10_000_000.0);
+        // Rocket overhead is resource-based integration cost (~$1.07M)
+        let expected = crate::resources::rocket_integration_cost();
+        assert!((design.rocket_overhead_cost() - expected).abs() < 1.0,
+            "Rocket overhead should be ~${expected}, got ${}", design.rocket_overhead_cost());
     }
 
     #[test]
     fn test_default_design_cost() {
         let design = RocketDesign::default_design();
-        // Default: 5 Kerolox ($50M) + 100000kg tank + 1 Hydrolox ($15M) + 20000kg tank
-        // + 2 stage overheads ($10M) + rocket overhead ($10M)
+        // Default: 5 Kerolox engines + 100000kg tank + 1 Hydrolox engine + 20000kg tank
+        // + 2 stage assembly costs + rocket integration
+        // All costs are now resource-based (much lower than old constants)
         let cost = design.total_cost();
 
-        // Should be roughly $102M (within budget of $150M)
-        assert!(cost > 95_000_000.0 && cost < 110_000_000.0,
-            "Default design cost should be ~$102M: ${}", cost);
+        // Should be roughly $3.6M with resource-based costs (well within $500M budget)
+        assert!(cost > 3_000_000.0 && cost < 5_000_000.0,
+            "Default design cost should be ~$3.6M: ${}", cost);
         assert!(design.is_within_budget());
     }
 
@@ -2331,13 +2334,14 @@ mod tests {
     fn test_over_budget_detection() {
         let mut design = RocketDesign::new();
 
-        // Add 35 expensive Hydrolox engines (35 × $15M = $525M engine cost alone)
-        // This should exceed the $500M budget
+        // With resource-based costs, engines are ~$124K each, so use a low budget
+        // to test over-budget detection
         design.add_stage(hydrolox_snap());
-        design.stages[0].engine_count = 35;
+        design.stages[0].engine_count = 5;
+        design.budget = 500_000.0; // Set budget to $500K
 
         assert!(!design.is_within_budget(),
-            "35 Hydrolox engines should exceed budget");
+            "5 Hydrolox engines + tank + assembly should exceed $500K budget");
         assert!(design.remaining_budget() < 0.0,
             "Remaining budget should be negative");
     }
@@ -2355,12 +2359,11 @@ mod tests {
             assert!(design.is_launchable());
         }
 
-        // Add too many engines to go over budget
-        design.stages[0].engine_count = 10;
-        if !design.is_within_budget() {
-            assert!(!design.is_launchable(),
-                "Over budget should not be launchable");
-        }
+        // Set a very low budget so the design goes over
+        design.budget = 100.0;
+        assert!(!design.is_within_budget());
+        assert!(!design.is_launchable(),
+            "Over budget should not be launchable");
     }
 
     #[test]
@@ -2370,16 +2373,20 @@ mod tests {
         design.stages[0].engine_count = 2;
         design.stages[0].propellant_mass_kg = 10200.0; // 10 m³
 
-        // Expected stage cost:
-        // 2 engines × $10M = $20M
-        // 10 m³ × $100K = $1M
-        // Stage overhead = $5M
-        // Total = $26M
-        let expected = 20_000_000.0 + 1_000_000.0 + 5_000_000.0;
+        let snap = design.stages[0].engine_snapshot();
+        // Expected stage cost with resource-based pricing:
+        // 2 engines × resource cost (kerolox, 450kg each)
+        let engine_cost = 2.0 * snap.base_cost;
+        // Tank mass = propellant_mass * tank_mass_ratio (0.06 for kerolox)
+        let tank_mass = 10200.0 * costs::KEROLOX_TANK_MASS_RATIO;
+        let tank_cost = crate::resources::tank_resource_cost(
+            crate::engine_design::FuelType::Kerolox, tank_mass);
+        let assembly_cost = crate::resources::stage_assembly_cost();
+        let expected = engine_cost + tank_cost + assembly_cost;
         let actual = design.stage_cost(0);
 
-        assert!((actual - expected).abs() < 100.0,
-            "Stage cost should be $26M, got ${}", actual);
+        assert!((actual - expected).abs() < 1.0,
+            "Stage cost should be ~${expected}, got ${actual}");
     }
 
     // ==========================================

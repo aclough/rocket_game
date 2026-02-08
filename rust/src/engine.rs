@@ -110,23 +110,6 @@ pub mod costs {
     /// Cost to fix a discovered flaw in dollars
     pub const FLAW_FIX_COST: f64 = 5_000_000.0;
 
-    /// Cost per engine by type (in dollars)
-    pub const KEROLOX_ENGINE_COST: f64 = 10_000_000.0;
-    pub const HYDROLOX_ENGINE_COST: f64 = 15_000_000.0;
-    pub const SOLID_ENGINE_COST: f64 = 15_000_000.0;  // Cost per solid motor
-
-    /// Cost per cubic meter of tank volume (in dollars)
-    /// Covers tank structure, insulation, plumbing, etc.
-    pub const TANK_COST_PER_M3: f64 = 100_000.0;
-
-    /// Fixed overhead cost per stage (in dollars)
-    /// Covers separation systems, avionics, structural integration
-    pub const STAGE_OVERHEAD_COST: f64 = 5_000_000.0;
-
-    /// Fixed overhead cost per rocket (in dollars)
-    /// Covers integration, testing, launch operations
-    pub const ROCKET_OVERHEAD_COST: f64 = 10_000_000.0;
-
     /// Propellant densities in kg/m³
     /// These are effective combined densities accounting for mixture ratios
     pub const KEROLOX_DENSITY_KG_M3: f64 = 1020.0;
@@ -144,9 +127,6 @@ pub mod costs {
 
     /// Solid motor "tank" mass ratio (casing mass as fraction of propellant)
     pub const SOLID_TANK_MASS_RATIO: f64 = 0.136;
-
-    /// Fraction of engine base_cost that goes to materials (rest is labor via teams)
-    pub const ENGINE_MATERIAL_FRACTION: f64 = 0.4;
 
     /// Structural mass for booster attachment points in kg
     pub const BOOSTER_ATTACHMENT_MASS_KG: f64 = 500.0;

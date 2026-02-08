@@ -196,20 +196,23 @@ impl RocketStage {
     }
 
     /// Calculate the cost of tanks for this stage in dollars
-    /// Based on tank volume required for the propellant
+    /// Based on tank mass and resource BOMs
     /// For solid motors, returns 0 (no separate tanks)
     pub fn tank_cost(&self) -> f64 {
         if self.is_solid() {
-            0.0 // Solid motors have no separate tanks
+            0.0
         } else {
-            self.tank_volume_m3() * costs::TANK_COST_PER_M3
+            crate::resources::tank_resource_cost(
+                self.engine_snapshot.fuel_type,
+                self.tank_mass_kg(),
+            )
         }
     }
 
     /// Calculate the total cost of this stage in dollars
-    /// Includes engines, tanks, and stage overhead
+    /// Includes engines, tanks, and stage assembly hardware
     pub fn total_cost(&self) -> f64 {
-        self.engine_cost() + self.tank_cost() + costs::STAGE_OVERHEAD_COST
+        self.engine_cost() + self.tank_cost() + crate::resources::stage_assembly_cost()
     }
 
     // ==========================================
@@ -514,50 +517,59 @@ mod tests {
     fn test_engine_cost() {
         let mut stage = RocketStage::new(kerolox_snapshot());
         stage.engine_count = 3;
-        // 3 × $10M = $30M
-        assert_eq!(stage.engine_cost(), 30_000_000.0);
+        // 3 × ~$158K = ~$474K (resource-based)
+        let expected = crate::resources::engine_resource_cost(
+            crate::engine_design::FuelType::Kerolox, 450.0) * 3.0;
+        assert!((stage.engine_cost() - expected).abs() < 100.0,
+            "3 kerolox engines should cost ~${:.0}, got ${:.0}", expected, stage.engine_cost());
 
         let mut hydrolox_stage = RocketStage::new(hydrolox_snapshot());
         hydrolox_stage.engine_count = 2;
-        // 2 × $15M = $30M
-        assert_eq!(hydrolox_stage.engine_cost(), 30_000_000.0);
+        // 2 × ~$124K = ~$249K
+        let expected = crate::resources::engine_resource_cost(
+            crate::engine_design::FuelType::Hydrolox, 300.0) * 2.0;
+        assert!((hydrolox_stage.engine_cost() - expected).abs() < 100.0);
     }
 
     #[test]
     fn test_tank_cost() {
         let mut stage = RocketStage::new(kerolox_snapshot());
-        stage.propellant_mass_kg = 10200.0; // 10 m³
-        // 10 m³ × $100,000/m³ = $1M
-        assert!((stage.tank_cost() - 1_000_000.0).abs() < 100.0);
+        stage.propellant_mass_kg = 10200.0;
+        // Tank mass: 10200 × 0.06 = 612 kg → resource-based cost
+        let expected = crate::resources::tank_resource_cost(
+            crate::engine_design::FuelType::Kerolox, 612.0);
+        assert!((stage.tank_cost() - expected).abs() < 100.0,
+            "Kerolox tank cost should be ~${:.0}, got ${:.0}", expected, stage.tank_cost());
     }
 
     #[test]
     fn test_stage_total_cost() {
         let mut stage = RocketStage::new(kerolox_snapshot());
         stage.engine_count = 1;
-        stage.propellant_mass_kg = 10200.0; // 10 m³
+        stage.propellant_mass_kg = 10200.0;
 
-        // Engine cost: 1 × $10M = $10M
-        // Tank cost: 10 m³ × $100K = $1M
-        // Stage overhead: $5M
-        // Total: $16M
-        let expected = 10_000_000.0 + 1_000_000.0 + 5_000_000.0;
-        assert!((stage.total_cost() - expected).abs() < 100.0);
+        // Engine: ~$158K, Tank: ~$32K, Assembly: ~$565K
+        let engine = crate::resources::engine_resource_cost(
+            crate::engine_design::FuelType::Kerolox, 450.0);
+        let tank = crate::resources::tank_resource_cost(
+            crate::engine_design::FuelType::Kerolox, 612.0);
+        let assembly = crate::resources::stage_assembly_cost();
+        let expected = engine + tank + assembly;
+        assert!((stage.total_cost() - expected).abs() < 100.0,
+            "Stage total should be ~${:.0}, got ${:.0}", expected, stage.total_cost());
     }
 
     #[test]
     fn test_hydrolox_tanks_more_expensive_per_kg() {
-        // Same propellant mass, but hydrolox needs larger tanks
+        // Same propellant mass, hydrolox has higher tank mass ratio
         let mut kerolox = RocketStage::new(kerolox_snapshot());
         kerolox.propellant_mass_kg = 10000.0;
 
         let mut hydrolox = RocketStage::new(hydrolox_snapshot());
         hydrolox.propellant_mass_kg = 10000.0;
 
-        // Hydrolox tanks should cost more due to lower density
-        // Kerolox: 10000/1020 = 9.8 m³
-        // Hydrolox: 10000/290 = 34.5 m³
-        assert!(hydrolox.tank_cost() > kerolox.tank_cost() * 3.0);
+        // Hydrolox tank mass: 10000 * 0.10 = 1000 kg vs Kerolox: 10000 * 0.06 = 600 kg
+        assert!(hydrolox.tank_cost() > kerolox.tank_cost());
     }
 
     // ==========================================

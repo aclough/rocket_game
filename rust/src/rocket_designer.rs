@@ -578,22 +578,16 @@ impl RocketDesigner {
         }
     }
 
-    /// Gets the cost per cubic meter of tank volume
-    #[func]
-    pub fn get_tank_cost_per_m3(&self) -> f64 {
-        costs::TANK_COST_PER_M3
-    }
-
-    /// Gets the fixed overhead cost per stage
+    /// Gets the fixed material cost per stage (assembly hardware)
     #[func]
     pub fn get_stage_overhead_cost(&self) -> f64 {
-        costs::STAGE_OVERHEAD_COST
+        crate::resources::stage_assembly_cost()
     }
 
-    /// Gets the fixed overhead cost per rocket
+    /// Gets the fixed material cost per rocket (integration)
     #[func]
     pub fn get_rocket_overhead_cost(&self) -> f64 {
-        costs::ROCKET_OVERHEAD_COST
+        crate::resources::rocket_integration_cost()
     }
 
     /// Gets the tank volume for a stage in cubic meters

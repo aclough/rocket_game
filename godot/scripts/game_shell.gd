@@ -1081,8 +1081,8 @@ func _update_finance_ui():
 	_update_finance_prices()
 
 func _update_finance_payroll():
-	var team_salary = game_manager.get_team_salary()
-	var salary_str = _format_money_value(team_salary)
+	var eng_salary_str = _format_money_value(game_manager.get_engineering_team_salary())
+	var mfg_salary_str = _format_money_value(game_manager.get_manufacturing_team_salary())
 
 	# Engineering teams
 	var eng_ids = game_manager.get_engineering_team_ids()
@@ -1093,7 +1093,7 @@ func _update_finance_payroll():
 		child.queue_free()
 
 	for id in eng_ids:
-		var row = _create_finance_team_row(id, salary_str)
+		var row = _create_finance_team_row(id, eng_salary_str)
 		_finance_eng_teams_container.add_child(row)
 
 	if eng_ids.size() == 0:
@@ -1112,7 +1112,7 @@ func _update_finance_payroll():
 		child.queue_free()
 
 	for id in mfg_ids:
-		var row = _create_finance_team_row(id, salary_str)
+		var row = _create_finance_team_row(id, mfg_salary_str)
 		_finance_mfg_teams_container.add_child(row)
 
 	if mfg_ids.size() == 0:
@@ -1144,18 +1144,19 @@ func _update_finance_prices():
 	for child in _finance_prices_container.get_children():
 		child.queue_free()
 
-	# Build price rows dynamically from GameManager getters
+	# Team hiring costs
 	_add_price_row("Engineering team hire", _format_money_value(game_manager.get_engineering_hire_cost()))
 	_add_price_row("Manufacturing team hire", _format_money_value(game_manager.get_manufacturing_hire_cost()))
-	_add_price_row("Team salary (each)", "%s/mo" % _format_money_value(game_manager.get_team_salary()))
+	_add_price_row("Engineering salary", "%s/mo" % _format_money_value(game_manager.get_engineering_team_salary()))
+	_add_price_row("Manufacturing salary", "%s/mo" % _format_money_value(game_manager.get_manufacturing_team_salary()))
 	_add_price_row("Floor space (per unit)", _format_money_value(game_manager.get_floor_space_cost_per_unit()))
-	_add_price_row("Tank materials", "%s/m³" % _format_money_value(game_manager.get_tank_material_cost_per_m3()))
-	_add_price_row("Stage assembly hardware", _format_money_value(game_manager.get_stage_assembly_cost()))
-	_add_price_row("Rocket integration", _format_money_value(game_manager.get_rocket_integration_cost()))
 
-	var mat_fraction = game_manager.get_engine_material_fraction()
-	_add_price_row("Engine materials", "%.0f%% of base cost" % (mat_fraction * 100.0))
+	# Resource prices
+	for i in range(game_manager.get_resource_count()):
+		_add_price_row(game_manager.get_resource_name(i),
+			"%s/kg" % _format_money_value(game_manager.get_resource_price(i)))
 
+	# Other costs
 	var pad_cost = game_manager.get_pad_upgrade_cost()
 	if pad_cost > 0:
 		_add_price_row("Next pad upgrade", _format_money_value(pad_cost))

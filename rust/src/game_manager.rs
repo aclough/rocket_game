@@ -2489,31 +2489,30 @@ impl GameManager {
     }
 
     // ==========================================
-    // Cost Constants (for Finance tab / forward-compatible with Resources)
+    // Resource System (for Finance tab and cost display)
     // ==========================================
 
-    /// Get tank material cost per cubic meter
+    /// Number of resource types
     #[func]
-    pub fn get_tank_material_cost_per_m3(&self) -> f64 {
-        crate::manufacturing::TANK_MATERIAL_COST_PER_M3
+    pub fn get_resource_count(&self) -> i32 {
+        crate::resources::RESOURCE_COUNT as i32
     }
 
-    /// Get stage assembly material cost
+    /// Get resource display name by index
     #[func]
-    pub fn get_stage_assembly_cost(&self) -> f64 {
-        crate::manufacturing::STAGE_ASSEMBLY_MATERIAL_COST
+    pub fn get_resource_name(&self, index: i32) -> GString {
+        crate::resources::Resource::from_index(index as usize)
+            .map(|r| r.display_name())
+            .unwrap_or("Unknown")
+            .into()
     }
 
-    /// Get rocket integration material cost
+    /// Get resource price per kg by index
     #[func]
-    pub fn get_rocket_integration_cost(&self) -> f64 {
-        crate::manufacturing::ROCKET_INTEGRATION_MATERIAL_COST
-    }
-
-    /// Get engine material fraction (fraction of base cost)
-    #[func]
-    pub fn get_engine_material_fraction(&self) -> f64 {
-        crate::manufacturing::ENGINE_MATERIAL_FRACTION
+    pub fn get_resource_price(&self, index: i32) -> f64 {
+        crate::resources::Resource::from_index(index as usize)
+            .map(|r| r.price_per_kg())
+            .unwrap_or(0.0)
     }
 
     /// Get cost to hire an engineering team
@@ -2528,10 +2527,16 @@ impl GameManager {
         crate::engineering_team::MANUFACTURING_HIRE_COST
     }
 
-    /// Get monthly salary per team
+    /// Get engineering team monthly salary
     #[func]
-    pub fn get_team_salary(&self) -> f64 {
-        crate::engineering_team::TEAM_MONTHLY_SALARY
+    pub fn get_engineering_team_salary(&self) -> f64 {
+        crate::engineering_team::ENGINEERING_TEAM_SALARY
+    }
+
+    /// Get manufacturing team monthly salary
+    #[func]
+    pub fn get_manufacturing_team_salary(&self) -> f64 {
+        crate::engineering_team::MANUFACTURING_TEAM_SALARY
     }
 
     /// Get pad upgrade costs for all levels (indices 0-3 = upgrades to levels 2-5)

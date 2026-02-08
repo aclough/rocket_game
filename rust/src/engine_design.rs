@@ -81,6 +81,7 @@ pub struct EngineDesign {
 pub struct EngineDesignSnapshot {
     pub engine_design_id: usize,
     pub name: String,
+    pub fuel_type: FuelType,
     pub scale: f64,
     pub mass_kg: f64,
     pub thrust_kn: f64,
@@ -132,7 +133,7 @@ impl EngineDesign {
     pub fn snapshot(&self, id: usize, name: &str) -> EngineDesignSnapshot {
         let is_solid = self.components.contains(&EngineComponent::SolidMotor);
 
-        let (base_mass, base_thrust, ve, density, tank_ratio, base_cost, fixed_mass_ratio, flaw_category) =
+        let (base_mass, base_thrust, ve, density, tank_ratio, fixed_mass_ratio, flaw_category) =
             if is_solid {
                 (
                     40_000.0,
@@ -140,7 +141,6 @@ impl EngineDesign {
                     2650.0,
                     costs::SOLID_DENSITY_KG_M3,
                     costs::SOLID_TANK_MASS_RATIO,
-                    costs::SOLID_ENGINE_COST,
                     Some(costs::SOLID_MASS_RATIO),
                     FlawCategory::SolidMotor,
                 )
@@ -151,7 +151,6 @@ impl EngineDesign {
                     4500.0,
                     costs::HYDROLOX_DENSITY_KG_M3,
                     costs::HYDROLOX_TANK_MASS_RATIO,
-                    costs::HYDROLOX_ENGINE_COST,
                     None,
                     FlawCategory::LiquidEngine,
                 )
@@ -163,20 +162,23 @@ impl EngineDesign {
                     3000.0,
                     costs::KEROLOX_DENSITY_KG_M3,
                     costs::KEROLOX_TANK_MASS_RATIO,
-                    costs::KEROLOX_ENGINE_COST,
                     None,
                     FlawCategory::LiquidEngine,
                 )
             };
 
+        let fuel_type = self.fuel_type();
+        let mass_kg = base_mass * self.scale;
+
         EngineDesignSnapshot {
             engine_design_id: id,
             name: name.to_string(),
+            fuel_type,
             scale: self.scale,
-            mass_kg: base_mass * self.scale,
+            mass_kg,
             thrust_kn: base_thrust * self.scale,
             exhaust_velocity_ms: ve,
-            base_cost: base_cost * self.scale,
+            base_cost: crate::resources::engine_resource_cost(fuel_type, mass_kg),
             propellant_density: density,
             tank_mass_ratio: tank_ratio,
             is_solid,
@@ -372,13 +374,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_kerolox_snapshot_matches_old_spec() {
+    fn test_kerolox_snapshot() {
         let design = default_kerolox();
         let snap = design.snapshot(1, "Kerolox");
         assert_eq!(snap.mass_kg, 450.0);
         assert_eq!(snap.thrust_kn, 500.0);
         assert_eq!(snap.exhaust_velocity_ms, 3000.0);
-        assert_eq!(snap.base_cost, costs::KEROLOX_ENGINE_COST);
+        assert_eq!(snap.fuel_type, FuelType::Kerolox);
+        // base_cost is resource-based: ~$158K for 450 kg kerolox
+        let expected_cost = crate::resources::engine_resource_cost(FuelType::Kerolox, 450.0);
+        assert!((snap.base_cost - expected_cost).abs() < 1.0);
         assert_eq!(snap.propellant_density, costs::KEROLOX_DENSITY_KG_M3);
         assert_eq!(snap.tank_mass_ratio, costs::KEROLOX_TANK_MASS_RATIO);
         assert!(!snap.is_solid);
@@ -387,23 +392,26 @@ mod tests {
     }
 
     #[test]
-    fn test_hydrolox_snapshot_matches_old_spec() {
+    fn test_hydrolox_snapshot() {
         let design = default_hydrolox();
         let snap = design.snapshot(0, "Hydrolox");
         assert_eq!(snap.mass_kg, 300.0);
         assert_eq!(snap.thrust_kn, 100.0);
         assert_eq!(snap.exhaust_velocity_ms, 4500.0);
-        assert_eq!(snap.base_cost, costs::HYDROLOX_ENGINE_COST);
+        assert_eq!(snap.fuel_type, FuelType::Hydrolox);
+        let expected_cost = crate::resources::engine_resource_cost(FuelType::Hydrolox, 300.0);
+        assert!((snap.base_cost - expected_cost).abs() < 1.0);
         assert!(!snap.is_solid);
     }
 
     #[test]
-    fn test_solid_snapshot_matches_old_spec() {
+    fn test_solid_snapshot() {
         let design = default_solid();
         let snap = design.snapshot(2, "Solid");
         assert_eq!(snap.mass_kg, 40_000.0);
         assert_eq!(snap.thrust_kn, 8_000.0);
         assert_eq!(snap.exhaust_velocity_ms, 2650.0);
+        assert_eq!(snap.fuel_type, FuelType::Solid);
         assert!(snap.is_solid);
         assert!((snap.fixed_mass_ratio.unwrap() - 0.88).abs() < 0.01);
         assert_eq!(snap.flaw_category, FlawCategory::SolidMotor);
@@ -415,10 +423,12 @@ mod tests {
         design.scale = 2.0;
         let snap = design.snapshot(0, "Scaled");
 
-        // Mass, thrust, cost scale linearly
+        // Mass and thrust scale linearly
         assert_eq!(snap.mass_kg, 900.0);
         assert_eq!(snap.thrust_kn, 1000.0);
-        assert_eq!(snap.base_cost, costs::KEROLOX_ENGINE_COST * 2.0);
+        // Cost scales linearly with mass (resource BOMs are mass-proportional)
+        let expected_cost = crate::resources::engine_resource_cost(FuelType::Kerolox, 900.0);
+        assert!((snap.base_cost - expected_cost).abs() < 1.0);
 
         // These don't scale
         assert_eq!(snap.exhaust_velocity_ms, 3000.0);

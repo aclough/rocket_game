@@ -10,23 +10,8 @@ use crate::stage::RocketStage;
 // Constants
 // ==========================================
 
-/// Fraction of engine base_cost that is material (rest is labor, covered by team work)
-pub const ENGINE_MATERIAL_FRACTION: f64 = 0.4;
-
-/// Base build days for an engine at scale 1.0
-pub const ENGINE_BASE_BUILD_DAYS: f64 = 30.0;
-
 /// Exponent for scaling engine build work with scale factor
 pub const ENGINE_BUILD_SCALE_EXPONENT: f64 = 0.75;
-
-/// Tank material cost per cubic meter (lower than old TANK_COST_PER_M3 since labor is separate)
-pub const TANK_MATERIAL_COST_PER_M3: f64 = 40_000.0;
-
-/// Fixed material cost per stage for assembly hardware
-pub const STAGE_ASSEMBLY_MATERIAL_COST: f64 = 2_000_000.0;
-
-/// Fixed material cost for rocket integration
-pub const ROCKET_INTEGRATION_MATERIAL_COST: f64 = 3_000_000.0;
 
 /// Base assembly days per stage
 pub const STAGE_BASE_ASSEMBLY_DAYS: f64 = 20.0;
@@ -526,32 +511,34 @@ impl Default for Manufacturing {
 // Cost and Work Calculation Functions
 // ==========================================
 
-/// Calculate engine material cost from a snapshot
+/// Calculate engine material cost from a snapshot (delegates to resource BOMs)
 pub fn engine_material_cost(snapshot: &EngineDesignSnapshot) -> f64 {
-    snapshot.base_cost * ENGINE_MATERIAL_FRACTION
+    crate::resources::engine_resource_cost(snapshot.fuel_type, snapshot.mass_kg)
 }
 
 /// Calculate engine build work (team-days) from a snapshot.
-/// Uses the scale stored in the snapshot.
+/// Build time varies by engine type (kerolox 120, hydrolox 180, solid 45 base days).
 pub fn engine_build_work(snapshot: &EngineDesignSnapshot) -> f64 {
-    ENGINE_BASE_BUILD_DAYS * snapshot.scale.powf(ENGINE_BUILD_SCALE_EXPONENT)
+    crate::resources::engine_base_build_days(snapshot.fuel_type)
+        * snapshot.scale.powf(ENGINE_BUILD_SCALE_EXPONENT)
 }
 
 /// Calculate material cost for a stage (tanks + assembly hardware, no engines)
 pub fn stage_material_cost(stage: &RocketStage) -> f64 {
+    let fuel_type = stage.engine_snapshot().fuel_type;
     if stage.is_solid() {
-        // Solid motors: no separate tank, just assembly cost
-        STAGE_ASSEMBLY_MATERIAL_COST
+        crate::resources::stage_assembly_cost()
     } else {
-        let tank_material = stage.tank_volume_m3() * TANK_MATERIAL_COST_PER_M3;
-        tank_material + STAGE_ASSEMBLY_MATERIAL_COST
+        let tank_cost =
+            crate::resources::tank_resource_cost(fuel_type, stage.tank_mass_kg());
+        tank_cost + crate::resources::stage_assembly_cost()
     }
 }
 
 /// Calculate total material cost for a rocket design (stages + integration, no engines)
 pub fn rocket_material_cost(design: &RocketDesign) -> f64 {
     let stage_costs: f64 = design.stages.iter().map(|s| stage_material_cost(s)).sum();
-    stage_costs + ROCKET_INTEGRATION_MATERIAL_COST
+    stage_costs + crate::resources::rocket_integration_cost()
 }
 
 /// Calculate assembly work for a single stage (team-days)
@@ -665,41 +652,40 @@ mod tests {
     #[test]
     fn test_engine_material_cost() {
         let snap = kerolox_snapshot();
-        // Kerolox at scale 1.0: $10M * 0.4 = $4M
+        // Kerolox 450 kg → ~$158K (resource BOMs)
         let cost = engine_material_cost(&snap);
-        assert!((cost - 4_000_000.0).abs() < 1.0,
-            "Kerolox material cost should be $4M, got ${}", cost);
+        assert!(cost > 150_000.0 && cost < 165_000.0,
+            "Kerolox material cost should be ~$158K, got ${:.0}", cost);
 
         let snap = hydrolox_snapshot();
-        // Hydrolox at scale 1.0: $15M * 0.4 = $6M
+        // Hydrolox 300 kg → ~$124K
         let cost = engine_material_cost(&snap);
-        assert!((cost - 6_000_000.0).abs() < 1.0,
-            "Hydrolox material cost should be $6M, got ${}", cost);
+        assert!(cost > 120_000.0 && cost < 130_000.0,
+            "Hydrolox material cost should be ~$124K, got ${:.0}", cost);
     }
 
     #[test]
     fn test_engine_build_work() {
         let snap = kerolox_snapshot();
-        // Kerolox at scale 1.0: 30 * 1.0^0.75 = 30 days
+        // Kerolox at scale 1.0: 120 * 1.0^0.75 = 120 days
         let work = engine_build_work(&snap);
-        assert!((work - 30.0).abs() < 0.1,
-            "Kerolox build work should be 30 days, got {}", work);
+        assert!((work - 120.0).abs() < 0.1,
+            "Kerolox build work should be 120 days, got {}", work);
 
         let snap = hydrolox_snapshot();
-        // Hydrolox at scale 1.0: 30 * 1.0^0.75 = 30 days
-        // (now uses snapshot.scale directly, not base_cost ratio)
+        // Hydrolox at scale 1.0: 180 * 1.0^0.75 = 180 days
         let work = engine_build_work(&snap);
-        assert!((work - 30.0).abs() < 0.1,
-            "Hydrolox build work at scale 1.0 should be 30 days, got {}", work);
+        assert!((work - 180.0).abs() < 0.1,
+            "Hydrolox build work should be 180 days, got {}", work);
     }
 
     #[test]
     fn test_rocket_material_cost() {
         let design = RocketDesign::default_design();
         let cost = rocket_material_cost(&design);
-        // 2 stages * $2M assembly + tank costs + $3M integration
-        assert!(cost > 12_000_000.0 && cost < 16_000_000.0,
-            "Rocket material cost should be ~$13.7M, got ${:.1}M", cost / 1_000_000.0);
+        // 2 stages (tanks + assembly) + integration ≈ $2.65M
+        assert!(cost > 2_000_000.0 && cost < 3_500_000.0,
+            "Rocket material cost should be ~$2.65M, got ${:.2}M", cost / 1_000_000.0);
     }
 
     #[test]
@@ -775,8 +761,11 @@ mod tests {
         assert!(result.is_some());
         let (order_id, total_cost) = result.unwrap();
         assert_eq!(order_id, 1);
-        // 3 * $4M = $12M
-        assert!((total_cost - 12_000_000.0).abs() < 1.0);
+        // 3 × ~$158K = ~$474K (resource-based cost)
+        let expected = crate::resources::engine_resource_cost(
+            crate::engine_design::FuelType::Kerolox, 450.0) * 3.0;
+        assert!((total_cost - expected).abs() < 100.0,
+            "Total cost should be ~${:.0}, got ${:.0}", expected, total_cost);
         assert_eq!(mfg.active_orders.len(), 1);
         // Engine at scale 1.0 uses 1 floor space unit
         assert_eq!(mfg.floor_space_in_use(), 1);
@@ -936,13 +925,13 @@ mod tests {
         use crate::stage::RocketStage;
 
         let mut stage = RocketStage::new(kerolox_snapshot());
-        stage.propellant_mass_kg = 10200.0; // 10200/1020 = 10 m^3
-
+        stage.propellant_mass_kg = 10200.0;
+        // Tank mass: 10200 * 0.06 = 612 kg, tank BOM cost ~$32K
+        // Stage assembly: ~$565K
+        // Total: ~$597K
         let cost = stage_material_cost(&stage);
-        // Tank: 10 m^3 * $40K = $400K, Assembly: $2M
-        // Total: $2.4M
-        assert!((cost - 2_400_000.0).abs() < 100.0,
-            "Stage material cost should be $2.4M, got ${:.1}M", cost / 1_000_000.0);
+        assert!(cost > 590_000.0 && cost < 610_000.0,
+            "Stage material cost should be ~$597K, got ${:.0}", cost);
     }
 
     #[test]

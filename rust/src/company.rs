@@ -1271,7 +1271,8 @@ mod tests {
     #[test]
     fn test_hiring_costs() {
         assert!((ENGINEERING_HIRE_COST - 150_000.0).abs() < 1.0);
-        assert!((MANUFACTURING_HIRE_COST - 450_000.0).abs() < 1.0);
+        // Manufacturing hire = 3× manufacturing salary ($300K) = $900K
+        assert!((MANUFACTURING_HIRE_COST - 900_000.0).abs() < 1.0);
     }
 
     #[test]

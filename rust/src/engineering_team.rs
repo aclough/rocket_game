@@ -1,14 +1,17 @@
 /// Engineering team system for continuous time-based work
 /// Teams work on rocket designs and engines over time
 
-/// Team monthly salary in dollars
-pub const TEAM_MONTHLY_SALARY: f64 = 150_000.0;
+/// Engineering team monthly salary (~8-10 engineers, $150K/mo)
+pub const ENGINEERING_TEAM_SALARY: f64 = 150_000.0;
+
+/// Manufacturing team monthly salary (~20-25 workers + equipment, $300K/mo)
+pub const MANUFACTURING_TEAM_SALARY: f64 = 300_000.0;
 
 /// Cost to hire an engineering team (1x monthly salary)
-pub const ENGINEERING_HIRE_COST: f64 = TEAM_MONTHLY_SALARY;
+pub const ENGINEERING_HIRE_COST: f64 = ENGINEERING_TEAM_SALARY;
 
 /// Cost to hire a manufacturing team (3x monthly salary)
-pub const MANUFACTURING_HIRE_COST: f64 = TEAM_MONTHLY_SALARY * 3.0;
+pub const MANUFACTURING_HIRE_COST: f64 = MANUFACTURING_TEAM_SALARY * 3.0;
 
 /// Type of team — determines what work they can do
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -63,7 +66,10 @@ impl EngineeringTeam {
             team_type,
             assignment: None,
             ramp_up_days_remaining: 0,  // Available immediately, ramp-up on assignment
-            monthly_salary: TEAM_MONTHLY_SALARY,
+            monthly_salary: match team_type {
+                TeamType::Engineering => ENGINEERING_TEAM_SALARY,
+                TeamType::Manufacturing => MANUFACTURING_TEAM_SALARY,
+            },
         }
     }
 
