@@ -380,9 +380,6 @@ func _on_new_empty_pressed():
 		game_manager.create_new_design()
 	design_selected.emit(-1)
 
-func _on_back_pressed():
-	back_requested.emit()
-
 # ==========================================
 # Engine Design Cards
 # ==========================================

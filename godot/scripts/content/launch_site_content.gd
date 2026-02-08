@@ -26,6 +26,7 @@ func set_game_manager(gm: GameManager):
 	game_manager = gm
 	if game_manager:
 		game_manager.money_changed.connect(_on_money_changed)
+		game_manager.inventory_changed.connect(_on_inventory_changed)
 		call_deferred("_update_infrastructure")
 
 func set_designer(d: RocketDesigner):
@@ -93,6 +94,10 @@ func _update_launch_readiness():
 			status_label.text = "Design not ready"
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3))
 		launch_button.disabled = true
+	elif not game_manager.has_rocket_for_current_design():
+		status_label.text = "No manufactured rocket available"
+		status_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3))
+		launch_button.disabled = true
 	elif not can_launch:
 		status_label.text = "Rocket too heavy for pad"
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
@@ -110,6 +115,9 @@ func _update_launch_readiness():
 
 func _on_money_changed(_amount: float):
 	_update_infrastructure()
+
+func _on_inventory_changed():
+	_update_launch_readiness()
 
 func _on_upgrade_pressed():
 	if game_manager and game_manager.upgrade_pad():

@@ -21,6 +21,7 @@ var show_testing_options: bool = false
 @onready var success_label = $MarginContainer/VBox/ContentHBox/TestsPanel/TestsMargin/TestsVBox/StatsPanel/StatsMargin/StatsVBox/SuccessLabel
 
 # UI references - Flaws
+@onready var flaws_panel = $MarginContainer/VBox/ContentHBox/FlawsPanel
 @onready var flaws_list = $MarginContainer/VBox/ContentHBox/FlawsPanel/FlawsMargin/FlawsVBox/FlawsScroll/FlawsList
 @onready var test_result_label = $MarginContainer/VBox/ContentHBox/FlawsPanel/FlawsMargin/FlawsVBox/TestResultLabel
 
@@ -58,11 +59,13 @@ func _update_ui():
 	# Update header
 	design_name_label.text = "Design: " + designer.get_design_name()
 
-	# Hide testing options when embedded in launch site (testing happens in engineering)
+	# Hide testing options and flaws panel when embedded in launch site
 	if rocket_test_panel:
 		rocket_test_panel.visible = show_testing_options
 	if engine_tests_container:
 		engine_tests_container.visible = show_testing_options
+	if flaws_panel:
+		flaws_panel.visible = show_testing_options
 
 	# Rebuild engine test cards for each engine type (only if showing)
 	if show_testing_options:

@@ -193,7 +193,7 @@ func _setup_research_content():
 	header_hbox.add_child(spacer)
 
 	var hire_btn = Button.new()
-	hire_btn.text = "+ Hire Team"
+	hire_btn.text = "+ Hire Eng Team ($150K)"
 	hire_btn.add_theme_font_size_override("font_size", 14)
 	hire_btn.pressed.connect(_on_research_hire_pressed)
 	header_hbox.add_child(hire_btn)
@@ -936,7 +936,7 @@ func _setup_production_content():
 
 	var mfg_title = Label.new()
 	mfg_title.text = "Manufacturing Teams"
-	mfg_title.add_theme_font_size_override("font_size", 18)
+	mfg_title.add_theme_font_size_override("font_size", 20)
 	mfg_vbox.add_child(mfg_title)
 
 	# Team count + hire row
@@ -948,10 +948,6 @@ func _setup_production_content():
 	_prod_mfg_team_count_label.text = "Teams: 0"
 	_prod_mfg_team_count_label.add_theme_font_size_override("font_size", 14)
 	mfg_header.add_child(_prod_mfg_team_count_label)
-
-	var mfg_spacer = Control.new()
-	mfg_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	mfg_header.add_child(mfg_spacer)
 
 	var hire_mfg_btn = Button.new()
 	hire_mfg_btn.text = "+ Hire Mfg Team ($450K)"
@@ -1512,14 +1508,21 @@ func _on_prod_assemble_rocket_pressed():
 
 		# Check if we have sufficient engines
 		var has_engines = game_manager.has_engines_for_rocket(i)
+		var missing_engines = game_manager.get_missing_engines_for_rocket(i)
+		var total_deficit = 0
+		for m in missing_engines:
+			total_deficit += m.get("deficit", 0)
+
 		if not has_engines:
-			btn_text += " [NEED ENGINES]"
+			btn_text += " [AUTO-BUILD %d ENGINE%s]" % [total_deficit, "S" if total_deficit != 1 else ""]
 
 		var btn = Button.new()
 		btn.text = btn_text
 		btn.add_theme_font_size_override("font_size", 13)
-		btn.disabled = not has_engines
-		btn.pressed.connect(_on_prod_rocket_selected.bind(i, dialog))
+		if has_engines:
+			btn.pressed.connect(_on_prod_rocket_selected.bind(i, dialog))
+		else:
+			btn.pressed.connect(_on_prod_auto_build_engines.bind(i, dialog))
 		dialog_vbox.add_child(btn)
 
 		# Show engines required
@@ -1537,6 +1540,17 @@ func _on_prod_assemble_rocket_pressed():
 
 	add_child(dialog)
 	dialog.popup_centered()
+
+func _on_prod_auto_build_engines(rocket_index: int, dialog: AcceptDialog):
+	dialog.queue_free()
+	var result = game_manager.auto_order_engines_for_rocket(rocket_index)
+	if result > 0:
+		_show_toast("Queued %d engine(s) — assemble rocket when they're ready" % result)
+		_update_production_ui()
+	elif result == 0:
+		_show_toast("No engines needed")
+	else:
+		_show_toast("Cannot order engines — check funds and floor space")
 
 func _on_prod_rocket_selected(rocket_index: int, dialog: AcceptDialog):
 	dialog.queue_free()
@@ -1790,6 +1804,11 @@ func _on_launch_requested():
 	if designer:
 		game_manager.sync_design_from(designer)
 		game_manager.ensure_design_saved(designer)
+
+	# Consume a manufactured rocket from inventory
+	if not game_manager.consume_rocket_for_current_design():
+		_show_toast("No manufactured rocket available for launch")
+		return
 
 	# Show launch overlay
 	launch_overlay.show_launch(game_manager, designer)

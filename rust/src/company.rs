@@ -280,9 +280,10 @@ impl Company {
     /// Update a rocket design's head with the given design
     pub fn update_rocket_design(&mut self, index: usize, design: RocketDesign) -> bool {
         if let Some(lineage) = self.rocket_designs.get_mut(index) {
-            let name = lineage.head().name.clone();
+            let new_name = design.name.clone();
             *lineage.head_mut() = design;
-            lineage.head_mut().name = name;
+            lineage.name = new_name.clone();
+            lineage.head_mut().name = new_name;
             true
         } else {
             false
@@ -1358,5 +1359,21 @@ mod tests {
             assert_eq!(*units, 2);
         }
         assert_eq!(company.manufacturing.floor_space_total, initial_space + 2);
+    }
+
+    #[test]
+    fn test_update_rocket_design_propagates_name() {
+        let mut company = Company::new();
+        let original_name = company.rocket_designs[0].name.clone();
+        assert_eq!(original_name, "Default Rocket");
+
+        // Load the design, change its name, and update
+        let mut design = company.load_rocket_design(0).unwrap();
+        design.name = "My Custom Rocket".to_string();
+        assert!(company.update_rocket_design(0, design));
+
+        // Both lineage and head should have the new name
+        assert_eq!(company.rocket_designs[0].name, "My Custom Rocket");
+        assert_eq!(company.rocket_designs[0].head().name, "My Custom Rocket");
     }
 }

@@ -2272,6 +2272,92 @@ impl GameManager {
         result
     }
 
+    /// Get missing engines for a rocket design as an array of dictionaries
+    /// Each dict has: engine_design_id, name, needed, available, deficit
+    #[func]
+    pub fn get_missing_engines_for_rocket(&self, index: i32) -> Array<Dictionary> {
+        let mut result = Array::new();
+        if index < 0 {
+            return result;
+        }
+        if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
+            for (engine_design_id, needed) in design.engines_required() {
+                let available = self.state.player_company.manufacturing.get_engines_available(engine_design_id);
+                let deficit = (needed as i32) - (available as i32);
+                if deficit > 0 {
+                    let mut dict = Dictionary::new();
+                    dict.set("engine_design_id", engine_design_id as i32);
+                    if engine_design_id < self.state.player_company.engine_designs.len() {
+                        dict.set("name", GString::from(self.state.player_company.engine_designs[engine_design_id].name.as_str()));
+                    } else {
+                        dict.set("name", GString::from("Unknown"));
+                    }
+                    dict.set("needed", needed as i32);
+                    dict.set("available", available as i32);
+                    dict.set("deficit", deficit);
+                    result.push(&dict);
+                }
+            }
+        }
+        result
+    }
+
+    /// Auto-order engines needed for a rocket design.
+    /// Cuts revisions as needed and starts engine orders for deficit quantities.
+    /// Returns total engines ordered, or -1 on failure.
+    #[func]
+    pub fn auto_order_engines_for_rocket(&mut self, index: i32) -> i32 {
+        if index < 0 {
+            return -1;
+        }
+        let design = match self.state.player_company.get_rocket_design(index as usize) {
+            Some(d) => d.clone(),
+            None => return -1,
+        };
+
+        let mut total_ordered: i32 = 0;
+
+        for (engine_design_id, needed) in design.engines_required() {
+            let available = self.state.player_company.manufacturing.get_engines_available(engine_design_id);
+            let deficit = (needed as i32) - (available as i32);
+            if deficit <= 0 {
+                continue;
+            }
+
+            if engine_design_id >= self.state.player_company.engine_designs.len() {
+                return -1;
+            }
+
+            // Cut a revision for manufacturing
+            let rev = self.state.player_company.engine_designs[engine_design_id]
+                .cut_revision("auto-mfg");
+
+            // Start the engine order
+            self.sync_money_to_state();
+            match self.state.player_company.start_engine_order(
+                engine_design_id,
+                rev,
+                deficit as u32,
+            ) {
+                Some(_) => {
+                    self.sync_money_from_state();
+                    self.emit_money_changed();
+                    total_ordered += deficit;
+                }
+                None => {
+                    self.sync_money_from_state();
+                    return -1;
+                }
+            }
+        }
+
+        if total_ordered > 0 {
+            self.base_mut().emit_signal("manufacturing_changed", &[]);
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        total_ordered
+    }
+
     /// Assign a team to work on a manufacturing order
     #[func]
     pub fn assign_team_to_manufacturing(&mut self, team_id: i32, order_id: i32) -> bool {
@@ -2345,6 +2431,41 @@ impl GameManager {
         } else {
             false
         }
+    }
+
+    /// Check if there's a manufactured rocket in inventory matching the current design
+    #[func]
+    pub fn has_rocket_for_current_design(&self) -> bool {
+        let design_id = match self.current_rocket_design_id {
+            Some(id) => id,
+            None => return false,
+        };
+        self.state.player_company.manufacturing.rocket_inventory
+            .iter()
+            .any(|entry| entry.rocket_design_id == design_id)
+    }
+
+    /// Consume a manufactured rocket matching the current design for launch
+    /// Returns true if a rocket was found and consumed
+    #[func]
+    pub fn consume_rocket_for_current_design(&mut self) -> bool {
+        let design_id = match self.current_rocket_design_id {
+            Some(id) => id,
+            None => return false,
+        };
+        // Find the first rocket matching this design
+        let serial = self.state.player_company.manufacturing.rocket_inventory
+            .iter()
+            .find(|entry| entry.rocket_design_id == design_id)
+            .map(|entry| entry.serial_number);
+        if let Some(serial_number) = serial {
+            let result = self.state.player_company.manufacturing.consume_rocket(serial_number);
+            if result.is_some() {
+                self.base_mut().emit_signal("inventory_changed", &[]);
+                return true;
+            }
+        }
+        false
     }
 
     // ==========================================
