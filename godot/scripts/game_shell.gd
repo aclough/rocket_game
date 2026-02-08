@@ -2099,6 +2099,7 @@ func _on_map_tab_pressed():
 
 func _on_missions_tab_pressed():
 	_show_tab(Tab.MISSIONS)
+	content_areas[Tab.MISSIONS]._update_ui()
 
 func _on_design_tab_pressed():
 	_show_tab(Tab.DESIGN)

@@ -278,6 +278,8 @@ impl GameManager {
         if self.state.player_company.select_contract(contract_id as u32) {
             self.base_mut()
                 .emit_signal("contract_selected", &[Variant::from(contract_id)]);
+            self.base_mut()
+                .emit_signal("contracts_changed", &[]);
             true
         } else {
             false

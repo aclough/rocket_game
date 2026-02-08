@@ -6,7 +6,6 @@
     * Refined over time for better stats with diminishing returns but benefit from flight experience
         * Things like increase chamber pressure or reduce complexity
         * This will introduce flaws.
-* Display the selected mission on the Missions page and provide a way of unselecting missions.
 * Save/load game (WorldSeed is already in GameState, ready to serialize)
 * Design versioning.  There's the "head" of the design that gets updated continuously as engineers improve things but for manufacturing you need a "1.2" or "C" or whatever version that instantiated rockets will be tagged with.
     * You can make some changes to a design (engines, tank size) when making a new version will introduce some flaws depending on how large the change is.
