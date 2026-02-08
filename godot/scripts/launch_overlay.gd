@@ -126,7 +126,7 @@ func run_launch_with_delays():
 
 			# Determine if a flaw caused this failure
 			if designer:
-				var base_rate = launcher.get_stage_failure_rate(i)
+				var _base_rate = launcher.get_stage_failure_rate(i)
 				var flaw_rate = launcher.get_flaw_failure_rate(i)
 
 				if flaw_rate > 0:

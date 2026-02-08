@@ -54,7 +54,7 @@ func _on_orbit_diagram_draw():
 func _draw_orbit(center: Vector2, radius: float, color: Color, width: float):
 	# Draw dashed orbit circle
 	var segments = 64
-	var dash_length = 8
+	var _dash_length = 8
 	for i in range(segments):
 		if i % 2 == 0:  # Create dashed effect
 			var angle1 = (float(i) / segments) * TAU
@@ -72,7 +72,7 @@ func _draw_earth(center: Vector2):
 
 	# Draw simplified land masses
 	# Just draw a few arcs/shapes to suggest continents
-	var land_points = PackedVector2Array()
+	var _land_points = PackedVector2Array()
 
 	# Simple continent shapes (very stylized)
 	_draw_land_mass(center, EARTH_RADIUS * 0.3, 0.5, 0.8)
@@ -80,16 +80,16 @@ func _draw_earth(center: Vector2):
 	_draw_land_mass(center, EARTH_RADIUS * 0.25, 3.5, 0.5)
 	_draw_land_mass(center, EARTH_RADIUS * 0.35, 5.0, 0.7)
 
-func _draw_land_mass(center: Vector2, size: float, angle: float, scale_y: float):
+func _draw_land_mass(center: Vector2, land_size: float, angle: float, scale_y: float):
 	# Draw an ellipse-ish shape to represent a continent
 	var land_center = center + Vector2(EARTH_RADIUS * 0.5, 0).rotated(angle)
 
 	# Only draw if within Earth bounds
-	if land_center.distance_to(center) < EARTH_RADIUS - size * 0.3:
+	if land_center.distance_to(center) < EARTH_RADIUS - land_size * 0.3:
 		var points = PackedVector2Array()
 		for i in range(12):
 			var a = (float(i) / 12) * TAU
-			var offset = Vector2(cos(a) * size, sin(a) * size * scale_y)
+			var offset = Vector2(cos(a) * land_size, sin(a) * land_size * scale_y)
 			points.append(land_center + offset)
 		orbit_diagram.draw_colored_polygon(points, EARTH_LAND)
 

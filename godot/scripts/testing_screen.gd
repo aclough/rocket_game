@@ -180,10 +180,10 @@ func _rebuild_flaws_list():
 
 		any_discovered = true
 		var fixed = designer.is_flaw_fixed(i)
-		var name = designer.get_flaw_name(i)
+		var flaw_name = designer.get_flaw_name(i)
 		var is_engine = designer.is_flaw_engine_type(i)
 
-		var card = _create_flaw_card(i, name, is_engine, fixed)
+		var card = _create_flaw_card(i, flaw_name, is_engine, fixed)
 		flaws_list.add_child(card)
 
 	if not any_discovered:

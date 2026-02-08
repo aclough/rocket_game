@@ -6,7 +6,6 @@ extends Control
 ## - Engine editor view: Engine designer
 
 signal testing_requested
-signal launch_requested
 signal back_requested
 
 enum View { SELECT, EDITOR, ENGINE_EDITOR }
@@ -27,7 +26,6 @@ func _ready():
 	# Connect design editor signals
 	editor_view.back_requested.connect(_on_editor_back_requested)
 	editor_view.testing_requested.connect(_on_editor_testing_requested)
-	editor_view.launch_requested.connect(_on_editor_launch_requested)
 	editor_view.submit_to_engineering_requested.connect(_on_editor_submit_to_engineering)
 
 	# Connect engine editor signals
@@ -65,7 +63,7 @@ func get_designer():
 	return editor_view.get_designer()
 
 # Design select signals
-func _on_design_selected(design_index: int):
+func _on_design_selected(_design_index: int):
 	# design_index is -1 for new design, otherwise the saved design index
 	# The design_select_screen already loaded the design into game_manager
 	# Sync it to the editor
@@ -94,10 +92,6 @@ func _on_editor_testing_requested():
 		var designer = editor_view.get_designer()
 		game_manager.sync_design_from(designer)
 	testing_requested.emit()
-
-func _on_editor_launch_requested():
-	# Same as testing for now
-	_on_editor_testing_requested()
 
 func _on_editor_submit_to_engineering():
 	# Save the design and submit to engineering

@@ -1,6 +1,5 @@
 extends Control
 
-signal launch_requested
 signal back_requested
 signal testing_requested
 signal submit_to_engineering_requested
@@ -456,7 +455,7 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 
 	# Effective delta-v for this stage (after gravity losses)
 	var effective_dv = designer.get_stage_effective_delta_v(stage_index)
-	var ideal_dv = designer.get_stage_delta_v(stage_index)
+	var _ideal_dv = designer.get_stage_delta_v(stage_index)
 	var gravity_loss = designer.get_stage_gravity_loss(stage_index)
 	var dv_label_stage = Label.new()
 	dv_label_stage.add_theme_font_size_override("font_size", 14)
@@ -646,7 +645,7 @@ func _show_booster_error(error: String):
 
 func _update_dv_display():
 	var effective_dv = designer.get_total_effective_delta_v()
-	var ideal_dv = designer.get_total_delta_v()
+	var _ideal_dv = designer.get_total_delta_v()
 	var gravity_loss = designer.get_total_gravity_loss()
 	var target_dv = designer.get_target_delta_v()
 	var percentage = designer.get_delta_v_percentage()
@@ -804,21 +803,21 @@ func _on_save_button_pressed():
 			dialog.queue_free()
 		)
 
-func _show_save_notification(name: String):
+func _show_save_notification(design_name: String):
 	# Show a brief notification that the design was saved
-	var notification = Label.new()
-	notification.text = "Design '%s' saved!" % name
-	notification.add_theme_font_size_override("font_size", 18)
-	notification.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-	notification.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	notification.position = Vector2(get_viewport_rect().size.x / 2 - 150, 100)
-	notification.custom_minimum_size = Vector2(300, 40)
-	add_child(notification)
+	var notif_label = Label.new()
+	notif_label.text = "Design '%s' saved!" % design_name
+	notif_label.add_theme_font_size_override("font_size", 18)
+	notif_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+	notif_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	notif_label.position = Vector2(get_viewport_rect().size.x / 2 - 150, 100)
+	notif_label.custom_minimum_size = Vector2(300, 40)
+	add_child(notif_label)
 
 	# Fade out and remove after 2 seconds
 	var tween = create_tween()
-	tween.tween_property(notification, "modulate:a", 0.0, 0.5).set_delay(1.5)
-	tween.tween_callback(notification.queue_free)
+	tween.tween_property(notif_label, "modulate:a", 0.0, 0.5).set_delay(1.5)
+	tween.tween_callback(notif_label.queue_free)
 
 func set_game_manager(gm: GameManager):
 	game_manager = gm

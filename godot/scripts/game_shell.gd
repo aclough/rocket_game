@@ -64,7 +64,6 @@ var _prod_orders_container: VBoxContainer
 var _prod_no_orders_label: Label
 var _prod_engine_inv_container: VBoxContainer
 var _prod_rocket_inv_container: VBoxContainer
-var _prod_update_timer: Timer
 
 # Finance tab UI elements (built dynamically)
 var _finance_balance_label: Label
@@ -2103,18 +2102,18 @@ func _on_work_event(event_type: String, data: Dictionary):
 			message = "Engine flaw fixed: %s" % flaw_name
 			refresh_research = true
 		"engine_manufactured":
-			var name = data.get("display_name", "Engine")
-			message = "Engine manufactured: %s" % name
+			var display_name = data.get("display_name", "Engine")
+			message = "Engine manufactured: %s" % display_name
 			refresh_production = true
 			refresh_research = true
 		"rocket_assembled":
-			var name = data.get("display_name", "Rocket")
-			message = "Rocket assembled: %s" % name
+			var display_name = data.get("display_name", "Rocket")
+			message = "Rocket assembled: %s" % display_name
 			refresh_production = true
 			refresh_research = true
 		"manufacturing_order_complete":
-			var name = data.get("display_name", "Order")
-			message = "Production complete: %s" % name
+			var display_name = data.get("display_name", "Order")
+			message = "Production complete: %s" % display_name
 			refresh_production = true
 			refresh_research = true
 		"team_ramped_up":

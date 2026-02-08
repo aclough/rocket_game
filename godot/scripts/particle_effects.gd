@@ -2,9 +2,9 @@ extends Node2D
 
 # Particle effect manager for rocket launches
 
-func create_engine_flame(position: Vector2) -> CPUParticles2D:
+func create_engine_flame(spawn_position: Vector2) -> CPUParticles2D:
 	var particles = CPUParticles2D.new()
-	particles.position = position
+	particles.position = spawn_position
 
 	# Flame properties
 	particles.emitting = true
@@ -44,9 +44,9 @@ func create_engine_flame(position: Vector2) -> CPUParticles2D:
 	add_child(particles)
 	return particles
 
-func create_explosion(position: Vector2) -> CPUParticles2D:
+func create_explosion(spawn_position: Vector2) -> CPUParticles2D:
 	var particles = CPUParticles2D.new()
-	particles.position = position
+	particles.position = spawn_position
 
 	# Explosion properties
 	particles.emitting = true
@@ -90,9 +90,9 @@ func create_explosion(position: Vector2) -> CPUParticles2D:
 
 	return particles
 
-func create_success_sparkles(position: Vector2) -> CPUParticles2D:
+func create_success_sparkles(spawn_position: Vector2) -> CPUParticles2D:
 	var particles = CPUParticles2D.new()
-	particles.position = position
+	particles.position = spawn_position
 
 	# Sparkle properties
 	particles.emitting = true

@@ -269,7 +269,7 @@ func _refresh_ui():
 	var status = game_manager.get_engine_status(engine_index)
 	var base_status = game_manager.get_engine_status_base(engine_index)
 	var fuel_type = game_manager.get_engine_design_fuel_type(engine_index)
-	var scale = game_manager.get_engine_design_scale(engine_index)
+	var engine_scale = game_manager.get_engine_design_scale(engine_index)
 	var can_modify = game_manager.can_modify_engine_design(engine_index)
 
 	# Header
@@ -293,8 +293,8 @@ func _refresh_ui():
 		_fuel_buttons[i].disabled = not can_modify
 
 	# Scale slider
-	_scale_slider.set_value_no_signal(scale)
-	_scale_label.text = "%.2fx" % scale
+	_scale_slider.set_value_no_signal(engine_scale)
+	_scale_label.text = "%.2fx" % engine_scale
 	_scale_slider.editable = can_modify
 
 	# Stats

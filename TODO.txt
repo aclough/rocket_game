@@ -1,6 +1,7 @@
 * Create new parts
     * Made more or less complex strongly affecting price but also changing performance and reliability.
     * Complexity should be a number stored with the part instead of just being used to derive other things, we'll want more cmoplex designs to have more of a penalty when someone tries to make one on the Moon or somewhere else far away from Earth's resoruces.
+* Part improvements
     * Refined over time for better stats with diminishing returns but benefit from flight experience
         * Things like increase chamber pressure or reduce complexity
         * This will introduce flaws.

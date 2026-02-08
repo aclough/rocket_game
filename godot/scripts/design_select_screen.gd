@@ -40,6 +40,9 @@ var confirm_dialog: ConfirmationDialog = null
 func _ready():
 	pass
 
+func _on_back_pressed():
+	back_requested.emit()
+
 func set_game_manager(gm: GameManager):
 	game_manager = gm
 	if game_manager:
@@ -120,7 +123,7 @@ func _rebuild_designs_list():
 		designs_list.add_child(card)
 
 func _create_design_card(index: int, required_dv: float) -> Control:
-	var name = game_manager.get_rocket_design_name(index)
+	var design_name = game_manager.get_rocket_design_name(index)
 	var delta_v = game_manager.get_rocket_design_delta_v(index)
 	var cost = game_manager.get_rocket_design_cost(index)
 	var mass = game_manager.get_rocket_design_mass(index)
@@ -172,7 +175,7 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 	hbox.add_child(info_vbox)
 
 	var name_label = Label.new()
-	name_label.text = name
+	name_label.text = design_name
 	name_label.add_theme_font_size_override("font_size", 20)
 	info_vbox.add_child(name_label)
 
@@ -381,16 +384,16 @@ func _on_new_empty_pressed():
 # ==========================================
 
 func _create_engine_design_card(index: int) -> Control:
-	var name = game_manager.get_engine_type_name(index)
+	var engine_name = game_manager.get_engine_type_name(index)
 	var fuel_type_name = game_manager.get_engine_design_fuel_type_name(index)
-	var scale = game_manager.get_engine_design_scale(index)
+	var engine_scale = game_manager.get_engine_design_scale(index)
 	var thrust = game_manager.get_engine_design_thrust(index)
 	var ve = game_manager.get_engine_design_exhaust_velocity(index)
 	var mass = game_manager.get_engine_design_mass(index)
 	var cost = game_manager.get_engine_design_cost(index)
 	var status = game_manager.get_engine_status(index)
 	var base_status = game_manager.get_engine_status_base(index)
-	var can_modify = game_manager.can_modify_engine_design(index)
+	var _can_modify = game_manager.can_modify_engine_design(index)
 	var teams_count = game_manager.get_teams_on_engine_count(index)
 
 	var wrapper = DesignCardWrapper.new()
@@ -425,13 +428,13 @@ func _create_engine_design_card(index: int) -> Control:
 	hbox.add_child(info_vbox)
 
 	var name_label = Label.new()
-	name_label.text = name
+	name_label.text = engine_name
 	name_label.add_theme_font_size_override("font_size", 20)
 	info_vbox.add_child(name_label)
 
 	var stats_label = Label.new()
 	stats_label.text = "%s | %.0fx | %.0f kN | %.0f m/s | %s | $%s" % [
-		fuel_type_name, scale, thrust, ve, _format_mass(mass), _format_money(cost)
+		fuel_type_name, engine_scale, thrust, ve, _format_mass(mass), _format_money(cost)
 	]
 	stats_label.add_theme_font_size_override("font_size", 14)
 	stats_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))

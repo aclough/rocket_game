@@ -25,7 +25,7 @@ func generate_stars():
 		}
 		stars.append(star)
 
-func _process(delta):
+func _process(_delta):
 	queue_redraw()
 
 func _draw():

@@ -114,7 +114,6 @@ func show_design_screen():
 	# Create design screen if not exists
 	if design_screen == null:
 		design_screen = design_screen_scene.instantiate()
-		design_screen.launch_requested.connect(_on_design_launch_requested)
 		design_screen.back_requested.connect(_on_design_back_requested)
 		if design_screen.has_signal("testing_requested"):
 			design_screen.testing_requested.connect(_on_design_testing_requested)
@@ -179,7 +178,6 @@ func show_testing_screen():
 	# Ensure design screen exists to get the designer
 	if design_screen == null:
 		design_screen = design_screen_scene.instantiate()
-		design_screen.launch_requested.connect(_on_design_launch_requested)
 		design_screen.back_requested.connect(_on_design_back_requested)
 		design_screen.testing_requested.connect(_on_design_testing_requested)
 		add_child(design_screen)
@@ -255,10 +253,6 @@ func _on_new_game_requested():
 		var designer = design_screen.get_designer()
 		if designer:
 			designer.load_default_design()
-
-func _on_design_launch_requested():
-	# Go to testing screen instead of launching directly
-	_on_design_testing_requested()
 
 func _on_design_testing_requested():
 	# Coming from designer, so back should go to designer
