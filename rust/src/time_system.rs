@@ -30,7 +30,7 @@ impl TimeSystem {
         Self {
             current_day: 1,
             start_year: 2001,
-            paused: false,
+            paused: true,
             fractional_day: 0.0,
             days_per_second: DEFAULT_DAYS_PER_SECOND,
             last_salary_day: 1,
@@ -118,13 +118,14 @@ mod tests {
         let ts = TimeSystem::new();
         assert_eq!(ts.current_day, 1);
         assert_eq!(ts.start_year, 2001);
-        assert!(!ts.paused);
+        assert!(ts.paused);
         assert_eq!(ts.fractional_day, 0.0);
     }
 
     #[test]
     fn test_advance_time() {
         let mut ts = TimeSystem::new();
+        ts.set_paused(false);
 
         // Advance 0.5 seconds at 2 days/second = 1 day
         let days = ts.advance(0.5);
@@ -146,20 +147,23 @@ mod tests {
     #[test]
     fn test_pause() {
         let mut ts = TimeSystem::new();
-        ts.toggle_pause();
+        // Starts paused, so time should not advance
         assert!(ts.paused);
-
-        // Time should not advance while paused
         let days = ts.advance(10.0);
         assert_eq!(days, 0);
         assert_eq!(ts.current_day, 1);
 
+        // Unpause and time should advance
         ts.toggle_pause();
         assert!(!ts.paused);
-
-        // Time should advance now
         let days = ts.advance(0.5);
         assert_eq!(days, 1);
+
+        // Re-pause
+        ts.toggle_pause();
+        assert!(ts.paused);
+        let days = ts.advance(10.0);
+        assert_eq!(days, 0);
     }
 
     #[test]

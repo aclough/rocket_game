@@ -24,6 +24,11 @@ When modifying physics parameters, game balance values, or constants, always upd
 After finishing changes to the Godot sections, run
 flatpak run org.godotengine.Godot --headless --quit --path /path/to/changes on them.
 
+# Completion
+
+When a feature is good and is approved for check in to git also check TODO.txt to see if it is listed there.  If so
+remove it.
+
 # Common Pitfalls
 
 When introducing new variables or flags to a struct, search for all places that struct is copied, cloned, or transferred (e.g., design → launcher) and ensure the new field is included. Run `grep` for struct construction sites.

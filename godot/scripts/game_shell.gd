@@ -77,6 +77,9 @@ var _finance_eng_teams_container: VBoxContainer
 var _finance_mfg_teams_container: VBoxContainer
 var _finance_prices_container: VBoxContainer
 
+# Toast notification stacking
+var _active_toasts: Array = []
+
 func _ready():
 	# Connect GameManager signals
 	game_manager.money_changed.connect(_on_money_changed)
@@ -510,15 +513,20 @@ func _create_design_work_card(index: int) -> PanelContainer:
 		status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 	header.add_child(status_label)
 
-	var teams_label = Label.new()
 	if teams_count > 0:
-		teams_label.text = "%d team%s assigned" % [teams_count, "s" if teams_count > 1 else ""]
-		teams_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		var teams_on = _get_teams_on_design(index)
+		for tid in teams_on:
+			var tname_label = Label.new()
+			tname_label.text = game_manager.get_team_name(tid)
+			tname_label.add_theme_font_size_override("font_size", 12)
+			tname_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+			vbox.add_child(tname_label)
 	else:
+		var teams_label = Label.new()
 		teams_label.text = "No teams assigned - drag a team here"
 		teams_label.add_theme_color_override("font_color", Color(0.8, 0.6, 0.3))
-	teams_label.add_theme_font_size_override("font_size", 12)
-	vbox.add_child(teams_label)
+		teams_label.add_theme_font_size_override("font_size", 12)
+		vbox.add_child(teams_label)
 
 	# Progress bar - different styles for different phases
 	if base_status == "Refining":
@@ -607,7 +615,7 @@ func _create_design_work_card(index: int) -> PanelContainer:
 
 	if teams_count > 0:
 		var unassign_btn = Button.new()
-		unassign_btn.text = "Unassign All"
+		unassign_btn.text = "Unassign Team"
 		unassign_btn.add_theme_font_size_override("font_size", 12)
 		unassign_btn.pressed.connect(_on_unassign_teams_pressed.bind(index))
 		btn_hbox.add_child(unassign_btn)
@@ -617,6 +625,15 @@ func _create_design_work_card(index: int) -> PanelContainer:
 func _on_design_card_toggle(index: int):
 	_expanded_design_cards[index] = not _expanded_design_cards.get(index, false)
 	_update_research_designs()
+
+func _get_teams_on_design(design_index: int) -> Array:
+	var result = []
+	var team_ids = game_manager.get_all_team_ids()
+	for id in team_ids:
+		var assignment = game_manager.get_team_assignment(id)
+		if assignment.get("type") == "design" and assignment.get("design_index") == design_index:
+			result.append(id)
+	return result
 
 func _update_research_engines():
 	if not _research_engines_container:
@@ -707,15 +724,20 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 
 	# Teams info (only if not Untested)
 	if base_status != "Untested":
-		var teams_label = Label.new()
 		if teams_count > 0:
-			teams_label.text = "%d team%s assigned" % [teams_count, "s" if teams_count > 1 else ""]
-			teams_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+			var teams_on = _get_teams_on_engine(index)
+			for tid in teams_on:
+				var tname_label = Label.new()
+				tname_label.text = game_manager.get_team_name(tid)
+				tname_label.add_theme_font_size_override("font_size", 12)
+				tname_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+				vbox.add_child(tname_label)
 		else:
+			var teams_label = Label.new()
 			teams_label.text = "No teams assigned"
 			teams_label.add_theme_color_override("font_color", Color(0.8, 0.6, 0.3))
-		teams_label.add_theme_font_size_override("font_size", 12)
-		vbox.add_child(teams_label)
+			teams_label.add_theme_font_size_override("font_size", 12)
+			vbox.add_child(teams_label)
 
 	# Progress bar - different styles for different phases
 	if base_status == "Refining":
@@ -799,7 +821,7 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 
 		if teams_count > 0:
 			var unassign_btn = Button.new()
-			unassign_btn.text = "Unassign All"
+			unassign_btn.text = "Unassign Team"
 			unassign_btn.add_theme_font_size_override("font_size", 12)
 			unassign_btn.pressed.connect(_on_unassign_engine_teams_pressed.bind(index))
 			btn_hbox.add_child(unassign_btn)
@@ -809,6 +831,15 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 func _on_engine_card_toggle(index: int):
 	_expanded_engine_cards[index] = not _expanded_engine_cards.get(index, false)
 	_update_research_engines()
+
+func _get_teams_on_engine(engine_index: int) -> Array:
+	var result = []
+	var team_ids = game_manager.get_all_team_ids()
+	for id in team_ids:
+		var assignment = game_manager.get_team_assignment(id)
+		if assignment.get("type") == "engine" and assignment.get("engine_design_id") == engine_index:
+			result.append(id)
+	return result
 
 func _on_submit_engine_pressed(index: int):
 	game_manager.submit_engine_to_refining(index)
@@ -836,12 +867,10 @@ func _on_assign_engine_team_pressed(engine_index: int):
 	_show_toast("No available engineering teams. Hire more!")
 
 func _on_unassign_engine_teams_pressed(engine_index: int):
-	# Unassign all teams from this engine
-	var team_ids = game_manager.get_all_team_ids()
-	for id in team_ids:
-		var assignment = game_manager.get_team_assignment(id)
-		if assignment.get("type") == "engine" and assignment.get("engine_design_id") == engine_index:
-			game_manager.unassign_team(id)
+	# Unassign the last team from this engine
+	var teams_on = _get_teams_on_engine(engine_index)
+	if teams_on.size() > 0:
+		game_manager.unassign_team(teams_on.back())
 	_update_research_ui()
 
 func _on_research_hire_pressed():
@@ -884,12 +913,10 @@ func _on_assign_team_pressed(design_index: int):
 	_show_toast("No available engineering teams. Hire more!")
 
 func _on_unassign_teams_pressed(design_index: int):
-	# Unassign all teams from this design
-	var team_ids = game_manager.get_all_team_ids()
-	for id in team_ids:
-		var assignment = game_manager.get_team_assignment(id)
-		if assignment.get("type") == "design" and assignment.get("design_index") == design_index:
-			game_manager.unassign_team(id)
+	# Unassign the last team from this design
+	var teams_on = _get_teams_on_design(design_index)
+	if teams_on.size() > 0:
+		game_manager.unassign_team(teams_on.back())
 	_update_research_ui()
 
 # ==========================================
@@ -1526,22 +1553,28 @@ func _create_order_card(order_id: int) -> PanelContainer:
 	if is_engine:
 		var completed = info.get("completed", 0)
 		var quantity = info.get("quantity", 1)
+		var remaining = quantity - completed
 		var qty_label = Label.new()
-		qty_label.text = "%d / %d built" % [completed, quantity]
+		qty_label.text = "%d remaining" % remaining
 		qty_label.add_theme_font_size_override("font_size", 14)
 		qty_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 		header.add_child(qty_label)
 
 	# Teams info
-	var teams_label = Label.new()
 	if teams_count > 0:
-		teams_label.text = "%d team%s assigned" % [teams_count, "s" if teams_count > 1 else ""]
-		teams_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		var teams_on = _get_teams_on_order(order_id)
+		for tid in teams_on:
+			var tname_label = Label.new()
+			tname_label.text = game_manager.get_team_name(tid)
+			tname_label.add_theme_font_size_override("font_size", 12)
+			tname_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+			vbox.add_child(tname_label)
 	else:
+		var teams_label = Label.new()
 		teams_label.text = "No teams assigned - assign teams to start production"
 		teams_label.add_theme_color_override("font_color", Color(0.8, 0.6, 0.3))
-	teams_label.add_theme_font_size_override("font_size", 12)
-	vbox.add_child(teams_label)
+		teams_label.add_theme_font_size_override("font_size", 12)
+		vbox.add_child(teams_label)
 
 	# Progress bar
 	var progress_bar = ProgressBar.new()
@@ -1570,7 +1603,7 @@ func _create_order_card(order_id: int) -> PanelContainer:
 
 	if teams_count > 0:
 		var unassign_btn = Button.new()
-		unassign_btn.text = "Unassign All"
+		unassign_btn.text = "Unassign Team"
 		unassign_btn.add_theme_font_size_override("font_size", 12)
 		unassign_btn.pressed.connect(_on_prod_unassign_teams_pressed.bind(order_id))
 		btn_hbox.add_child(unassign_btn)
@@ -1699,12 +1732,20 @@ func _on_prod_assign_team_pressed(order_id: int):
 
 	_show_toast("No available manufacturing teams. Hire more!")
 
-func _on_prod_unassign_teams_pressed(order_id: int):
+func _get_teams_on_order(order_id: int) -> Array:
+	var result = []
 	var team_ids = game_manager.get_all_team_ids()
 	for id in team_ids:
 		var assignment = game_manager.get_team_assignment(id)
 		if assignment.get("type") == "manufacturing" and assignment.get("order_id") == order_id:
-			game_manager.unassign_team(id)
+			result.append(id)
+	return result
+
+func _on_prod_unassign_teams_pressed(order_id: int):
+	# Unassign the last team from this order
+	var teams_on = _get_teams_on_order(order_id)
+	if teams_on.size() > 0:
+		game_manager.unassign_team(teams_on.back())
 	_update_production_ui()
 	_update_research_teams()
 
@@ -2026,10 +2067,11 @@ func _show_toast(message: String):
 	toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	toast.modulate = Color(1, 1, 1, 0)  # Start invisible
 
-	# Position at top center
+	# Position at top center, stacked below existing toasts
 	toast.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	toast.position.y = 60
+	toast.position.y = 60 + _active_toasts.size() * 35
 
+	_active_toasts.append(toast)
 	add_child(toast)
 
 	# Animate in and out
@@ -2037,7 +2079,14 @@ func _show_toast(message: String):
 	tween.tween_property(toast, "modulate", Color(1, 1, 1, 1), 0.3)
 	tween.tween_interval(2.0)
 	tween.tween_property(toast, "modulate", Color(1, 1, 1, 0), 0.5)
-	tween.tween_callback(toast.queue_free)
+	tween.tween_callback(_remove_toast.bind(toast))
+
+func _remove_toast(toast: Label):
+	_active_toasts.erase(toast)
+	toast.queue_free()
+	# Reposition remaining toasts
+	for i in range(_active_toasts.size()):
+		_active_toasts[i].position.y = 60 + i * 35
 
 func _on_date_label_gui_input(event: InputEvent):
 	# Click on date label to toggle pause
@@ -2053,6 +2102,8 @@ func _on_missions_tab_pressed():
 
 func _on_design_tab_pressed():
 	_show_tab(Tab.DESIGN)
+	var design = content_areas[Tab.DESIGN]
+	design.show_select_view()
 
 func _on_launch_site_tab_pressed():
 	# Sync design data to ensure latest flaw discoveries are visible
