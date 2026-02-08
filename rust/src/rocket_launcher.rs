@@ -1,9 +1,7 @@
 use godot::prelude::*;
 
-use crate::engine_design::default_snapshot;
 use crate::launcher::{LaunchResult, LaunchSimulator, LaunchStage};
 use crate::rocket_design::{LaunchEvent, RocketDesign};
-use crate::stage::RocketStage;
 
 /// Godot-accessible rocket launcher node
 /// Can use either fixed stages (legacy) or dynamic stages from a rocket design
@@ -58,116 +56,13 @@ impl RocketLauncher {
         self.use_design = false;
     }
 
-    /// Sets the rocket design from individual stage data
-    /// Call this after configuring a RocketDesigner, passing the stage data
-    ///
-    /// stages_data format: Array of [engine_type: int, engine_count: int, propellant_mass: float]
-    #[func]
-    pub fn set_design_from_data(&mut self, payload_mass: f64, stages_data: Array<Array<Variant>>) {
-        let mut design = RocketDesign::new();
-        design.payload_mass_kg = payload_mass;
-
-        for stage_data in stages_data.iter_shared() {
-            if stage_data.len() >= 3 {
-                let engine_type_idx = stage_data
-                    .get(0)
-                    .and_then(|v| v.try_to::<i32>().ok())
-                    .unwrap_or(1);
-                let engine_count = stage_data
-                    .get(1)
-                    .and_then(|v| v.try_to::<i32>().ok())
-                    .unwrap_or(1);
-                let propellant_mass = stage_data
-                    .get(2)
-                    .and_then(|v| v.try_to::<f64>().ok())
-                    .unwrap_or(1000.0);
-
-                let snapshot = default_snapshot(engine_type_idx.max(0) as usize);
-
-                let mut stage = RocketStage::new(snapshot);
-                stage.engine_count = engine_count.max(1) as u32;
-                stage.propellant_mass_kg = propellant_mass.max(0.0);
-
-                design.stages.push(stage);
-            }
-        }
-
-        self.cached_events = design.generate_launch_events();
-        self.design = Some(design);
-        self.use_design = true;
-    }
-
     /// Copies the design from a RocketDesigner node
     /// This is the preferred way to set the design
-    /// Also copies flaws so flaw-based failure rates are available
+    /// Uses get_design_clone() which properly copies all stages, snapshots, and flaws
     #[func]
     pub fn copy_design_from(&mut self, designer: Gd<crate::rocket_designer::RocketDesigner>) {
         let designer_ref = designer.bind();
-
-        let mut design = RocketDesign::new();
-        design.payload_mass_kg = designer_ref.get_payload_mass();
-        design.name = designer_ref.get_design_name().to_string();
-
-        let stage_count = designer_ref.get_stage_count();
-        for i in 0..stage_count {
-            let engine_type_idx = designer_ref.get_stage_engine_type(i);
-            let engine_count = designer_ref.get_stage_engine_count(i);
-            let propellant_mass = designer_ref.get_stage_propellant_mass(i);
-
-            let snapshot = default_snapshot(engine_type_idx.max(0) as usize);
-            let is_booster = designer_ref.is_stage_booster(i);
-
-            let mut stage = RocketStage::new(snapshot);
-            stage.engine_count = engine_count.max(1) as u32;
-            stage.propellant_mass_kg = propellant_mass.max(0.0);
-            stage.is_booster = is_booster;
-
-            design.stages.push(stage);
-        }
-
-        // Copy flaws from the designer
-        let flaw_count = designer_ref.get_flaw_count();
-        godot_print!("copy_design_from: copying {} flaws", flaw_count);
-        for i in 0..flaw_count {
-            let name = designer_ref.get_flaw_name(i).to_string();
-            let description = designer_ref.get_flaw_description(i).to_string();
-            let discovered = designer_ref.is_flaw_discovered(i);
-            let fixed = designer_ref.is_flaw_fixed(i);
-            let is_engine = designer_ref.is_flaw_engine_type(i);
-            let failure_rate = designer_ref.get_flaw_failure_rate(i);
-            let engine_type_idx = designer_ref.get_flaw_engine_design_id(i);
-            let trigger_type_idx = designer_ref.get_flaw_trigger_type(i);
-
-            let trigger = crate::flaw::FlawTrigger::from_index(trigger_type_idx)
-                .unwrap_or(crate::flaw::FlawTrigger::MaxQ);
-            godot_print!("  flaw[{}]: {} trigger={:?} rate={} fixed={}",
-                i, name, trigger, failure_rate, fixed);
-
-            // Create a flaw with matching properties
-            let flaw = crate::flaw::Flaw {
-                id: (i + 1) as u32,
-                flaw_type: if is_engine {
-                    crate::flaw::FlawType::Engine
-                } else {
-                    crate::flaw::FlawType::Design
-                },
-                name,
-                description,
-                failure_rate,
-                testing_modifier: 0.8,
-                trigger_event_type: trigger,
-                discovered,
-                fixed,
-                engine_design_id: if engine_type_idx >= 0 { Some(engine_type_idx as usize) } else { None },
-            };
-            // Add to appropriate vector based on fixed status
-            if fixed {
-                design.fixed_flaws.push(flaw);
-            } else {
-                design.active_flaws.push(flaw);
-            }
-        }
-        design.flaws_generated = designer_ref.has_flaws_generated();
+        let design = designer_ref.get_design_clone();
 
         self.cached_events = design.generate_launch_events();
         self.design = Some(design);

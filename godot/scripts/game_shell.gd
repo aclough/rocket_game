@@ -1786,7 +1786,7 @@ func _on_prod_engine_selected(engine_index: int, dialog: AcceptDialog):
 			_show_toast("Engine order started!")
 			_update_production_ui()
 		else:
-			_show_toast("Cannot start order - check facility level and funds")
+			_show_toast("Cannot start engine order: %s" % game_manager.get_last_order_error())
 		qty_dialog.queue_free()
 	)
 	qty_dialog.canceled.connect(func(): qty_dialog.queue_free())
@@ -1863,7 +1863,7 @@ func _on_prod_auto_build_engines(rocket_index: int, dialog: AcceptDialog):
 	elif result == 0:
 		_show_toast("No engines needed")
 	else:
-		_show_toast("Cannot order engines — check funds and floor space")
+		_show_toast("Cannot order engines: %s" % game_manager.get_last_order_error())
 
 func _on_prod_rocket_selected(rocket_index: int, dialog: AcceptDialog):
 	dialog.queue_free()
@@ -1877,7 +1877,7 @@ func _on_prod_rocket_selected(rocket_index: int, dialog: AcceptDialog):
 		_show_toast("Rocket assembly started!")
 		_update_production_ui()
 	else:
-		_show_toast("Cannot start order - check facility level, funds, and engine inventory")
+		_show_toast("Cannot start rocket: %s" % game_manager.get_last_order_error())
 
 func _on_manufacturing_changed():
 	if current_tab == Tab.PRODUCTION:

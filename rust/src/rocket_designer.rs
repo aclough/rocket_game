@@ -887,7 +887,7 @@ impl RocketDesigner {
         self.get_total_flaw_count() as i32
     }
 
-    /// Get the number of discovered flaws (design + engine)
+    /// Get the number of discovered flaws (design + engine), including already-fixed ones
     #[func]
     pub fn get_discovered_flaw_count(&self) -> i32 {
         let design_discovered = self.design.get_discovered_flaw_count();
@@ -895,7 +895,8 @@ impl RocketDesigner {
             .iter()
             .filter(|&&id| id < self.engine_designs_flaws.len())
             .map(|&id| {
-                self.engine_designs_flaws[id].0.iter().filter(|f| f.discovered).count()
+                let (ref active, ref fixed) = self.engine_designs_flaws[id];
+                active.iter().filter(|f| f.discovered).count() + fixed.len()
             })
             .sum();
         (design_discovered + engine_discovered) as i32

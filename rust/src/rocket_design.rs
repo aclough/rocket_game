@@ -1400,9 +1400,9 @@ impl RocketDesign {
         self.active_flaws.len()
     }
 
-    /// Get the number of discovered but unfixed flaws
+    /// Get the total number of discovered flaws (including ones already fixed)
     pub fn get_discovered_flaw_count(&self) -> usize {
-        self.active_flaws.iter().filter(|f| f.discovered).count()
+        self.active_flaws.iter().filter(|f| f.discovered).count() + self.fixed_flaws.len()
     }
 
     /// Get the number of fixed flaws

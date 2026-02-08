@@ -704,63 +704,79 @@ impl Company {
 
     /// Start an engine manufacturing order.
     /// Requires a frozen revision of the engine design.
-    /// Returns (order_id, total_material_cost) or None.
+    /// Returns Ok((order_id, total_material_cost)) or Err with a reason string.
     pub fn start_engine_order(
         &mut self,
         engine_design_id: usize,
         revision_number: u32,
         quantity: u32,
-    ) -> Option<(ManufacturingOrderId, f64)> {
-        let lineage = self.engine_designs.get(engine_design_id)?;
-        let revision = lineage.get_revision(revision_number)?;
+    ) -> Result<(ManufacturingOrderId, f64), &'static str> {
+        let lineage = self.engine_designs.get(engine_design_id)
+            .ok_or("Invalid engine design")?;
+        let revision = lineage.get_revision(revision_number)
+            .ok_or("Invalid revision")?;
         let snapshot = revision.snapshot.snapshot(engine_design_id, &lineage.name);
+
+        // Check floor space before starting
+        let space_needed = crate::manufacturing::floor_space_for_engine(snapshot.scale);
+        if !self.manufacturing.can_start_engine_order_with_space(space_needed) {
+            return Err("Not enough floor space");
+        }
 
         let result = self.manufacturing.start_engine_order(
             engine_design_id,
             revision_number,
             snapshot,
             quantity,
-        )?;
+        ).ok_or("Manufacturing order failed")?;
 
         // Deduct total material cost up front
         let (_, total_material_cost) = result;
         if self.money < total_material_cost {
             // Can't afford — cancel the order we just created
             self.manufacturing.cancel_order(result.0);
-            return None;
+            return Err("Not enough funds for materials");
         }
         self.money -= total_material_cost;
-        Some(result)
+        Ok(result)
     }
 
     /// Start a rocket assembly order.
     /// Requires a frozen revision and engines in inventory.
-    /// Returns (order_id, material_cost) or None.
+    /// Returns Ok((order_id, material_cost)) or Err with a reason string.
     pub fn start_rocket_order(
         &mut self,
         rocket_design_id: usize,
         revision_number: u32,
-    ) -> Option<(ManufacturingOrderId, f64)> {
-        let lineage = self.rocket_designs.get(rocket_design_id)?;
-        let revision = lineage.get_revision(revision_number)?;
+    ) -> Result<(ManufacturingOrderId, f64), &'static str> {
+        let lineage = self.rocket_designs.get(rocket_design_id)
+            .ok_or("Invalid design")?;
+        let revision = lineage.get_revision(revision_number)
+            .ok_or("Invalid revision")?;
         let design_snapshot = revision.snapshot.clone();
 
         // Check engines are available
         if !self.manufacturing.has_engines_for_rocket(&design_snapshot) {
-            return None;
+            return Err("Not enough engines in inventory");
+        }
+
+        // Check floor space
+        let space_needed = crate::manufacturing::floor_space_for_rocket(&design_snapshot);
+        if !self.manufacturing.can_start_rocket_order_with_space(space_needed) {
+            return Err("Not enough floor space");
         }
 
         let result = self.manufacturing.start_rocket_order(
             rocket_design_id,
             revision_number,
             design_snapshot.clone(),
-        )?;
+        ).ok_or("Manufacturing order failed")?;
 
         // Deduct material cost
         let (_, material_cost) = result;
         if self.money < material_cost {
             self.manufacturing.cancel_order(result.0);
-            return None;
+            return Err("Not enough funds for materials");
         }
         self.money -= material_cost;
 
@@ -769,10 +785,10 @@ impl Company {
             // This shouldn't happen since we checked above, but be safe
             self.money += material_cost;
             self.manufacturing.cancel_order(result.0);
-            return None;
+            return Err("Engine inventory changed unexpectedly");
         }
 
-        Some(result)
+        Ok(result)
     }
 
     /// Cancel a manufacturing order by ID.
@@ -1288,7 +1304,7 @@ mod tests {
         let idx = company.engine_designs.len() - 1;
         company.engine_designs[idx].cut_revision("v1");
         let order_result = company.start_engine_order(idx, 1, 1);
-        if let Some((order_id, _)) = order_result {
+        if let Ok((order_id, _)) = order_result {
             // Engineering team should fail to be assigned to manufacturing
             assert!(!company.assign_team_to_manufacturing(eng_team_id, order_id));
         }

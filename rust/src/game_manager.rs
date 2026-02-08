@@ -15,6 +15,8 @@ pub struct GameManager {
     current_rocket_design_id: Option<usize>,
     /// Player finances - single source of truth for money
     finance: Gd<PlayerFinance>,
+    /// Error message from the last failed manufacturing order
+    last_order_error: String,
 }
 
 #[godot_api]
@@ -25,6 +27,7 @@ impl INode for GameManager {
             state: GameState::new(),
             current_rocket_design_id: None,
             finance: Gd::from_init_fn(PlayerFinance::init),
+            last_order_error: String::new(),
         }
     }
 
@@ -809,6 +812,13 @@ impl GameManager {
         // Update the active lineage head
         if let Some(index) = self.current_rocket_design_id {
             self.state.player_company.update_rocket_design(index, design);
+            // If the design is Refining and has a discovered unfixed flaw, start fixing it
+            let design = self.state.player_company.rocket_designs[index].head_mut();
+            if matches!(design.design_status, crate::rocket_design::DesignStatus::Refining { .. }) {
+                if let Some(flaw_index) = design.get_next_unfixed_flaw() {
+                    design.start_fixing_flaw(flaw_index);
+                }
+            }
             self.base_mut().emit_signal("designs_changed", &[]);
         }
     }
@@ -1993,9 +2003,16 @@ impl GameManager {
             }
 
             if let Some(name) = found_flaw_name {
-                // Auto-submit to refining if still Untested so teams can fix it
+                // Auto-submit to refining if still Untested
                 if matches!(design.status, EngineStatus::Untested) {
                     design.submit_to_refining(flaw_gen, idx);
+                }
+                // Transition to Fixing if currently Refining so teams work on the flaw
+                if matches!(design.status, EngineStatus::Refining { .. }) {
+                    if let Some(flaw_index) = design.get_next_unfixed_flaw() {
+                        let flaw_name = design.active_flaws[flaw_index].name.clone();
+                        design.status.start_fixing(flaw_name, flaw_index);
+                    }
                 }
                 self.base_mut().emit_signal("designs_changed", &[]);
                 return GString::from(name.as_str());
@@ -2066,9 +2083,11 @@ impl GameManager {
 
     /// Start an engine manufacturing order.
     /// Returns order_id (>0) on success, -1 on failure.
+    /// On failure, call get_last_order_error() for the reason.
     #[func]
     pub fn start_engine_order(&mut self, engine_design_id: i32, revision_number: i32, quantity: i32) -> i32 {
         if engine_design_id < 0 || revision_number < 0 || quantity <= 0 {
+            self.last_order_error = "Invalid parameters".to_string();
             return -1;
         }
         self.sync_money_to_state();
@@ -2077,21 +2096,28 @@ impl GameManager {
             revision_number as u32,
             quantity as u32,
         ) {
-            Some((order_id, _)) => {
+            Ok((order_id, _)) => {
+                self.last_order_error.clear();
                 self.sync_money_from_state();
                 self.emit_money_changed();
                 self.base_mut().emit_signal("manufacturing_changed", &[]);
                 order_id as i32
             }
-            None => -1,
+            Err(reason) => {
+                self.last_order_error = reason.to_string();
+                self.sync_money_from_state();
+                -1
+            }
         }
     }
 
     /// Start a rocket assembly order.
     /// Returns order_id (>0) on success, -1 on failure.
+    /// On failure, call get_last_order_error() for the reason.
     #[func]
     pub fn start_rocket_order(&mut self, rocket_design_id: i32, revision_number: i32) -> i32 {
         if rocket_design_id < 0 || revision_number < 0 {
+            self.last_order_error = "Invalid design or revision".to_string();
             return -1;
         }
         self.sync_money_to_state();
@@ -2099,15 +2125,26 @@ impl GameManager {
             rocket_design_id as usize,
             revision_number as u32,
         ) {
-            Some((order_id, _)) => {
+            Ok((order_id, _)) => {
+                self.last_order_error.clear();
                 self.sync_money_from_state();
                 self.emit_money_changed();
                 self.base_mut().emit_signal("manufacturing_changed", &[]);
                 self.base_mut().emit_signal("inventory_changed", &[]);
                 order_id as i32
             }
-            None => -1,
+            Err(reason) => {
+                self.last_order_error = reason.to_string();
+                self.sync_money_from_state();
+                -1
+            }
         }
+    }
+
+    /// Get the error message from the last failed order attempt
+    #[func]
+    pub fn get_last_order_error(&self) -> GString {
+        GString::from(self.last_order_error.as_str())
     }
 
     /// Cancel a manufacturing order
@@ -2345,12 +2382,13 @@ impl GameManager {
                 rev,
                 deficit as u32,
             ) {
-                Some(_) => {
+                Ok(_) => {
                     self.sync_money_from_state();
                     self.emit_money_changed();
                     total_ordered += deficit;
                 }
-                None => {
+                Err(reason) => {
+                    self.last_order_error = reason.to_string();
                     self.sync_money_from_state();
                     return -1;
                 }
