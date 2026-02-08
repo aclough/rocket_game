@@ -103,14 +103,11 @@ func _update_launch_readiness():
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
 		launch_button.disabled = true
 	else:
-		var success_rate = designer.get_estimated_success_rate() * 100
-		status_label.text = "Ready (%.0f%% est. success)" % success_rate
-		if success_rate >= 70:
-			status_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-		elif success_rate >= 40:
-			status_label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.3))
-		else:
-			status_label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.3))
+		var testing_level = designer.get_testing_level()
+		var testing_level_name = designer.get_testing_level_name()
+		status_label.text = "Ready (%s)" % testing_level_name
+		var level_color = _testing_level_color(testing_level)
+		status_label.add_theme_color_override("font_color", level_color)
 		launch_button.disabled = false
 
 func _on_money_changed(_amount: float):
@@ -130,6 +127,16 @@ func _on_launch_pressed():
 func refresh_testing_view():
 	if testing_view:
 		testing_view._update_ui()
+
+# Helper to get color for a testing level index (0-4)
+func _testing_level_color(level: int) -> Color:
+	match level:
+		0: return Color(1.0, 0.3, 0.3)       # Untested - Red
+		1: return Color(1.0, 0.6, 0.2)       # Lightly Tested - Orange
+		2: return Color(1.0, 1.0, 0.3)       # Moderately Tested - Yellow
+		3: return Color(0.6, 1.0, 0.4)       # Well Tested - Light green
+		4: return Color(0.3, 1.0, 0.3)       # Thoroughly Tested - Green
+		_: return Color(0.5, 0.5, 0.5)
 
 func _format_number(value: float) -> String:
 	var int_value = int(value)

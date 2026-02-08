@@ -722,6 +722,16 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
 	header.add_child(status_label)
 
+	# Testing level label (only when Refining or Fixing)
+	if base_status == "Refining" or base_status == "Fixing":
+		var testing_level = game_manager.get_engine_testing_level(index)
+		var testing_level_name = game_manager.get_engine_testing_level_name(index)
+		var testing_label = Label.new()
+		testing_label.text = testing_level_name
+		testing_label.add_theme_font_size_override("font_size", 12)
+		testing_label.add_theme_color_override("font_color", _engine_testing_level_color(testing_level))
+		vbox.add_child(testing_label)
+
 	# Teams info (only if not Untested)
 	if base_status != "Untested":
 		if teams_count > 0:
@@ -831,6 +841,16 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 func _on_engine_card_toggle(index: int):
 	_expanded_engine_cards[index] = not _expanded_engine_cards.get(index, false)
 	_update_research_engines()
+
+# Helper to get color for an engine testing level index (0-4)
+func _engine_testing_level_color(level: int) -> Color:
+	match level:
+		0: return Color(1.0, 0.3, 0.3)       # Untested - Red
+		1: return Color(1.0, 0.6, 0.2)       # Lightly Tested - Orange
+		2: return Color(1.0, 1.0, 0.3)       # Moderately Tested - Yellow
+		3: return Color(0.6, 1.0, 0.4)       # Well Tested - Light green
+		4: return Color(0.3, 1.0, 0.3)       # Thoroughly Tested - Green
+		_: return Color(0.5, 0.5, 0.5)
 
 func _get_teams_on_engine(engine_index: int) -> Array:
 	var result = []

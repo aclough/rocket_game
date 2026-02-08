@@ -1,6 +1,8 @@
 use rand::Rng;
 use rand_distr::{Distribution, LogNormal};
 
+use crate::engine_design::FuelType;
+
 /// Represents a hidden defect in a rocket that can cause failures
 #[derive(Clone, Debug)]
 pub struct Flaw {
@@ -258,43 +260,174 @@ pub const DESIGN_FLAW_TEMPLATES: &[FlawTemplate] = &[
     },
 ];
 
+// ==========================================
+// Technology Difficulty Mean Functions
+// ==========================================
+
+/// Mean failure rate for engine flaws, based on fuel type and scale.
+/// Hydrolox is harder (0.35), Kerolox moderate (0.25), Solid easiest (0.15).
+/// Scale has a mild effect: 1.0 + 0.1 * (scale - 1.0).
+pub fn engine_failure_rate_mean(fuel_type: FuelType, scale: f64) -> f64 {
+    let base = match fuel_type {
+        FuelType::Kerolox => 0.25,
+        FuelType::Hydrolox => 0.35,
+        FuelType::Solid => 0.15,
+    };
+    let scale_mult = 1.0 + 0.1 * (scale - 1.0);
+    base * scale_mult
+}
+
+/// Mean testing modifier for engine flaws, based on fuel type.
+/// Higher means easier to discover. Solid easiest (0.65), Kerolox moderate (0.55), Hydrolox hardest (0.40).
+/// Scale has no effect on discoverability.
+pub fn engine_testing_modifier_mean(fuel_type: FuelType, _scale: f64) -> f64 {
+    match fuel_type {
+        FuelType::Kerolox => 0.55,
+        FuelType::Hydrolox => 0.40,
+        FuelType::Solid => 0.65,
+    }
+}
+
+/// Mean failure rate for rocket design flaws, based on complexity.
+/// More stages, fuel type diversity, and engines increase failure rates.
+pub fn rocket_failure_rate_mean(stage_count: usize, unique_fuel_types: usize, total_engines: u32) -> f64 {
+    let base = 0.25;
+    let stage_mult = 1.0 + 0.1 * (stage_count as f64 - 1.0);
+    let fuel_mult = 1.0 + 0.1 * (unique_fuel_types as f64 - 1.0);
+    let engine_mult = 1.0 + 0.02 * (total_engines as f64 - 1.0);
+    base * stage_mult * fuel_mult * engine_mult
+}
+
+/// Mean testing modifier for rocket design flaws, based on stage count.
+/// More stages make testing harder (lower discoverability).
+pub fn rocket_testing_modifier_mean(stage_count: usize) -> f64 {
+    let base = 0.55;
+    base / (1.0 + 0.1 * (stage_count as f64 - 1.0))
+}
+
+// ==========================================
+// Testing Level Enum and Estimation
+// ==========================================
+
+/// Qualitative assessment of how well-tested a design is.
+/// Shown to the player instead of exact success rates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TestingLevel {
+    Untested = 0,
+    LightlyTested = 1,
+    ModeratelyTested = 2,
+    WellTested = 3,
+    ThoroughlyTested = 4,
+}
+
+impl TestingLevel {
+    /// Human-readable name for display
+    pub fn name(&self) -> &'static str {
+        match self {
+            TestingLevel::Untested => "Untested",
+            TestingLevel::LightlyTested => "Lightly Tested",
+            TestingLevel::ModeratelyTested => "Moderately Tested",
+            TestingLevel::WellTested => "Well Tested",
+            TestingLevel::ThoroughlyTested => "Thoroughly Tested",
+        }
+    }
+
+    /// Convert to integer index for GDScript interop
+    pub fn to_index(&self) -> i32 {
+        *self as i32
+    }
+
+    /// Convert from integer index
+    pub fn from_index(i: i32) -> TestingLevel {
+        match i {
+            0 => TestingLevel::Untested,
+            1 => TestingLevel::LightlyTested,
+            2 => TestingLevel::ModeratelyTested,
+            3 => TestingLevel::WellTested,
+            4 => TestingLevel::ThoroughlyTested,
+            _ => if i < 0 { TestingLevel::Untested } else { TestingLevel::ThoroughlyTested },
+        }
+    }
+}
+
+/// Convert a coverage ratio to a TestingLevel
+fn coverage_to_testing_level(coverage: f64) -> TestingLevel {
+    if coverage < 0.1 {
+        TestingLevel::Untested
+    } else if coverage < 0.4 {
+        TestingLevel::LightlyTested
+    } else if coverage < 1.0 {
+        TestingLevel::ModeratelyTested
+    } else if coverage < 2.5 {
+        TestingLevel::WellTested
+    } else {
+        TestingLevel::ThoroughlyTested
+    }
+}
+
+/// Estimate the testing level of an engine based on technology and refining time.
+pub fn engine_testing_level(fuel_type: FuelType, scale: f64, refining_days: f64) -> TestingLevel {
+    let expected_flaw_count = 3.5; // average of 3-4
+    let fr_mean = engine_failure_rate_mean(fuel_type, scale);
+    let tm_mean = engine_testing_modifier_mean(fuel_type, scale);
+    let expected_days = expected_flaw_count * 30.0 / (fr_mean * tm_mean);
+    let coverage = refining_days / expected_days;
+    coverage_to_testing_level(coverage)
+}
+
+/// Estimate the testing level of a rocket design based on complexity and refining time.
+pub fn rocket_testing_level(
+    stage_count: usize,
+    unique_fuel_types: usize,
+    total_engines: u32,
+    refining_days: f64,
+) -> TestingLevel {
+    let expected_flaw_count = (3 + stage_count.min(3)) as f64;
+    let fr_mean = rocket_failure_rate_mean(stage_count, unique_fuel_types, total_engines);
+    let tm_mean = rocket_testing_modifier_mean(stage_count);
+    let expected_days = expected_flaw_count * 30.0 / (fr_mean * tm_mean);
+    let coverage = refining_days / expected_days;
+    coverage_to_testing_level(coverage)
+}
+
 impl Flaw {
-    /// Generate a randomized failure rate from a global distribution.
-    /// Uses a log-normal distribution centered on ~25% failure rate.
-    /// Designs fresh off the blackboard are dangerous.
+    /// Generate a randomized failure rate from a log-normal distribution.
+    /// The `mean` parameter sets the expected value of the distribution.
+    /// mu is computed as ln(mean) - sigma²/2 so E[X] = mean.
     /// sigma = 0.8 gives wide spread for varied gameplay.
     /// Clamped to [0.5%, 100%].
-    fn randomize_failure_rate() -> f64 {
+    fn randomize_failure_rate(mean: f64) -> f64 {
         let mut rng = rand::thread_rng();
 
-        let mu = (0.25_f64).ln();
         let sigma = 0.8;
+        let mu = mean.ln() - sigma * sigma / 2.0;
 
         if let Ok(dist) = LogNormal::new(mu, sigma) {
             dist.sample(&mut rng).clamp(0.005, 1.0)
         } else {
-            0.25
+            mean
         }
     }
 
     /// Generate a randomized testing modifier from a uniform distribution.
-    /// Higher values mean easier to discover during testing.
-    /// Range: [0.1, 1.0]
-    fn randomize_testing_modifier() -> f64 {
+    /// Centered on `mean` with width 0.5, clamped to [0.05, 1.0].
+    fn randomize_testing_modifier(mean: f64) -> f64 {
         let mut rng = rand::thread_rng();
-        rng.gen_range(0.1..=1.0)
+        let low = (mean - 0.25).max(0.05);
+        let high = (mean + 0.25).min(1.0);
+        rng.gen_range(low..=high)
     }
 
     /// Create a new flaw from a template with a unique ID.
-    /// Failure rate and testing modifier are drawn from global distributions.
-    pub fn from_template(template: &FlawTemplate, id: u32) -> Self {
+    /// Failure rate and testing modifier are drawn from distributions centered on the given means.
+    pub fn from_template(template: &FlawTemplate, id: u32, fr_mean: f64, tm_mean: f64) -> Self {
         Self {
             id,
             flaw_type: template.flaw_type.clone(),
             name: template.name.to_string(),
             description: template.description.to_string(),
-            failure_rate: Self::randomize_failure_rate(),
-            testing_modifier: Self::randomize_testing_modifier(),
+            failure_rate: Self::randomize_failure_rate(fr_mean),
+            testing_modifier: Self::randomize_testing_modifier(tm_mean),
             trigger_event_type: template.trigger_event_type.clone(),
             discovered: false,
             fixed: false,
@@ -303,15 +436,15 @@ impl Flaw {
     }
 
     /// Create a new engine flaw from a template with a specific engine design.
-    /// Failure rate and testing modifier are drawn from global distributions.
-    pub fn from_template_with_engine(template: &FlawTemplate, id: u32, engine_design_id: usize) -> Self {
+    /// Failure rate and testing modifier are drawn from distributions centered on the given means.
+    pub fn from_template_with_engine(template: &FlawTemplate, id: u32, engine_design_id: usize, fr_mean: f64, tm_mean: f64) -> Self {
         Self {
             id,
             flaw_type: template.flaw_type.clone(),
             name: template.name.to_string(),
             description: template.description.to_string(),
-            failure_rate: Self::randomize_failure_rate(),
-            testing_modifier: Self::randomize_testing_modifier(),
+            failure_rate: Self::randomize_failure_rate(fr_mean),
+            testing_modifier: Self::randomize_testing_modifier(tm_mean),
             trigger_event_type: template.trigger_event_type.clone(),
             discovered: false,
             fixed: false,
@@ -370,14 +503,20 @@ impl FlawGenerator {
     /// Generate engine flaws for a specific engine design with the given flaw category.
     /// Fixed count per engine design (not scaled by usage in rockets).
     /// Called when an engine design is first submitted for refining.
+    /// Flaw severity depends on fuel_type and scale via technology difficulty means.
     pub fn generate_engine_flaws_for_type_with_category(
         &mut self,
         engine_design_id: usize,
         category: FlawCategory,
+        fuel_type: FuelType,
+        scale: f64,
     ) -> Vec<Flaw> {
         let mut rng = rand::thread_rng();
 
         let templates = Self::templates_for_category(category);
+
+        let fr_mean = engine_failure_rate_mean(fuel_type, scale);
+        let tm_mean = engine_testing_modifier_mean(fuel_type, scale);
 
         // Fixed 3-4 flaws per engine design (with log-normal distribution for varied severity)
         let flaw_count = 3 + rng.gen_range(0..2);
@@ -386,24 +525,33 @@ impl FlawGenerator {
         selected
             .into_iter()
             .map(|template| {
-                let flaw = Flaw::from_template_with_engine(template, self.next_id, engine_design_id);
+                let flaw = Flaw::from_template_with_engine(template, self.next_id, engine_design_id, fr_mean, tm_mean);
                 self.next_id += 1;
                 flaw
             })
             .collect()
     }
 
-    /// Generate engine flaws for a specific engine design (defaults to LiquidEngine category).
+    /// Generate engine flaws for a specific engine design (defaults to LiquidEngine/Kerolox at scale 1.0).
     /// Fixed count per engine design (not scaled by usage in rockets).
     /// Called when an engine design is first submitted for refining.
     pub fn generate_engine_flaws_for_type(&mut self, engine_design_id: usize) -> Vec<Flaw> {
-        self.generate_engine_flaws_for_type_with_category(engine_design_id, FlawCategory::LiquidEngine)
+        self.generate_engine_flaws_for_type_with_category(engine_design_id, FlawCategory::LiquidEngine, FuelType::Kerolox, 1.0)
     }
 
-    /// Generate only design flaws for a rocket (engine flaws are on EngineSpec now).
+    /// Generate only design flaws for a rocket (engine flaws are on EngineDesign now).
     /// Called when a rocket design is created.
-    pub fn generate_design_flaws(&mut self, stage_count: usize) -> Vec<Flaw> {
+    /// Flaw severity depends on stage_count, unique_fuel_types, and total_engines.
+    pub fn generate_design_flaws(
+        &mut self,
+        stage_count: usize,
+        unique_fuel_types: usize,
+        total_engines: u32,
+    ) -> Vec<Flaw> {
         let mut rng = rand::thread_rng();
+
+        let fr_mean = rocket_failure_rate_mean(stage_count, unique_fuel_types, total_engines);
+        let tm_mean = rocket_testing_modifier_mean(stage_count);
 
         // Design flaws: 3-6 based on stage count
         // More flaws with long tail distribution for varied gameplay
@@ -417,7 +565,7 @@ impl FlawGenerator {
         design_templates
             .into_iter()
             .map(|template| {
-                let flaw = Flaw::from_template(template, self.next_id);
+                let flaw = Flaw::from_template(template, self.next_id, fr_mean, tm_mean);
                 self.next_id += 1;
                 flaw
             })
@@ -586,35 +734,6 @@ pub fn check_flaw_trigger(flaws: &[Flaw], event_name: &str, stage_engine_design_
     triggerable.last().map(|(f, _)| f.id)
 }
 
-/// Estimate the success rate based on active flaws
-/// This is a rough estimate shown to the player
-pub fn estimate_success_rate(flaws: &[Flaw], base_success_rate: f64) -> f64 {
-    // Multiply survival probabilities for each unfixed flaw
-    // This is statistically correct: P(all survive) = P(survive_1) * P(survive_2) * ...
-    let flaw_success_rate: f64 = flaws
-        .iter()
-        .filter(|f| !f.fixed)
-        .map(|f| 1.0 - f.failure_rate)
-        .product();
-
-    base_success_rate * flaw_success_rate
-}
-
-/// Get the approximate count of unknown (undiscovered and unfixed) flaws
-/// Returns a fuzzy estimate, not the exact count
-pub fn estimate_unknown_flaw_count(flaws: &[Flaw]) -> (usize, usize) {
-    let unknown_count = flaws
-        .iter()
-        .filter(|f| !f.discovered && !f.fixed)
-        .count();
-
-    // Return a range: (min, max) that includes the actual count
-    // This gives the player a rough idea without exact information
-    let min = if unknown_count > 2 { unknown_count - 2 } else { 0 };
-    let max = unknown_count + 2;
-    (min, max)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,7 +741,7 @@ mod tests {
     #[test]
     fn test_flaw_from_template() {
         let template = &LIQUID_ENGINE_FLAW_TEMPLATES[0];
-        let flaw = Flaw::from_template(template, 1);
+        let flaw = Flaw::from_template(template, 1, 0.25, 0.55);
 
         assert_eq!(flaw.id, 1);
         assert_eq!(flaw.flaw_type, FlawType::Engine);
@@ -633,7 +752,7 @@ mod tests {
 
     #[test]
     fn test_flaw_is_active() {
-        let mut flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1);
+        let mut flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1, 0.25, 0.55);
 
         assert!(flaw.is_active());
 
@@ -643,18 +762,18 @@ mod tests {
 
     #[test]
     fn test_flaw_trigger_matches() {
-        let ignition_flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1);
+        let ignition_flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1, 0.25, 0.55);
         assert!(ignition_flaw.can_trigger_at("Stage 1 Ignition"));
         assert!(!ignition_flaw.can_trigger_at("Liftoff"));
 
-        let maxq_flaw = Flaw::from_template(&DESIGN_FLAW_TEMPLATES[0], 2);
+        let maxq_flaw = Flaw::from_template(&DESIGN_FLAW_TEMPLATES[0], 2, 0.25, 0.55);
         assert!(maxq_flaw.can_trigger_at("Max-Q"));
         assert!(!maxq_flaw.can_trigger_at("Stage 1 Ignition"));
     }
 
     #[test]
     fn test_effective_failure_rate() {
-        let mut flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1);
+        let mut flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1, 0.25, 0.55);
 
         let original_rate = flaw.failure_rate;
         assert!(flaw.effective_failure_rate() > 0.0);
@@ -666,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_discovery_probability() {
-        let mut flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1);
+        let mut flaw = Flaw::from_template(&LIQUID_ENGINE_FLAW_TEMPLATES[0], 1, 0.25, 0.55);
 
         let prob = flaw.discovery_probability();
         assert!(prob > 0.0);
@@ -683,8 +802,8 @@ mod tests {
         // Generate engine flaws for a specific engine type
         let engine_flaws = generator.generate_engine_flaws_for_type(0);
 
-        // Generate design flaws for a 2-stage rocket
-        let design_flaws = generator.generate_design_flaws(2);
+        // Generate design flaws for a 2-stage rocket (1 fuel type, 6 engines)
+        let design_flaws = generator.generate_design_flaws(2, 1, 6);
 
         // Should generate the expected counts
         assert!(engine_flaws.len() >= 3); // 3-4 per engine type
@@ -723,18 +842,140 @@ mod tests {
         assert!((ignition_rate - expected).abs() < 0.001);
     }
 
+    // ==========================================
+    // Technology Difficulty Mean Tests
+    // ==========================================
+
     #[test]
-    fn test_estimate_success_rate() {
-        let mut generator = FlawGenerator::new();
+    fn test_engine_failure_rate_means() {
+        let kerolox = engine_failure_rate_mean(FuelType::Kerolox, 1.0);
+        let hydrolox = engine_failure_rate_mean(FuelType::Hydrolox, 1.0);
+        let solid = engine_failure_rate_mean(FuelType::Solid, 1.0);
 
-        // Generate design flaws for a 2-stage rocket
-        let flaws = generator.generate_design_flaws(2);
+        assert_eq!(kerolox, 0.25);
+        assert_eq!(hydrolox, 0.35);
+        assert_eq!(solid, 0.15);
+        assert!(solid < kerolox);
+        assert!(kerolox < hydrolox);
+    }
 
-        let success = estimate_success_rate(&flaws, 0.9);
+    #[test]
+    fn test_engine_testing_modifier_means() {
+        let kerolox = engine_testing_modifier_mean(FuelType::Kerolox, 1.0);
+        let hydrolox = engine_testing_modifier_mean(FuelType::Hydrolox, 1.0);
+        let solid = engine_testing_modifier_mean(FuelType::Solid, 1.0);
 
-        // With flaws, success rate should be lower than or equal to base
-        assert!(success <= 0.9);
-        // Success rate should be non-negative
-        assert!(success >= 0.0);
+        assert_eq!(kerolox, 0.55);
+        assert_eq!(hydrolox, 0.40);
+        assert_eq!(solid, 0.65);
+        assert!(hydrolox < kerolox);
+        assert!(kerolox < solid);
+    }
+
+    #[test]
+    fn test_scale_effect_mild() {
+        let scale_1 = engine_failure_rate_mean(FuelType::Kerolox, 1.0);
+        let scale_4 = engine_failure_rate_mean(FuelType::Kerolox, 4.0);
+
+        // At scale 4.0: multiplier = 1.0 + 0.1 * (4-1) = 1.3
+        let ratio = scale_4 / scale_1;
+        assert!((ratio - 1.3).abs() < 0.01, "Scale effect should be ~1.3x at scale 4.0, got {}", ratio);
+    }
+
+    #[test]
+    fn test_rocket_failure_rate_mean() {
+        let base = rocket_failure_rate_mean(1, 1, 1);
+        let more_stages = rocket_failure_rate_mean(3, 1, 1);
+        let more_engines = rocket_failure_rate_mean(1, 1, 10);
+        let more_fuels = rocket_failure_rate_mean(1, 3, 1);
+
+        assert!(more_stages > base, "More stages should increase failure rate mean");
+        assert!(more_engines > base, "More engines should increase failure rate mean");
+        assert!(more_fuels > base, "More fuel types should increase failure rate mean");
+    }
+
+    #[test]
+    fn test_randomize_failure_rate_parameterized() {
+        // Run many samples and verify higher mean produces higher average
+        let n = 1000;
+        let mut sum_low = 0.0;
+        let mut sum_high = 0.0;
+
+        for _ in 0..n {
+            sum_low += Flaw::randomize_failure_rate(0.15);
+            sum_high += Flaw::randomize_failure_rate(0.35);
+        }
+
+        let avg_low = sum_low / n as f64;
+        let avg_high = sum_high / n as f64;
+
+        assert!(avg_high > avg_low, "Higher mean ({}) should produce higher average ({}) than lower mean ({}), avg ({})",
+            0.35, avg_high, 0.15, avg_low);
+    }
+
+    // ==========================================
+    // Testing Level Tests
+    // ==========================================
+
+    #[test]
+    fn test_testing_level_thresholds() {
+        assert_eq!(coverage_to_testing_level(0.0), TestingLevel::Untested);
+        assert_eq!(coverage_to_testing_level(0.05), TestingLevel::Untested);
+        assert_eq!(coverage_to_testing_level(0.1), TestingLevel::LightlyTested);
+        assert_eq!(coverage_to_testing_level(0.3), TestingLevel::LightlyTested);
+        assert_eq!(coverage_to_testing_level(0.4), TestingLevel::ModeratelyTested);
+        assert_eq!(coverage_to_testing_level(0.99), TestingLevel::ModeratelyTested);
+        assert_eq!(coverage_to_testing_level(1.0), TestingLevel::WellTested);
+        assert_eq!(coverage_to_testing_level(2.0), TestingLevel::WellTested);
+        assert_eq!(coverage_to_testing_level(2.5), TestingLevel::ThoroughlyTested);
+        assert_eq!(coverage_to_testing_level(10.0), TestingLevel::ThoroughlyTested);
+    }
+
+    #[test]
+    fn test_engine_testing_level_progression() {
+        // 0 days = Untested
+        let level_0 = engine_testing_level(FuelType::Kerolox, 1.0, 0.0);
+        assert_eq!(level_0, TestingLevel::Untested);
+
+        // Many days = Thoroughly Tested
+        let level_many = engine_testing_level(FuelType::Kerolox, 1.0, 10000.0);
+        assert_eq!(level_many, TestingLevel::ThoroughlyTested);
+
+        // Monotonically increasing
+        let levels: Vec<TestingLevel> = [0.0, 50.0, 200.0, 500.0, 2000.0]
+            .iter()
+            .map(|&d| engine_testing_level(FuelType::Kerolox, 1.0, d))
+            .collect();
+        for i in 1..levels.len() {
+            assert!(levels[i] >= levels[i-1], "Testing level should not decrease with more refining days");
+        }
+    }
+
+    #[test]
+    fn test_rocket_testing_level() {
+        // 0 days = Untested
+        let level_0 = rocket_testing_level(2, 1, 6, 0.0);
+        assert_eq!(level_0, TestingLevel::Untested);
+
+        // Many days = Thoroughly Tested
+        let level_many = rocket_testing_level(2, 1, 6, 10000.0);
+        assert_eq!(level_many, TestingLevel::ThoroughlyTested);
+    }
+
+    #[test]
+    fn test_testing_level_names() {
+        assert_eq!(TestingLevel::Untested.name(), "Untested");
+        assert_eq!(TestingLevel::LightlyTested.name(), "Lightly Tested");
+        assert_eq!(TestingLevel::ModeratelyTested.name(), "Moderately Tested");
+        assert_eq!(TestingLevel::WellTested.name(), "Well Tested");
+        assert_eq!(TestingLevel::ThoroughlyTested.name(), "Thoroughly Tested");
+    }
+
+    #[test]
+    fn test_testing_level_index_roundtrip() {
+        for i in 0..=4 {
+            let level = TestingLevel::from_index(i);
+            assert_eq!(level.to_index(), i);
+        }
     }
 }

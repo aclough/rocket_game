@@ -73,6 +73,8 @@ pub struct EngineDesign {
     pub fixed_flaws: Vec<Flaw>,
     pub flaws_generated: bool,
     pub status: EngineStatus,
+    /// Calendar days spent in the Refining phase (for testing level estimation)
+    pub refining_days: f64,
 }
 
 /// Lightweight stats cache stored on RocketStage.
@@ -202,9 +204,12 @@ impl EngineDesign {
         } else {
             FlawCategory::LiquidEngine
         };
+        let fuel_type = self.fuel_type();
         self.active_flaws = generator.generate_engine_flaws_for_type_with_category(
             engine_design_id,
             category,
+            fuel_type,
+            self.scale,
         );
         self.fixed_flaws.clear();
         self.flaws_generated = true;
@@ -308,6 +313,7 @@ pub fn create_engine(fuel: FuelType, scale: f64) -> EngineDesign {
         fixed_flaws: Vec::new(),
         flaws_generated: false,
         status: EngineStatus::Untested,
+        refining_days: 0.0,
     }
 }
 
@@ -325,6 +331,7 @@ pub fn default_kerolox() -> EngineDesign {
         fixed_flaws: Vec::new(),
         flaws_generated: false,
         status: EngineStatus::Untested,
+        refining_days: 0.0,
     }
 }
 
@@ -336,6 +343,7 @@ pub fn default_hydrolox() -> EngineDesign {
         fixed_flaws: Vec::new(),
         flaws_generated: false,
         status: EngineStatus::Untested,
+        refining_days: 0.0,
     }
 }
 
@@ -347,6 +355,7 @@ pub fn default_solid() -> EngineDesign {
         fixed_flaws: Vec::new(),
         flaws_generated: false,
         status: EngineStatus::Untested,
+        refining_days: 0.0,
     }
 }
 

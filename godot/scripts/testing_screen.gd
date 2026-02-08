@@ -75,26 +75,15 @@ func _update_ui():
 		rocket_test_cost_label.text = "Cost: $" + _format_money(designer.get_rocket_test_cost())
 		rocket_test_button.disabled = not designer.can_afford_rocket_test()
 
-	# Update stats
-	var flaw_range = designer.get_estimated_unknown_flaw_range()
-	if flaw_range.size() >= 2:
-		var min_flaws = flaw_range[0]
-		var max_flaws = flaw_range[1]
-		if min_flaws == max_flaws:
-			unknown_label.text = "Unknown issues: ~%d" % min_flaws
-		else:
-			unknown_label.text = "Unknown issues: ~%d-%d" % [min_flaws, max_flaws]
+	# Update stats with testing level
+	var testing_level = designer.get_testing_level()
+	var testing_level_name = designer.get_testing_level_name()
+	unknown_label.text = "Testing: %s" % testing_level_name
+	success_label.text = ""
 
-	var success_rate = designer.get_estimated_success_rate() * 100
-	success_label.text = "Est. success rate: %.0f%%" % success_rate
-
-	# Color-code success rate
-	if success_rate >= 70:
-		success_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-	elif success_rate >= 40:
-		success_label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.3))
-	else:
-		success_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+	# Color-code by testing level
+	var level_color = _testing_level_color(testing_level)
+	unknown_label.add_theme_color_override("font_color", level_color)
 
 	# Update flaws list
 	_rebuild_flaws_list()
@@ -303,6 +292,16 @@ func _on_rocket_test_pressed():
 	else:
 		test_result_label.text = "Rocket test complete. No new issues found."
 		test_result_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+
+# Helper to get color for a testing level index (0-4)
+func _testing_level_color(level: int) -> Color:
+	match level:
+		0: return Color(1.0, 0.3, 0.3)       # Untested - Red
+		1: return Color(1.0, 0.6, 0.2)       # Lightly Tested - Orange
+		2: return Color(1.0, 1.0, 0.3)       # Moderately Tested - Yellow
+		3: return Color(0.6, 1.0, 0.4)       # Well Tested - Light green
+		4: return Color(0.3, 1.0, 0.3)       # Thoroughly Tested - Green
+		_: return Color(0.5, 0.5, 0.5)
 
 # Helper to format money values with commas
 func _format_money(value: float) -> String:

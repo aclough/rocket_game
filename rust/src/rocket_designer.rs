@@ -1270,43 +1270,60 @@ impl RocketDesigner {
         self.can_afford(costs::FLAW_FIX_COST)
     }
 
-    /// Get the estimated success rate including flaws
-    /// Combines design flaws and engine flaws from the registry
+    /// Get the qualitative testing level as an integer index (0-4)
+    /// Returns the worst (minimum) of rocket and all engine testing levels
     #[func]
-    pub fn get_estimated_success_rate(&self) -> f64 {
-        let base_success = self.design.mission_success_probability();
+    pub fn get_testing_level(&self) -> i32 {
+        use crate::flaw::{engine_testing_level, rocket_testing_level};
 
-        // Start with design flaw success rate
-        let design_flaw_success: f64 = self.design.active_flaws
-            .iter()
-            .filter(|f| !f.fixed)
-            .map(|f| 1.0 - f.failure_rate)
-            .product();
+        if self.design.stages.is_empty() {
+            return 0;
+        }
 
-        // Multiply by engine flaw success rates for each engine design used
-        let engine_flaw_success: f64 = self.design.get_unique_engine_design_ids()
-            .iter()
-            .filter(|&&id| id < self.engine_designs_flaws.len())
-            .map(|&id| {
-                self.engine_designs_flaws[id].0
-                    .iter()
-                    .filter(|f| !f.fixed)
-                    .map(|f| 1.0 - f.failure_rate)
-                    .product::<f64>()
-            })
-            .product();
+        // Compute rocket-level testing level
+        let unique_fuel_types = {
+            use std::collections::HashSet;
+            let fuel_types: HashSet<usize> = self.design.stages.iter()
+                .map(|s| s.engine_snapshot().fuel_type.index())
+                .collect();
+            fuel_types.len()
+        };
+        let total_engines: u32 = self.design.stages.iter().map(|s| s.engine_count).sum();
 
-        base_success * design_flaw_success * engine_flaw_success
+        let rocket_level = rocket_testing_level(
+            self.design.stages.len(),
+            unique_fuel_types,
+            total_engines,
+            self.design.refining_days,
+        );
+
+        // Find worst engine testing level
+        let mut min_level = rocket_level;
+        for stage in &self.design.stages {
+            let snap = stage.engine_snapshot();
+            // Use engine's refining_days from synced engine data if available
+            let engine_refining_days = if snap.engine_design_id < self.engine_snapshots.len() {
+                // We don't store refining_days in snapshots, so we need it from game_manager
+                // For now, use the design's refining_days as a proxy
+                // (engine refining days will be passed separately via get_engine_testing_level)
+                self.design.refining_days
+            } else {
+                0.0
+            };
+            let engine_level = engine_testing_level(snap.fuel_type, snap.scale, engine_refining_days);
+            if engine_level < min_level {
+                min_level = engine_level;
+            }
+        }
+
+        min_level.to_index()
     }
 
-    /// Get the estimated range of unknown flaws (min, max)
+    /// Get the testing level name as a string
     #[func]
-    pub fn get_estimated_unknown_flaw_range(&self) -> Array<i32> {
-        let (min, max) = self.design.estimate_unknown_flaws();
-        let mut result = Array::new();
-        result.push(min as i32);
-        result.push(max as i32);
-        result
+    pub fn get_testing_level_name(&self) -> GString {
+        use crate::flaw::TestingLevel;
+        GString::from(TestingLevel::from_index(self.get_testing_level()).name())
     }
 
     /// Get total testing spent

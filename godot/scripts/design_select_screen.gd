@@ -124,7 +124,8 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 	var delta_v = game_manager.get_rocket_design_delta_v(index)
 	var cost = game_manager.get_rocket_design_cost(index)
 	var mass = game_manager.get_rocket_design_mass(index)
-	var success_rate = game_manager.get_rocket_design_success_rate(index) * 100
+	var testing_level = game_manager.get_rocket_design_testing_level(index)
+	var testing_level_name = game_manager.get_rocket_design_testing_level_name(index)
 	var stages = game_manager.get_rocket_design_stage_count(index)
 	var has_flaws = game_manager.rocket_design_has_flaws(index)
 	var discovered = game_manager.get_rocket_design_discovered_flaw_count(index)
@@ -202,27 +203,22 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 		untested_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3))
 		info_vbox.add_child(untested_label)
 
-	# Success rate
-	var success_vbox = VBoxContainer.new()
-	success_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hbox.add_child(success_vbox)
+	# Testing level
+	var testing_vbox = VBoxContainer.new()
+	testing_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	hbox.add_child(testing_vbox)
 
-	var success_label = Label.new()
-	success_label.text = "%.0f%%" % success_rate
-	success_label.add_theme_font_size_override("font_size", 20)
-	if success_rate >= 70:
-		success_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-	elif success_rate >= 40:
-		success_label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.3))
-	else:
-		success_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
-	success_vbox.add_child(success_label)
+	var testing_label = Label.new()
+	testing_label.text = testing_level_name
+	testing_label.add_theme_font_size_override("font_size", 16)
+	testing_label.add_theme_color_override("font_color", _testing_level_color(testing_level))
+	testing_vbox.add_child(testing_label)
 
-	var success_title = Label.new()
-	success_title.text = "success"
-	success_title.add_theme_font_size_override("font_size", 10)
-	success_title.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-	success_vbox.add_child(success_title)
+	var testing_title = Label.new()
+	testing_title.text = "testing"
+	testing_title.add_theme_font_size_override("font_size", 10)
+	testing_title.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+	testing_vbox.add_child(testing_title)
 
 	# Get edit/launch status before building buttons
 	var can_edit = game_manager.can_edit_design(index)
@@ -508,6 +504,16 @@ func _on_delete_engine_pressed(index: int):
 
 func _on_new_engine_pressed():
 	engine_edit_requested.emit(-1)
+
+# Helper to get color for a testing level index (0-4)
+func _testing_level_color(level: int) -> Color:
+	match level:
+		0: return Color(1.0, 0.3, 0.3)       # Untested - Red
+		1: return Color(1.0, 0.6, 0.2)       # Lightly Tested - Orange
+		2: return Color(1.0, 1.0, 0.3)       # Moderately Tested - Yellow
+		3: return Color(0.6, 1.0, 0.4)       # Well Tested - Light green
+		4: return Color(0.3, 1.0, 0.3)       # Thoroughly Tested - Green
+		_: return Color(0.5, 0.5, 0.5)
 
 # Helper to format money values
 func _format_money(value: float) -> String:

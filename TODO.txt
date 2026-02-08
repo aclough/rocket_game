@@ -1,17 +1,24 @@
+* Fixes
+    * Make "Auto Assign Teams" something that is toggled rather than a single action.
+    * Add level of testing to Rocket in Research screen.
+* Refining to Testing in Research
+    * Testing is an activity that takes 20 work units.
+    * Multiply the chance of successfully detecting a flaw by 20
+* Add rockets that can't yet be built to Production
+    * In addition to adding the needed items that aren't in the queue to the queue add the Rocket but don't let teams be asigned to it before the items are ready.
 * Create new parts
-    * Made more or less complex strongly affecting price but also changing performance.
+    * Made more or less complex strongly affecting price but also changing performance and reliability.
     * Complexity should be a number stored with the part instead of just being used to derive other things, we'll want more cmoplex designs to have more of a penalty when someone tries to make one on the Moon or somewhere else far away from Earth's resoruces.
     * Refined over time for better stats with diminishing returns but benefit from flight experience
         * Things like increase chamber pressure or reduce complexity
         * This will introduce flaws.
+* Aluminium, steel, or composite tanks for rocket stages.
 * Save/load game (WorldSeed is already in GameState, ready to serialize)
 * Design versioning improvements:
     * Making changes to a design (engines, tank size) when cutting a new version should introduce flaws depending on how large the change is.
     * Flaws fixed on the "head" should not affect existing parts from older versions.
 * UI
     * Little guys that represent teams on the card they're assigned to.
-    * In reseach make an estimate of how well tested a design is based on how long its been tested and how many flaws have been found.  Don't use the actual number of remaining flaws!  This is just to give players a rough guide.
-        * Likewise other places where we estimate success.
 * Designs include strutural materials like steel, almuminium, or carbon composite.
 * Prestige system
     * A bunch of modifiers with natural decays.

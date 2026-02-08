@@ -1,7 +1,7 @@
 use crate::engine::costs;
 use crate::engine_design::{default_snapshot, EngineDesignSnapshot};
 use crate::engineering_team::{DETAILED_ENGINEERING_WORK, REFINING_WORK_PER_FLAW};
-use crate::flaw::{calculate_flaw_failure_rate, estimate_success_rate, estimate_unknown_flaw_count, run_test, Flaw, FlawGenerator, FlawType};
+use crate::flaw::{calculate_flaw_failure_rate, run_test, Flaw, FlawGenerator, FlawType};
 use crate::stage::RocketStage;
 
 /// Work required to fix a discovered flaw (14 days with 1 team)
@@ -237,6 +237,8 @@ pub struct RocketDesign {
     flaw_design_signature: String,
     /// Current status in the engineering workflow
     pub design_status: DesignStatus,
+    /// Calendar days spent in the Refining phase (for testing level estimation)
+    pub refining_days: f64,
 }
 
 impl RocketDesign {
@@ -255,6 +257,7 @@ impl RocketDesign {
             budget: costs::STARTING_BUDGET,
             flaw_design_signature: String::new(),
             design_status: DesignStatus::Specification,
+            refining_days: 0.0,
         }
     }
 
@@ -412,6 +415,7 @@ impl RocketDesign {
         self.flaws_generated = false;
         self.testing_spent = 0.0;
         self.flaw_design_signature.clear();
+        self.refining_days = 0.0;
     }
 
     /// Check if flaws need to be reset due to design changes, and reset if so
@@ -1335,8 +1339,20 @@ impl RocketDesign {
             return;
         }
 
+        // Compute unique fuel types from stage snapshots
+        let unique_fuel_types = {
+            use std::collections::HashSet;
+            let fuel_types: HashSet<usize> = self.stages.iter()
+                .map(|s| s.engine_snapshot().fuel_type.index())
+                .collect();
+            fuel_types.len()
+        };
+
+        // Sum total engines across all stages
+        let total_engines: u32 = self.stages.iter().map(|s| s.engine_count).sum();
+
         // Only generate design flaws - engine flaws are on EngineDesign
-        self.active_flaws = generator.generate_design_flaws(stage_count);
+        self.active_flaws = generator.generate_design_flaws(stage_count, unique_fuel_types, total_engines);
         self.fixed_flaws.clear();
         self.flaws_generated = true;
         // Save the design signature so we can detect changes
@@ -1535,19 +1551,6 @@ impl RocketDesign {
     /// Only considers active (unfixed) flaws
     pub fn get_flaw_failure_contribution(&self, event_name: &str, stage_engine_design_id: Option<usize>) -> f64 {
         calculate_flaw_failure_rate(&self.active_flaws, event_name, stage_engine_design_id)
-    }
-
-    /// Estimate success rate including flaw contributions
-    /// Only considers active (unfixed) flaws
-    pub fn estimate_success_rate_with_flaws(&self) -> f64 {
-        let base_success = self.mission_success_probability();
-        estimate_success_rate(&self.active_flaws, base_success)
-    }
-
-    /// Get estimated range of unknown flaw count (fuzzy, not exact)
-    /// Only considers active (unfixed) flaws
-    pub fn estimate_unknown_flaws(&self) -> (usize, usize) {
-        estimate_unknown_flaw_count(&self.active_flaws)
     }
 
     /// Check if a flaw can be afforded

@@ -569,17 +569,65 @@ impl GameManager {
             .unwrap_or(0.0)
     }
 
-    /// Get design estimated success rate at index
+    /// Get design testing level at index (0-4)
     #[func]
-    pub fn get_rocket_design_success_rate(&self, index: i32) -> f64 {
+    pub fn get_rocket_design_testing_level(&self, index: i32) -> i32 {
         if index < 0 {
-            return 0.0;
+            return 0;
         }
         self.state
             .player_company
             .get_rocket_design(index as usize)
-            .map(|d| d.estimate_success_rate_with_flaws())
-            .unwrap_or(0.0)
+            .map(|d| {
+                use crate::flaw::rocket_testing_level;
+                use std::collections::HashSet;
+
+                let stage_count = d.stages.len();
+                if stage_count == 0 {
+                    return 0;
+                }
+                let unique_fuel_types = {
+                    let fuel_types: HashSet<usize> = d.stages.iter()
+                        .map(|s| s.engine_snapshot().fuel_type.index())
+                        .collect();
+                    fuel_types.len()
+                };
+                let total_engines: u32 = d.stages.iter().map(|s| s.engine_count).sum();
+                rocket_testing_level(stage_count, unique_fuel_types, total_engines, d.refining_days).to_index()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Get design testing level name at index
+    #[func]
+    pub fn get_rocket_design_testing_level_name(&self, index: i32) -> GString {
+        use crate::flaw::TestingLevel;
+        GString::from(TestingLevel::from_index(self.get_rocket_design_testing_level(index)).name())
+    }
+
+    /// Get engine testing level at index (0-4)
+    #[func]
+    pub fn get_engine_testing_level(&self, index: i32) -> i32 {
+        if index < 0 {
+            return 0;
+        }
+        self.state
+            .player_company
+            .engine_designs
+            .get(index as usize)
+            .map(|l| {
+                use crate::flaw::engine_testing_level;
+                let d = l.head();
+                engine_testing_level(d.fuel_type(), d.scale, d.refining_days).to_index()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Get engine testing level name at index
+    #[func]
+    pub fn get_engine_testing_level_name(&self, index: i32) -> GString {
+        use crate::flaw::TestingLevel;
+        GString::from(TestingLevel::from_index(self.get_engine_testing_level(index)).name())
     }
 
     /// Check if a rocket design has generated flaws

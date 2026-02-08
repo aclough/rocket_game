@@ -372,6 +372,7 @@ impl Company {
             new_engine.active_flaws.clear();
             new_engine.fixed_flaws.clear();
             new_engine.flaws_generated = false;
+            new_engine.refining_days = 0.0;
             let new_name = format!("{} (Copy)", lineage.name);
             self.engine_designs.push(DesignLineage::new(&new_name, new_engine));
             Some(self.engine_designs.len() - 1)
@@ -983,6 +984,9 @@ impl Company {
 
             // Only discover flaws during Refining (not during Fixing)
             if is_refining {
+                // Track calendar days spent in Refining
+                design.refining_days += 1.0;
+
                 // Check each undiscovered flaw using its individual discovery probability
                 // Divide by 30 to convert from per-test to per-day probability (roughly monthly)
                 let mut rng = rand::thread_rng();
@@ -1087,6 +1091,9 @@ impl Company {
 
             // Handle Refining phase - discover flaws
             if is_refining {
+                // Track calendar days spent in Refining
+                design.refining_days += 1.0;
+
                 // Check each undiscovered flaw using its individual discovery probability
                 // Divide by 30 to convert from per-test to per-day probability
                 let mut rng = rand::thread_rng();
