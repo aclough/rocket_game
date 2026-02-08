@@ -888,6 +888,12 @@ impl GameManager {
         let mut design = design.unwrap_or_else(|| self.state.player_company.rocket_designs[0].head().clone());
         design.budget = self.finance.bind().get_money();
 
+        // Set targets from active contract so the designer shows correct mission requirements
+        if self.state.player_company.active_contract.is_some() {
+            design.target_delta_v = self.state.player_company.get_target_delta_v();
+            design.payload_mass_kg = self.state.player_company.get_payload_mass();
+        }
+
         // Sync engine data from Company to Designer
         let snapshots: Vec<_> = self.state.player_company.engine_designs
             .iter()
