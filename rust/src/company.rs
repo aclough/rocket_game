@@ -2,9 +2,12 @@ use crate::contract::{Contract, Destination};
 use crate::design_lineage::DesignLineage;
 use crate::engine::costs;
 use crate::engine_design::{default_engine_lineages, create_engine, EngineDesign, FuelType};
-use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, WorkEvent};
+use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, TeamType, WorkEvent,
+    ENGINEERING_HIRE_COST, MANUFACTURING_HIRE_COST};
 use crate::flaw::FlawGenerator;
 use crate::launch_site::LaunchSite;
+use crate::manufacturing::{Manufacturing, ManufacturingOrderId, ManufacturingOrderType, manufacturing_team_efficiency};
+
 use crate::rocket_design::RocketDesign;
 use rand::Rng;
 
@@ -50,6 +53,8 @@ pub struct Company {
     next_team_id: u32,
     /// Flaw generator for creating design flaws
     pub flaw_generator: FlawGenerator,
+    /// Manufacturing facilities, orders, and inventory
+    pub manufacturing: Manufacturing,
 }
 
 impl Company {
@@ -73,13 +78,16 @@ impl Company {
             teams: Vec::new(),
             next_team_id: 1,
             flaw_generator: FlawGenerator::new(),
+            manufacturing: Manufacturing::new(),
         };
 
         // Generate initial contracts
         company.generate_contracts(CONTRACTS_TO_SHOW);
 
-        // Start with one engineering team
-        company.hire_team();
+        // Start with one engineering team (free at game start)
+        let starting_team = EngineeringTeam::new(company.next_team_id, TeamType::Engineering);
+        company.teams.push(starting_team);
+        company.next_team_id += 1;
 
         company
     }
@@ -471,14 +479,32 @@ impl Company {
     // Engineering Team Management
     // ==========================================
 
-    /// Hire a new engineering team
-    /// Returns the team ID
-    pub fn hire_team(&mut self) -> u32 {
-        let team = EngineeringTeam::new(self.next_team_id);
+    /// Hire a new engineering team (costs ENGINEERING_HIRE_COST)
+    /// Returns Some(team_id) if affordable, None otherwise
+    pub fn hire_engineering_team(&mut self) -> Option<u32> {
+        if self.money < ENGINEERING_HIRE_COST {
+            return None;
+        }
+        self.money -= ENGINEERING_HIRE_COST;
+        let team = EngineeringTeam::new(self.next_team_id, TeamType::Engineering);
         let id = team.id;
         self.teams.push(team);
         self.next_team_id += 1;
-        id
+        Some(id)
+    }
+
+    /// Hire a new manufacturing team (costs MANUFACTURING_HIRE_COST)
+    /// Returns Some(team_id) if affordable, None otherwise
+    pub fn hire_manufacturing_team(&mut self) -> Option<u32> {
+        if self.money < MANUFACTURING_HIRE_COST {
+            return None;
+        }
+        self.money -= MANUFACTURING_HIRE_COST;
+        let team = EngineeringTeam::new(self.next_team_id, TeamType::Manufacturing);
+        let id = team.id;
+        self.teams.push(team);
+        self.next_team_id += 1;
+        Some(id)
     }
 
     /// Fire a team by ID
@@ -507,13 +533,16 @@ impl Company {
         self.teams.iter_mut().find(|t| t.id == team_id)
     }
 
-    /// Assign a team to work on a rocket design
+    /// Assign a team to work on a rocket design (engineering teams only)
     pub fn assign_team_to_design(&mut self, team_id: u32, rocket_design_id: usize) -> bool {
         if rocket_design_id >= self.rocket_designs.len() {
             return false;
         }
 
         if let Some(team) = self.get_team_mut(team_id) {
+            if team.team_type != TeamType::Engineering {
+                return false;
+            }
             team.assign(TeamAssignment::RocketDesign {
                 rocket_design_id,
                 work_phase: crate::engineering_team::DesignWorkPhase::DetailedEngineering {
@@ -527,9 +556,12 @@ impl Company {
         }
     }
 
-    /// Assign a team to work on an engine design
+    /// Assign a team to work on an engine design (engineering teams only)
     pub fn assign_team_to_engine(&mut self, team_id: u32, engine_design_id: usize) -> bool {
         if let Some(team) = self.get_team_mut(team_id) {
+            if team.team_type != TeamType::Engineering {
+                return false;
+            }
             team.assign(TeamAssignment::EngineDesign {
                 engine_design_id,
                 work_phase: crate::engineering_team::EngineWorkPhase::Refining {
@@ -622,6 +654,173 @@ impl Company {
     }
 
     // ==========================================
+    // Manufacturing Management
+    // ==========================================
+
+    /// Buy floor space (deducts cost, creates construction order).
+    /// Returns true if affordable.
+    pub fn buy_floor_space(&mut self, units: usize) -> bool {
+        let cost = units as f64 * crate::manufacturing::FLOOR_SPACE_COST_PER_UNIT;
+        if self.money < cost {
+            return false;
+        }
+        self.money -= cost;
+        self.manufacturing.buy_floor_space(units);
+        true
+    }
+
+    /// Get IDs of engineering teams only
+    pub fn get_engineering_team_ids(&self) -> Vec<u32> {
+        self.teams.iter()
+            .filter(|t| t.team_type == TeamType::Engineering)
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// Get IDs of manufacturing teams only
+    pub fn get_manufacturing_team_ids(&self) -> Vec<u32> {
+        self.teams.iter()
+            .filter(|t| t.team_type == TeamType::Manufacturing)
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// Get total monthly salary for engineering teams
+    pub fn get_engineering_monthly_salary(&self) -> f64 {
+        self.teams.iter()
+            .filter(|t| t.team_type == TeamType::Engineering)
+            .map(|t| t.monthly_salary)
+            .sum()
+    }
+
+    /// Get total monthly salary for manufacturing teams
+    pub fn get_manufacturing_monthly_salary(&self) -> f64 {
+        self.teams.iter()
+            .filter(|t| t.team_type == TeamType::Manufacturing)
+            .map(|t| t.monthly_salary)
+            .sum()
+    }
+
+    /// Start an engine manufacturing order.
+    /// Requires a frozen revision of the engine design.
+    /// Returns (order_id, total_material_cost) or None.
+    pub fn start_engine_order(
+        &mut self,
+        engine_design_id: usize,
+        revision_number: u32,
+        quantity: u32,
+    ) -> Option<(ManufacturingOrderId, f64)> {
+        let lineage = self.engine_designs.get(engine_design_id)?;
+        let revision = lineage.get_revision(revision_number)?;
+        let snapshot = revision.snapshot.snapshot(engine_design_id, &lineage.name);
+
+        let result = self.manufacturing.start_engine_order(
+            engine_design_id,
+            revision_number,
+            snapshot,
+            quantity,
+        )?;
+
+        // Deduct total material cost up front
+        let (_, total_material_cost) = result;
+        if self.money < total_material_cost {
+            // Can't afford — cancel the order we just created
+            self.manufacturing.cancel_order(result.0);
+            return None;
+        }
+        self.money -= total_material_cost;
+        Some(result)
+    }
+
+    /// Start a rocket assembly order.
+    /// Requires a frozen revision and engines in inventory.
+    /// Returns (order_id, material_cost) or None.
+    pub fn start_rocket_order(
+        &mut self,
+        rocket_design_id: usize,
+        revision_number: u32,
+    ) -> Option<(ManufacturingOrderId, f64)> {
+        let lineage = self.rocket_designs.get(rocket_design_id)?;
+        let revision = lineage.get_revision(revision_number)?;
+        let design_snapshot = revision.snapshot.clone();
+
+        // Check engines are available
+        if !self.manufacturing.has_engines_for_rocket(&design_snapshot) {
+            return None;
+        }
+
+        let result = self.manufacturing.start_rocket_order(
+            rocket_design_id,
+            revision_number,
+            design_snapshot.clone(),
+        )?;
+
+        // Deduct material cost
+        let (_, material_cost) = result;
+        if self.money < material_cost {
+            self.manufacturing.cancel_order(result.0);
+            return None;
+        }
+        self.money -= material_cost;
+
+        // Consume engines from inventory
+        if !self.manufacturing.consume_engines_for_rocket(&design_snapshot) {
+            // This shouldn't happen since we checked above, but be safe
+            self.money += material_cost;
+            self.manufacturing.cancel_order(result.0);
+            return None;
+        }
+
+        Some(result)
+    }
+
+    /// Cancel a manufacturing order by ID.
+    pub fn cancel_manufacturing_order(&mut self, order_id: ManufacturingOrderId) -> bool {
+        self.manufacturing.cancel_order(order_id)
+    }
+
+    /// Assign a team to work on a manufacturing order (manufacturing teams only)
+    pub fn assign_team_to_manufacturing(&mut self, team_id: u32, order_id: ManufacturingOrderId) -> bool {
+        // Verify order exists
+        if self.manufacturing.get_order(order_id).is_none() {
+            return false;
+        }
+
+        if let Some(team) = self.get_team_mut(team_id) {
+            if team.team_type != TeamType::Manufacturing {
+                return false;
+            }
+            team.assign(TeamAssignment::Manufacturing { order_id });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get teams working on a specific manufacturing order
+    pub fn get_teams_on_order(&self, order_id: ManufacturingOrderId) -> Vec<&EngineeringTeam> {
+        self.teams
+            .iter()
+            .filter(|t| {
+                matches!(
+                    &t.assignment,
+                    Some(TeamAssignment::Manufacturing { order_id: oid }) if *oid == order_id
+                )
+            })
+            .collect()
+    }
+
+    /// Calculate total team efficiency for teams on a manufacturing order
+    pub fn get_manufacturing_order_efficiency(&self, order_id: ManufacturingOrderId) -> f64 {
+        let productive_teams: Vec<_> = self
+            .get_teams_on_order(order_id)
+            .into_iter()
+            .filter(|t| !t.is_ramping_up())
+            .collect();
+        manufacturing_team_efficiency(productive_teams.len())
+    }
+
+    // ==========================================
     // Day Processing
     // ==========================================
 
@@ -658,6 +857,16 @@ impl Company {
         // Process work on engines
         let engine_events = self.process_engine_work();
         events.extend(engine_events);
+
+        // Process manufacturing work
+        let manufacturing_events = self.process_manufacturing_work();
+        events.extend(manufacturing_events);
+
+        // Process floor space construction
+        let completed_units = self.manufacturing.process_construction();
+        if completed_units > 0 {
+            events.push(WorkEvent::FloorSpaceCompleted { units: completed_units });
+        }
 
         events
     }
@@ -848,6 +1057,113 @@ impl Company {
 
         events
     }
+
+    /// Process work progress on all manufacturing orders
+    fn process_manufacturing_work(&mut self) -> Vec<WorkEvent> {
+        let mut events = Vec::new();
+
+        // Calculate efficiency for each active order
+        let order_efficiencies: Vec<(ManufacturingOrderId, f64)> = self.manufacturing.active_orders
+            .iter()
+            .map(|o| (o.id, self.get_manufacturing_order_efficiency(o.id)))
+            .filter(|(_, eff)| *eff > 0.0)
+            .collect();
+
+        // Process work for each order with teams assigned
+        for (order_id, efficiency) in order_efficiencies {
+            let order = match self.manufacturing.get_order_mut(order_id) {
+                Some(o) => o,
+                None => continue,
+            };
+
+            order.progress += efficiency;
+
+            if order.is_unit_complete() {
+                match &mut order.order_type {
+                    ManufacturingOrderType::Engine {
+                        engine_design_id,
+                        revision_number,
+                        snapshot,
+                        quantity,
+                        completed,
+                    } => {
+                        *completed += 1;
+                        let eid = *engine_design_id;
+                        let rev = *revision_number;
+                        let snap = snapshot.clone();
+                        let comp = *completed;
+                        let qty = *quantity;
+                        let oid = order_id;
+
+                        // Add completed engine to inventory
+                        self.manufacturing.add_engine_to_inventory(eid, rev, snap);
+
+                        events.push(WorkEvent::EngineManufactured {
+                            engine_design_id: eid,
+                            revision_number: rev,
+                            order_id: oid,
+                        });
+
+                        if comp >= qty {
+                            events.push(WorkEvent::ManufacturingOrderComplete {
+                                order_id: oid,
+                            });
+                        } else {
+                            // Reset progress for next unit
+                            let order = self.manufacturing.get_order_mut(oid).unwrap();
+                            order.progress = 0.0;
+                        }
+                    }
+                    ManufacturingOrderType::Rocket {
+                        rocket_design_id,
+                        revision_number,
+                        design_snapshot,
+                    } => {
+                        let rid = *rocket_design_id;
+                        let rev = *revision_number;
+                        let snap = design_snapshot.clone();
+                        let oid = order_id;
+
+                        // Add completed rocket to inventory
+                        self.manufacturing.add_rocket_to_inventory(rid, rev, snap);
+
+                        let serial = self.manufacturing.rocket_inventory.last()
+                            .map(|r| r.serial_number)
+                            .unwrap_or(0);
+
+                        events.push(WorkEvent::RocketAssembled {
+                            rocket_design_id: rid,
+                            revision_number: rev,
+                            serial_number: serial,
+                        });
+
+                        events.push(WorkEvent::ManufacturingOrderComplete {
+                            order_id: oid,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Remove completed orders
+        self.manufacturing.active_orders.retain(|o| !o.is_order_complete());
+
+        // Auto-unassign teams from completed orders
+        let active_order_ids: Vec<ManufacturingOrderId> = self.manufacturing.active_orders
+            .iter()
+            .map(|o| o.id)
+            .collect();
+
+        for team in &mut self.teams {
+            if let Some(TeamAssignment::Manufacturing { order_id }) = &team.assignment {
+                if !active_order_ids.contains(order_id) {
+                    team.unassign();
+                }
+            }
+        }
+
+        events
+    }
 }
 
 impl Default for Company {
@@ -860,6 +1176,7 @@ impl Default for Company {
 mod tests {
     use super::*;
     use crate::engine_design::FuelType;
+    use crate::engineering_team::TeamType;
 
     #[test]
     fn test_create_engine_design() {
@@ -919,5 +1236,127 @@ mod tests {
         let mut company = Company::new();
         assert!(company.set_engine_design_fuel_type(0, FuelType::Solid));
         assert_eq!(company.engine_designs[0].head().fuel_type(), FuelType::Solid);
+    }
+
+    #[test]
+    fn test_starting_team_is_engineering() {
+        let company = Company::new();
+        assert_eq!(company.teams.len(), 1);
+        assert_eq!(company.teams[0].team_type, TeamType::Engineering);
+    }
+
+    #[test]
+    fn test_hire_engineering_team() {
+        let mut company = Company::new();
+        let initial_money = company.money;
+        let result = company.hire_engineering_team();
+        assert!(result.is_some());
+        assert_eq!(company.teams.len(), 2);
+        assert_eq!(company.teams[1].team_type, TeamType::Engineering);
+        assert!((company.money - (initial_money - ENGINEERING_HIRE_COST)).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_hire_manufacturing_team() {
+        let mut company = Company::new();
+        let initial_money = company.money;
+        let result = company.hire_manufacturing_team();
+        assert!(result.is_some());
+        assert_eq!(company.teams.len(), 2);
+        assert_eq!(company.teams[1].team_type, TeamType::Manufacturing);
+        assert!((company.money - (initial_money - MANUFACTURING_HIRE_COST)).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_hiring_costs() {
+        assert!((ENGINEERING_HIRE_COST - 150_000.0).abs() < 1.0);
+        assert!((MANUFACTURING_HIRE_COST - 450_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_engineering_team_cannot_do_manufacturing() {
+        let mut company = Company::new();
+        // Starting team is engineering
+        let eng_team_id = company.teams[0].id;
+
+        // Hire a manufacturing team and start an order so we have an order to assign to
+        company.hire_manufacturing_team();
+
+        // Create a simple engine order (need a frozen revision)
+        let idx = company.engine_designs.len() - 1;
+        company.engine_designs[idx].cut_revision("v1");
+        let order_result = company.start_engine_order(idx, 1, 1);
+        if let Some((order_id, _)) = order_result {
+            // Engineering team should fail to be assigned to manufacturing
+            assert!(!company.assign_team_to_manufacturing(eng_team_id, order_id));
+        }
+    }
+
+    #[test]
+    fn test_manufacturing_team_cannot_do_design() {
+        let mut company = Company::new();
+        company.hire_manufacturing_team();
+        let mfg_team_id = company.teams[1].id;
+
+        // Manufacturing team should fail to be assigned to rocket design
+        assert!(!company.assign_team_to_design(mfg_team_id, 0));
+
+        // Manufacturing team should fail to be assigned to engine design
+        assert!(!company.assign_team_to_engine(mfg_team_id, 0));
+    }
+
+    #[test]
+    fn test_team_type_queries() {
+        let mut company = Company::new();
+        // Start with 1 engineering team
+        assert_eq!(company.get_engineering_team_ids().len(), 1);
+        assert_eq!(company.get_manufacturing_team_ids().len(), 0);
+
+        // Hire a manufacturing team
+        company.hire_manufacturing_team();
+        assert_eq!(company.get_engineering_team_ids().len(), 1);
+        assert_eq!(company.get_manufacturing_team_ids().len(), 1);
+
+        // Hire another engineering team
+        company.hire_engineering_team();
+        assert_eq!(company.get_engineering_team_ids().len(), 2);
+        assert_eq!(company.get_manufacturing_team_ids().len(), 1);
+    }
+
+    #[test]
+    fn test_buy_floor_space() {
+        let mut company = Company::new();
+        let initial_space = company.manufacturing.floor_space_total;
+        let initial_money = company.money;
+
+        assert!(company.buy_floor_space(3));
+        // Money deducted
+        let expected_cost = 3.0 * crate::manufacturing::FLOOR_SPACE_COST_PER_UNIT;
+        assert!((company.money - (initial_money - expected_cost)).abs() < 1.0);
+        // Space not yet added (under construction)
+        assert_eq!(company.manufacturing.floor_space_total, initial_space);
+        assert_eq!(company.manufacturing.floor_space_constructing(), 3);
+    }
+
+    #[test]
+    fn test_floor_space_completes_in_process_day() {
+        let mut company = Company::new();
+        company.buy_floor_space(2);
+        let initial_space = company.manufacturing.floor_space_total;
+
+        // Process 29 days - no completion
+        for _ in 0..29 {
+            let events = company.process_day(false);
+            assert!(!events.iter().any(|e| matches!(e, WorkEvent::FloorSpaceCompleted { .. })));
+        }
+
+        // Day 30 - should complete
+        let events = company.process_day(false);
+        let floor_event = events.iter().find(|e| matches!(e, WorkEvent::FloorSpaceCompleted { .. }));
+        assert!(floor_event.is_some());
+        if let Some(WorkEvent::FloorSpaceCompleted { units }) = floor_event {
+            assert_eq!(*units, 2);
+        }
+        assert_eq!(company.manufacturing.floor_space_total, initial_space + 2);
     }
 }

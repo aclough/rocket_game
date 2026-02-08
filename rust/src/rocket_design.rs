@@ -1234,6 +1234,21 @@ impl RocketDesign {
     // Cost Calculations
     // ==========================================
 
+    /// Calculate total material cost for manufacturing this rocket (stages + integration, no engines)
+    pub fn total_material_cost(&self) -> f64 {
+        crate::manufacturing::rocket_material_cost(self)
+    }
+
+    /// Calculate total assembly work (team-days) for manufacturing this rocket
+    pub fn total_assembly_work(&self) -> f64 {
+        crate::manufacturing::rocket_assembly_work(self)
+    }
+
+    /// Get engines required for manufacturing as (engine_design_id, count) pairs
+    pub fn engines_required(&self) -> Vec<(usize, u32)> {
+        crate::manufacturing::engines_required(self)
+    }
+
     /// Get the starting budget in dollars
     pub fn starting_budget() -> f64 {
         costs::STARTING_BUDGET

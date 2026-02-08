@@ -145,6 +145,9 @@ pub mod costs {
     /// Solid motor "tank" mass ratio (casing mass as fraction of propellant)
     pub const SOLID_TANK_MASS_RATIO: f64 = 0.136;
 
+    /// Fraction of engine base_cost that goes to materials (rest is labor via teams)
+    pub const ENGINE_MATERIAL_FRACTION: f64 = 0.4;
+
     /// Structural mass for booster attachment points in kg
     pub const BOOSTER_ATTACHMENT_MASS_KG: f64 = 500.0;
 

@@ -76,6 +76,12 @@ impl GameManager {
     #[signal]
     fn teams_changed();
 
+    #[signal]
+    fn manufacturing_changed();
+
+    #[signal]
+    fn inventory_changed();
+
     // ==========================================
     // Money and Budget
     // ==========================================
@@ -1106,6 +1112,24 @@ impl GameManager {
             self.emit_money_changed();
         }
 
+        // Check for manufacturing events to emit appropriate signals
+        let has_manufacturing_event = events.iter().any(|e| {
+            matches!(
+                e,
+                crate::engineering_team::WorkEvent::EngineManufactured { .. }
+                    | crate::engineering_team::WorkEvent::RocketAssembled { .. }
+                    | crate::engineering_team::WorkEvent::ManufacturingOrderComplete { .. }
+                    | crate::engineering_team::WorkEvent::FloorSpaceCompleted { .. }
+            )
+        });
+        let has_inventory_event = events.iter().any(|e| {
+            matches!(
+                e,
+                crate::engineering_team::WorkEvent::EngineManufactured { .. }
+                    | crate::engineering_team::WorkEvent::RocketAssembled { .. }
+            )
+        });
+
         // Convert events to Godot dictionaries
         let mut result = Array::new();
         for event in events {
@@ -1114,6 +1138,18 @@ impl GameManager {
 
             // Emit signal for each event
             self.emit_work_event(&event);
+        }
+
+        // Emit aggregate signals after processing all events
+        if has_manufacturing_event {
+            self.base_mut()
+                .emit_signal("manufacturing_changed", &[]);
+        }
+        if has_inventory_event {
+            self.base_mut()
+                .emit_signal("inventory_changed", &[]);
+            // Inventory changes also affect money (material costs already deducted at order start)
+            self.emit_money_changed();
         }
 
         result
@@ -1206,9 +1242,37 @@ impl GameManager {
                 dict.set("type", "team_ramped_up");
                 dict.set("team_id", *team_id as i32);
             }
+            WorkEvent::EngineManufactured {
+                engine_design_id,
+                revision_number,
+                order_id,
+            } => {
+                dict.set("type", "engine_manufactured");
+                dict.set("engine_design_id", *engine_design_id as i32);
+                dict.set("revision_number", *revision_number as i32);
+                dict.set("order_id", *order_id as i32);
+            }
+            WorkEvent::RocketAssembled {
+                rocket_design_id,
+                revision_number,
+                serial_number,
+            } => {
+                dict.set("type", "rocket_assembled");
+                dict.set("design_index", *rocket_design_id as i32);
+                dict.set("revision_number", *revision_number as i32);
+                dict.set("serial_number", *serial_number as i32);
+            }
+            WorkEvent::ManufacturingOrderComplete { order_id } => {
+                dict.set("type", "manufacturing_order_complete");
+                dict.set("order_id", *order_id as i32);
+            }
             WorkEvent::SalaryDeducted { amount } => {
                 dict.set("type", "salary_deducted");
                 dict.set("amount", *amount);
+            }
+            WorkEvent::FloorSpaceCompleted { units } => {
+                dict.set("type", "floor_space_completed");
+                dict.set("units", *units as i32);
             }
         }
         dict
@@ -1229,8 +1293,18 @@ impl GameManager {
                 "engine_flaw_discovered"
             }
             crate::engineering_team::WorkEvent::EngineFlawFixed { .. } => "engine_flaw_fixed",
+            crate::engineering_team::WorkEvent::EngineManufactured { .. } => {
+                "engine_manufactured"
+            }
+            crate::engineering_team::WorkEvent::RocketAssembled { .. } => "rocket_assembled",
+            crate::engineering_team::WorkEvent::ManufacturingOrderComplete { .. } => {
+                "manufacturing_order_complete"
+            }
             crate::engineering_team::WorkEvent::TeamRampedUp { .. } => "team_ramped_up",
             crate::engineering_team::WorkEvent::SalaryDeducted { .. } => "salary_deducted",
+            crate::engineering_team::WorkEvent::FloorSpaceCompleted { .. } => {
+                "floor_space_completed"
+            }
         };
         self.base_mut().emit_signal(
             "work_event_occurred",
@@ -1364,19 +1438,42 @@ impl GameManager {
     // Engineering Team Management
     // ==========================================
 
-    /// Get the number of engineering teams
+    /// Get the number of all teams
     #[func]
     pub fn get_team_count(&self) -> i32 {
         self.state.player_company.get_team_count() as i32
     }
 
-    /// Hire a new engineering team
-    /// Returns the team ID
+    /// Hire a new engineering team (deducts hire cost)
+    /// Returns the team ID, or -1 if can't afford
     #[func]
-    pub fn hire_team(&mut self) -> i32 {
-        let id = self.state.player_company.hire_team();
-        self.base_mut().emit_signal("teams_changed", &[]);
-        id as i32
+    pub fn hire_engineering_team(&mut self) -> i32 {
+        self.sync_money_to_state();
+        match self.state.player_company.hire_engineering_team() {
+            Some(id) => {
+                self.sync_money_from_state();
+                self.emit_money_changed();
+                self.base_mut().emit_signal("teams_changed", &[]);
+                id as i32
+            }
+            None => -1,
+        }
+    }
+
+    /// Hire a new manufacturing team (deducts hire cost)
+    /// Returns the team ID, or -1 if can't afford
+    #[func]
+    pub fn hire_manufacturing_team(&mut self) -> i32 {
+        self.sync_money_to_state();
+        match self.state.player_company.hire_manufacturing_team() {
+            Some(id) => {
+                self.sync_money_from_state();
+                self.emit_money_changed();
+                self.base_mut().emit_signal("teams_changed", &[]);
+                id as i32
+            }
+            None => -1,
+        }
     }
 
     /// Fire a team by ID
@@ -1508,14 +1605,19 @@ impl GameManager {
     }
 
     /// Get what a team is assigned to (returns a dictionary)
-    /// Keys: "type" (string: "none", "design", "engine"), and type-specific data
+    /// Keys: "type" (string: "none", "design", "engine", "manufacturing"),
+    ///        "team_type" (string: "engineering" or "manufacturing"), and type-specific data
     #[func]
     pub fn get_team_assignment(&self, team_id: i32) -> Dictionary {
-        use crate::engineering_team::TeamAssignment;
+        use crate::engineering_team::{TeamAssignment, TeamType};
 
         let mut dict = Dictionary::new();
 
         if let Some(team) = self.state.player_company.get_team(team_id as u32) {
+            dict.set("team_type", match team.team_type {
+                TeamType::Engineering => "engineering",
+                TeamType::Manufacturing => "manufacturing",
+            });
             match &team.assignment {
                 None => {
                     dict.set("type", "none");
@@ -1528,12 +1630,60 @@ impl GameManager {
                     dict.set("type", "engine");
                     dict.set("engine_design_id", *engine_design_id as i32);
                 }
+                Some(TeamAssignment::Manufacturing { order_id }) => {
+                    dict.set("type", "manufacturing");
+                    dict.set("order_id", *order_id as i32);
+                }
             }
         } else {
             dict.set("type", "none");
         }
 
         dict
+    }
+
+    /// Get IDs of engineering teams only
+    #[func]
+    pub fn get_engineering_team_ids(&self) -> Array<i32> {
+        let mut result = Array::new();
+        for id in self.state.player_company.get_engineering_team_ids() {
+            result.push(id as i32);
+        }
+        result
+    }
+
+    /// Get IDs of manufacturing teams only
+    #[func]
+    pub fn get_manufacturing_team_ids(&self) -> Array<i32> {
+        let mut result = Array::new();
+        for id in self.state.player_company.get_manufacturing_team_ids() {
+            result.push(id as i32);
+        }
+        result
+    }
+
+    /// Get team type as string ("engineering" or "manufacturing")
+    #[func]
+    pub fn get_team_type(&self, team_id: i32) -> GString {
+        use crate::engineering_team::TeamType;
+        self.state.player_company.get_team(team_id as u32)
+            .map(|t| match t.team_type {
+                TeamType::Engineering => GString::from("engineering"),
+                TeamType::Manufacturing => GString::from("manufacturing"),
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get total monthly salary for engineering teams
+    #[func]
+    pub fn get_engineering_monthly_salary(&self) -> f64 {
+        self.state.player_company.get_engineering_monthly_salary()
+    }
+
+    /// Get total monthly salary for manufacturing teams
+    #[func]
+    pub fn get_manufacturing_monthly_salary(&self) -> f64 {
+        self.state.player_company.get_manufacturing_monthly_salary()
     }
 
     // ==========================================
@@ -1856,6 +2006,345 @@ impl GameManager {
             return 0;
         }
         self.state.player_company.get_teams_on_engine(engine_design_id as usize).len() as i32
+    }
+
+    // ==========================================
+    // Manufacturing Management
+    // ==========================================
+
+    /// Get total floor space
+    #[func]
+    pub fn get_floor_space_total(&self) -> i32 {
+        self.state.player_company.manufacturing.floor_space_total as i32
+    }
+
+    /// Get floor space currently in use by active orders
+    #[func]
+    pub fn get_floor_space_in_use(&self) -> i32 {
+        self.state.player_company.manufacturing.floor_space_in_use() as i32
+    }
+
+    /// Get floor space available for new orders
+    #[func]
+    pub fn get_floor_space_available(&self) -> i32 {
+        self.state.player_company.manufacturing.floor_space_available() as i32
+    }
+
+    /// Get floor space currently under construction
+    #[func]
+    pub fn get_floor_space_under_construction(&self) -> i32 {
+        self.state.player_company.manufacturing.floor_space_constructing() as i32
+    }
+
+    /// Get cost per unit of floor space
+    #[func]
+    pub fn get_floor_space_cost_per_unit(&self) -> f64 {
+        crate::manufacturing::FLOOR_SPACE_COST_PER_UNIT
+    }
+
+    /// Buy floor space (deducts cost, starts construction)
+    #[func]
+    pub fn buy_floor_space(&mut self, units: i32) -> bool {
+        if units <= 0 {
+            return false;
+        }
+        self.sync_money_to_state();
+        let result = self.state.player_company.buy_floor_space(units as usize);
+        if result {
+            self.sync_money_from_state();
+            self.emit_money_changed();
+            self.base_mut().emit_signal("manufacturing_changed", &[]);
+        }
+        result
+    }
+
+    /// Start an engine manufacturing order.
+    /// Returns order_id (>0) on success, -1 on failure.
+    #[func]
+    pub fn start_engine_order(&mut self, engine_design_id: i32, revision_number: i32, quantity: i32) -> i32 {
+        if engine_design_id < 0 || revision_number < 0 || quantity <= 0 {
+            return -1;
+        }
+        self.sync_money_to_state();
+        match self.state.player_company.start_engine_order(
+            engine_design_id as usize,
+            revision_number as u32,
+            quantity as u32,
+        ) {
+            Some((order_id, _)) => {
+                self.sync_money_from_state();
+                self.emit_money_changed();
+                self.base_mut().emit_signal("manufacturing_changed", &[]);
+                order_id as i32
+            }
+            None => -1,
+        }
+    }
+
+    /// Start a rocket assembly order.
+    /// Returns order_id (>0) on success, -1 on failure.
+    #[func]
+    pub fn start_rocket_order(&mut self, rocket_design_id: i32, revision_number: i32) -> i32 {
+        if rocket_design_id < 0 || revision_number < 0 {
+            return -1;
+        }
+        self.sync_money_to_state();
+        match self.state.player_company.start_rocket_order(
+            rocket_design_id as usize,
+            revision_number as u32,
+        ) {
+            Some((order_id, _)) => {
+                self.sync_money_from_state();
+                self.emit_money_changed();
+                self.base_mut().emit_signal("manufacturing_changed", &[]);
+                self.base_mut().emit_signal("inventory_changed", &[]);
+                order_id as i32
+            }
+            None => -1,
+        }
+    }
+
+    /// Cancel a manufacturing order
+    #[func]
+    pub fn cancel_manufacturing_order(&mut self, order_id: i32) -> bool {
+        if order_id < 0 {
+            return false;
+        }
+        let result = self.state.player_company.cancel_manufacturing_order(order_id as u32);
+        if result {
+            self.base_mut().emit_signal("manufacturing_changed", &[]);
+        }
+        result
+    }
+
+    /// Get number of active manufacturing orders
+    #[func]
+    pub fn get_active_order_count(&self) -> i32 {
+        self.state.player_company.manufacturing.active_orders.len() as i32
+    }
+
+    /// Get info about an active order as a dictionary
+    #[func]
+    pub fn get_order_info(&self, order_id: i32) -> Dictionary {
+        let mut dict = Dictionary::new();
+        if order_id < 0 {
+            return dict;
+        }
+        if let Some(order) = self.state.player_company.manufacturing.get_order(order_id as u32) {
+            dict.set("id", order.id as i32);
+            dict.set("display_name", GString::from(order.display_name().as_str()));
+            dict.set("progress", order.progress_fraction());
+            dict.set("is_engine", order.is_engine_order());
+            dict.set("total_work", order.total_work);
+            dict.set("current_progress", order.progress);
+
+            match &order.order_type {
+                crate::manufacturing::ManufacturingOrderType::Engine { engine_design_id, quantity, completed, .. } => {
+                    dict.set("engine_design_id", *engine_design_id as i32);
+                    dict.set("quantity", *quantity as i32);
+                    dict.set("completed", *completed as i32);
+                }
+                crate::manufacturing::ManufacturingOrderType::Rocket { rocket_design_id, .. } => {
+                    dict.set("rocket_design_id", *rocket_design_id as i32);
+                }
+            }
+        }
+        dict
+    }
+
+    /// Get all active order IDs
+    #[func]
+    pub fn get_active_order_ids(&self) -> Array<i32> {
+        let mut result = Array::new();
+        for order in &self.state.player_company.manufacturing.active_orders {
+            result.push(order.id as i32);
+        }
+        result
+    }
+
+    /// Get engine inventory as an array of dictionaries
+    #[func]
+    pub fn get_engine_inventory(&self) -> Array<Dictionary> {
+        let mut result = Array::new();
+        for entry in &self.state.player_company.manufacturing.engine_inventory {
+            let mut dict = Dictionary::new();
+            dict.set("engine_design_id", entry.engine_design_id as i32);
+            dict.set("revision_number", entry.revision_number as i32);
+            dict.set("name", GString::from(entry.snapshot.name.as_str()));
+            dict.set("quantity", entry.quantity as i32);
+            result.push(&dict);
+        }
+        result
+    }
+
+    /// Get rocket inventory as an array of dictionaries
+    #[func]
+    pub fn get_rocket_inventory(&self) -> Array<Dictionary> {
+        let mut result = Array::new();
+        for entry in &self.state.player_company.manufacturing.rocket_inventory {
+            let mut dict = Dictionary::new();
+            dict.set("rocket_design_id", entry.rocket_design_id as i32);
+            dict.set("revision_number", entry.revision_number as i32);
+            dict.set("serial_number", entry.serial_number as i32);
+            dict.set("name", GString::from(entry.design_snapshot.name.as_str()));
+            dict.set("mass_kg", entry.design_snapshot.total_wet_mass_kg());
+            result.push(&dict);
+        }
+        result
+    }
+
+    /// Get the number of engines available for a given design ID
+    #[func]
+    pub fn get_engines_available_for_design(&self, engine_design_id: i32) -> i32 {
+        if engine_design_id < 0 {
+            return 0;
+        }
+        self.state.player_company.manufacturing.get_engines_available(engine_design_id as usize) as i32
+    }
+
+    /// Get engine material cost for a given engine design
+    #[func]
+    pub fn get_engine_material_cost(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let lineage = &self.state.player_company.engine_designs[index as usize];
+            let snap = lineage.head().snapshot(index as usize, &lineage.name);
+            crate::manufacturing::engine_material_cost(&snap)
+        } else {
+            0.0
+        }
+    }
+
+    /// Get engine build work (team-days) for a given engine design
+    #[func]
+    pub fn get_engine_build_days(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let lineage = &self.state.player_company.engine_designs[index as usize];
+            let snap = lineage.head().snapshot(index as usize, &lineage.name);
+            crate::manufacturing::engine_build_work(&snap)
+        } else {
+            0.0
+        }
+    }
+
+    /// Get total material cost for a rocket design (stages + integration, no engines)
+    #[func]
+    pub fn get_rocket_material_cost(&self, index: i32) -> f64 {
+        if index < 0 {
+            return 0.0;
+        }
+        self.state.player_company.get_rocket_design(index as usize)
+            .map(|d| d.total_material_cost())
+            .unwrap_or(0.0)
+    }
+
+    /// Get total assembly work (team-days) for a rocket design
+    #[func]
+    pub fn get_rocket_assembly_days(&self, index: i32) -> f64 {
+        if index < 0 {
+            return 0.0;
+        }
+        self.state.player_company.get_rocket_design(index as usize)
+            .map(|d| d.total_assembly_work())
+            .unwrap_or(0.0)
+    }
+
+    /// Get engines required for a rocket design as an array of dictionaries
+    /// Each dict has: engine_design_id, count
+    #[func]
+    pub fn get_engines_required_for_rocket(&self, index: i32) -> Array<Dictionary> {
+        let mut result = Array::new();
+        if index < 0 {
+            return result;
+        }
+        if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
+            for (engine_design_id, count) in design.engines_required() {
+                let mut dict = Dictionary::new();
+                dict.set("engine_design_id", engine_design_id as i32);
+                dict.set("count", count as i32);
+                // Include engine name if available
+                if engine_design_id < self.state.player_company.engine_designs.len() {
+                    let name = &self.state.player_company.engine_designs[engine_design_id].name;
+                    dict.set("name", GString::from(name.as_str()));
+                }
+                result.push(&dict);
+            }
+        }
+        result
+    }
+
+    /// Assign a team to work on a manufacturing order
+    #[func]
+    pub fn assign_team_to_manufacturing(&mut self, team_id: i32, order_id: i32) -> bool {
+        if team_id < 0 || order_id < 0 {
+            return false;
+        }
+        let result = self.state.player_company.assign_team_to_manufacturing(team_id as u32, order_id as u32);
+        if result {
+            self.base_mut().emit_signal("teams_changed", &[]);
+        }
+        result
+    }
+
+    /// Get number of teams working on a manufacturing order
+    #[func]
+    pub fn get_teams_on_order_count(&self, order_id: i32) -> i32 {
+        if order_id < 0 {
+            return 0;
+        }
+        self.state.player_company.get_teams_on_order(order_id as u32).len() as i32
+    }
+
+    /// Cut a revision for an engine design and return the revision number
+    #[func]
+    pub fn cut_engine_revision(&mut self, index: i32, label: GString) -> i32 {
+        if index < 0 || (index as usize) >= self.state.player_company.engine_designs.len() {
+            return -1;
+        }
+        let rev = self.state.player_company.engine_designs[index as usize]
+            .cut_revision(&label.to_string());
+        self.base_mut().emit_signal("designs_changed", &[]);
+        rev as i32
+    }
+
+    /// Cut a revision for a rocket design and return the revision number
+    #[func]
+    pub fn cut_rocket_revision(&mut self, index: i32, label: GString) -> i32 {
+        if index < 0 || (index as usize) >= self.state.player_company.rocket_designs.len() {
+            return -1;
+        }
+        let rev = self.state.player_company.rocket_designs[index as usize]
+            .cut_revision(&label.to_string());
+        self.base_mut().emit_signal("designs_changed", &[]);
+        rev as i32
+    }
+
+    /// Check if a rocket design has engines available for manufacturing
+    #[func]
+    pub fn has_engines_for_rocket(&self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
+            self.state.player_company.manufacturing.has_engines_for_rocket(design)
+        } else {
+            false
+        }
+    }
+
+    /// Consume a rocket from inventory for launch (by serial number)
+    /// Returns true if successful
+    #[func]
+    pub fn consume_rocket_for_launch(&mut self, serial_number: i32) -> bool {
+        if serial_number < 0 {
+            return false;
+        }
+        let result = self.state.player_company.manufacturing.consume_rocket(serial_number as u32);
+        if result.is_some() {
+            self.base_mut().emit_signal("inventory_changed", &[]);
+            true
+        } else {
+            false
+        }
     }
 
     // ==========================================

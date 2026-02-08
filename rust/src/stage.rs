@@ -236,6 +236,21 @@ impl RocketStage {
         }
     }
 
+    /// Calculate material cost for manufacturing this stage (tanks + assembly hardware, no engines)
+    pub fn material_cost(&self) -> f64 {
+        crate::manufacturing::stage_material_cost(self)
+    }
+
+    /// Calculate engine material cost for all engines in this stage
+    pub fn engine_material_cost(&self) -> f64 {
+        crate::manufacturing::engine_material_cost(&self.engine_snapshot) * self.engine_count as f64
+    }
+
+    /// Calculate assembly work (team-days) for manufacturing this stage
+    pub fn assembly_work(&self) -> f64 {
+        crate::manufacturing::stage_assembly_work(self)
+    }
+
     /// Calculate the total cost including booster attachment if applicable
     pub fn total_cost_with_attachment(&self) -> f64 {
         self.total_cost() + self.booster_attachment_cost()

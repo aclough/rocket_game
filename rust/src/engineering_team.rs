@@ -4,6 +4,21 @@
 /// Team monthly salary in dollars
 pub const TEAM_MONTHLY_SALARY: f64 = 150_000.0;
 
+/// Cost to hire an engineering team (1x monthly salary)
+pub const ENGINEERING_HIRE_COST: f64 = TEAM_MONTHLY_SALARY;
+
+/// Cost to hire a manufacturing team (3x monthly salary)
+pub const MANUFACTURING_HIRE_COST: f64 = TEAM_MONTHLY_SALARY * 3.0;
+
+/// Type of team — determines what work they can do
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TeamType {
+    /// Can do design and refining work (rocket designs, engine designs)
+    Engineering,
+    /// Can do manufacturing work (build engines, assemble rockets)
+    Manufacturing,
+}
+
 /// Days for a new team to ramp up before full productivity
 pub const RAMP_UP_DAYS: u32 = 7;
 
@@ -16,13 +31,15 @@ pub const REFINING_WORK_PER_FLAW: f64 = 10.0;
 /// Work units required for engine refining (not used for completion, just reference)
 pub const ENGINE_REFINING_WORK: f64 = 30.0;
 
-/// Represents an engineering team that can work on designs or engines
+/// Represents a team that can work on designs, engines, or manufacturing
 #[derive(Debug, Clone)]
 pub struct EngineeringTeam {
     /// Unique team identifier
     pub id: u32,
     /// Team name for display
     pub name: String,
+    /// Type of team (Engineering or Manufacturing)
+    pub team_type: TeamType,
     /// Current assignment (if any)
     pub assignment: Option<TeamAssignment>,
     /// Days remaining in ramp-up period (0 = fully ramped)
@@ -32,13 +49,18 @@ pub struct EngineeringTeam {
 }
 
 impl EngineeringTeam {
-    /// Create a new team with the given ID
+    /// Create a new team with the given ID and type
     /// New teams start fully available (not ramping up)
     /// Ramp-up only begins when assigned to work
-    pub fn new(id: u32) -> Self {
+    pub fn new(id: u32, team_type: TeamType) -> Self {
+        let prefix = match team_type {
+            TeamType::Engineering => "Eng Team",
+            TeamType::Manufacturing => "Mfg Team",
+        };
         Self {
             id,
-            name: format!("Team {}", id),
+            name: format!("{} {}", prefix, id),
+            team_type,
             assignment: None,
             ramp_up_days_remaining: 0,  // Available immediately, ramp-up on assignment
             monthly_salary: TEAM_MONTHLY_SALARY,
@@ -91,6 +113,10 @@ pub enum TeamAssignment {
     EngineDesign {
         engine_design_id: usize,
         work_phase: EngineWorkPhase,
+    },
+    /// Working on a manufacturing order
+    Manufacturing {
+        order_id: crate::manufacturing::ManufacturingOrderId,
     },
 }
 
@@ -147,6 +173,22 @@ pub enum WorkEvent {
         engine_design_id: usize,
         flaw_name: String,
     },
+    /// An engine was manufactured (one unit of an engine order completed)
+    EngineManufactured {
+        engine_design_id: usize,
+        revision_number: u32,
+        order_id: crate::manufacturing::ManufacturingOrderId,
+    },
+    /// A rocket was assembled
+    RocketAssembled {
+        rocket_design_id: usize,
+        revision_number: u32,
+        serial_number: u32,
+    },
+    /// A manufacturing order is fully complete (all units built)
+    ManufacturingOrderComplete {
+        order_id: crate::manufacturing::ManufacturingOrderId,
+    },
     /// A team finished ramping up
     TeamRampedUp {
         team_id: u32,
@@ -154,6 +196,10 @@ pub enum WorkEvent {
     /// Salaries were deducted
     SalaryDeducted {
         amount: f64,
+    },
+    /// Floor space construction completed
+    FloorSpaceCompleted {
+        units: usize,
     },
 }
 
@@ -184,20 +230,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_team() {
-        let team = EngineeringTeam::new(1);
+    fn test_new_engineering_team() {
+        let team = EngineeringTeam::new(1, TeamType::Engineering);
         assert_eq!(team.id, 1);
-        assert_eq!(team.name, "Team 1");
+        assert_eq!(team.name, "Eng Team 1");
+        assert_eq!(team.team_type, TeamType::Engineering);
         assert!(team.assignment.is_none());
-        // New teams start available (not ramping up)
         assert_eq!(team.ramp_up_days_remaining, 0);
         assert!(!team.is_ramping_up());
         assert_eq!(team.productivity(), 1.0);
     }
 
     #[test]
+    fn test_new_manufacturing_team() {
+        let team = EngineeringTeam::new(2, TeamType::Manufacturing);
+        assert_eq!(team.id, 2);
+        assert_eq!(team.name, "Mfg Team 2");
+        assert_eq!(team.team_type, TeamType::Manufacturing);
+    }
+
+    #[test]
     fn test_ramp_up() {
-        let mut team = EngineeringTeam::new(1);
+        let mut team = EngineeringTeam::new(1, TeamType::Engineering);
         // Starts fully available
         assert_eq!(team.productivity(), 1.0);
         assert!(!team.is_ramping_up());
@@ -236,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_assignment_resets_ramp_up() {
-        let mut team = EngineeringTeam::new(1);
+        let mut team = EngineeringTeam::new(1, TeamType::Engineering);
 
         // Fully ramp up
         for _ in 0..RAMP_UP_DAYS {

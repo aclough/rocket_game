@@ -55,6 +55,17 @@ var _research_update_timer: Timer
 var _expanded_design_cards: Dictionary = {}  # design_index -> bool
 var _expanded_engine_cards: Dictionary = {}  # engine_index -> bool
 
+# Production tab UI elements (built dynamically)
+var _prod_mfg_team_count_label: Label
+var _prod_mfg_salary_label: Label
+var _prod_mfg_teams_container: VBoxContainer
+var _prod_floor_space_label: Label
+var _prod_orders_container: VBoxContainer
+var _prod_no_orders_label: Label
+var _prod_engine_inv_container: VBoxContainer
+var _prod_rocket_inv_container: VBoxContainer
+var _prod_update_timer: Timer
+
 func _ready():
 	# Connect GameManager signals
 	game_manager.money_changed.connect(_on_money_changed)
@@ -64,12 +75,17 @@ func _ready():
 	game_manager.time_resumed.connect(_on_time_resumed)
 	game_manager.work_event_occurred.connect(_on_work_event)
 
+	# Connect manufacturing signals
+	game_manager.manufacturing_changed.connect(_on_manufacturing_changed)
+	game_manager.inventory_changed.connect(_on_inventory_changed)
+
 	# Initialize content areas with game manager
 	_setup_missions_content()
 	_setup_design_content()
 	_setup_launch_site_content()
 	_setup_launch_overlay()
 	_setup_research_content()
+	_setup_production_content()
 
 	# Initial status bar update
 	_update_status_bar()
@@ -159,7 +175,7 @@ func _setup_research_content():
 	teams_margin.add_child(teams_vbox)
 
 	var teams_title = Label.new()
-	teams_title.text = "Rocket Engineers"
+	teams_title.text = "Engineering Teams"
 	teams_title.add_theme_font_size_override("font_size", 20)
 	teams_vbox.add_child(teams_title)
 
@@ -293,19 +309,20 @@ func _update_research_teams():
 	if not _research_teams_container:
 		return
 
-	# Update labels
-	var count = game_manager.get_team_count()
+	# Update labels (engineering teams only)
+	var eng_ids = game_manager.get_engineering_team_ids()
+	var count = eng_ids.size()
 	if _research_team_count_label:
 		_research_team_count_label.text = "Teams: %d" % count
 	if _research_salary_label:
-		_research_salary_label.text = "Monthly salary: %s" % game_manager.get_total_monthly_salary_formatted()
+		var salary = game_manager.get_engineering_monthly_salary()
+		_research_salary_label.text = "Monthly salary: $%.0fK" % (salary / 1000.0)
 
-	# Clear and rebuild team cards
+	# Clear and rebuild team cards (engineering teams only)
 	for child in _research_teams_container.get_children():
 		child.queue_free()
 
-	var team_ids = game_manager.get_all_team_ids()
-	for id in team_ids:
+	for id in eng_ids:
 		var card = _create_team_card(id)
 		_research_teams_container.add_child(card)
 
@@ -353,9 +370,26 @@ func _create_team_card(team_id: int) -> PanelContainer:
 				status_label.text = "Working on: %s" % design_name
 			else:
 				status_label.text = "Working on design"
+		elif atype == "engine":
+			var engine_id = assignment.get("engine_design_id", -1)
+			if engine_id >= 0:
+				var engine_name = game_manager.get_engine_type_name(engine_id)
+				status_label.text = "Refining: %s" % engine_name
+			else:
+				status_label.text = "Refining engine"
+		elif atype == "manufacturing":
+			var order_id = assignment.get("order_id", -1)
+			if order_id >= 0:
+				var order_info = game_manager.get_order_info(order_id)
+				var order_name = order_info.get("display_name", "Unknown")
+				status_label.text = "Building: %s" % order_name
+			else:
+				status_label.text = "Manufacturing"
+			status_label.add_theme_color_override("font_color", Color(0.8, 0.6, 1.0))
 		else:
 			status_label.text = "Assigned"
-		status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+		if atype != "manufacturing":
+			status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 	else:
 		status_label.text = "Available"
 		status_label.add_theme_color_override("font_color", Color(0.5, 1.0, 0.5))
@@ -769,8 +803,8 @@ func _on_submit_engine_pressed(index: int):
 	_update_research_ui()
 
 func _on_assign_engine_team_pressed(engine_index: int):
-	# Find an available (unassigned, not ramping) team
-	var team_ids = game_manager.get_all_team_ids()
+	# Find an available engineering team (unassigned, not ramping)
+	var team_ids = game_manager.get_engineering_team_ids()
 	for id in team_ids:
 		var is_assigned = game_manager.is_team_assigned(id)
 		var is_ramping = game_manager.is_team_ramping_up(id)
@@ -779,7 +813,7 @@ func _on_assign_engine_team_pressed(engine_index: int):
 			_update_research_ui()
 			return
 
-	# If no available team, try any unassigned team (even if ramping)
+	# If no available team, try any unassigned engineering team (even if ramping)
 	for id in team_ids:
 		if not game_manager.is_team_assigned(id):
 			game_manager.assign_team_to_engine(id, engine_index)
@@ -787,7 +821,7 @@ func _on_assign_engine_team_pressed(engine_index: int):
 			return
 
 	# No teams available - show a message
-	_show_toast("No available teams. Hire more teams!")
+	_show_toast("No available engineering teams. Hire more!")
 
 func _on_unassign_engine_teams_pressed(engine_index: int):
 	# Unassign all teams from this engine
@@ -799,7 +833,9 @@ func _on_unassign_engine_teams_pressed(engine_index: int):
 	_update_research_ui()
 
 func _on_research_hire_pressed():
-	game_manager.hire_team()
+	var result = game_manager.hire_engineering_team()
+	if result < 0:
+		_show_toast("Cannot afford to hire ($150K)")
 
 func _on_research_teams_changed():
 	_update_research_teams()
@@ -811,10 +847,12 @@ func _on_research_update_timer():
 	# Periodic update of research UI (for progress bars and counters)
 	if current_tab == Tab.RESEARCH:
 		_update_research_ui()
+	elif current_tab == Tab.PRODUCTION:
+		_update_production_ui()
 
 func _on_assign_team_pressed(design_index: int):
-	# Find an available (unassigned, not ramping) team
-	var team_ids = game_manager.get_all_team_ids()
+	# Find an available engineering team (unassigned, not ramping)
+	var team_ids = game_manager.get_engineering_team_ids()
 	for id in team_ids:
 		var is_assigned = game_manager.is_team_assigned(id)
 		var is_ramping = game_manager.is_team_ramping_up(id)
@@ -823,7 +861,7 @@ func _on_assign_team_pressed(design_index: int):
 			_update_research_ui()
 			return
 
-	# If no available team, try any unassigned team (even if ramping)
+	# If no available team, try any unassigned engineering team (even if ramping)
 	for id in team_ids:
 		if not game_manager.is_team_assigned(id):
 			game_manager.assign_team_to_design(id, design_index)
@@ -831,7 +869,7 @@ func _on_assign_team_pressed(design_index: int):
 			return
 
 	# No teams available - show a message
-	_show_toast("No available teams. Hire more teams!")
+	_show_toast("No available engineering teams. Hire more!")
 
 func _on_unassign_teams_pressed(design_index: int):
 	# Unassign all teams from this design
@@ -841,6 +879,696 @@ func _on_unassign_teams_pressed(design_index: int):
 		if assignment.get("type") == "design" and assignment.get("design_index") == design_index:
 			game_manager.unassign_team(id)
 	_update_research_ui()
+
+# ==========================================
+# Production Tab
+# ==========================================
+
+func _setup_production_content():
+	var production = content_areas[Tab.PRODUCTION]
+	if not production:
+		return
+
+	# Remove placeholder label
+	for child in production.get_children():
+		child.queue_free()
+
+	# Build the Production UI
+	var margin = MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 20)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_right", 20)
+	margin.add_theme_constant_override("margin_bottom", 20)
+	production.add_child(margin)
+
+	var scroll = ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	margin.add_child(scroll)
+
+	var main_vbox = VBoxContainer.new()
+	main_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.add_theme_constant_override("separation", 20)
+	scroll.add_child(main_vbox)
+
+	var title = Label.new()
+	title.text = "Production"
+	title.add_theme_font_size_override("font_size", 24)
+	main_vbox.add_child(title)
+
+	# === Manufacturing Teams Section ===
+	var mfg_teams_panel = PanelContainer.new()
+	mfg_teams_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.add_child(mfg_teams_panel)
+
+	var mfg_margin = MarginContainer.new()
+	mfg_margin.add_theme_constant_override("margin_left", 15)
+	mfg_margin.add_theme_constant_override("margin_top", 15)
+	mfg_margin.add_theme_constant_override("margin_right", 15)
+	mfg_margin.add_theme_constant_override("margin_bottom", 15)
+	mfg_teams_panel.add_child(mfg_margin)
+
+	var mfg_vbox = VBoxContainer.new()
+	mfg_vbox.add_theme_constant_override("separation", 12)
+	mfg_margin.add_child(mfg_vbox)
+
+	var mfg_title = Label.new()
+	mfg_title.text = "Manufacturing Teams"
+	mfg_title.add_theme_font_size_override("font_size", 18)
+	mfg_vbox.add_child(mfg_title)
+
+	# Team count + hire row
+	var mfg_header = HBoxContainer.new()
+	mfg_header.add_theme_constant_override("separation", 10)
+	mfg_vbox.add_child(mfg_header)
+
+	_prod_mfg_team_count_label = Label.new()
+	_prod_mfg_team_count_label.text = "Teams: 0"
+	_prod_mfg_team_count_label.add_theme_font_size_override("font_size", 14)
+	mfg_header.add_child(_prod_mfg_team_count_label)
+
+	var mfg_spacer = Control.new()
+	mfg_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mfg_header.add_child(mfg_spacer)
+
+	var hire_mfg_btn = Button.new()
+	hire_mfg_btn.text = "+ Hire Mfg Team ($450K)"
+	hire_mfg_btn.add_theme_font_size_override("font_size", 14)
+	hire_mfg_btn.pressed.connect(_on_prod_hire_mfg_pressed)
+	mfg_header.add_child(hire_mfg_btn)
+
+	_prod_mfg_salary_label = Label.new()
+	_prod_mfg_salary_label.text = "Monthly salary: $0"
+	_prod_mfg_salary_label.add_theme_font_size_override("font_size", 12)
+	_prod_mfg_salary_label.add_theme_color_override("font_color", Color(1, 0.85, 0.3))
+	mfg_vbox.add_child(_prod_mfg_salary_label)
+
+	_prod_mfg_teams_container = VBoxContainer.new()
+	_prod_mfg_teams_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prod_mfg_teams_container.add_theme_constant_override("separation", 8)
+	mfg_vbox.add_child(_prod_mfg_teams_container)
+
+	# === Floor Space Section ===
+	var floor_panel = PanelContainer.new()
+	floor_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.add_child(floor_panel)
+
+	var floor_margin = MarginContainer.new()
+	floor_margin.add_theme_constant_override("margin_left", 15)
+	floor_margin.add_theme_constant_override("margin_top", 15)
+	floor_margin.add_theme_constant_override("margin_right", 15)
+	floor_margin.add_theme_constant_override("margin_bottom", 15)
+	floor_panel.add_child(floor_margin)
+
+	var floor_vbox = VBoxContainer.new()
+	floor_vbox.add_theme_constant_override("separation", 12)
+	floor_margin.add_child(floor_vbox)
+
+	var floor_title = Label.new()
+	floor_title.text = "Floor Space"
+	floor_title.add_theme_font_size_override("font_size", 18)
+	floor_vbox.add_child(floor_title)
+
+	var floor_hbox = HBoxContainer.new()
+	floor_hbox.add_theme_constant_override("separation", 15)
+	floor_vbox.add_child(floor_hbox)
+
+	_prod_floor_space_label = Label.new()
+	_prod_floor_space_label.add_theme_font_size_override("font_size", 14)
+	_prod_floor_space_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+	_prod_floor_space_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	floor_hbox.add_child(_prod_floor_space_label)
+
+	var buy_space_btn = Button.new()
+	buy_space_btn.text = "Buy Floor Space ($5M/unit)"
+	buy_space_btn.add_theme_font_size_override("font_size", 13)
+	buy_space_btn.pressed.connect(_on_prod_buy_floor_space)
+	floor_hbox.add_child(buy_space_btn)
+
+	# === New Order Buttons ===
+	var order_btns_hbox = HBoxContainer.new()
+	order_btns_hbox.add_theme_constant_override("separation", 15)
+	main_vbox.add_child(order_btns_hbox)
+
+	var build_engines_btn = Button.new()
+	build_engines_btn.text = "Build Engines..."
+	build_engines_btn.add_theme_font_size_override("font_size", 14)
+	build_engines_btn.pressed.connect(_on_prod_build_engines_pressed)
+	order_btns_hbox.add_child(build_engines_btn)
+
+	var assemble_rocket_btn = Button.new()
+	assemble_rocket_btn.text = "Assemble Rocket..."
+	assemble_rocket_btn.add_theme_font_size_override("font_size", 14)
+	assemble_rocket_btn.pressed.connect(_on_prod_assemble_rocket_pressed)
+	order_btns_hbox.add_child(assemble_rocket_btn)
+
+	# === Manufacturing Queue Section ===
+	var queue_panel = PanelContainer.new()
+	queue_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.add_child(queue_panel)
+
+	var queue_margin = MarginContainer.new()
+	queue_margin.add_theme_constant_override("margin_left", 15)
+	queue_margin.add_theme_constant_override("margin_top", 15)
+	queue_margin.add_theme_constant_override("margin_right", 15)
+	queue_margin.add_theme_constant_override("margin_bottom", 15)
+	queue_panel.add_child(queue_margin)
+
+	var queue_vbox = VBoxContainer.new()
+	queue_vbox.add_theme_constant_override("separation", 10)
+	queue_margin.add_child(queue_vbox)
+
+	var queue_title = Label.new()
+	queue_title.text = "Manufacturing Queue"
+	queue_title.add_theme_font_size_override("font_size", 18)
+	queue_vbox.add_child(queue_title)
+
+	_prod_no_orders_label = Label.new()
+	_prod_no_orders_label.text = "No active manufacturing orders. Build engines or assemble rockets above."
+	_prod_no_orders_label.add_theme_font_size_override("font_size", 14)
+	_prod_no_orders_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+	_prod_no_orders_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	queue_vbox.add_child(_prod_no_orders_label)
+
+	_prod_orders_container = VBoxContainer.new()
+	_prod_orders_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prod_orders_container.add_theme_constant_override("separation", 10)
+	queue_vbox.add_child(_prod_orders_container)
+
+	# === Inventory Sections ===
+	var inv_hbox = HBoxContainer.new()
+	inv_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inv_hbox.add_theme_constant_override("separation", 20)
+	main_vbox.add_child(inv_hbox)
+
+	# Engine Inventory
+	var engine_inv_panel = PanelContainer.new()
+	engine_inv_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inv_hbox.add_child(engine_inv_panel)
+
+	var engine_inv_margin = MarginContainer.new()
+	engine_inv_margin.add_theme_constant_override("margin_left", 15)
+	engine_inv_margin.add_theme_constant_override("margin_top", 15)
+	engine_inv_margin.add_theme_constant_override("margin_right", 15)
+	engine_inv_margin.add_theme_constant_override("margin_bottom", 15)
+	engine_inv_panel.add_child(engine_inv_margin)
+
+	var engine_inv_vbox = VBoxContainer.new()
+	engine_inv_vbox.add_theme_constant_override("separation", 8)
+	engine_inv_margin.add_child(engine_inv_vbox)
+
+	var engine_inv_title = Label.new()
+	engine_inv_title.text = "Engine Inventory"
+	engine_inv_title.add_theme_font_size_override("font_size", 18)
+	engine_inv_vbox.add_child(engine_inv_title)
+
+	_prod_engine_inv_container = VBoxContainer.new()
+	_prod_engine_inv_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prod_engine_inv_container.add_theme_constant_override("separation", 4)
+	engine_inv_vbox.add_child(_prod_engine_inv_container)
+
+	# Rocket Inventory
+	var rocket_inv_panel = PanelContainer.new()
+	rocket_inv_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inv_hbox.add_child(rocket_inv_panel)
+
+	var rocket_inv_margin = MarginContainer.new()
+	rocket_inv_margin.add_theme_constant_override("margin_left", 15)
+	rocket_inv_margin.add_theme_constant_override("margin_top", 15)
+	rocket_inv_margin.add_theme_constant_override("margin_right", 15)
+	rocket_inv_margin.add_theme_constant_override("margin_bottom", 15)
+	rocket_inv_panel.add_child(rocket_inv_margin)
+
+	var rocket_inv_vbox = VBoxContainer.new()
+	rocket_inv_vbox.add_theme_constant_override("separation", 8)
+	rocket_inv_margin.add_child(rocket_inv_vbox)
+
+	var rocket_inv_title = Label.new()
+	rocket_inv_title.text = "Rocket Inventory"
+	rocket_inv_title.add_theme_font_size_override("font_size", 18)
+	rocket_inv_vbox.add_child(rocket_inv_title)
+
+	_prod_rocket_inv_container = VBoxContainer.new()
+	_prod_rocket_inv_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prod_rocket_inv_container.add_theme_constant_override("separation", 4)
+	rocket_inv_vbox.add_child(_prod_rocket_inv_container)
+
+	# Initial update
+	_update_production_ui()
+
+func _update_production_ui():
+	_update_production_mfg_teams()
+	_update_production_floor_space()
+	_update_production_orders()
+	_update_production_inventory()
+
+func _update_production_mfg_teams():
+	if not _prod_mfg_teams_container:
+		return
+
+	var mfg_ids = game_manager.get_manufacturing_team_ids()
+	if _prod_mfg_team_count_label:
+		_prod_mfg_team_count_label.text = "Teams: %d" % mfg_ids.size()
+	if _prod_mfg_salary_label:
+		var salary = game_manager.get_manufacturing_monthly_salary()
+		_prod_mfg_salary_label.text = "Monthly salary: $%.0fK" % (salary / 1000.0)
+
+	for child in _prod_mfg_teams_container.get_children():
+		child.queue_free()
+
+	for id in mfg_ids:
+		var card = _create_team_card(id)
+		_prod_mfg_teams_container.add_child(card)
+
+func _update_production_floor_space():
+	if not _prod_floor_space_label:
+		return
+
+	var total = game_manager.get_floor_space_total()
+	var in_use = game_manager.get_floor_space_in_use()
+	var available = game_manager.get_floor_space_available()
+	var constructing = game_manager.get_floor_space_under_construction()
+
+	var text = "%d / %d units in use (%d available)" % [in_use, total, available]
+	if constructing > 0:
+		text += " [%d under construction]" % constructing
+	_prod_floor_space_label.text = text
+
+func _update_production_orders():
+	if not _prod_orders_container:
+		return
+
+	# Clear existing
+	for child in _prod_orders_container.get_children():
+		child.queue_free()
+
+	var order_ids = game_manager.get_active_order_ids()
+	_prod_no_orders_label.visible = order_ids.size() == 0
+
+	for order_id in order_ids:
+		var card = _create_order_card(order_id)
+		_prod_orders_container.add_child(card)
+
+func _create_order_card(order_id: int) -> PanelContainer:
+	var info = game_manager.get_order_info(order_id)
+	var display_name = info.get("display_name", "Unknown")
+	var is_engine = info.get("is_engine", false)
+	var progress = info.get("progress", 0.0)
+	var teams_count = game_manager.get_teams_on_order_count(order_id)
+
+	var panel = PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var style = StyleBoxFlat.new()
+	if is_engine:
+		style.set_bg_color(Color(0.1, 0.08, 0.15))
+		style.set_border_color(Color(0.6, 0.4, 0.9, 0.5))
+	else:
+		style.set_bg_color(Color(0.08, 0.12, 0.15))
+		style.set_border_color(Color(0.3, 0.7, 0.9, 0.5))
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(4)
+	panel.add_theme_stylebox_override("panel", style)
+
+	var card_margin = MarginContainer.new()
+	card_margin.add_theme_constant_override("margin_left", 15)
+	card_margin.add_theme_constant_override("margin_right", 15)
+	card_margin.add_theme_constant_override("margin_top", 10)
+	card_margin.add_theme_constant_override("margin_bottom", 10)
+	panel.add_child(card_margin)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 6)
+	card_margin.add_child(vbox)
+
+	# Header
+	var header = HBoxContainer.new()
+	vbox.add_child(header)
+
+	var name_label = Label.new()
+	name_label.text = display_name
+	name_label.add_theme_font_size_override("font_size", 16)
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(name_label)
+
+	# Engine orders show completed/quantity
+	if is_engine:
+		var completed = info.get("completed", 0)
+		var quantity = info.get("quantity", 1)
+		var qty_label = Label.new()
+		qty_label.text = "%d / %d built" % [completed, quantity]
+		qty_label.add_theme_font_size_override("font_size", 14)
+		qty_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		header.add_child(qty_label)
+
+	# Teams info
+	var teams_label = Label.new()
+	if teams_count > 0:
+		teams_label.text = "%d team%s assigned" % [teams_count, "s" if teams_count > 1 else ""]
+		teams_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	else:
+		teams_label.text = "No teams assigned - assign teams to start production"
+		teams_label.add_theme_color_override("font_color", Color(0.8, 0.6, 0.3))
+	teams_label.add_theme_font_size_override("font_size", 12)
+	vbox.add_child(teams_label)
+
+	# Progress bar
+	var progress_bar = ProgressBar.new()
+	progress_bar.value = progress * 100
+	progress_bar.custom_minimum_size = Vector2(0, 12)
+	progress_bar.show_percentage = true
+	var fill_style = StyleBoxFlat.new()
+	if is_engine:
+		fill_style.set_bg_color(Color(0.6, 0.4, 0.9))
+	else:
+		fill_style.set_bg_color(Color(0.3, 0.7, 0.9))
+	fill_style.set_corner_radius_all(3)
+	progress_bar.add_theme_stylebox_override("fill", fill_style)
+	vbox.add_child(progress_bar)
+
+	# Buttons
+	var btn_hbox = HBoxContainer.new()
+	btn_hbox.add_theme_constant_override("separation", 10)
+	vbox.add_child(btn_hbox)
+
+	var assign_btn = Button.new()
+	assign_btn.text = "Assign Team"
+	assign_btn.add_theme_font_size_override("font_size", 12)
+	assign_btn.pressed.connect(_on_prod_assign_team_pressed.bind(order_id))
+	btn_hbox.add_child(assign_btn)
+
+	if teams_count > 0:
+		var unassign_btn = Button.new()
+		unassign_btn.text = "Unassign All"
+		unassign_btn.add_theme_font_size_override("font_size", 12)
+		unassign_btn.pressed.connect(_on_prod_unassign_teams_pressed.bind(order_id))
+		btn_hbox.add_child(unassign_btn)
+
+	var cancel_btn = Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.add_theme_font_size_override("font_size", 12)
+	cancel_btn.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
+	cancel_btn.pressed.connect(_on_prod_cancel_order_pressed.bind(order_id))
+	btn_hbox.add_child(cancel_btn)
+
+	return panel
+
+func _update_production_inventory():
+	if not _prod_engine_inv_container:
+		return
+
+	# Engine inventory
+	for child in _prod_engine_inv_container.get_children():
+		child.queue_free()
+
+	var engine_inv = game_manager.get_engine_inventory()
+	if engine_inv.size() == 0:
+		var empty_label = Label.new()
+		empty_label.text = "No engines in stock"
+		empty_label.add_theme_font_size_override("font_size", 13)
+		empty_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		_prod_engine_inv_container.add_child(empty_label)
+	else:
+		for entry in engine_inv:
+			var entry_name = entry.get("name", "Unknown")
+			var qty = entry.get("quantity", 0)
+			var rev = entry.get("revision_number", 0)
+			var entry_label = Label.new()
+			entry_label.text = "%s (Rev %d): %d in stock" % [entry_name, rev, qty]
+			entry_label.add_theme_font_size_override("font_size", 13)
+			entry_label.add_theme_color_override("font_color", Color(0.7, 0.8, 1.0))
+			_prod_engine_inv_container.add_child(entry_label)
+
+	# Rocket inventory
+	for child in _prod_rocket_inv_container.get_children():
+		child.queue_free()
+
+	var rocket_inv = game_manager.get_rocket_inventory()
+	if rocket_inv.size() == 0:
+		var empty_label = Label.new()
+		empty_label.text = "No assembled rockets"
+		empty_label.add_theme_font_size_override("font_size", 13)
+		empty_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		_prod_rocket_inv_container.add_child(empty_label)
+	else:
+		for entry in rocket_inv:
+			var entry_name = entry.get("name", "Unknown")
+			var serial = entry.get("serial_number", 0)
+			var entry_label = Label.new()
+			entry_label.text = "%s (S/N %d)" % [entry_name, serial]
+			entry_label.add_theme_font_size_override("font_size", 13)
+			entry_label.add_theme_color_override("font_color", Color(0.5, 0.9, 0.7))
+			_prod_rocket_inv_container.add_child(entry_label)
+
+# Production tab action handlers
+
+func _on_prod_hire_mfg_pressed():
+	var result = game_manager.hire_manufacturing_team()
+	if result < 0:
+		_show_toast("Cannot afford to hire ($450K)")
+	else:
+		_update_production_ui()
+
+func _on_prod_buy_floor_space():
+	# Show a small dialog to select how many units
+	var dialog = AcceptDialog.new()
+	dialog.title = "Buy Floor Space"
+	dialog.size = Vector2(300, 150)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	dialog.add_child(vbox)
+
+	var info_label = Label.new()
+	info_label.text = "Cost: $5M per unit (30 days to build)"
+	info_label.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(info_label)
+
+	var spin = SpinBox.new()
+	spin.min_value = 1
+	spin.max_value = 20
+	spin.value = 1
+	spin.step = 1
+	vbox.add_child(spin)
+
+	add_child(dialog)
+	dialog.popup_centered()
+
+	dialog.confirmed.connect(func():
+		var units = int(spin.value)
+		var success = game_manager.buy_floor_space(units)
+		if success:
+			_show_toast("Floor space ordered: %d units (30 days)" % units)
+			_update_production_ui()
+		else:
+			_show_toast("Cannot afford floor space")
+		dialog.queue_free()
+	)
+	dialog.canceled.connect(func(): dialog.queue_free())
+
+func _on_prod_assign_team_pressed(order_id: int):
+	# Find an available manufacturing team
+	var team_ids = game_manager.get_manufacturing_team_ids()
+	for id in team_ids:
+		var is_assigned = game_manager.is_team_assigned(id)
+		var is_ramping = game_manager.is_team_ramping_up(id)
+		if not is_assigned and not is_ramping:
+			game_manager.assign_team_to_manufacturing(id, order_id)
+			_update_production_ui()
+			_update_research_teams()
+			return
+
+	# If no available team, try any unassigned manufacturing team
+	for id in team_ids:
+		if not game_manager.is_team_assigned(id):
+			game_manager.assign_team_to_manufacturing(id, order_id)
+			_update_production_ui()
+			_update_research_teams()
+			return
+
+	_show_toast("No available manufacturing teams. Hire more!")
+
+func _on_prod_unassign_teams_pressed(order_id: int):
+	var team_ids = game_manager.get_all_team_ids()
+	for id in team_ids:
+		var assignment = game_manager.get_team_assignment(id)
+		if assignment.get("type") == "manufacturing" and assignment.get("order_id") == order_id:
+			game_manager.unassign_team(id)
+	_update_production_ui()
+	_update_research_teams()
+
+func _on_prod_cancel_order_pressed(order_id: int):
+	game_manager.cancel_manufacturing_order(order_id)
+	_update_production_ui()
+	_update_research_teams()
+
+func _on_prod_build_engines_pressed():
+	# Show dialog to select which engine to build
+	var engine_count = game_manager.get_engine_type_count()
+	if engine_count == 0:
+		_show_toast("No engine designs available")
+		return
+
+	var dialog = AcceptDialog.new()
+	dialog.title = "Build Engines"
+	dialog.size = Vector2(450, 400)
+
+	var dialog_vbox = VBoxContainer.new()
+	dialog_vbox.add_theme_constant_override("separation", 10)
+	dialog.add_child(dialog_vbox)
+
+	var instructions = Label.new()
+	instructions.text = "Select an engine design to manufacture:"
+	instructions.add_theme_font_size_override("font_size", 14)
+	dialog_vbox.add_child(instructions)
+
+	for i in range(engine_count):
+		var engine_name = game_manager.get_engine_type_name(i)
+		var material_cost = game_manager.get_engine_material_cost(i)
+		var build_days = game_manager.get_engine_build_days(i)
+
+		var btn = Button.new()
+		btn.text = "%s - $%sM material, ~%.0f team-days" % [engine_name, _format_money_short(material_cost / 1_000_000.0), build_days]
+		btn.add_theme_font_size_override("font_size", 13)
+		btn.pressed.connect(_on_prod_engine_selected.bind(i, dialog))
+		dialog_vbox.add_child(btn)
+
+	add_child(dialog)
+	dialog.popup_centered()
+
+func _on_prod_engine_selected(engine_index: int, dialog: AcceptDialog):
+	dialog.queue_free()
+
+	# Show quantity dialog
+	var qty_dialog = AcceptDialog.new()
+	qty_dialog.title = "Quantity"
+	qty_dialog.size = Vector2(300, 150)
+
+	var qty_vbox = VBoxContainer.new()
+	qty_vbox.add_theme_constant_override("separation", 10)
+	qty_dialog.add_child(qty_vbox)
+
+	var qty_label = Label.new()
+	qty_label.text = "How many to build?"
+	qty_vbox.add_child(qty_label)
+
+	var qty_spin = SpinBox.new()
+	qty_spin.min_value = 1
+	qty_spin.max_value = 50
+	qty_spin.value = 1
+	qty_spin.step = 1
+	qty_vbox.add_child(qty_spin)
+
+	add_child(qty_dialog)
+	qty_dialog.popup_centered()
+
+	qty_dialog.confirmed.connect(func():
+		var quantity = int(qty_spin.value)
+		# Need to cut a revision first
+		var rev = game_manager.cut_engine_revision(engine_index, "mfg")
+		if rev < 0:
+			_show_toast("Failed to cut engine revision")
+			qty_dialog.queue_free()
+			return
+		var result = game_manager.start_engine_order(engine_index, rev, quantity)
+		if result >= 0:
+			_show_toast("Engine order started!")
+			_update_production_ui()
+		else:
+			_show_toast("Cannot start order - check facility level and funds")
+		qty_dialog.queue_free()
+	)
+	qty_dialog.canceled.connect(func(): qty_dialog.queue_free())
+
+func _on_prod_assemble_rocket_pressed():
+	# Show dialog to select which rocket to assemble
+	var design_count = game_manager.get_rocket_design_count()
+	if design_count == 0:
+		_show_toast("No rocket designs available")
+		return
+
+	var dialog = AcceptDialog.new()
+	dialog.title = "Assemble Rocket"
+	dialog.size = Vector2(500, 400)
+
+	var dialog_vbox = VBoxContainer.new()
+	dialog_vbox.add_theme_constant_override("separation", 10)
+	dialog.add_child(dialog_vbox)
+
+	var instructions = Label.new()
+	instructions.text = "Select a rocket design to assemble:"
+	instructions.add_theme_font_size_override("font_size", 14)
+	dialog_vbox.add_child(instructions)
+
+	for i in range(design_count):
+		var design_name = game_manager.get_rocket_design_name(i)
+		var material_cost = game_manager.get_rocket_material_cost(i)
+		var assembly_days = game_manager.get_rocket_assembly_days(i)
+		var engines_req = game_manager.get_engines_required_for_rocket(i)
+
+		var btn_text = "%s - $%sM material, ~%.0f team-days" % [design_name, _format_money_short(material_cost / 1_000_000.0), assembly_days]
+
+		# Check if we have sufficient engines
+		var has_engines = game_manager.has_engines_for_rocket(i)
+		if not has_engines:
+			btn_text += " [NEED ENGINES]"
+
+		var btn = Button.new()
+		btn.text = btn_text
+		btn.add_theme_font_size_override("font_size", 13)
+		btn.disabled = not has_engines
+		btn.pressed.connect(_on_prod_rocket_selected.bind(i, dialog))
+		dialog_vbox.add_child(btn)
+
+		# Show engines required
+		if engines_req.size() > 0:
+			var eng_info = Label.new()
+			var parts = []
+			for req in engines_req:
+				var eng_name = req.get("name", "?")
+				var eng_count = req.get("count", 0)
+				parts.append("%dx %s" % [eng_count, eng_name])
+			eng_info.text = "  Engines needed: %s" % ", ".join(parts)
+			eng_info.add_theme_font_size_override("font_size", 11)
+			eng_info.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+			dialog_vbox.add_child(eng_info)
+
+	add_child(dialog)
+	dialog.popup_centered()
+
+func _on_prod_rocket_selected(rocket_index: int, dialog: AcceptDialog):
+	dialog.queue_free()
+	# Cut a revision and start the order
+	var rev = game_manager.cut_rocket_revision(rocket_index, "mfg")
+	if rev < 0:
+		_show_toast("Failed to cut rocket revision")
+		return
+	var result = game_manager.start_rocket_order(rocket_index, rev)
+	if result >= 0:
+		_show_toast("Rocket assembly started!")
+		_update_production_ui()
+	else:
+		_show_toast("Cannot start order - check facility level, funds, and engine inventory")
+
+func _on_manufacturing_changed():
+	if current_tab == Tab.PRODUCTION:
+		_update_production_ui()
+
+func _on_inventory_changed():
+	if current_tab == Tab.PRODUCTION:
+		_update_production_ui()
+
+func _format_money_short(value: float) -> String:
+	if value >= 1000:
+		return "%.0f" % value
+	elif value >= 100:
+		return "%.0f" % value
+	elif value >= 10:
+		return "%.1f" % value
+	else:
+		return "%.2f" % value
 
 func _update_status_bar():
 	fame_label.text = game_manager.get_fame_formatted()
@@ -897,6 +1625,8 @@ func _on_work_event(event_type: String, data: Dictionary):
 	var message = ""
 	var refresh_research = false
 
+	var refresh_production = false
+
 	match event_type:
 		"design_phase_complete":
 			var phase = data.get("phase_name", "")
@@ -918,6 +1648,21 @@ func _on_work_event(event_type: String, data: Dictionary):
 			var flaw_name = data.get("flaw_name", "unknown")
 			message = "Engine flaw fixed: %s" % flaw_name
 			refresh_research = true
+		"engine_manufactured":
+			var name = data.get("display_name", "Engine")
+			message = "Engine manufactured: %s" % name
+			refresh_production = true
+			refresh_research = true
+		"rocket_assembled":
+			var name = data.get("display_name", "Rocket")
+			message = "Rocket assembled: %s" % name
+			refresh_production = true
+			refresh_research = true
+		"manufacturing_order_complete":
+			var name = data.get("display_name", "Order")
+			message = "Production complete: %s" % name
+			refresh_production = true
+			refresh_research = true
 		"team_ramped_up":
 			var team_id = data.get("team_id", 0)
 			message = "Team %d ready to work" % team_id
@@ -925,11 +1670,17 @@ func _on_work_event(event_type: String, data: Dictionary):
 		"salary_deducted":
 			var amount = data.get("amount", 0)
 			message = "Monthly salaries: $%.0fK" % (amount / 1000.0)
+		"floor_space_completed":
+			var units = data.get("units", 0)
+			message = "Floor space completed: %d units" % units
+			refresh_production = true
 		_:
 			return  # Don't show toast for unknown events
 
 	if refresh_research:
 		_update_research_ui()
+	if refresh_production:
+		_update_production_ui()
 
 	if message != "":
 		_show_toast(message)
@@ -991,6 +1742,7 @@ func _on_finance_tab_pressed():
 
 func _on_production_tab_pressed():
 	_show_tab(Tab.PRODUCTION)
+	_update_production_ui()
 
 # Public API for other scripts to access game manager
 func get_game_manager() -> GameManager:

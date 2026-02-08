@@ -81,6 +81,7 @@ pub struct EngineDesign {
 pub struct EngineDesignSnapshot {
     pub engine_design_id: usize,
     pub name: String,
+    pub scale: f64,
     pub mass_kg: f64,
     pub thrust_kn: f64,
     pub exhaust_velocity_ms: f64,
@@ -171,6 +172,7 @@ impl EngineDesign {
         EngineDesignSnapshot {
             engine_design_id: id,
             name: name.to_string(),
+            scale: self.scale,
             mass_kg: base_mass * self.scale,
             thrust_kn: base_thrust * self.scale,
             exhaust_velocity_ms: ve,

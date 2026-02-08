@@ -128,14 +128,23 @@ func _create_engine_card(engine_type: int) -> Control:
 	var cost = designer.get_engine_cost(engine_type)
 	var is_solid = designer.is_engine_type_solid(engine_type)
 
+	# Get manufacturing info if available
+	var material_cost_str = "$%sM" % _format_money_short(cost * 0.4 / 1_000_000.0)
+	var build_days_str = ""
+	if game_manager:
+		var mat_cost = game_manager.get_engine_material_cost(engine_type)
+		var build_days = game_manager.get_engine_build_days(engine_type)
+		material_cost_str = "$%sM" % _format_money_short(mat_cost / 1_000_000.0)
+		build_days_str = " | Build: ~%.0f days" % build_days
+
 	var stats_label = Label.new()
 	stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if is_solid:
 		# Solid motors show different info
-		stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMotor: %.0f kg\nFixed ratio: 88%%\nCost: $%sM" % [thrust, ve, mass, _format_money(cost / 1000000)]
+		stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMotor: %.0f kg\nFixed ratio: 88%%\nMaterial: %s%s" % [thrust, ve, mass, material_cost_str, build_days_str]
 		stats_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.4))
 	else:
-		stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMass: %.0f kg\nCost: $%sM" % [thrust, ve, mass, _format_money(cost / 1000000)]
+		stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMass: %.0f kg\nMaterial: %s%s" % [thrust, ve, mass, material_cost_str, build_days_str]
 		stats_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	stats_label.add_theme_font_size_override("font_size", 12)
 	vbox.add_child(stats_label)
@@ -186,6 +195,15 @@ func _format_money(value: float) -> String:
 # Helper to format numbers with commas (alias for non-money values)
 func _format_number(value: float) -> String:
 	return _format_money(value)
+
+# Helper to format money in compact form (e.g., 41.1)
+func _format_money_short(value: float) -> String:
+	if value >= 100:
+		return "%.0f" % value
+	elif value >= 10:
+		return "%.1f" % value
+	else:
+		return "%.2f" % value
 
 func _on_design_changed():
 	# Don't rebuild if we're dragging a slider - just update values
@@ -659,17 +677,39 @@ func _update_budget_display():
 	var total_cost = designer.get_total_cost()
 	var remaining = designer.get_remaining_budget()
 
-	cost_label.text = "Cost: $%s" % _format_money(total_cost)
-	remaining_label.text = "Remaining: $%s" % _format_money(remaining)
+	# Show both the launch cost and manufacturing info
+	if game_manager:
+		var current_index = game_manager.get_current_design_index()
+		if current_index >= 0:
+			var material_cost = game_manager.get_rocket_material_cost(current_index)
+			var assembly_days = game_manager.get_rocket_assembly_days(current_index)
+			cost_label.text = "Materials: $%sM | Build: ~%.0f team-days" % [_format_money_short(material_cost / 1_000_000.0), assembly_days]
+
+			# Show engines required
+			var engines_req = game_manager.get_engines_required_for_rocket(current_index)
+			if engines_req.size() > 0:
+				var parts = []
+				for req in engines_req:
+					var eng_name = req.get("name", "?")
+					var eng_count = req.get("count", 0)
+					parts.append("%dx %s" % [eng_count, eng_name])
+				remaining_label.text = "Engines: %s" % ", ".join(parts)
+				remaining_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+			else:
+				remaining_label.text = ""
+		else:
+			cost_label.text = "Cost: $%s" % _format_money(total_cost)
+			remaining_label.text = "Remaining: $%s" % _format_money(remaining)
+	else:
+		cost_label.text = "Cost: $%s" % _format_money(total_cost)
+		remaining_label.text = "Remaining: $%s" % _format_money(remaining)
 
 	if designer.is_within_budget():
 		budget_status.text = "WITHIN BUDGET"
 		budget_status.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-		remaining_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	else:
 		budget_status.text = "OVER BUDGET"
 		budget_status.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
-		remaining_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
 
 func _update_launch_button():
 	# Check design status to determine button behavior
