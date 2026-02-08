@@ -13,14 +13,14 @@ use crate::stage::RocketStage;
 /// Exponent for scaling engine build work with scale factor
 pub const ENGINE_BUILD_SCALE_EXPONENT: f64 = 0.75;
 
-/// Base assembly days per stage
-pub const STAGE_BASE_ASSEMBLY_DAYS: f64 = 20.0;
+/// Base assembly days per stage (tank fabrication, structural work, stage integration)
+pub const STAGE_BASE_ASSEMBLY_DAYS: f64 = 60.0;
 
-/// Extra assembly days per additional engine beyond the first
-pub const ASSEMBLY_DAYS_PER_EXTRA_ENGINE: f64 = 2.0;
+/// Extra assembly days per additional engine beyond the first (mounting, plumbing)
+pub const ASSEMBLY_DAYS_PER_EXTRA_ENGINE: f64 = 5.0;
 
-/// Days for final rocket integration (all stages together)
-pub const ROCKET_INTEGRATION_DAYS: f64 = 15.0;
+/// Days for final rocket integration (stacking, harness, checkout)
+pub const ROCKET_INTEGRATION_DAYS: f64 = 30.0;
 
 /// Team efficiency exponent for manufacturing (more parallelizable than design work)
 pub const MANUFACTURING_TEAM_EXPONENT: f64 = 0.85;
@@ -692,12 +692,12 @@ mod tests {
     fn test_rocket_assembly_work() {
         let design = RocketDesign::default_design();
         let work = rocket_assembly_work(&design);
-        // Stage 1: 5 engines -> 20 + 4*2 = 28 days
-        // Stage 2: 1 engine -> 20 + 0*2 = 20 days
-        // Integration: 15 days
-        // Total: 28 + 20 + 15 = 63 days
-        assert!((work - 63.0).abs() < 0.1,
-            "Assembly work should be 63 days, got {}", work);
+        // Stage 1: 5 engines -> 60 + 4*5 = 80 days
+        // Stage 2: 1 engine -> 60 + 0*5 = 60 days
+        // Integration: 30 days
+        // Total: 80 + 60 + 30 = 170 days
+        assert!((work - 170.0).abs() < 0.1,
+            "Assembly work should be 170 days, got {}", work);
     }
 
     #[test]
@@ -942,8 +942,8 @@ mod tests {
         stage.engine_count = 5;
 
         let work = stage_assembly_work(&stage);
-        // 20 + 4*2 = 28 days
-        assert!((work - 28.0).abs() < 0.1,
-            "Stage assembly work should be 28 days, got {}", work);
+        // 60 + 4*5 = 80 days
+        assert!((work - 80.0).abs() < 0.1,
+            "Stage assembly work should be 80 days, got {}", work);
     }
 }
