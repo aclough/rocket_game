@@ -55,6 +55,8 @@ pub struct Company {
     pub flaw_generator: FlawGenerator,
     /// Manufacturing facilities, orders, and inventory
     pub manufacturing: Manufacturing,
+    /// Whether to auto-assign idle manufacturing teams each day
+    pub auto_assign_manufacturing: bool,
 }
 
 impl Company {
@@ -79,6 +81,7 @@ impl Company {
             next_team_id: 1,
             flaw_generator: FlawGenerator::new(),
             manufacturing: Manufacturing::new(),
+            auto_assign_manufacturing: false,
         };
 
         // Generate initial contracts
@@ -931,6 +934,11 @@ impl Company {
         let completed_units = self.manufacturing.process_construction();
         if completed_units > 0 {
             events.push(WorkEvent::FloorSpaceCompleted { units: completed_units });
+        }
+
+        // Auto-assign idle manufacturing teams if toggled on
+        if self.auto_assign_manufacturing {
+            self.auto_assign_manufacturing_teams();
         }
 
         events

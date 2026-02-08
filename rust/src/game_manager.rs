@@ -2485,6 +2485,23 @@ impl GameManager {
         assigned as i32
     }
 
+    #[func]
+    pub fn get_auto_assign_manufacturing(&self) -> bool {
+        self.state.player_company.auto_assign_manufacturing
+    }
+
+    #[func]
+    pub fn set_auto_assign_manufacturing(&mut self, enabled: bool) {
+        self.state.player_company.auto_assign_manufacturing = enabled;
+        if enabled {
+            // Immediately assign any idle teams when toggled on
+            let assigned = self.state.player_company.auto_assign_manufacturing_teams();
+            if assigned > 0 {
+                self.base_mut().emit_signal("manufacturing_changed", &[]);
+            }
+        }
+    }
+
     /// Cut a revision for an engine design and return the revision number
     #[func]
     pub fn cut_engine_revision(&mut self, index: i32, label: GString) -> i32 {

@@ -513,6 +513,16 @@ func _create_design_work_card(index: int) -> PanelContainer:
 		status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 	header.add_child(status_label)
 
+	# Show testing level when in Refining or Fixing phase
+	if base_status == "Refining" or base_status == "Fixing":
+		var testing_level = game_manager.get_rocket_design_testing_level(index)
+		var testing_level_name = game_manager.get_rocket_design_testing_level_name(index)
+		var testing_label = Label.new()
+		testing_label.text = testing_level_name
+		testing_label.add_theme_font_size_override("font_size", 12)
+		testing_label.add_theme_color_override("font_color", _engine_testing_level_color(testing_level))
+		vbox.add_child(testing_label)
+
 	if teams_count > 0:
 		var teams_on = _get_teams_on_design(index)
 		for tid in teams_on:
@@ -1380,10 +1390,11 @@ func _setup_production_content():
 	assemble_rocket_btn.pressed.connect(_on_prod_assemble_rocket_pressed)
 	order_btns_hbox.add_child(assemble_rocket_btn)
 
-	var auto_assign_btn = Button.new()
+	var auto_assign_btn = CheckButton.new()
 	auto_assign_btn.text = "Auto-Assign Teams"
 	auto_assign_btn.add_theme_font_size_override("font_size", 14)
-	auto_assign_btn.pressed.connect(_on_prod_auto_assign_teams)
+	auto_assign_btn.button_pressed = game_manager.get_auto_assign_manufacturing()
+	auto_assign_btn.toggled.connect(_on_prod_auto_assign_toggled)
 	order_btns_hbox.add_child(auto_assign_btn)
 
 	# === Manufacturing Queue Section ===
@@ -1951,13 +1962,13 @@ func _on_prod_rocket_selected(rocket_index: int, dialog: AcceptDialog):
 	else:
 		_show_toast("Cannot start rocket: %s" % game_manager.get_last_order_error())
 
-func _on_prod_auto_assign_teams():
-	var assigned = game_manager.auto_assign_manufacturing_teams()
-	if assigned > 0:
-		_show_toast("Auto-assigned %d team%s" % [assigned, "s" if assigned != 1 else ""])
-		_update_production_ui()
+func _on_prod_auto_assign_toggled(enabled: bool):
+	game_manager.set_auto_assign_manufacturing(enabled)
+	if enabled:
+		_show_toast("Auto-assign teams enabled")
 	else:
-		_show_toast("No idle manufacturing teams to assign")
+		_show_toast("Auto-assign teams disabled")
+	_update_production_ui()
 
 func _on_manufacturing_changed():
 	if current_tab == Tab.PRODUCTION:
