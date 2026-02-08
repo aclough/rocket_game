@@ -249,10 +249,10 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 	edit_btn.custom_minimum_size = Vector2(100, 30)
 	edit_btn.add_theme_font_size_override("font_size", 12)
 	edit_btn.pressed.connect(_on_edit_design_pressed.bind(index))
-	# Disable editing if design is in Engineering/Refining phase
+	# Disable editing if design is in Engineering/Testing phase
 	if not can_edit:
 		edit_btn.disabled = true
-		edit_btn.tooltip_text = "Cannot edit while in Engineering/Refining phase"
+		edit_btn.tooltip_text = "Cannot edit while in Engineering/Testing phase"
 	buttons_vbox.add_child(edit_btn)
 
 	# Show "Submit to Engineering" for designs in Specification status
@@ -280,7 +280,7 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 		if teams_count > 0:
 			status_label.text += " (%d teams)" % teams_count
 		status_label.add_theme_font_size_override("font_size", 11)
-		if base_status == "Refining":
+		if base_status == "Testing":
 			status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
 		elif base_status == "Fixing":
 			status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
@@ -305,10 +305,10 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 			fill_style.set_corner_radius_all(2)
 			progress_bar.add_theme_stylebox_override("fill", fill_style)
 			info_vbox.add_child(progress_bar)
-		elif base_status == "Refining":
-			# Blue bar at 100% for Refining
+		elif base_status == "Testing":
+			# Blue bar showing actual progress for Testing
 			var progress_bar = ProgressBar.new()
-			progress_bar.value = 100
+			progress_bar.value = progress * 100
 			progress_bar.custom_minimum_size = Vector2(0, 8)
 			progress_bar.show_percentage = false
 			var fill_style = StyleBoxFlat.new()
@@ -444,7 +444,7 @@ func _create_engine_design_card(index: int) -> Control:
 		if teams_count > 0:
 			status_label.text += " (%d teams)" % teams_count
 		status_label.add_theme_font_size_override("font_size", 11)
-		if base_status == "Refining":
+		if base_status == "Testing":
 			status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
 		elif base_status == "Fixing":
 			status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))

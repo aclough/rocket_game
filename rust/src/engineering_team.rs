@@ -16,7 +16,7 @@ pub const MANUFACTURING_HIRE_COST: f64 = MANUFACTURING_TEAM_SALARY * 3.0;
 /// Type of team — determines what work they can do
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TeamType {
-    /// Can do design and refining work (rocket designs, engine designs)
+    /// Can do design and testing work (rocket designs, engine designs)
     Engineering,
     /// Can do manufacturing work (build engines, assemble rockets)
     Manufacturing,
@@ -28,11 +28,8 @@ pub const RAMP_UP_DAYS: u32 = 7;
 /// Work units required for detailed engineering phase
 pub const DETAILED_ENGINEERING_WORK: f64 = 30.0;
 
-/// Work units required to refine/discover each potential flaw
-pub const REFINING_WORK_PER_FLAW: f64 = 10.0;
-
-/// Work units required for engine refining (not used for completion, just reference)
-pub const ENGINE_REFINING_WORK: f64 = 30.0;
+/// Work units per testing cycle (active work that advances progress)
+pub const TESTING_WORK: f64 = 30.0;
 
 /// Represents a team that can work on designs, engines, or manufacturing
 #[derive(Debug, Clone)]
@@ -134,8 +131,8 @@ pub enum DesignWorkPhase {
         progress: f64,
         total_work: f64,
     },
-    /// Refining phase - looking for and fixing flaws
-    Refining {
+    /// Testing phase - looking for and fixing flaws
+    Testing {
         progress: f64,
         total_work: f64,
     },
@@ -144,8 +141,8 @@ pub enum DesignWorkPhase {
 /// Work phases for engine types
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineWorkPhase {
-    /// Refining - looking for flaws
-    Refining {
+    /// Testing - looking for flaws
+    Testing {
         progress: f64,
         total_work: f64,
     },
@@ -159,7 +156,7 @@ pub enum WorkEvent {
         rocket_design_id: usize,
         phase_name: String,
     },
-    /// A design flaw was discovered during refining
+    /// A design flaw was discovered during testing
     DesignFlawDiscovered {
         rocket_design_id: usize,
         flaw_name: String,

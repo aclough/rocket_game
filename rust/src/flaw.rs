@@ -2,6 +2,7 @@ use rand::Rng;
 use rand_distr::{Distribution, LogNormal};
 
 use crate::engine_design::FuelType;
+use crate::engineering_team::TESTING_WORK;
 
 /// Represents a hidden defect in a rocket that can cause failures
 #[derive(Clone, Debug)]
@@ -365,28 +366,28 @@ fn coverage_to_testing_level(coverage: f64) -> TestingLevel {
     }
 }
 
-/// Estimate the testing level of an engine based on technology and refining time.
-pub fn engine_testing_level(fuel_type: FuelType, scale: f64, refining_days: f64) -> TestingLevel {
+/// Estimate the testing level of an engine based on technology and cumulative testing work.
+pub fn engine_testing_level(fuel_type: FuelType, scale: f64, testing_work_completed: f64) -> TestingLevel {
     let expected_flaw_count = 3.5; // average of 3-4
     let fr_mean = engine_failure_rate_mean(fuel_type, scale);
     let tm_mean = engine_testing_modifier_mean(fuel_type, scale);
-    let expected_days = expected_flaw_count * 30.0 / (fr_mean * tm_mean);
-    let coverage = refining_days / expected_days;
+    let expected_work = expected_flaw_count * TESTING_WORK as f64 / (fr_mean * tm_mean);
+    let coverage = testing_work_completed / expected_work;
     coverage_to_testing_level(coverage)
 }
 
-/// Estimate the testing level of a rocket design based on complexity and refining time.
+/// Estimate the testing level of a rocket design based on complexity and cumulative testing work.
 pub fn rocket_testing_level(
     stage_count: usize,
     unique_fuel_types: usize,
     total_engines: u32,
-    refining_days: f64,
+    testing_work_completed: f64,
 ) -> TestingLevel {
     let expected_flaw_count = (3 + stage_count.min(3)) as f64;
     let fr_mean = rocket_failure_rate_mean(stage_count, unique_fuel_types, total_engines);
     let tm_mean = rocket_testing_modifier_mean(stage_count);
-    let expected_days = expected_flaw_count * 30.0 / (fr_mean * tm_mean);
-    let coverage = refining_days / expected_days;
+    let expected_work = expected_flaw_count * TESTING_WORK as f64 / (fr_mean * tm_mean);
+    let coverage = testing_work_completed / expected_work;
     coverage_to_testing_level(coverage)
 }
 
@@ -933,31 +934,31 @@ mod tests {
 
     #[test]
     fn test_engine_testing_level_progression() {
-        // 0 days = Untested
+        // 0 work = Untested
         let level_0 = engine_testing_level(FuelType::Kerolox, 1.0, 0.0);
         assert_eq!(level_0, TestingLevel::Untested);
 
-        // Many days = Thoroughly Tested
+        // Much work = Thoroughly Tested
         let level_many = engine_testing_level(FuelType::Kerolox, 1.0, 10000.0);
         assert_eq!(level_many, TestingLevel::ThoroughlyTested);
 
         // Monotonically increasing
-        let levels: Vec<TestingLevel> = [0.0, 50.0, 200.0, 500.0, 2000.0]
+        let levels: Vec<TestingLevel> = [0.0, 5.0, 20.0, 50.0, 200.0]
             .iter()
-            .map(|&d| engine_testing_level(FuelType::Kerolox, 1.0, d))
+            .map(|&w| engine_testing_level(FuelType::Kerolox, 1.0, w))
             .collect();
         for i in 1..levels.len() {
-            assert!(levels[i] >= levels[i-1], "Testing level should not decrease with more refining days");
+            assert!(levels[i] >= levels[i-1], "Testing level should not decrease with more testing work");
         }
     }
 
     #[test]
     fn test_rocket_testing_level() {
-        // 0 days = Untested
+        // 0 work = Untested
         let level_0 = rocket_testing_level(2, 1, 6, 0.0);
         assert_eq!(level_0, TestingLevel::Untested);
 
-        // Many days = Thoroughly Tested
+        // Much work = Thoroughly Tested
         let level_many = rocket_testing_level(2, 1, 6, 10000.0);
         assert_eq!(level_many, TestingLevel::ThoroughlyTested);
     }

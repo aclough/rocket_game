@@ -375,7 +375,7 @@ impl Company {
             new_engine.active_flaws.clear();
             new_engine.fixed_flaws.clear();
             new_engine.flaws_generated = false;
-            new_engine.refining_days = 0.0;
+            new_engine.testing_work_completed = 0.0;
             let new_name = format!("{} (Copy)", lineage.name);
             self.engine_designs.push(DesignLineage::new(&new_name, new_engine));
             Some(self.engine_designs.len() - 1)
@@ -569,9 +569,9 @@ impl Company {
             }
             team.assign(TeamAssignment::EngineDesign {
                 engine_design_id,
-                work_phase: crate::engineering_team::EngineWorkPhase::Refining {
+                work_phase: crate::engineering_team::EngineWorkPhase::Testing {
                     progress: 0.0,
-                    total_work: crate::engineering_team::ENGINE_REFINING_WORK,
+                    total_work: crate::engineering_team::TESTING_WORK,
                 },
             });
             true
@@ -966,7 +966,7 @@ impl Company {
             }
 
             let phase_before = design.design_status.name();
-            let is_refining = matches!(design.design_status, DesignStatus::Refining { .. });
+            let is_testing = matches!(design.design_status, DesignStatus::Testing { .. });
             let is_fixing = matches!(design.design_status, DesignStatus::Fixing { .. });
 
             // Advance work
@@ -974,15 +974,15 @@ impl Company {
 
             if phase_completed {
                 if is_fixing {
-                    // Fixing complete - mark flaw as fixed and return to Refining
+                    // Fixing complete - mark flaw as fixed and return to Testing
                     if let Some(flaw_name) = design.complete_flaw_fix() {
                         events.push(WorkEvent::DesignFlawFixed {
                             rocket_design_id,
                             flaw_name,
                         });
                     }
-                } else {
-                    // Engineering phase completed
+                } else if !is_testing {
+                    // Engineering phase completed (testing cycle completions are silent)
                     events.push(WorkEvent::DesignPhaseComplete {
                         rocket_design_id,
                         phase_name: phase_before.to_string(),
@@ -990,19 +990,18 @@ impl Company {
                 }
             }
 
-            // Only discover flaws during Refining (not during Fixing)
-            if is_refining {
-                // Track calendar days spent in Refining
-                design.refining_days += 1.0;
+            // Track cumulative testing work every day
+            if is_testing {
+                design.testing_work_completed += efficiency;
+            }
 
-                // Check each undiscovered flaw using its individual discovery probability
-                // Divide by 30 to convert from per-test to per-day probability (roughly monthly)
+            // Discover flaws only when a testing cycle completes
+            if phase_completed && is_testing {
                 let mut rng = rand::thread_rng();
                 for flaw in design.active_flaws.iter_mut() {
                     if !flaw.discovered && !flaw.fixed {
-                        let daily_discovery_chance = flaw.discovery_probability() / 30.0;
                         let roll = rng.gen::<f64>();
-                        if roll < daily_discovery_chance {
+                        if roll < flaw.discovery_probability() {
                             flaw.discovered = true;
                             events.push(WorkEvent::DesignFlawDiscovered {
                                 rocket_design_id,
@@ -1013,9 +1012,9 @@ impl Company {
                 }
             }
 
-            // After Refining or completing a fix, check if there are unfixed flaws to work on
-            let now_refining = matches!(design.design_status, DesignStatus::Refining { .. });
-            if now_refining {
+            // After Testing or completing a fix, check if there are unfixed flaws to work on
+            let now_testing = matches!(design.design_status, DesignStatus::Testing { .. });
+            if now_testing {
                 if let Some(flaw_index) = design.get_next_unfixed_flaw() {
                     let flaw_name = design.active_flaws[flaw_index].name.clone();
                     design.start_fixing_flaw(flaw_index);
@@ -1076,7 +1075,7 @@ impl Company {
                 continue;
             }
 
-            let is_refining = matches!(design.status, EngineStatus::Refining { .. });
+            let is_testing = matches!(design.status, EngineStatus::Testing { .. });
             let is_fixing = matches!(design.status, EngineStatus::Fixing { .. });
 
             // Handle Fixing phase
@@ -1085,44 +1084,55 @@ impl Company {
                     *progress += efficiency;
                     if *progress >= *total {
                         let flaw_index_copy = *flaw_index;
-                        // Fix complete - mark flaw as fixed and return to Refining
+                        // Fix complete - mark flaw as fixed and return to Testing
                         if let Some(flaw_name) = design.fix_flaw_by_index(flaw_index_copy) {
                             events.push(WorkEvent::EngineFlawFixed {
                                 engine_design_id,
                                 flaw_name,
                             });
                         }
-                        design.status.return_to_refining();
+                        design.status.return_to_testing();
                     }
                 }
             }
 
-            // Handle Refining phase - discover flaws
-            if is_refining {
-                // Track calendar days spent in Refining
-                design.refining_days += 1.0;
+            // Handle Testing phase - advance work and discover flaws
+            if is_testing {
+                // Advance testing progress
+                let mut cycle_completed = false;
+                if let EngineStatus::Testing { progress, total } = &mut design.status {
+                    *progress += efficiency;
+                    if *progress >= *total {
+                        // Testing cycle complete - reset for next cycle
+                        *progress = 0.0;
+                        cycle_completed = true;
+                    }
+                }
 
-                // Check each undiscovered flaw using its individual discovery probability
-                // Divide by 30 to convert from per-test to per-day probability
-                let mut rng = rand::thread_rng();
-                for flaw in design.active_flaws.iter_mut() {
-                    if !flaw.discovered && !flaw.fixed {
-                        let daily_discovery_chance = flaw.discovery_probability() / 30.0;
-                        let roll = rng.gen::<f64>();
-                        if roll < daily_discovery_chance {
-                            flaw.discovered = true;
-                            events.push(WorkEvent::EngineFlawDiscovered {
-                                engine_design_id,
-                                flaw_name: flaw.name.clone(),
-                            });
+                // Track cumulative work completed during Testing
+                design.testing_work_completed += efficiency;
+
+                // Discover flaws only when a testing cycle completes
+                if cycle_completed {
+                    let mut rng = rand::thread_rng();
+                    for flaw in design.active_flaws.iter_mut() {
+                        if !flaw.discovered && !flaw.fixed {
+                            let roll = rng.gen::<f64>();
+                            if roll < flaw.discovery_probability() {
+                                flaw.discovered = true;
+                                events.push(WorkEvent::EngineFlawDiscovered {
+                                    engine_design_id,
+                                    flaw_name: flaw.name.clone(),
+                                });
+                            }
                         }
                     }
                 }
             }
 
-            // After Refining or completing a fix, check if there are unfixed flaws to work on
-            let now_refining = matches!(design.status, EngineStatus::Refining { .. });
-            if now_refining {
+            // After Testing or completing a fix, check if there are unfixed flaws to work on
+            let now_testing = matches!(design.status, EngineStatus::Testing { .. });
+            if now_testing {
                 if let Some(flaw_index) = design.get_next_unfixed_flaw() {
                     let flaw_name = design.active_flaws[flaw_index].name.clone();
                     design.status.start_fixing(flaw_name.clone(), flaw_index);

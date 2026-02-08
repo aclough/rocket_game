@@ -1,16 +1,16 @@
 /// Work required to fix a discovered engine flaw (14 days with 1 team)
 pub const ENGINE_FLAW_FIX_WORK: f64 = 14.0;
 
-/// Status of an engine in the refining workflow
+/// Status of an engine in the testing workflow
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineStatus {
-    /// Engine has not been submitted for refining yet (future: Designing phase)
+    /// Engine has not been submitted for testing yet (future: Designing phase)
     Untested,
-    /// Teams are refining the engine and looking for flaws
-    Refining {
-        /// Work progress (not used for completion, just for tracking)
+    /// Teams are testing the engine and looking for flaws
+    Testing {
+        /// Work progress (0.0 to total)
         progress: f64,
-        /// Total work (for reference)
+        /// Total work required per testing cycle
         total: f64,
     },
     /// Teams are fixing a discovered flaw
@@ -37,7 +37,7 @@ impl EngineStatus {
     pub fn name(&self) -> &'static str {
         match self {
             EngineStatus::Untested => "Untested",
-            EngineStatus::Refining { .. } => "Refining",
+            EngineStatus::Testing { .. } => "Testing",
             EngineStatus::Fixing { .. } => "Fixing",
         }
     }
@@ -54,7 +54,9 @@ impl EngineStatus {
     pub fn progress_fraction(&self) -> f64 {
         match self {
             EngineStatus::Untested => 0.0,
-            EngineStatus::Refining { .. } => 1.0, // Always show 100% for Refining
+            EngineStatus::Testing { progress, total } => {
+                if *total > 0.0 { progress / total } else { 0.0 }
+            }
             EngineStatus::Fixing { progress, total, .. } => {
                 if *total > 0.0 { progress / total } else { 0.0 }
             }
@@ -63,14 +65,14 @@ impl EngineStatus {
 
     /// Check if engine is being worked on
     pub fn is_working(&self) -> bool {
-        matches!(self, EngineStatus::Refining { .. } | EngineStatus::Fixing { .. })
+        matches!(self, EngineStatus::Testing { .. } | EngineStatus::Fixing { .. })
     }
 
-    /// Start refining this engine
-    pub fn start_refining(&mut self) {
-        *self = EngineStatus::Refining {
+    /// Start testing this engine
+    pub fn start_testing(&mut self) {
+        *self = EngineStatus::Testing {
             progress: 0.0,
-            total: 30.0, // Reference value
+            total: crate::engineering_team::TESTING_WORK,
         };
     }
 
@@ -84,11 +86,11 @@ impl EngineStatus {
         };
     }
 
-    /// Return to Refining after fixing a flaw
-    pub fn return_to_refining(&mut self) {
-        *self = EngineStatus::Refining {
-            progress: 30.0, // Start at 100%
-            total: 30.0,
+    /// Return to Testing after fixing a flaw (reset progress for new cycle)
+    pub fn return_to_testing(&mut self) {
+        *self = EngineStatus::Testing {
+            progress: 0.0,
+            total: crate::engineering_team::TESTING_WORK,
         };
     }
 }

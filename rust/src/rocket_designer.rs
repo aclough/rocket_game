@@ -1294,23 +1294,22 @@ impl RocketDesigner {
             self.design.stages.len(),
             unique_fuel_types,
             total_engines,
-            self.design.refining_days,
+            self.design.testing_work_completed,
         );
 
         // Find worst engine testing level
         let mut min_level = rocket_level;
         for stage in &self.design.stages {
             let snap = stage.engine_snapshot();
-            // Use engine's refining_days from synced engine data if available
-            let engine_refining_days = if snap.engine_design_id < self.engine_snapshots.len() {
-                // We don't store refining_days in snapshots, so we need it from game_manager
-                // For now, use the design's refining_days as a proxy
-                // (engine refining days will be passed separately via get_engine_testing_level)
-                self.design.refining_days
+            // Use engine's testing_work_completed from synced engine data if available
+            let engine_testing_work = if snap.engine_design_id < self.engine_snapshots.len() {
+                // We don't store testing_work_completed in snapshots, so we use the design's as a proxy
+                // (engine testing work will be passed separately via get_engine_testing_level)
+                self.design.testing_work_completed
             } else {
                 0.0
             };
-            let engine_level = engine_testing_level(snap.fuel_type, snap.scale, engine_refining_days);
+            let engine_level = engine_testing_level(snap.fuel_type, snap.scale, engine_testing_work);
             if engine_level < min_level {
                 min_level = engine_level;
             }

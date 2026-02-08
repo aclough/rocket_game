@@ -73,8 +73,8 @@ pub struct EngineDesign {
     pub fixed_flaws: Vec<Flaw>,
     pub flaws_generated: bool,
     pub status: EngineStatus,
-    /// Calendar days spent in the Refining phase (for testing level estimation)
-    pub refining_days: f64,
+    /// Cumulative work completed during Testing phase (for testing level estimation)
+    pub testing_work_completed: f64,
 }
 
 /// Lightweight stats cache stored on RocketStage.
@@ -287,15 +287,15 @@ impl EngineDesign {
         self.fixed_flaws.iter().map(|f| f.name.clone()).collect()
     }
 
-    /// Submit engine for refining (generates flaws if needed)
-    pub fn submit_to_refining(&mut self, generator: &mut FlawGenerator, engine_design_id: usize) -> bool {
+    /// Submit engine for testing (generates flaws if needed)
+    pub fn submit_to_testing(&mut self, generator: &mut FlawGenerator, engine_design_id: usize) -> bool {
         if !matches!(self.status, EngineStatus::Untested) {
             return false;
         }
         if !self.flaws_generated {
             self.generate_flaws(generator, engine_design_id);
         }
-        self.status.start_refining();
+        self.status.start_testing();
         true
     }
 }
@@ -313,7 +313,7 @@ pub fn create_engine(fuel: FuelType, scale: f64) -> EngineDesign {
         fixed_flaws: Vec::new(),
         flaws_generated: false,
         status: EngineStatus::Untested,
-        refining_days: 0.0,
+        testing_work_completed: 0.0,
     }
 }
 
@@ -331,7 +331,7 @@ pub fn default_kerolox() -> EngineDesign {
         fixed_flaws: Vec::new(),
         flaws_generated: false,
         status: EngineStatus::Untested,
-        refining_days: 0.0,
+        testing_work_completed: 0.0,
     }
 }
 
@@ -343,7 +343,7 @@ pub fn default_hydrolox() -> EngineDesign {
         fixed_flaws: Vec::new(),
         flaws_generated: false,
         status: EngineStatus::Untested,
-        refining_days: 0.0,
+        testing_work_completed: 0.0,
     }
 }
 
@@ -355,7 +355,7 @@ pub fn default_solid() -> EngineDesign {
         fixed_flaws: Vec::new(),
         flaws_generated: false,
         status: EngineStatus::Untested,
-        refining_days: 0.0,
+        testing_work_completed: 0.0,
     }
 }
 
@@ -498,16 +498,16 @@ mod tests {
     }
 
     #[test]
-    fn test_submit_to_refining() {
+    fn test_submit_to_testing() {
         let mut design = default_kerolox();
         let mut gen = FlawGenerator::new();
 
-        assert!(design.submit_to_refining(&mut gen, 1));
-        assert!(matches!(design.status, EngineStatus::Refining { .. }));
+        assert!(design.submit_to_testing(&mut gen, 1));
+        assert!(matches!(design.status, EngineStatus::Testing { .. }));
         assert!(design.flaws_generated);
 
         // Can't submit again
-        assert!(!design.submit_to_refining(&mut gen, 1));
+        assert!(!design.submit_to_testing(&mut gen, 1));
     }
 
     #[test]
@@ -537,7 +537,7 @@ mod tests {
     fn test_set_fuel_type_blocked_when_not_untested() {
         let mut design = default_kerolox();
         let mut gen = FlawGenerator::new();
-        design.submit_to_refining(&mut gen, 0);
+        design.submit_to_testing(&mut gen, 0);
 
         assert!(!design.set_fuel_type(FuelType::Solid));
         // Should still be kerolox
@@ -550,7 +550,7 @@ mod tests {
         assert!(design.can_modify());
 
         let mut gen = FlawGenerator::new();
-        design.submit_to_refining(&mut gen, 0);
+        design.submit_to_testing(&mut gen, 0);
         assert!(!design.can_modify());
     }
 
@@ -572,7 +572,7 @@ mod tests {
     fn test_set_scale_blocked_when_not_untested() {
         let mut design = default_kerolox();
         let mut gen = FlawGenerator::new();
-        design.submit_to_refining(&mut gen, 0);
+        design.submit_to_testing(&mut gen, 0);
 
         assert!(!design.set_scale(2.0));
         assert_eq!(design.scale, 1.0);

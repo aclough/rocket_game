@@ -1,6 +1,6 @@
 use crate::engine::costs;
 use crate::engine_design::{default_snapshot, EngineDesignSnapshot};
-use crate::engineering_team::{DETAILED_ENGINEERING_WORK, REFINING_WORK_PER_FLAW};
+use crate::engineering_team::{DETAILED_ENGINEERING_WORK, TESTING_WORK};
 use crate::flaw::{calculate_flaw_failure_rate, run_test, Flaw, FlawGenerator, FlawType};
 use crate::stage::RocketStage;
 
@@ -19,11 +19,11 @@ pub enum DesignStatus {
         /// Total work required
         total: f64,
     },
-    /// Teams are refining and looking for flaws
-    Refining {
+    /// Teams are testing and looking for flaws
+    Testing {
         /// Work progress (0.0 to total)
         progress: f64,
-        /// Total work required
+        /// Total work required per testing cycle
         total: f64,
     },
     /// Teams are fixing a discovered flaw
@@ -53,7 +53,7 @@ impl DesignStatus {
         match self {
             DesignStatus::Specification => "Specification",
             DesignStatus::Engineering { .. } => "Engineering",
-            DesignStatus::Refining { .. } => "Refining",
+            DesignStatus::Testing { .. } => "Testing",
             DesignStatus::Fixing { .. } => "Fixing",
             DesignStatus::Complete => "Complete",
         }
@@ -74,7 +74,9 @@ impl DesignStatus {
             DesignStatus::Engineering { progress, total } => {
                 if *total > 0.0 { progress / total } else { 0.0 }
             }
-            DesignStatus::Refining { .. } => 1.0, // Always show 100% for Refining
+            DesignStatus::Testing { progress, total } => {
+                if *total > 0.0 { progress / total } else { 0.0 }
+            }
             DesignStatus::Fixing { progress, total, .. } => {
                 if *total > 0.0 { progress / total } else { 0.0 }
             }
@@ -82,9 +84,9 @@ impl DesignStatus {
         }
     }
 
-    /// Check if design is in a work phase (Engineering, Refining, or Fixing)
+    /// Check if design is in a work phase (Engineering, Testing, or Fixing)
     pub fn is_working(&self) -> bool {
-        matches!(self, DesignStatus::Engineering { .. } | DesignStatus::Refining { .. } | DesignStatus::Fixing { .. })
+        matches!(self, DesignStatus::Engineering { .. } | DesignStatus::Testing { .. } | DesignStatus::Fixing { .. })
     }
 
     /// Check if design can be edited
@@ -93,9 +95,9 @@ impl DesignStatus {
     }
 
     /// Check if design is ready for launch
-    /// Designs in Refining or Fixing can still be launched (with known risks)
+    /// Designs in Testing or Fixing can still be launched (with known risks)
     pub fn can_launch(&self) -> bool {
-        matches!(self, DesignStatus::Complete | DesignStatus::Refining { .. } | DesignStatus::Fixing { .. })
+        matches!(self, DesignStatus::Complete | DesignStatus::Testing { .. } | DesignStatus::Fixing { .. })
     }
 }
 
@@ -237,8 +239,8 @@ pub struct RocketDesign {
     flaw_design_signature: String,
     /// Current status in the engineering workflow
     pub design_status: DesignStatus,
-    /// Calendar days spent in the Refining phase (for testing level estimation)
-    pub refining_days: f64,
+    /// Cumulative work completed during Testing phase (for testing level estimation)
+    pub testing_work_completed: f64,
 }
 
 impl RocketDesign {
@@ -257,7 +259,7 @@ impl RocketDesign {
             budget: costs::STARTING_BUDGET,
             flaw_design_signature: String::new(),
             design_status: DesignStatus::Specification,
-            refining_days: 0.0,
+            testing_work_completed: 0.0,
         }
     }
 
@@ -282,20 +284,24 @@ impl RocketDesign {
             DesignStatus::Engineering { progress, total } => {
                 *progress += efficiency;
                 if *progress >= *total {
-                    // Move to Refining phase
-                    // Calculate total refining work based on potential flaws
-                    let potential_flaws = self.count_potential_flaws();
-                    let refining_total = potential_flaws as f64 * REFINING_WORK_PER_FLAW;
-                    self.design_status = DesignStatus::Refining {
+                    // Move to Testing phase
+                    self.design_status = DesignStatus::Testing {
                         progress: 0.0,
-                        total: refining_total.max(REFINING_WORK_PER_FLAW), // At least one cycle
+                        total: TESTING_WORK,
                     };
                     return true;
                 }
             }
-            DesignStatus::Refining { .. } => {
-                // Refining doesn't advance progress - it just enables flaw discovery
-                // Progress is always shown as 100% in UI
+            DesignStatus::Testing { progress, total } => {
+                *progress += efficiency;
+                if *progress >= *total {
+                    // Testing cycle complete - reset for next cycle
+                    self.design_status = DesignStatus::Testing {
+                        progress: 0.0,
+                        total: TESTING_WORK,
+                    };
+                    return true;
+                }
             }
             DesignStatus::Fixing { progress, total, .. } => {
                 *progress += efficiency;
@@ -310,9 +316,9 @@ impl RocketDesign {
     }
 
     /// Start fixing a discovered flaw
-    /// Transitions from Refining to Fixing state
+    /// Transitions from Testing to Fixing state
     pub fn start_fixing_flaw(&mut self, flaw_index: usize) -> bool {
-        if !matches!(self.design_status, DesignStatus::Refining { .. }) {
+        if !matches!(self.design_status, DesignStatus::Testing { .. }) {
             return false;
         }
         if flaw_index >= self.active_flaws.len() {
@@ -332,7 +338,7 @@ impl RocketDesign {
         true
     }
 
-    /// Complete the current flaw fix and return to Refining
+    /// Complete the current flaw fix and return to Testing
     /// Returns the name of the fixed flaw, or None if not in Fixing state
     pub fn complete_flaw_fix(&mut self) -> Option<String> {
         if let DesignStatus::Fixing { flaw_index, flaw_name, .. } = &self.design_status {
@@ -344,12 +350,10 @@ impl RocketDesign {
                 self.active_flaws[flaw_index].fixed = true;
             }
 
-            // Return to Refining
-            let potential_flaws = self.count_potential_flaws();
-            let refining_total = potential_flaws as f64 * REFINING_WORK_PER_FLAW;
-            self.design_status = DesignStatus::Refining {
-                progress: refining_total, // Start at 100% since we're continuing
-                total: refining_total.max(REFINING_WORK_PER_FLAW),
+            // Return to Testing with progress reset for new cycle
+            self.design_status = DesignStatus::Testing {
+                progress: 0.0,
+                total: TESTING_WORK,
             };
 
             Some(flaw_name)
@@ -363,17 +367,6 @@ impl RocketDesign {
         self.active_flaws
             .iter()
             .position(|f| f.discovered && !f.fixed)
-    }
-
-    /// Count potential flaws based on design complexity
-    fn count_potential_flaws(&self) -> usize {
-        // Base: 2 flaws per stage, +1 for each additional engine
-        let mut count = 0;
-        for stage in &self.stages {
-            count += 2;
-            count += (stage.engine_count.saturating_sub(1)) as usize;
-        }
-        count.max(1)
     }
 
     /// Return design to Specification state (e.g., after significant changes)
@@ -415,7 +408,7 @@ impl RocketDesign {
         self.flaws_generated = false;
         self.testing_spent = 0.0;
         self.flaw_design_signature.clear();
-        self.refining_days = 0.0;
+        self.testing_work_completed = 0.0;
     }
 
     /// Check if flaws need to be reset due to design changes, and reset if so

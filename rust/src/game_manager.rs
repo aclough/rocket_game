@@ -593,7 +593,7 @@ impl GameManager {
                     fuel_types.len()
                 };
                 let total_engines: u32 = d.stages.iter().map(|s| s.engine_count).sum();
-                rocket_testing_level(stage_count, unique_fuel_types, total_engines, d.refining_days).to_index()
+                rocket_testing_level(stage_count, unique_fuel_types, total_engines, d.testing_work_completed).to_index()
             })
             .unwrap_or(0)
     }
@@ -618,7 +618,7 @@ impl GameManager {
             .map(|l| {
                 use crate::flaw::engine_testing_level;
                 let d = l.head();
-                engine_testing_level(d.fuel_type(), d.scale, d.refining_days).to_index()
+                engine_testing_level(d.fuel_type(), d.scale, d.testing_work_completed).to_index()
             })
             .unwrap_or(0)
     }
@@ -862,9 +862,9 @@ impl GameManager {
         // Update the active lineage head
         if let Some(index) = self.current_rocket_design_id {
             self.state.player_company.update_rocket_design(index, design);
-            // If the design is Refining and has a discovered unfixed flaw, start fixing it
+            // If the design is Testing and has a discovered unfixed flaw, start fixing it
             let design = self.state.player_company.rocket_designs[index].head_mut();
-            if matches!(design.design_status, crate::rocket_design::DesignStatus::Refining { .. }) {
+            if matches!(design.design_status, crate::rocket_design::DesignStatus::Testing { .. }) {
                 if let Some(flaw_index) = design.get_next_unfixed_flaw() {
                     design.start_fixing_flaw(flaw_index);
                 }
@@ -2009,14 +2009,14 @@ impl GameManager {
         result
     }
 
-    /// Submit an engine design to refining (generates flaws if needed)
+    /// Submit an engine design to testing (generates flaws if needed)
     #[func]
-    pub fn submit_engine_to_refining(&mut self, index: i32) -> bool {
+    pub fn submit_engine_to_testing(&mut self, index: i32) -> bool {
         if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
             let idx = index as usize;
             let flaw_gen = &mut self.state.player_company.flaw_generator;
             let design = self.state.player_company.engine_designs[idx].head_mut();
-            let result = design.submit_to_refining(flaw_gen, idx);
+            let result = design.submit_to_testing(flaw_gen, idx);
             if result {
                 self.base_mut().emit_signal("designs_changed", &[]);
             }
@@ -2028,7 +2028,7 @@ impl GameManager {
 
     /// Discover an engine flaw by ID in the game state's engine designs
     /// Called when a launch failure reveals an engine flaw
-    /// Also auto-submits the engine to Refining if still Untested
+    /// Also auto-submits the engine to Testing if still Untested
     /// Returns the flaw name if found and newly discovered
     #[func]
     pub fn discover_engine_flaw_by_id(&mut self, flaw_id: i32) -> GString {
@@ -2053,12 +2053,12 @@ impl GameManager {
             }
 
             if let Some(name) = found_flaw_name {
-                // Auto-submit to refining if still Untested
+                // Auto-submit to testing if still Untested
                 if matches!(design.status, EngineStatus::Untested) {
-                    design.submit_to_refining(flaw_gen, idx);
+                    design.submit_to_testing(flaw_gen, idx);
                 }
-                // Transition to Fixing if currently Refining so teams work on the flaw
-                if matches!(design.status, EngineStatus::Refining { .. }) {
+                // Transition to Fixing if currently Testing so teams work on the flaw
+                if matches!(design.status, EngineStatus::Testing { .. }) {
                     if let Some(flaw_index) = design.get_next_unfixed_flaw() {
                         let flaw_name = design.active_flaws[flaw_index].name.clone();
                         design.status.start_fixing(flaw_name, flaw_index);

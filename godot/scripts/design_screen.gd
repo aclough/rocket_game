@@ -729,7 +729,7 @@ func _update_launch_button():
 		launch_button.text = "CONTINUE TO TESTING"
 		launch_button.disabled = not designer.is_launchable()
 	else:
-		# Design is in Engineering or Refining - can't proceed yet
+		# Design is in Engineering or Testing - can't proceed yet
 		launch_button.text = status.to_upper() + " IN PROGRESS"
 		launch_button.disabled = true
 

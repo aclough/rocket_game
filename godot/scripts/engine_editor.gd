@@ -282,7 +282,7 @@ func _refresh_ui():
 		_status_label.text = "Status: " + status
 		if base_status == "Untested":
 			_status_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3))
-		elif base_status == "Refining":
+		elif base_status == "Testing":
 			_status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
 		elif base_status == "Fixing":
 			_status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))

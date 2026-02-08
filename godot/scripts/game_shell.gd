@@ -389,9 +389,9 @@ func _create_team_card(team_id: int) -> PanelContainer:
 			var engine_id = assignment.get("engine_design_id", -1)
 			if engine_id >= 0:
 				var engine_name = game_manager.get_engine_type_name(engine_id)
-				status_label.text = "Refining: %s" % engine_name
+				status_label.text = "Testing: %s" % engine_name
 			else:
-				status_label.text = "Refining engine"
+				status_label.text = "Testing engine"
 		elif atype == "manufacturing":
 			var order_id = assignment.get("order_id", -1)
 			if order_id >= 0:
@@ -441,7 +441,7 @@ func _update_research_designs():
 
 	for i in range(design_count):
 		var base_status = game_manager.get_design_status_base(i)
-		if base_status == "Engineering" or base_status == "Refining" or base_status == "Fixing":
+		if base_status == "Engineering" or base_status == "Testing" or base_status == "Fixing":
 			var card = _create_design_work_card(i)
 			_research_designs_container.add_child(card)
 			has_work_items = true
@@ -462,8 +462,8 @@ func _create_design_work_card(index: int) -> PanelContainer:
 
 	# Style based on status
 	var style = StyleBoxFlat.new()
-	if base_status == "Refining":
-		# Blue style for Refining
+	if base_status == "Testing":
+		# Blue style for Testing
 		style.set_bg_color(Color(0.08, 0.1, 0.18))
 		style.set_border_color(Color(0.3, 0.5, 0.9, 0.5))
 	elif base_status == "Fixing":
@@ -505,7 +505,7 @@ func _create_design_work_card(index: int) -> PanelContainer:
 	var status_label = Label.new()
 	status_label.text = status
 	status_label.add_theme_font_size_override("font_size", 14)
-	if base_status == "Refining":
+	if base_status == "Testing":
 		status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
 	elif base_status == "Fixing":
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
@@ -513,8 +513,8 @@ func _create_design_work_card(index: int) -> PanelContainer:
 		status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 	header.add_child(status_label)
 
-	# Show testing level when in Refining or Fixing phase
-	if base_status == "Refining" or base_status == "Fixing":
+	# Show testing level when in Testing or Fixing phase
+	if base_status == "Testing" or base_status == "Fixing":
 		var testing_level = game_manager.get_rocket_design_testing_level(index)
 		var testing_level_name = game_manager.get_rocket_design_testing_level_name(index)
 		var testing_label = Label.new()
@@ -539,12 +539,12 @@ func _create_design_work_card(index: int) -> PanelContainer:
 		vbox.add_child(teams_label)
 
 	# Progress bar - different styles for different phases
-	if base_status == "Refining":
-		# Refining: blue bar always at 100%
+	if base_status == "Testing":
+		# Testing: blue progress bar showing actual progress
 		var progress_bar = ProgressBar.new()
-		progress_bar.value = 100
+		progress_bar.value = progress * 100
 		progress_bar.custom_minimum_size = Vector2(0, 12)
-		progress_bar.show_percentage = false
+		progress_bar.show_percentage = true
 		# Style the progress bar blue
 		var fill_style = StyleBoxFlat.new()
 		fill_style.set_bg_color(Color(0.3, 0.5, 0.9))
@@ -675,8 +675,8 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 		# Gray style for Untested
 		style.set_bg_color(Color(0.1, 0.1, 0.1))
 		style.set_border_color(Color(0.4, 0.4, 0.4, 0.5))
-	elif base_status == "Refining":
-		# Blue style for Refining
+	elif base_status == "Testing":
+		# Blue style for Testing
 		style.set_bg_color(Color(0.08, 0.1, 0.18))
 		style.set_border_color(Color(0.3, 0.5, 0.9, 0.5))
 	elif base_status == "Fixing":
@@ -726,14 +726,14 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 	status_label.add_theme_font_size_override("font_size", 14)
 	if base_status == "Untested":
 		status_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-	elif base_status == "Refining":
+	elif base_status == "Testing":
 		status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
 	elif base_status == "Fixing":
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
 	header.add_child(status_label)
 
-	# Testing level label (only when Refining or Fixing)
-	if base_status == "Refining" or base_status == "Fixing":
+	# Testing level label (only when Testing or Fixing)
+	if base_status == "Testing" or base_status == "Fixing":
 		var testing_level = game_manager.get_engine_testing_level(index)
 		var testing_level_name = game_manager.get_engine_testing_level_name(index)
 		var testing_label = Label.new()
@@ -760,12 +760,12 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 			vbox.add_child(teams_label)
 
 	# Progress bar - different styles for different phases
-	if base_status == "Refining":
-		# Refining: blue bar always at 100%
+	if base_status == "Testing":
+		# Testing: blue progress bar showing actual progress
 		var progress_bar = ProgressBar.new()
-		progress_bar.value = 100
+		progress_bar.value = progress * 100
 		progress_bar.custom_minimum_size = Vector2(0, 12)
-		progress_bar.show_percentage = false
+		progress_bar.show_percentage = true
 		var fill_style = StyleBoxFlat.new()
 		fill_style.set_bg_color(Color(0.3, 0.5, 0.9))
 		fill_style.set_corner_radius_all(3)
@@ -825,9 +825,9 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 	vbox.add_child(btn_hbox)
 
 	if base_status == "Untested":
-		# Submit to Refining button
+		# Submit to Testing button
 		var submit_btn = Button.new()
-		submit_btn.text = "Submit to Refining"
+		submit_btn.text = "Submit to Testing"
 		submit_btn.add_theme_font_size_override("font_size", 12)
 		submit_btn.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 		submit_btn.pressed.connect(_on_submit_engine_pressed.bind(index))
@@ -872,7 +872,7 @@ func _get_teams_on_engine(engine_index: int) -> Array:
 	return result
 
 func _on_submit_engine_pressed(index: int):
-	game_manager.submit_engine_to_refining(index)
+	game_manager.submit_engine_to_testing(index)
 	_update_research_ui()
 
 func _on_assign_engine_team_pressed(engine_index: int):
