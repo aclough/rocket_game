@@ -173,7 +173,7 @@ theme_override_font_sizes/font_size = 24
 text = "RESEARCH (Coming Soon)"
 horizontal_alignment = 1
 
-[node name="FinanceContent" type="Control" parent="MainVBox/ContentHBox/ContentArea"]
+[node name="ProductionContent" type="Control" parent="MainVBox/ContentHBox/ContentArea"]
 visible = false
 layout_mode = 1
 anchors_preset = 15
@@ -182,7 +182,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="PlaceholderLabel" type="Label" parent="MainVBox/ContentHBox/ContentArea/FinanceContent"]
+[node name="PlaceholderLabel" type="Label" parent="MainVBox/ContentHBox/ContentArea/ProductionContent"]
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
@@ -196,10 +196,10 @@ offset_bottom = 20.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_font_sizes/font_size = 24
-text = "FINANCE (Coming Soon)"
+text = "PRODUCTION (Coming Soon)"
 horizontal_alignment = 1
 
-[node name="ProductionContent" type="Control" parent="MainVBox/ContentHBox/ContentArea"]
+[node name="FinanceContent" type="Control" parent="MainVBox/ContentHBox/ContentArea"]
 visible = false
 layout_mode = 1
 anchors_preset = 15
@@ -208,7 +208,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="PlaceholderLabel" type="Label" parent="MainVBox/ContentHBox/ContentArea/ProductionContent"]
+[node name="PlaceholderLabel" type="Label" parent="MainVBox/ContentHBox/ContentArea/FinanceContent"]
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
@@ -277,19 +277,19 @@ toggle_mode = true
 theme_override_font_sizes/font_size = 14
 text = "Research"
 
-[node name="FinanceTab" type="Button" parent="MainVBox/TabBar/TabMargin/TabHBox"]
-custom_minimum_size = Vector2(100, 0)
-layout_mode = 2
-toggle_mode = true
-theme_override_font_sizes/font_size = 14
-text = "Finance"
-
 [node name="ProductionTab" type="Button" parent="MainVBox/TabBar/TabMargin/TabHBox"]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 toggle_mode = true
 theme_override_font_sizes/font_size = 14
 text = "Production"
+
+[node name="FinanceTab" type="Button" parent="MainVBox/TabBar/TabMargin/TabHBox"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+toggle_mode = true
+theme_override_font_sizes/font_size = 14
+text = "Finance"
 
 [node name="GameManager" type="GameManager" parent="."]
 
@@ -301,6 +301,6 @@ visible = false
 [connection signal="pressed" from="MainVBox/TabBar/TabMargin/TabHBox/DesignTab" to="." method="_on_design_tab_pressed"]
 [connection signal="pressed" from="MainVBox/TabBar/TabMargin/TabHBox/LaunchSiteTab" to="." method="_on_launch_site_tab_pressed"]
 [connection signal="pressed" from="MainVBox/TabBar/TabMargin/TabHBox/ResearchTab" to="." method="_on_research_tab_pressed"]
-[connection signal="pressed" from="MainVBox/TabBar/TabMargin/TabHBox/FinanceTab" to="." method="_on_finance_tab_pressed"]
 [connection signal="pressed" from="MainVBox/TabBar/TabMargin/TabHBox/ProductionTab" to="." method="_on_production_tab_pressed"]
+[connection signal="pressed" from="MainVBox/TabBar/TabMargin/TabHBox/FinanceTab" to="." method="_on_finance_tab_pressed"]
 [connection signal="gui_input" from="MainVBox/StatusBar/StatusMargin/StatusHBox/DateLabel" to="." method="_on_date_label_gui_input"]

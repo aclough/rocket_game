@@ -2488,6 +2488,63 @@ impl GameManager {
         self.base_mut().emit_signal("contracts_changed", &[]);
     }
 
+    // ==========================================
+    // Cost Constants (for Finance tab / forward-compatible with Resources)
+    // ==========================================
+
+    /// Get tank material cost per cubic meter
+    #[func]
+    pub fn get_tank_material_cost_per_m3(&self) -> f64 {
+        crate::manufacturing::TANK_MATERIAL_COST_PER_M3
+    }
+
+    /// Get stage assembly material cost
+    #[func]
+    pub fn get_stage_assembly_cost(&self) -> f64 {
+        crate::manufacturing::STAGE_ASSEMBLY_MATERIAL_COST
+    }
+
+    /// Get rocket integration material cost
+    #[func]
+    pub fn get_rocket_integration_cost(&self) -> f64 {
+        crate::manufacturing::ROCKET_INTEGRATION_MATERIAL_COST
+    }
+
+    /// Get engine material fraction (fraction of base cost)
+    #[func]
+    pub fn get_engine_material_fraction(&self) -> f64 {
+        crate::manufacturing::ENGINE_MATERIAL_FRACTION
+    }
+
+    /// Get cost to hire an engineering team
+    #[func]
+    pub fn get_engineering_hire_cost(&self) -> f64 {
+        crate::engineering_team::ENGINEERING_HIRE_COST
+    }
+
+    /// Get cost to hire a manufacturing team
+    #[func]
+    pub fn get_manufacturing_hire_cost(&self) -> f64 {
+        crate::engineering_team::MANUFACTURING_HIRE_COST
+    }
+
+    /// Get monthly salary per team
+    #[func]
+    pub fn get_team_salary(&self) -> f64 {
+        crate::engineering_team::TEAM_MONTHLY_SALARY
+    }
+
+    /// Get pad upgrade costs for all levels (indices 0-3 = upgrades to levels 2-5)
+    #[func]
+    pub fn get_pad_upgrade_costs(&self) -> Array<f64> {
+        let mut result = Array::new();
+        result.push(50_000_000.0);
+        result.push(150_000_000.0);
+        result.push(400_000_000.0);
+        result.push(1_000_000_000.0);
+        result
+    }
+
     /// Get a summary of the current game state for saving
     #[func]
     pub fn get_save_summary(&self) -> GString {

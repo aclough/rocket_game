@@ -3,7 +3,7 @@ extends Control
 ## Main game shell with tabbed interface
 ## Handles status bar updates and tab switching
 
-enum Tab { MAP, MISSIONS, DESIGN, LAUNCH_SITE, RESEARCH, FINANCE, PRODUCTION }
+enum Tab { MAP, MISSIONS, DESIGN, LAUNCH_SITE, RESEARCH, PRODUCTION, FINANCE }
 
 var current_tab: Tab = Tab.MAP
 
@@ -66,6 +66,17 @@ var _prod_engine_inv_container: VBoxContainer
 var _prod_rocket_inv_container: VBoxContainer
 var _prod_update_timer: Timer
 
+# Finance tab UI elements (built dynamically)
+var _finance_balance_label: Label
+var _finance_burn_label: Label
+var _finance_salary_date_label: Label
+var _finance_runway_label: Label
+var _finance_eng_header_label: Label
+var _finance_mfg_header_label: Label
+var _finance_eng_teams_container: VBoxContainer
+var _finance_mfg_teams_container: VBoxContainer
+var _finance_prices_container: VBoxContainer
+
 func _ready():
 	# Connect GameManager signals
 	game_manager.money_changed.connect(_on_money_changed)
@@ -86,6 +97,7 @@ func _ready():
 	_setup_launch_overlay()
 	_setup_research_content()
 	_setup_production_content()
+	_setup_finance_content()
 
 	# Initial status bar update
 	_update_status_bar()
@@ -881,6 +893,306 @@ func _on_unassign_teams_pressed(design_index: int):
 	_update_research_ui()
 
 # ==========================================
+# Finance Tab
+# ==========================================
+
+func _setup_finance_content():
+	var finance = content_areas[Tab.FINANCE]
+	if not finance:
+		return
+
+	# Remove placeholder label
+	for child in finance.get_children():
+		child.queue_free()
+
+	# Build the Finance UI
+	var margin = MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 20)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_right", 20)
+	margin.add_theme_constant_override("margin_bottom", 20)
+	finance.add_child(margin)
+
+	var scroll = ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	margin.add_child(scroll)
+
+	var main_vbox = VBoxContainer.new()
+	main_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.add_theme_constant_override("separation", 20)
+	scroll.add_child(main_vbox)
+
+	var title = Label.new()
+	title.text = "Finance"
+	title.add_theme_font_size_override("font_size", 24)
+	main_vbox.add_child(title)
+
+	# === Section 1: Financial Summary ===
+	var summary_panel = PanelContainer.new()
+	summary_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.add_child(summary_panel)
+
+	var summary_margin = MarginContainer.new()
+	summary_margin.add_theme_constant_override("margin_left", 15)
+	summary_margin.add_theme_constant_override("margin_top", 15)
+	summary_margin.add_theme_constant_override("margin_right", 15)
+	summary_margin.add_theme_constant_override("margin_bottom", 15)
+	summary_panel.add_child(summary_margin)
+
+	var summary_vbox = VBoxContainer.new()
+	summary_vbox.add_theme_constant_override("separation", 10)
+	summary_margin.add_child(summary_vbox)
+
+	var summary_title = Label.new()
+	summary_title.text = "Financial Summary"
+	summary_title.add_theme_font_size_override("font_size", 20)
+	summary_vbox.add_child(summary_title)
+
+	_finance_balance_label = Label.new()
+	_finance_balance_label.add_theme_font_size_override("font_size", 28)
+	_finance_balance_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+	summary_vbox.add_child(_finance_balance_label)
+
+	_finance_burn_label = Label.new()
+	_finance_burn_label.add_theme_font_size_override("font_size", 16)
+	_finance_burn_label.add_theme_color_override("font_color", Color(1, 0.85, 0.3))
+	summary_vbox.add_child(_finance_burn_label)
+
+	_finance_salary_date_label = Label.new()
+	_finance_salary_date_label.add_theme_font_size_override("font_size", 14)
+	_finance_salary_date_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	summary_vbox.add_child(_finance_salary_date_label)
+
+	_finance_runway_label = Label.new()
+	_finance_runway_label.add_theme_font_size_override("font_size", 16)
+	summary_vbox.add_child(_finance_runway_label)
+
+	# === Section 2: Team Payroll ===
+	var payroll_panel = PanelContainer.new()
+	payroll_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.add_child(payroll_panel)
+
+	var payroll_margin = MarginContainer.new()
+	payroll_margin.add_theme_constant_override("margin_left", 15)
+	payroll_margin.add_theme_constant_override("margin_top", 15)
+	payroll_margin.add_theme_constant_override("margin_right", 15)
+	payroll_margin.add_theme_constant_override("margin_bottom", 15)
+	payroll_panel.add_child(payroll_margin)
+
+	var payroll_vbox = VBoxContainer.new()
+	payroll_vbox.add_theme_constant_override("separation", 10)
+	payroll_margin.add_child(payroll_vbox)
+
+	var payroll_title = Label.new()
+	payroll_title.text = "Team Payroll"
+	payroll_title.add_theme_font_size_override("font_size", 20)
+	payroll_vbox.add_child(payroll_title)
+
+	# Engineering teams sub-section
+	_finance_eng_header_label = Label.new()
+	_finance_eng_header_label.add_theme_font_size_override("font_size", 16)
+	_finance_eng_header_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+	payroll_vbox.add_child(_finance_eng_header_label)
+
+	_finance_eng_teams_container = VBoxContainer.new()
+	_finance_eng_teams_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_finance_eng_teams_container.add_theme_constant_override("separation", 4)
+	payroll_vbox.add_child(_finance_eng_teams_container)
+
+	# Manufacturing teams sub-section
+	_finance_mfg_header_label = Label.new()
+	_finance_mfg_header_label.add_theme_font_size_override("font_size", 16)
+	_finance_mfg_header_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+	payroll_vbox.add_child(_finance_mfg_header_label)
+
+	_finance_mfg_teams_container = VBoxContainer.new()
+	_finance_mfg_teams_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_finance_mfg_teams_container.add_theme_constant_override("separation", 4)
+	payroll_vbox.add_child(_finance_mfg_teams_container)
+
+	# === Section 3: Reference Prices ===
+	var prices_panel = PanelContainer.new()
+	prices_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.add_child(prices_panel)
+
+	var prices_margin = MarginContainer.new()
+	prices_margin.add_theme_constant_override("margin_left", 15)
+	prices_margin.add_theme_constant_override("margin_top", 15)
+	prices_margin.add_theme_constant_override("margin_right", 15)
+	prices_margin.add_theme_constant_override("margin_bottom", 15)
+	prices_panel.add_child(prices_margin)
+
+	var prices_vbox = VBoxContainer.new()
+	prices_vbox.add_theme_constant_override("separation", 10)
+	prices_margin.add_child(prices_vbox)
+
+	var prices_title = Label.new()
+	prices_title.text = "Reference Prices"
+	prices_title.add_theme_font_size_override("font_size", 20)
+	prices_vbox.add_child(prices_title)
+
+	_finance_prices_container = VBoxContainer.new()
+	_finance_prices_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_finance_prices_container.add_theme_constant_override("separation", 6)
+	prices_vbox.add_child(_finance_prices_container)
+
+	# Connect teams_changed to refresh finance when visible
+	game_manager.teams_changed.connect(_on_finance_teams_changed)
+
+func _on_finance_teams_changed():
+	if current_tab == Tab.FINANCE:
+		_update_finance_ui()
+
+func _update_finance_ui():
+	if not _finance_balance_label:
+		return
+
+	# === Financial Summary ===
+	_finance_balance_label.text = "Balance: %s" % game_manager.get_money_formatted()
+
+	var monthly_burn = game_manager.get_total_monthly_salary()
+	_finance_burn_label.text = "Monthly burn: %s/mo" % _format_money_value(monthly_burn)
+
+	var days_to_salary = game_manager.days_until_salary()
+	_finance_salary_date_label.text = "Next salary payment in %d day%s" % [days_to_salary, "s" if days_to_salary != 1 else ""]
+
+	# Runway calculation
+	if monthly_burn > 0:
+		var balance = game_manager.get_money()
+		var runway_months = balance / monthly_burn
+		_finance_runway_label.text = "Runway: %.1f months" % runway_months
+		if runway_months > 12.0:
+			_finance_runway_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+		elif runway_months > 6.0:
+			_finance_runway_label.add_theme_color_override("font_color", Color(1, 0.85, 0.3))
+		else:
+			_finance_runway_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+	else:
+		_finance_runway_label.text = "Runway: No expenses"
+		_finance_runway_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+
+	# === Team Payroll ===
+	_update_finance_payroll()
+
+	# === Reference Prices ===
+	_update_finance_prices()
+
+func _update_finance_payroll():
+	var team_salary = game_manager.get_team_salary()
+	var salary_str = _format_money_value(team_salary)
+
+	# Engineering teams
+	var eng_ids = game_manager.get_engineering_team_ids()
+	var eng_total = game_manager.get_engineering_monthly_salary()
+	_finance_eng_header_label.text = "Engineering Teams (%d) — %s/mo" % [eng_ids.size(), _format_money_value(eng_total)]
+
+	for child in _finance_eng_teams_container.get_children():
+		child.queue_free()
+
+	for id in eng_ids:
+		var row = _create_finance_team_row(id, salary_str)
+		_finance_eng_teams_container.add_child(row)
+
+	if eng_ids.size() == 0:
+		var none_label = Label.new()
+		none_label.text = "  No engineering teams hired"
+		none_label.add_theme_font_size_override("font_size", 13)
+		none_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		_finance_eng_teams_container.add_child(none_label)
+
+	# Manufacturing teams
+	var mfg_ids = game_manager.get_manufacturing_team_ids()
+	var mfg_total = game_manager.get_manufacturing_monthly_salary()
+	_finance_mfg_header_label.text = "Manufacturing Teams (%d) — %s/mo" % [mfg_ids.size(), _format_money_value(mfg_total)]
+
+	for child in _finance_mfg_teams_container.get_children():
+		child.queue_free()
+
+	for id in mfg_ids:
+		var row = _create_finance_team_row(id, salary_str)
+		_finance_mfg_teams_container.add_child(row)
+
+	if mfg_ids.size() == 0:
+		var none_label = Label.new()
+		none_label.text = "  No manufacturing teams hired"
+		none_label.add_theme_font_size_override("font_size", 13)
+		none_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		_finance_mfg_teams_container.add_child(none_label)
+
+func _create_finance_team_row(team_id: int, salary_str: String) -> HBoxContainer:
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 10)
+
+	var name_label = Label.new()
+	name_label.text = "  %s" % game_manager.get_team_name(team_id)
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_label.add_theme_font_size_override("font_size", 13)
+	hbox.add_child(name_label)
+
+	var cost_label = Label.new()
+	cost_label.text = "%s/mo" % salary_str
+	cost_label.add_theme_font_size_override("font_size", 13)
+	cost_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	hbox.add_child(cost_label)
+
+	return hbox
+
+func _update_finance_prices():
+	for child in _finance_prices_container.get_children():
+		child.queue_free()
+
+	# Build price rows dynamically from GameManager getters
+	_add_price_row("Engineering team hire", _format_money_value(game_manager.get_engineering_hire_cost()))
+	_add_price_row("Manufacturing team hire", _format_money_value(game_manager.get_manufacturing_hire_cost()))
+	_add_price_row("Team salary (each)", "%s/mo" % _format_money_value(game_manager.get_team_salary()))
+	_add_price_row("Floor space (per unit)", _format_money_value(game_manager.get_floor_space_cost_per_unit()))
+	_add_price_row("Tank materials", "%s/m³" % _format_money_value(game_manager.get_tank_material_cost_per_m3()))
+	_add_price_row("Stage assembly hardware", _format_money_value(game_manager.get_stage_assembly_cost()))
+	_add_price_row("Rocket integration", _format_money_value(game_manager.get_rocket_integration_cost()))
+
+	var mat_fraction = game_manager.get_engine_material_fraction()
+	_add_price_row("Engine materials", "%.0f%% of base cost" % (mat_fraction * 100.0))
+
+	var pad_cost = game_manager.get_pad_upgrade_cost()
+	if pad_cost > 0:
+		_add_price_row("Next pad upgrade", _format_money_value(pad_cost))
+	else:
+		_add_price_row("Pad upgrade", "Max level")
+
+	_add_price_row("Contract refresh", _format_money_value(game_manager.get_refresh_cost()))
+
+func _add_price_row(item_name: String, price_str: String):
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 10)
+
+	var name_label = Label.new()
+	name_label.text = item_name
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_label.add_theme_font_size_override("font_size", 14)
+	hbox.add_child(name_label)
+
+	var value_label = Label.new()
+	value_label.text = price_str
+	value_label.add_theme_font_size_override("font_size", 14)
+	value_label.add_theme_color_override("font_color", Color(1, 0.85, 0.3))
+	hbox.add_child(value_label)
+
+	_finance_prices_container.add_child(hbox)
+
+func _format_money_value(value: float) -> String:
+	if value >= 1_000_000_000.0:
+		return "$%.1fB" % (value / 1_000_000_000.0)
+	elif value >= 1_000_000.0:
+		return "$%.1fM" % (value / 1_000_000.0)
+	elif value >= 1_000.0:
+		return "$%.0fK" % (value / 1_000.0)
+	else:
+		return "$%.0f" % value
+
+# ==========================================
 # Production Tab
 # ==========================================
 
@@ -1619,6 +1931,8 @@ func _show_tab(tab: Tab):
 # Signal handlers for status bar updates
 func _on_money_changed(_new_amount: float):
 	money_label.text = game_manager.get_money_formatted()
+	if current_tab == Tab.FINANCE:
+		_update_finance_ui()
 
 func _on_date_changed(_new_day: int):
 	date_label.text = game_manager.get_date_formatted()
@@ -1638,8 +1952,8 @@ func _on_work_event(event_type: String, data: Dictionary):
 	# Show toast notifications for important events
 	var message = ""
 	var refresh_research = false
-
 	var refresh_production = false
+	var refresh_finance = false
 
 	match event_type:
 		"design_phase_complete":
@@ -1684,6 +1998,7 @@ func _on_work_event(event_type: String, data: Dictionary):
 		"salary_deducted":
 			var amount = data.get("amount", 0)
 			message = "Monthly salaries: $%.0fK" % (amount / 1000.0)
+			refresh_finance = true
 		"floor_space_completed":
 			var units = data.get("units", 0)
 			message = "Floor space completed: %d units" % units
@@ -1695,6 +2010,8 @@ func _on_work_event(event_type: String, data: Dictionary):
 		_update_research_ui()
 	if refresh_production:
 		_update_production_ui()
+	if refresh_finance and current_tab == Tab.FINANCE:
+		_update_finance_ui()
 
 	if message != "":
 		_show_toast(message)
@@ -1753,6 +2070,7 @@ func _on_research_tab_pressed():
 
 func _on_finance_tab_pressed():
 	_show_tab(Tab.FINANCE)
+	_update_finance_ui()
 
 func _on_production_tab_pressed():
 	_show_tab(Tab.PRODUCTION)
