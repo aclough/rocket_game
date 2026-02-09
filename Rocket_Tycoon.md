@@ -129,6 +129,7 @@ Others might be unseeded
   * Parts
   * Resources like fuel
   * Use of facilities like lasers
-* Have reputation limits on things like enriched uranium, being able to put lasers in orbit
+* Have reputation limits on things like enriched uranium, being able to put big mass drivers on the
+  Moon.
 * Move your facilities up to space and declare independence?
 
