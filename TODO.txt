@@ -11,7 +11,6 @@
     * Making changes to a design (engines, tank size) when cutting a new version should introduce flaws depending on how large the change is.
     * Flaws fixed on the "head" should not affect existing parts from older versions.
 * UI
-    * Little guys that represent teams on the card they're assigned to.
 * Prices
     * Keep track of the number of parts and rockets built.
     * Keep track of the amount of engineering that goes into parts and engines.

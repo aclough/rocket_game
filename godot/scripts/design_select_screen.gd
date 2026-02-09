@@ -32,6 +32,45 @@ class DesignCardWrapper extends MarginContainer:
 var pending_delete_index: int = -1
 var confirm_dialog: ConfirmationDialog = null
 
+# Cached team person icon
+var _eng_team_icon: ImageTexture = null
+
+func _create_person_icon(color: Color) -> ImageTexture:
+	var img = Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	# Head: filled circle at (8, 4), radius 3
+	for y in range(16):
+		for x in range(16):
+			var dx = x - 8
+			var dy = y - 4
+			if dx * dx + dy * dy <= 9:
+				img.set_pixel(x, y, color)
+	# Body: trapezoid y=8..15, widening from ~3px to ~6px half-width
+	for y in range(8, 16):
+		var t = float(y - 8) / 7.0
+		var half_w = int(3.0 + t * 3.0)
+		for x in range(8 - half_w, 8 + half_w + 1):
+			if x >= 0 and x < 16:
+				img.set_pixel(x, y, color)
+	var tex = ImageTexture.create_from_image(img)
+	return tex
+
+func _get_eng_team_icon() -> ImageTexture:
+	if _eng_team_icon == null:
+		_eng_team_icon = _create_person_icon(Color(0.4, 0.7, 1.0))
+	return _eng_team_icon
+
+func _create_team_count_icons_hbox(count: int, icon: ImageTexture) -> HBoxContainer:
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 4)
+	for i in range(count):
+		var tex_rect = TextureRect.new()
+		tex_rect.texture = icon
+		tex_rect.custom_minimum_size = Vector2(16, 16)
+		tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		hbox.add_child(tex_rect)
+	return hbox
+
 # UI references
 @onready var mission_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/TitleVBox/MissionLabel
 @onready var requirements_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderHBox/TitleVBox/RequirementsLabel
@@ -278,10 +317,10 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 
 	# Add design status info
 	if base_status != "Specification" and base_status != "":
+		var status_hbox = HBoxContainer.new()
+		status_hbox.add_theme_constant_override("separation", 8)
 		var status_label = Label.new()
 		status_label.text = "%s" % status
-		if teams_count > 0:
-			status_label.text += " (%d teams)" % teams_count
 		status_label.add_theme_font_size_override("font_size", 11)
 		if base_status == "Testing":
 			status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
@@ -289,7 +328,11 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 			status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
 		elif base_status == "Engineering":
 			status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
-		info_vbox.add_child(status_label)
+		status_hbox.add_child(status_label)
+		if teams_count > 0:
+			var icons = _create_team_count_icons_hbox(teams_count, _get_eng_team_icon())
+			status_hbox.add_child(icons)
+		info_vbox.add_child(status_hbox)
 
 		# Progress bar for work phases
 		if base_status == "Engineering" and progress > 0 and progress < 1:
@@ -442,16 +485,20 @@ func _create_engine_design_card(index: int) -> Control:
 
 	# Status label
 	if base_status != "Untested":
+		var status_hbox = HBoxContainer.new()
+		status_hbox.add_theme_constant_override("separation", 8)
 		var status_label = Label.new()
 		status_label.text = status
-		if teams_count > 0:
-			status_label.text += " (%d teams)" % teams_count
 		status_label.add_theme_font_size_override("font_size", 11)
 		if base_status == "Testing":
 			status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
 		elif base_status == "Fixing":
 			status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
-		info_vbox.add_child(status_label)
+		status_hbox.add_child(status_label)
+		if teams_count > 0:
+			var icons = _create_team_count_icons_hbox(teams_count, _get_eng_team_icon())
+			status_hbox.add_child(icons)
+		info_vbox.add_child(status_hbox)
 	else:
 		var untested_label = Label.new()
 		untested_label.text = "Untested"

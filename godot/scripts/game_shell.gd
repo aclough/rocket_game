@@ -79,6 +79,52 @@ var _finance_prices_container: VBoxContainer
 # Toast notification stacking
 var _active_toasts: Array = []
 
+# Cached team person icons
+var _eng_team_icon: ImageTexture = null
+var _mfg_team_icon: ImageTexture = null
+
+func _create_person_icon(color: Color) -> ImageTexture:
+	var img = Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	# Head: filled circle at (8, 4), radius 3
+	for y in range(16):
+		for x in range(16):
+			var dx = x - 8
+			var dy = y - 4
+			if dx * dx + dy * dy <= 9:
+				img.set_pixel(x, y, color)
+	# Body: trapezoid y=8..15, widening from ~3px to ~6px half-width
+	for y in range(8, 16):
+		var t = float(y - 8) / 7.0
+		var half_w = int(3.0 + t * 3.0)
+		for x in range(8 - half_w, 8 + half_w + 1):
+			if x >= 0 and x < 16:
+				img.set_pixel(x, y, color)
+	var tex = ImageTexture.create_from_image(img)
+	return tex
+
+func _get_eng_team_icon() -> ImageTexture:
+	if _eng_team_icon == null:
+		_eng_team_icon = _create_person_icon(Color(0.4, 0.7, 1.0))
+	return _eng_team_icon
+
+func _get_mfg_team_icon() -> ImageTexture:
+	if _mfg_team_icon == null:
+		_mfg_team_icon = _create_person_icon(Color(0.7, 0.5, 1.0))
+	return _mfg_team_icon
+
+func _create_team_icons_hbox(team_ids: Array, icon: ImageTexture) -> HBoxContainer:
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 4)
+	for tid in team_ids:
+		var tex_rect = TextureRect.new()
+		tex_rect.texture = icon
+		tex_rect.custom_minimum_size = Vector2(16, 16)
+		tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tex_rect.tooltip_text = game_manager.get_team_name(tid)
+		hbox.add_child(tex_rect)
+	return hbox
+
 func _ready():
 	# Connect GameManager signals
 	game_manager.money_changed.connect(_on_money_changed)
@@ -524,12 +570,7 @@ func _create_design_work_card(index: int) -> PanelContainer:
 
 	if teams_count > 0:
 		var teams_on = _get_teams_on_design(index)
-		for tid in teams_on:
-			var tname_label = Label.new()
-			tname_label.text = game_manager.get_team_name(tid)
-			tname_label.add_theme_font_size_override("font_size", 12)
-			tname_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-			vbox.add_child(tname_label)
+		vbox.add_child(_create_team_icons_hbox(teams_on, _get_eng_team_icon()))
 	else:
 		var teams_label = Label.new()
 		teams_label.text = "No teams assigned - drag a team here"
@@ -745,12 +786,7 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 	if base_status != "Untested":
 		if teams_count > 0:
 			var teams_on = _get_teams_on_engine(index)
-			for tid in teams_on:
-				var tname_label = Label.new()
-				tname_label.text = game_manager.get_team_name(tid)
-				tname_label.add_theme_font_size_override("font_size", 12)
-				tname_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-				vbox.add_child(tname_label)
+			vbox.add_child(_create_team_icons_hbox(teams_on, _get_eng_team_icon()))
 		else:
 			var teams_label = Label.new()
 			teams_label.text = "No teams assigned"
@@ -1642,12 +1678,7 @@ func _create_order_card(order_id: int) -> PanelContainer:
 		# Normal order card — teams info, progress bar, buttons
 		if teams_count > 0:
 			var teams_on = _get_teams_on_order(order_id)
-			for tid in teams_on:
-				var tname_label = Label.new()
-				tname_label.text = game_manager.get_team_name(tid)
-				tname_label.add_theme_font_size_override("font_size", 12)
-				tname_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-				vbox.add_child(tname_label)
+			vbox.add_child(_create_team_icons_hbox(teams_on, _get_mfg_team_icon()))
 		else:
 			var teams_label = Label.new()
 			teams_label.text = "No teams assigned - assign teams to start production"
