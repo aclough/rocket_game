@@ -74,6 +74,9 @@ impl GameManager {
     fn time_resumed();
 
     #[signal]
+    fn speed_changed(new_speed: f64);
+
+    #[signal]
     fn work_event_occurred(event_type: GString, data: Dictionary);
 
     #[signal]
@@ -1269,6 +1272,58 @@ impl GameManager {
         }
     }
 
+    /// Get current simulation speed
+    #[func]
+    pub fn get_time_speed(&self) -> f64 {
+        self.state.get_days_per_second()
+    }
+
+    /// Set simulation speed (emits speed_changed if value changed)
+    #[func]
+    pub fn set_time_speed(&mut self, speed: f64) {
+        let old = self.state.get_days_per_second();
+        self.state.set_days_per_second(speed);
+        let new_speed = self.state.get_days_per_second();
+        if (new_speed - old).abs() > 0.001 {
+            self.base_mut()
+                .emit_signal("speed_changed", &[Variant::from(new_speed)]);
+        }
+    }
+
+    /// Get number of speed presets
+    #[func]
+    pub fn get_speed_preset_count(&self) -> i32 {
+        crate::time_system::SPEED_PRESETS.len() as i32
+    }
+
+    /// Get label for a speed preset
+    #[func]
+    pub fn get_speed_preset_label(&self, index: i32) -> GString {
+        if let Some(&(label, _)) = crate::time_system::SPEED_PRESETS.get(index as usize) {
+            GString::from(label)
+        } else {
+            GString::new()
+        }
+    }
+
+    /// Get value for a speed preset
+    #[func]
+    pub fn get_speed_preset_value(&self, index: i32) -> f64 {
+        if let Some(&(_, value)) = crate::time_system::SPEED_PRESETS.get(index as usize) {
+            value
+        } else {
+            0.0
+        }
+    }
+
+    /// Get current speed preset index (-1 if custom)
+    #[func]
+    pub fn get_current_speed_preset_index(&self) -> i32 {
+        self.state.time_system.get_speed_preset_index()
+            .map(|i| i as i32)
+            .unwrap_or(-1)
+    }
+
     /// Get days until next salary payment
     #[func]
     pub fn days_until_salary(&self) -> i32 {
@@ -2286,6 +2341,32 @@ impl GameManager {
         result
     }
 
+    /// Increase quantity of an engine manufacturing order.
+    /// Returns cost charged, or -1.0 on failure.
+    #[func]
+    pub fn increase_engine_order(&mut self, order_id: i32, quantity_to_add: i32) -> f64 {
+        if order_id < 0 || quantity_to_add <= 0 {
+            self.last_order_error = "Invalid parameters".to_string();
+            return -1.0;
+        }
+        self.sync_money_to_state();
+        match self.state.player_company.increase_engine_order(
+            order_id as u32,
+            quantity_to_add as u32,
+        ) {
+            Ok(cost) => {
+                self.sync_money_from_state();
+                self.base_mut().emit_signal("manufacturing_changed", &[]);
+                cost
+            }
+            Err(msg) => {
+                self.sync_money_from_state();
+                self.last_order_error = msg.to_string();
+                -1.0
+            }
+        }
+    }
+
     /// Get number of active manufacturing orders
     #[func]
     pub fn get_active_order_count(&self) -> i32 {
@@ -2307,6 +2388,7 @@ impl GameManager {
             dict.set("total_work", order.total_work);
             dict.set("current_progress", order.progress);
             dict.set("waiting_for_engines", order.waiting_for_engines);
+            dict.set("material_cost_per_unit", order.material_cost_per_unit);
 
             match &order.order_type {
                 crate::manufacturing::ManufacturingOrderType::Engine { engine_design_id, quantity, completed, .. } => {

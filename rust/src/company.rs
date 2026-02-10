@@ -852,6 +852,31 @@ impl Company {
         self.manufacturing.cancel_order(order_id)
     }
 
+    /// Increase quantity of an existing engine manufacturing order.
+    /// Returns the additional cost on success.
+    pub fn increase_engine_order(
+        &mut self,
+        order_id: ManufacturingOrderId,
+        quantity_to_add: u32,
+    ) -> Result<f64, &'static str> {
+        if quantity_to_add == 0 {
+            return Err("Quantity must be greater than 0");
+        }
+        // Check it's an engine order before checking funds
+        let cost_per_unit = match self.manufacturing.get_order(order_id) {
+            Some(order) if order.is_engine_order() => order.material_cost_per_unit,
+            Some(_) => return Err("Not an engine order"),
+            None => return Err("Order not found"),
+        };
+        let additional_cost = cost_per_unit * quantity_to_add as f64;
+        if self.money < additional_cost {
+            return Err("Insufficient funds");
+        }
+        self.manufacturing.increase_engine_order_quantity(order_id, quantity_to_add);
+        self.money -= additional_cost;
+        Ok(additional_cost)
+    }
+
     /// Assign a team to work on a manufacturing order (manufacturing teams only)
     pub fn assign_team_to_manufacturing(&mut self, team_id: u32, order_id: ManufacturingOrderId) -> bool {
         // Verify order exists and is not waiting for engines
@@ -1710,5 +1735,35 @@ mod tests {
         // Engines should be consumed
         assert_eq!(company.manufacturing.get_engines_available(1), 0);
         assert_eq!(company.manufacturing.get_engines_available(0), 0);
+    }
+
+    #[test]
+    fn test_increase_engine_order_deducts_cost() {
+        let mut company = Company::new();
+        // Start an engine order
+        let rev = company.engine_designs[1].cut_revision("mfg");
+        let (order_id, initial_cost) = company.start_engine_order(1, rev, 1).unwrap();
+        let money_after_start = company.money;
+
+        let cost_per_unit = initial_cost; // quantity=1
+        let result = company.increase_engine_order(order_id, 3);
+        assert!(result.is_ok());
+        let additional_cost = result.unwrap();
+        assert!((additional_cost - cost_per_unit * 3.0).abs() < 0.01);
+        assert!((company.money - (money_after_start - additional_cost)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_increase_engine_order_insufficient_funds() {
+        let mut company = Company::new();
+        let rev = company.engine_designs[1].cut_revision("mfg");
+        let (order_id, _) = company.start_engine_order(1, rev, 1).unwrap();
+
+        // Drain funds
+        company.money = 0.0;
+
+        let result = company.increase_engine_order(order_id, 1);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Insufficient funds");
     }
 }

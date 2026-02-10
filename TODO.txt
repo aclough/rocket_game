@@ -11,8 +11,6 @@
     * Flaws fixed on the "head" should not affect existing parts from older versions.
     * Changes to the design of parts can introduce flaws.
 * UI
-    * Add ability to increase size of already exiting production runs in the manufacturing queue.
-    * Faster time rate.  Maybe make it variable.
 * Prices
     * Keep track of the number of parts and rockets built.
     * Keep track of the amount of engineering that goes into parts and engines.

@@ -101,7 +101,30 @@ impl TimeSystem {
         let days_since_salary = self.current_day.saturating_sub(self.last_salary_day);
         DAYS_PER_MONTH.saturating_sub(days_since_salary)
     }
+
+    /// Get current simulation speed in days per second
+    pub fn get_days_per_second(&self) -> f64 {
+        self.days_per_second
+    }
+
+    /// Set simulation speed in days per second (minimum 0.1)
+    pub fn set_days_per_second(&mut self, speed: f64) {
+        self.days_per_second = speed.max(0.1);
+    }
+
+    /// Find which speed preset index matches the current speed, if any
+    pub fn get_speed_preset_index(&self) -> Option<usize> {
+        SPEED_PRESETS.iter().position(|&(_, v)| (v - self.days_per_second).abs() < 0.001)
+    }
 }
+
+/// Speed presets: (label, days_per_second)
+pub const SPEED_PRESETS: &[(&str, f64)] = &[
+    ("1x", 1.0),
+    ("2x", 2.0),
+    ("5x", 5.0),
+    ("10x", 10.0),
+];
 
 impl Default for TimeSystem {
     fn default() -> Self {
@@ -180,6 +203,56 @@ mod tests {
 
         // Should not be due immediately after payment
         assert!(!ts.check_salary_due());
+    }
+
+    #[test]
+    fn test_speed_setting() {
+        let mut ts = TimeSystem::new();
+        assert_eq!(ts.get_days_per_second(), DEFAULT_DAYS_PER_SECOND);
+
+        ts.set_days_per_second(5.0);
+        assert_eq!(ts.get_days_per_second(), 5.0);
+
+        // Clamped to minimum 0.1
+        ts.set_days_per_second(-1.0);
+        assert!((ts.get_days_per_second() - 0.1).abs() < 0.001);
+
+        ts.set_days_per_second(0.0);
+        assert!((ts.get_days_per_second() - 0.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_speed_preset_index() {
+        let mut ts = TimeSystem::new();
+        ts.set_days_per_second(2.0);
+        assert_eq!(ts.get_speed_preset_index(), Some(1)); // "2x"
+
+        ts.set_days_per_second(10.0);
+        assert_eq!(ts.get_speed_preset_index(), Some(3)); // "10x"
+
+        ts.set_days_per_second(3.0);
+        assert_eq!(ts.get_speed_preset_index(), None); // custom
+    }
+
+    #[test]
+    fn test_speed_doesnt_affect_pause() {
+        let mut ts = TimeSystem::new();
+        ts.set_days_per_second(10.0);
+        assert!(ts.paused);
+        let days = ts.advance(1.0);
+        assert_eq!(days, 0);
+    }
+
+    #[test]
+    fn test_high_speed_produces_correct_days() {
+        let mut ts = TimeSystem::new();
+        ts.set_paused(false);
+        ts.set_days_per_second(10.0);
+
+        // 1 second at 10 days/sec = 10 days
+        let days = ts.advance(1.0);
+        assert_eq!(days, 10);
+        assert_eq!(ts.current_day, 11);
     }
 
     #[test]

@@ -76,6 +76,9 @@ var _finance_eng_teams_container: VBoxContainer
 var _finance_mfg_teams_container: VBoxContainer
 var _finance_prices_container: VBoxContainer
 
+# Speed control buttons
+var _speed_buttons: Array = []
+
 # Toast notification stacking
 var _active_toasts: Array = []
 
@@ -147,9 +150,13 @@ func _ready():
 	_setup_production_content()
 	_setup_finance_content()
 
+	# Connect speed changed signal
+	game_manager.speed_changed.connect(_on_speed_changed)
+
 	# Initial status bar update
 	_update_status_bar()
 	_update_pause_indicator()
+	_setup_speed_controls()
 
 	# Create timer for periodic research UI updates
 	_research_update_timer = Timer.new()
@@ -171,6 +178,14 @@ func _input(event: InputEvent):
 	if event.is_action_pressed("ui_accept"):  # Space is typically mapped to ui_accept
 		game_manager.toggle_time_pause()
 		get_viewport().set_input_as_handled()
+	# Number keys 1-4 for speed presets
+	elif event is InputEventKey and event.pressed and not event.echo:
+		var key = event.keycode
+		var preset_count = game_manager.get_speed_preset_count()
+		if key >= KEY_1 and key <= KEY_1 + preset_count - 1:
+			var index = key - KEY_1
+			game_manager.set_time_speed(game_manager.get_speed_preset_value(index))
+			get_viewport().set_input_as_handled()
 
 func _setup_missions_content():
 	var missions = content_areas[Tab.MISSIONS]
@@ -1718,6 +1733,13 @@ func _create_order_card(order_id: int) -> PanelContainer:
 			unassign_btn.pressed.connect(_on_prod_unassign_teams_pressed.bind(order_id))
 			btn_hbox.add_child(unassign_btn)
 
+		if is_engine:
+			var more_btn = Button.new()
+			more_btn.text = "+More"
+			more_btn.add_theme_font_size_override("font_size", 12)
+			more_btn.pressed.connect(_on_prod_increase_order_pressed.bind(order_id))
+			btn_hbox.add_child(more_btn)
+
 		var cancel_btn = Button.new()
 		cancel_btn.text = "Cancel"
 		cancel_btn.add_theme_font_size_override("font_size", 12)
@@ -1863,6 +1885,14 @@ func _on_prod_cancel_order_pressed(order_id: int):
 	game_manager.cancel_manufacturing_order(order_id)
 	_update_production_ui()
 	_update_research_teams()
+
+func _on_prod_increase_order_pressed(order_id: int):
+	var result = game_manager.increase_engine_order(order_id, 1)
+	if result >= 0:
+		_show_toast("+1 unit ($%sM)" % _format_money_short(result / 1_000_000.0))
+		_update_production_ui()
+	else:
+		_show_toast("Cannot increase order: %s" % game_manager.get_last_order_error())
 
 func _on_prod_build_engines_pressed():
 	# Show dialog to select which engine to build
@@ -2097,6 +2127,43 @@ func _on_date_changed(_new_day: int):
 
 func _on_fame_changed(_new_fame: float):
 	fame_label.text = game_manager.get_fame_formatted()
+
+func _setup_speed_controls():
+	var status_hbox = $MainVBox/StatusBar/StatusMargin/StatusHBox
+	var spacer = status_hbox.get_node("Spacer")
+
+	var speed_hbox = HBoxContainer.new()
+	speed_hbox.add_theme_constant_override("separation", 4)
+
+	var speed_label = Label.new()
+	speed_label.text = "Speed:"
+	speed_label.add_theme_font_size_override("font_size", 14)
+	speed_hbox.add_child(speed_label)
+
+	var preset_count = game_manager.get_speed_preset_count()
+	for i in range(preset_count):
+		var btn = Button.new()
+		btn.text = game_manager.get_speed_preset_label(i)
+		btn.toggle_mode = true
+		btn.add_theme_font_size_override("font_size", 12)
+		btn.pressed.connect(_on_speed_preset_pressed.bind(i))
+		speed_hbox.add_child(btn)
+		_speed_buttons.append(btn)
+
+	status_hbox.add_child(speed_hbox)
+	status_hbox.move_child(speed_hbox, spacer.get_index())
+	_update_speed_buttons()
+
+func _on_speed_preset_pressed(index: int):
+	game_manager.set_time_speed(game_manager.get_speed_preset_value(index))
+
+func _on_speed_changed(_new_speed: float):
+	_update_speed_buttons()
+
+func _update_speed_buttons():
+	var current_index = game_manager.get_current_speed_preset_index()
+	for i in range(_speed_buttons.size()):
+		_speed_buttons[i].button_pressed = (i == current_index)
 
 func _on_time_paused():
 	_update_pause_indicator()

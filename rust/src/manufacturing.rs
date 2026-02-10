@@ -393,6 +393,24 @@ impl Manufacturing {
         }
     }
 
+    /// Increase quantity of an existing engine order.
+    /// Returns the additional material cost, or None if the order doesn't exist
+    /// or is not an engine order.
+    pub fn increase_engine_order_quantity(
+        &mut self,
+        order_id: ManufacturingOrderId,
+        quantity_to_add: u32,
+    ) -> Option<f64> {
+        let order = self.active_orders.iter_mut().find(|o| o.id == order_id)?;
+        match &mut order.order_type {
+            ManufacturingOrderType::Engine { quantity, .. } => {
+                *quantity += quantity_to_add;
+                Some(order.material_cost_per_unit * quantity_to_add as f64)
+            }
+            ManufacturingOrderType::Rocket { .. } => None,
+        }
+    }
+
     /// Get a reference to an order by ID
     pub fn get_order(&self, order_id: ManufacturingOrderId) -> Option<&ManufacturingOrder> {
         self.active_orders.iter().find(|o| o.id == order_id)
@@ -1264,5 +1282,41 @@ mod tests {
 
         assert!((comp_tank / alu_tank - 0.70).abs() < 0.01,
             "Composite tank should be 70% of aluminium: alu={:.1}, comp={:.1}", alu_tank, comp_tank);
+    }
+
+    // ==========================================
+    // Increase Engine Order Quantity Tests
+    // ==========================================
+
+    #[test]
+    fn test_increase_engine_order_quantity() {
+        let mut mfg = Manufacturing::new();
+        let snap = kerolox_snapshot();
+        let (order_id, _) = mfg.start_engine_order(1, 1, snap, 3).unwrap();
+
+        let cost_per_unit = mfg.get_order(order_id).unwrap().material_cost_per_unit;
+        let additional_cost = mfg.increase_engine_order_quantity(order_id, 5).unwrap();
+        assert!((additional_cost - cost_per_unit * 5.0).abs() < 0.01);
+
+        // Verify quantity increased
+        match &mfg.get_order(order_id).unwrap().order_type {
+            ManufacturingOrderType::Engine { quantity, .. } => assert_eq!(*quantity, 8),
+            _ => panic!("Expected engine order"),
+        }
+    }
+
+    #[test]
+    fn test_increase_rocket_order_returns_none() {
+        let mut mfg = Manufacturing::new();
+        let design = RocketDesign::default_design();
+        let (order_id, _) = mfg.start_rocket_order(0, 1, design, false).unwrap();
+
+        assert!(mfg.increase_engine_order_quantity(order_id, 2).is_none());
+    }
+
+    #[test]
+    fn test_increase_nonexistent_order_returns_none() {
+        let mut mfg = Manufacturing::new();
+        assert!(mfg.increase_engine_order_quantity(999, 2).is_none());
     }
 }

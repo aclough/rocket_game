@@ -105,6 +105,16 @@ impl GameState {
     pub fn days_until_salary(&self) -> u32 {
         self.time_system.days_until_salary()
     }
+
+    /// Get current simulation speed in days per second
+    pub fn get_days_per_second(&self) -> f64 {
+        self.time_system.get_days_per_second()
+    }
+
+    /// Set simulation speed in days per second
+    pub fn set_days_per_second(&mut self, speed: f64) {
+        self.time_system.set_days_per_second(speed);
+    }
 }
 
 impl Default for GameState {
