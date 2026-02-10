@@ -475,9 +475,10 @@ func _create_engine_design_card(index: int) -> Control:
 	name_label.add_theme_font_size_override("font_size", 20)
 	info_vbox.add_child(name_label)
 
+	var complexity = game_manager.get_engine_design_complexity(index)
 	var stats_label = Label.new()
-	stats_label.text = "%s | %.0fx | %.0f kN | %.0f m/s | %s | $%s" % [
-		fuel_type_name, engine_scale, thrust, ve, _format_mass(mass), _format_money(cost)
+	stats_label.text = "%s | %.0fx | C%d | %.0f kN | %.0f m/s | %s | $%s" % [
+		fuel_type_name, engine_scale, complexity, thrust, ve, _format_mass(mass), _format_money(cost)
 	]
 	stats_label.add_theme_font_size_override("font_size", 14)
 	stats_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))

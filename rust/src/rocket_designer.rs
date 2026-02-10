@@ -86,6 +86,16 @@ impl RocketDesigner {
         }
     }
 
+    /// Returns the complexity of an engine type
+    #[func]
+    pub fn get_engine_complexity(&self, engine_type: i32) -> i32 {
+        if engine_type >= 0 && (engine_type as usize) < self.engine_snapshots.len() {
+            self.engine_snapshots[engine_type as usize].complexity
+        } else {
+            0
+        }
+    }
+
     /// Returns the exhaust velocity of an engine type in m/s
     #[func]
     pub fn get_engine_exhaust_velocity(&self, engine_type: i32) -> f64 {
