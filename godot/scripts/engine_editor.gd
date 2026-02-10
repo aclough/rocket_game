@@ -16,6 +16,8 @@ var _status_label: Label
 var _fuel_buttons: Array[Button] = []
 var _scale_slider: HSlider
 var _scale_label: Label
+var _complexity_slider: HSlider
+var _complexity_label: Label
 var _stats_labels: Dictionary = {}
 var _config_container: VBoxContainer
 var _footer_btn: Button
@@ -261,6 +263,38 @@ func _build_chemical_config():
 	range_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
 	_config_container.add_child(range_label)
 
+	# Complexity slider
+	var complexity_hbox = HBoxContainer.new()
+	complexity_hbox.add_theme_constant_override("separation", 10)
+	_config_container.add_child(complexity_hbox)
+
+	var complexity_title = Label.new()
+	complexity_title.text = "Complexity:"
+	complexity_title.add_theme_font_size_override("font_size", 14)
+	complexity_hbox.add_child(complexity_title)
+
+	_complexity_slider = HSlider.new()
+	_complexity_slider.min_value = 1
+	_complexity_slider.max_value = 10
+	_complexity_slider.step = 1
+	_complexity_slider.value = 6
+	_complexity_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_complexity_slider.custom_minimum_size = Vector2(200, 0)
+	_complexity_slider.value_changed.connect(_on_complexity_changed)
+	complexity_hbox.add_child(_complexity_slider)
+
+	_complexity_label = Label.new()
+	_complexity_label.text = "6"
+	_complexity_label.add_theme_font_size_override("font_size", 14)
+	_complexity_label.custom_minimum_size = Vector2(30, 0)
+	complexity_hbox.add_child(_complexity_label)
+
+	var complexity_hint = Label.new()
+	complexity_hint.text = "Higher = better performance, higher cost/build time, more flaws"
+	complexity_hint.add_theme_font_size_override("font_size", 11)
+	complexity_hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+	_config_container.add_child(complexity_hint)
+
 func _refresh_ui():
 	if not game_manager or engine_index < 0:
 		return
@@ -297,6 +331,16 @@ func _refresh_ui():
 	_scale_label.text = "%.2fx" % engine_scale
 	_scale_slider.editable = can_modify
 
+	# Complexity slider
+	var complexity = game_manager.get_engine_design_complexity(engine_index)
+	var complexity_range = game_manager.get_engine_design_complexity_range(engine_index)
+	if complexity_range.size() == 2:
+		_complexity_slider.min_value = complexity_range[0]
+		_complexity_slider.max_value = complexity_range[1]
+	_complexity_slider.set_value_no_signal(complexity)
+	_complexity_label.text = "%d" % complexity
+	_complexity_slider.editable = can_modify
+
 	# Stats
 	_update_stats()
 
@@ -332,12 +376,19 @@ func _update_stats():
 func _on_fuel_type_selected(fuel_index: int):
 	if game_manager and engine_index >= 0:
 		game_manager.set_engine_design_fuel_type(engine_index, fuel_index)
+		# Fuel type change may re-clamp complexity range, so do a full refresh
 		_refresh_ui()
 
 func _on_scale_changed(value: float):
 	if game_manager and engine_index >= 0:
 		game_manager.set_engine_design_scale(engine_index, value)
 		_scale_label.text = "%.2fx" % value
+		_update_stats()
+
+func _on_complexity_changed(value: float):
+	if game_manager and engine_index >= 0:
+		game_manager.set_engine_design_complexity(engine_index, int(value))
+		_complexity_label.text = "%d" % int(value)
 		_update_stats()
 
 func _on_rename_pressed():

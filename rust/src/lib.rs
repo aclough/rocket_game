@@ -1,5 +1,6 @@
 use godot::prelude::*;
 
+pub mod balance;
 pub mod company;
 pub mod contract;
 pub mod design_lineage;

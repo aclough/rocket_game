@@ -583,9 +583,12 @@ pub fn engine_material_cost(snapshot: &EngineDesignSnapshot) -> f64 {
 
 /// Calculate engine build work (team-days) from a snapshot.
 /// Build time varies by engine type (kerolox 120, hydrolox 180, solid 45 base days).
+/// Complexity scales build time quadratically: (complexity / center)^2.
 pub fn engine_build_work(snapshot: &EngineDesignSnapshot) -> f64 {
+    let range = crate::balance::complexity_range(snapshot.fuel_type);
     crate::resources::engine_base_build_days(snapshot.fuel_type)
         * snapshot.scale.powf(ENGINE_BUILD_SCALE_EXPONENT)
+        * crate::balance::complexity_build_multiplier(snapshot.complexity, range.center)
 }
 
 /// Calculate material cost for a stage (tanks + assembly hardware, no engines)
@@ -1179,5 +1182,42 @@ mod tests {
         assert_eq!(unblocked, vec![order1]);
         assert!(!mfg.get_order(order1).unwrap().waiting_for_engines);
         assert!(mfg.get_order(order2).unwrap().waiting_for_engines);
+    }
+
+    // ==========================================
+    // Complexity Effect on Build Time Tests
+    // ==========================================
+
+    #[test]
+    fn test_engine_build_work_complexity_center() {
+        // Center complexity should give the same result as before
+        let snap = kerolox_snapshot();
+        assert_eq!(snap.complexity, 6); // center for kerolox
+        let work = engine_build_work(&snap);
+        // 120 * 1.0^0.75 * (6/6)^2 = 120
+        assert!((work - 120.0).abs() < 0.1,
+            "Center complexity build work should be 120 days, got {}", work);
+    }
+
+    #[test]
+    fn test_engine_build_work_high_complexity() {
+        let mut snap = kerolox_snapshot();
+        snap.complexity = 8;
+        let work = engine_build_work(&snap);
+        // 120 * 1.0^0.75 * (8/6)^2 = 120 * 1.778 ≈ 213.3
+        let expected = 120.0 * (8.0_f64 / 6.0).powi(2);
+        assert!((work - expected).abs() < 0.1,
+            "High complexity build work should be {:.1} days, got {:.1}", expected, work);
+    }
+
+    #[test]
+    fn test_engine_build_work_low_complexity() {
+        let mut snap = kerolox_snapshot();
+        snap.complexity = 4;
+        let work = engine_build_work(&snap);
+        // 120 * 1.0^0.75 * (4/6)^2 = 120 * 0.444 ≈ 53.3
+        let expected = 120.0 * (4.0_f64 / 6.0).powi(2);
+        assert!((work - expected).abs() < 0.1,
+            "Low complexity build work should be {:.1} days, got {:.1}", expected, work);
     }
 }

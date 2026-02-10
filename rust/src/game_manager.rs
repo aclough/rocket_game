@@ -1851,6 +1851,44 @@ impl GameManager {
         result
     }
 
+    /// Set the complexity of an engine design
+    #[func]
+    pub fn set_engine_design_complexity(&mut self, index: i32, complexity: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let result = self.state.player_company.set_engine_design_complexity(index as usize, complexity);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Get the complexity of an engine design
+    #[func]
+    pub fn get_engine_design_complexity(&self, index: i32) -> i32 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            self.state.player_company.engine_designs[index as usize].head().complexity
+        } else {
+            0
+        }
+    }
+
+    /// Get the complexity range for an engine design as [min, max]
+    #[func]
+    pub fn get_engine_design_complexity_range(&self, index: i32) -> Array<i32> {
+        let mut arr = Array::new();
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let range = self.state.player_company.engine_designs[index as usize].head().complexity_range();
+            arr.push(range.min);
+            arr.push(range.max);
+        } else {
+            arr.push(0);
+            arr.push(0);
+        }
+        arr
+    }
+
     /// Check if an engine design can be modified (only when Untested)
     #[func]
     pub fn can_modify_engine_design(&self, index: i32) -> bool {

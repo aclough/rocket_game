@@ -1,3 +1,4 @@
+use crate::balance::{self, complexity_range, complexity_mass_multiplier, complexity_ve_multiplier, complexity_cost_multiplier};
 use crate::engine::{costs, EngineStatus};
 use crate::flaw::{Flaw, FlawCategory, FlawGenerator};
 
@@ -68,6 +69,9 @@ pub enum EngineComponent {
 pub struct EngineDesign {
     pub components: Vec<EngineComponent>,
     pub scale: f64,
+    /// Complexity level (integer within fuel-type-specific range).
+    /// Higher = better performance, higher cost/build time, more flaws.
+    pub complexity: i32,
     // Flaw system fields (same role as old EngineSpec)
     pub active_flaws: Vec<Flaw>,
     pub fixed_flaws: Vec<Flaw>,
@@ -85,6 +89,7 @@ pub struct EngineDesignSnapshot {
     pub name: String,
     pub fuel_type: FuelType,
     pub scale: f64,
+    pub complexity: i32,
     pub mass_kg: f64,
     pub thrust_kn: f64,
     pub exhaust_velocity_ms: f64,
@@ -113,12 +118,31 @@ impl EngineDesign {
         }
     }
 
-    /// Set fuel type by replacing components. Returns false if not modifiable.
+    /// Set fuel type by replacing components. Re-clamps complexity to new range.
+    /// Returns false if not modifiable.
     pub fn set_fuel_type(&mut self, fuel: FuelType) -> bool {
         if !self.can_modify() {
             return false;
         }
         self.components = fuel.components();
+        // Re-clamp complexity to the new fuel type's range
+        let range = complexity_range(fuel);
+        self.complexity = self.complexity.clamp(range.min, range.max);
+        true
+    }
+
+    /// Get the complexity range for the current fuel type
+    pub fn complexity_range(&self) -> balance::ComplexityRange {
+        complexity_range(self.fuel_type())
+    }
+
+    /// Set complexity (clamped to fuel-type range). Returns false if not modifiable.
+    pub fn set_complexity(&mut self, complexity: i32) -> bool {
+        if !self.can_modify() {
+            return false;
+        }
+        let range = self.complexity_range();
+        self.complexity = complexity.clamp(range.min, range.max);
         true
     }
 
@@ -170,17 +194,24 @@ impl EngineDesign {
             };
 
         let fuel_type = self.fuel_type();
-        let mass_kg = base_mass * self.scale;
+        let range = complexity_range(fuel_type);
+        let center = range.center;
+
+        let mass_kg = base_mass * self.scale * complexity_mass_multiplier(self.complexity, center);
+        let exhaust_velocity_ms = ve * complexity_ve_multiplier(self.complexity, center);
+        let raw_cost = crate::resources::engine_resource_cost(fuel_type, mass_kg);
+        let base_cost = raw_cost * complexity_cost_multiplier(self.complexity, center);
 
         EngineDesignSnapshot {
             engine_design_id: id,
             name: name.to_string(),
             fuel_type,
             scale: self.scale,
+            complexity: self.complexity,
             mass_kg,
             thrust_kn: base_thrust * self.scale,
-            exhaust_velocity_ms: ve,
-            base_cost: crate::resources::engine_resource_cost(fuel_type, mass_kg),
+            exhaust_velocity_ms,
+            base_cost,
             propellant_density: density,
             tank_mass_ratio: tank_ratio,
             is_solid,
@@ -205,11 +236,14 @@ impl EngineDesign {
             FlawCategory::LiquidEngine
         };
         let fuel_type = self.fuel_type();
-        self.active_flaws = generator.generate_engine_flaws_for_type_with_category(
+        let range = complexity_range(fuel_type);
+        self.active_flaws = generator.generate_engine_flaws_with_complexity(
             engine_design_id,
             category,
             fuel_type,
             self.scale,
+            self.complexity,
+            range.center,
         );
         self.fixed_flaws.clear();
         self.flaws_generated = true;
@@ -304,11 +338,14 @@ impl EngineDesign {
 // Engine Creation Functions
 // ==========================================
 
-/// Create an engine design with the given fuel type and scale
+/// Create an engine design with the given fuel type and scale.
+/// Complexity defaults to the center of the fuel type's range.
 pub fn create_engine(fuel: FuelType, scale: f64) -> EngineDesign {
+    let range = complexity_range(fuel);
     EngineDesign {
         components: fuel.components(),
         scale: scale.clamp(ENGINE_SCALE_MIN, ENGINE_SCALE_MAX),
+        complexity: range.center,
         active_flaws: Vec::new(),
         fixed_flaws: Vec::new(),
         flaws_generated: false,
@@ -327,6 +364,7 @@ pub fn default_kerolox() -> EngineDesign {
     EngineDesign {
         components: vec![EngineComponent::Kerolox, EngineComponent::Turbopump],
         scale: 1.0,
+        complexity: 6, // center for Kerolox
         active_flaws: Vec::new(),
         fixed_flaws: Vec::new(),
         flaws_generated: false,
@@ -339,6 +377,7 @@ pub fn default_hydrolox() -> EngineDesign {
     EngineDesign {
         components: vec![EngineComponent::Hydrolox, EngineComponent::Turbopump],
         scale: 1.0,
+        complexity: 7, // center for Hydrolox
         active_flaws: Vec::new(),
         fixed_flaws: Vec::new(),
         flaws_generated: false,
@@ -351,6 +390,7 @@ pub fn default_solid() -> EngineDesign {
     EngineDesign {
         components: vec![EngineComponent::SolidMotor],
         scale: 1.0,
+        complexity: 3, // center for Solid
         active_flaws: Vec::new(),
         fixed_flaws: Vec::new(),
         flaws_generated: false,
@@ -528,9 +568,13 @@ mod tests {
         assert!(design.set_fuel_type(FuelType::Hydrolox));
         assert_eq!(design.fuel_type(), FuelType::Hydrolox);
 
+        // Complexity 6 stays at 6 (within Hydrolox range 5-9)
+        assert_eq!(design.complexity, 6);
+
         // Verify snapshot uses new fuel type
+        // ve = 4500 * (1 + 0.01 * (6 - 7)) = 4500 * 0.99 = 4455
         let snap = design.snapshot(0, "Changed");
-        assert_eq!(snap.exhaust_velocity_ms, 4500.0);
+        assert!((snap.exhaust_velocity_ms - 4455.0).abs() < 0.1);
     }
 
     #[test]
@@ -593,5 +637,123 @@ mod tests {
             assert_eq!(ft.index(), i);
         }
         assert!(FuelType::from_index(3).is_none());
+    }
+
+    // ==========================================
+    // Complexity Tests
+    // ==========================================
+
+    #[test]
+    fn test_default_complexity_at_center() {
+        let kerolox = default_kerolox();
+        assert_eq!(kerolox.complexity, 6);
+        let hydrolox = default_hydrolox();
+        assert_eq!(hydrolox.complexity, 7);
+        let solid = default_solid();
+        assert_eq!(solid.complexity, 3);
+    }
+
+    #[test]
+    fn test_create_engine_defaults_to_center() {
+        let e = create_engine(FuelType::Kerolox, 1.0);
+        assert_eq!(e.complexity, 6);
+        let e = create_engine(FuelType::Hydrolox, 1.0);
+        assert_eq!(e.complexity, 7);
+        let e = create_engine(FuelType::Solid, 1.0);
+        assert_eq!(e.complexity, 3);
+    }
+
+    #[test]
+    fn test_set_complexity() {
+        let mut design = default_kerolox();
+        assert!(design.set_complexity(8));
+        assert_eq!(design.complexity, 8);
+
+        // Clamped to range bounds
+        assert!(design.set_complexity(2));
+        assert_eq!(design.complexity, 4); // Kerolox min
+
+        assert!(design.set_complexity(20));
+        assert_eq!(design.complexity, 8); // Kerolox max
+    }
+
+    #[test]
+    fn test_set_complexity_blocked_when_not_untested() {
+        let mut design = default_kerolox();
+        let mut gen = FlawGenerator::new();
+        design.submit_to_testing(&mut gen, 0);
+
+        assert!(!design.set_complexity(8));
+        assert_eq!(design.complexity, 6);
+    }
+
+    #[test]
+    fn test_fuel_type_switch_reclamps_complexity() {
+        let mut design = default_kerolox();
+        design.set_complexity(8); // Kerolox max
+        assert_eq!(design.complexity, 8);
+
+        // Switch to Solid (range 2-4): must clamp down
+        design.set_fuel_type(FuelType::Solid);
+        assert_eq!(design.complexity, 4); // Solid max
+    }
+
+    #[test]
+    fn test_high_complexity_improves_mass_and_ve() {
+        let mut design = default_kerolox();
+        let center_snap = design.snapshot(0, "Center");
+
+        design.set_complexity(8); // +2 above center
+        let high_snap = design.snapshot(0, "High");
+
+        // Mass should be lower (2% per unit * 2 = 4% lighter)
+        assert!(high_snap.mass_kg < center_snap.mass_kg);
+        let expected_mass = 450.0 * (1.0 - 0.02 * 2.0);
+        assert!((high_snap.mass_kg - expected_mass).abs() < 0.01);
+
+        // VE should be higher (1% per unit * 2 = 2% better)
+        assert!(high_snap.exhaust_velocity_ms > center_snap.exhaust_velocity_ms);
+        let expected_ve = 3000.0 * (1.0 + 0.01 * 2.0);
+        assert!((high_snap.exhaust_velocity_ms - expected_ve).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_high_complexity_increases_cost() {
+        let mut design = default_kerolox();
+        let center_snap = design.snapshot(0, "Center");
+
+        design.set_complexity(8);
+        let high_snap = design.snapshot(0, "High");
+
+        // Cost goes up quadratically: (8/6)^2 ≈ 1.778
+        assert!(high_snap.base_cost > center_snap.base_cost);
+    }
+
+    #[test]
+    fn test_low_complexity_reduces_cost() {
+        let mut design = default_kerolox();
+        let center_snap = design.snapshot(0, "Center");
+
+        design.set_complexity(4);
+        let low_snap = design.snapshot(0, "Low");
+
+        // Cost goes down: (4/6)^2 ≈ 0.444
+        assert!(low_snap.base_cost < center_snap.base_cost);
+    }
+
+    #[test]
+    fn test_complexity_range_accessor() {
+        let design = default_kerolox();
+        let range = design.complexity_range();
+        assert_eq!(range.min, 4);
+        assert_eq!(range.max, 8);
+        assert_eq!(range.center, 6);
+    }
+
+    #[test]
+    fn test_snapshot_includes_complexity() {
+        let design = default_kerolox();
+        let snap = design.snapshot(0, "Test");
+        assert_eq!(snap.complexity, 6);
     }
 }
