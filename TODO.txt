@@ -1,6 +1,11 @@
 * Fixes
     * Display part complexity to the user.
-* Create new parts
+* Rockets record how much of what sort of propellant they have, and how much they have at the end of a mission.
+    * Will be important later when we have multi-stage missions and propellant depots
+* Places, delta-v map
+    * LEO, GTO, L4, etc.  Just the Earth-Moon system for now.
+    * Update map page to show these.
+    * Get delta-v map at https://en.wikipedia.org/wiki/File:Deltavs.svg
 * Part improvements
     * Refined over time for better stats with diminishing returns but benefit from flight experience
         * Things like increase chamber pressure or reduce complexity
