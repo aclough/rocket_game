@@ -218,8 +218,10 @@ func _create_design_card(index: int, required_dv: float) -> Control:
 	name_label.add_theme_font_size_override("font_size", 20)
 	info_vbox.add_child(name_label)
 
+	var tank_material_name = game_manager.get_rocket_design_tank_material_name(index)
+
 	var stats_label = Label.new()
-	stats_label.text = "%d stages | %.0f m/s | %s | $%s" % [stages, delta_v, _format_mass(mass), _format_money(cost)]
+	stats_label.text = "%d stages | %s | %.0f m/s | %s | $%s" % [stages, tank_material_name, delta_v, _format_mass(mass), _format_money(cost)]
 	stats_label.add_theme_font_size_override("font_size", 16)
 	stats_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	info_vbox.add_child(stats_label)

@@ -1,5 +1,6 @@
 use crate::engine::costs;
 use crate::engine_design::EngineDesignSnapshot;
+use crate::resources::TankMaterial;
 use crate::rocket_design::calculate_gravity_loss;
 
 /// A stage in a rocket design
@@ -16,6 +17,8 @@ pub struct RocketStage {
     /// Whether this stage is a booster that fires in parallel with the stage above it
     /// When true, this stage fires simultaneously with the stage at index-1
     pub is_booster: bool,
+    /// Tank construction material (Aluminium or Carbon Composite)
+    pub tank_material: TankMaterial,
 }
 
 impl RocketStage {
@@ -28,6 +31,7 @@ impl RocketStage {
             engine_count: 1,
             propellant_mass_kg: 1000.0, // Default starting propellant (will be overridden for solids)
             is_booster: false,
+            tank_material: TankMaterial::default(),
         };
         // For solid motors, set the propellant mass based on fixed mass ratio
         stage.update_solid_propellant();
@@ -74,7 +78,7 @@ impl RocketStage {
         if self.is_solid() {
             0.0 // Solid motor casing is already included in engine_mass_kg
         } else {
-            self.propellant_mass_kg * self.engine_snapshot.tank_mass_ratio
+            self.propellant_mass_kg * self.engine_snapshot.tank_mass_ratio * self.tank_material.mass_ratio_multiplier()
         }
     }
 
@@ -161,7 +165,7 @@ impl RocketStage {
 
         let fraction = fraction.clamp(0.01, 0.99); // Prevent division by zero
         let engine_mass = self.engine_mass_kg();
-        let t = self.engine_snapshot.tank_mass_ratio;
+        let t = self.engine_snapshot.tank_mass_ratio * self.tank_material.mass_ratio_multiplier();
         let denominator = 1.0 - fraction * (1.0 + t);
 
         if denominator > 0.01 {
@@ -204,6 +208,7 @@ impl RocketStage {
         } else {
             crate::resources::tank_resource_cost(
                 self.engine_snapshot.fuel_type,
+                self.tank_material,
                 self.tank_mass_kg(),
             )
         }
@@ -537,7 +542,7 @@ mod tests {
         stage.propellant_mass_kg = 10200.0;
         // Tank mass: 10200 × 0.06 = 612 kg → resource-based cost
         let expected = crate::resources::tank_resource_cost(
-            crate::engine_design::FuelType::Kerolox, 612.0);
+            crate::engine_design::FuelType::Kerolox, crate::resources::TankMaterial::Aluminium, 612.0);
         assert!((stage.tank_cost() - expected).abs() < 100.0,
             "Kerolox tank cost should be ~${:.0}, got ${:.0}", expected, stage.tank_cost());
     }
@@ -552,7 +557,7 @@ mod tests {
         let engine = crate::resources::engine_resource_cost(
             crate::engine_design::FuelType::Kerolox, 450.0);
         let tank = crate::resources::tank_resource_cost(
-            crate::engine_design::FuelType::Kerolox, 612.0);
+            crate::engine_design::FuelType::Kerolox, crate::resources::TankMaterial::Aluminium, 612.0);
         let assembly = crate::resources::stage_assembly_cost();
         let expected = engine + tank + assembly;
         assert!((stage.total_cost() - expected).abs() < 100.0,

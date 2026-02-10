@@ -1342,6 +1342,46 @@ impl RocketDesigner {
     }
 
     // ==========================================
+    // Tank Material
+    // ==========================================
+
+    /// Get the current tank material index
+    #[func]
+    pub fn get_tank_material(&self) -> i32 {
+        self.design.tank_material.index() as i32
+    }
+
+    /// Set the tank material by index (propagates to all stages)
+    #[func]
+    pub fn set_tank_material(&mut self, index: i32) {
+        if let Some(material) = crate::resources::TankMaterial::from_index(index as usize) {
+            self.design.set_tank_material(material);
+            self.emit_design_changed();
+        }
+    }
+
+    /// Get the display name of the current tank material
+    #[func]
+    pub fn get_tank_material_name(&self) -> GString {
+        GString::from(self.design.tank_material.display_name())
+    }
+
+    /// Get the number of available tank materials
+    #[func]
+    pub fn get_tank_material_count(&self) -> i32 {
+        crate::resources::TankMaterial::count() as i32
+    }
+
+    /// Get the display name of a tank material by index
+    #[func]
+    pub fn get_tank_material_option_name(&self, index: i32) -> GString {
+        match crate::resources::TankMaterial::from_index(index as usize) {
+            Some(mat) => GString::from(mat.display_name()),
+            None => GString::from("Unknown"),
+        }
+    }
+
+    // ==========================================
     // Signals
     // ==========================================
 

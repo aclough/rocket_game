@@ -5,7 +5,6 @@
     * Refined over time for better stats with diminishing returns but benefit from flight experience
         * Things like increase chamber pressure or reduce complexity
         * This will introduce flaws.
-* Aluminium, steel, or composite tanks for rocket stages.
 * Save/load game (WorldSeed is already in GameState, ready to serialize)
 * Design versioning improvements:
     * Making changes to a design (engines, tank size) when cutting a new version should introduce flaws depending on how large the change is.
@@ -18,7 +17,6 @@
     * Keep track of the number of parts and rockets built.
     * Keep track of the amount of engineering that goes into parts and engines.
     * Use these to calculate the marginal and average cost of rockts and parts.
-* Designs include strutural materials like steel, almuminium, or carbon composite.
 * Prestige system
     * A bunch of modifiers with natural decays.
     * A 10, 100, etc customer launches without a failure one.

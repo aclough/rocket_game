@@ -121,6 +121,19 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 14
 text = "+"
 
+[node name="MaterialContainer" type="HBoxContainer" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="MaterialLabel" type="Label" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/MaterialContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Tanks:"
+
+[node name="MaterialOption" type="OptionButton" parent="MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/MaterialContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+
 [node name="ContentHBox" type="HBoxContainer" parent="MarginContainer/VBox"]
 layout_mode = 2
 size_flags_vertical = 3

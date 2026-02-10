@@ -18,6 +18,7 @@ var game_manager: GameManager = null
 @onready var payload_value_label = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer/PayloadValue
 @onready var payload_decrease_btn = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer/PayloadDecreaseBtn
 @onready var payload_increase_btn = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/PayloadContainer/PayloadIncreaseBtn
+@onready var material_option = $MarginContainer/VBox/HeaderPanel/HeaderMargin/HeaderVBox/MissionInfo/MaterialContainer/MaterialOption
 
 # Payload adjustment increment in kg
 const PAYLOAD_INCREMENT: float = 1000.0
@@ -54,6 +55,9 @@ func _ready():
 	# Connect visibility changed to update header when screen shown
 	visibility_changed.connect(_on_visibility_changed)
 
+	# Set up tank material options
+	_setup_material_options()
+
 	# Set up engine cards
 	_setup_engine_cards()
 
@@ -74,6 +78,8 @@ func _on_visibility_changed():
 		# Update header when screen becomes visible (payload/target may have changed)
 		_update_header()
 		_update_dv_display()
+		# Sync material selection
+		material_option.selected = designer.get_tank_material()
 		# Refresh engine cards in case engines were added/modified
 		_setup_engine_cards()
 
@@ -204,6 +210,17 @@ func _format_money_short(value: float) -> String:
 		return "%.1f" % value
 	else:
 		return "%.2f" % value
+
+func _setup_material_options():
+	material_option.clear()
+	var count = designer.get_tank_material_count()
+	for i in range(count):
+		material_option.add_item(designer.get_tank_material_option_name(i), i)
+	material_option.selected = designer.get_tank_material()
+	material_option.item_selected.connect(_on_tank_material_changed)
+
+func _on_tank_material_changed(index: int):
+	designer.set_tank_material(index)
 
 func _on_design_changed():
 	# Don't rebuild if we're dragging a slider - just update values

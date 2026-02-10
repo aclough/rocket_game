@@ -2,6 +2,7 @@ use crate::engine::costs;
 use crate::engine_design::{default_snapshot, EngineDesignSnapshot};
 use crate::engineering_team::{DETAILED_ENGINEERING_WORK, TESTING_WORK};
 use crate::flaw::{calculate_flaw_failure_rate, run_test, Flaw, FlawGenerator, FlawType};
+use crate::resources::TankMaterial;
 use crate::stage::RocketStage;
 
 /// Work required to fix a discovered flaw (14 days with 1 team)
@@ -241,6 +242,8 @@ pub struct RocketDesign {
     pub design_status: DesignStatus,
     /// Cumulative work completed during Testing phase (for testing level estimation)
     pub testing_work_completed: f64,
+    /// Tank construction material for this rocket (applied to all stages)
+    pub tank_material: TankMaterial,
 }
 
 impl RocketDesign {
@@ -260,6 +263,7 @@ impl RocketDesign {
             flaw_design_signature: String::new(),
             design_status: DesignStatus::Specification,
             testing_work_completed: 0.0,
+            tank_material: TankMaterial::default(),
         }
     }
 
@@ -378,7 +382,7 @@ impl RocketDesign {
     /// Changes to engine designs, counts, or propellant masses will change the signature
     pub fn compute_design_signature(&self) -> String {
         let mut signature = String::new();
-        signature.push_str(&format!("stages:{};", self.stages.len()));
+        signature.push_str(&format!("stages:{};mat:{};", self.stages.len(), self.tank_material.index()));
         for (i, stage) in self.stages.iter().enumerate() {
             signature.push_str(&format!(
                 "s{}:{}x{}:{:.0}kg,b:{};",
@@ -455,9 +459,18 @@ impl RocketDesign {
 
     /// Add a new stage to the top of the rocket
     pub fn add_stage(&mut self, snapshot: EngineDesignSnapshot) -> usize {
-        let stage = RocketStage::new(snapshot);
+        let mut stage = RocketStage::new(snapshot);
+        stage.tank_material = self.tank_material;
         self.stages.push(stage);
         self.stages.len() - 1
+    }
+
+    /// Set the tank material for this design and propagate to all stages
+    pub fn set_tank_material(&mut self, material: TankMaterial) {
+        self.tank_material = material;
+        for stage in &mut self.stages {
+            stage.tank_material = material;
+        }
     }
 
     /// Remove a stage by index
@@ -2376,7 +2389,7 @@ mod tests {
         // Tank mass = propellant_mass * tank_mass_ratio (0.06 for kerolox)
         let tank_mass = 10200.0 * costs::KEROLOX_TANK_MASS_RATIO;
         let tank_cost = crate::resources::tank_resource_cost(
-            crate::engine_design::FuelType::Kerolox, tank_mass);
+            crate::engine_design::FuelType::Kerolox, crate::resources::TankMaterial::Aluminium, tank_mass);
         let assembly_cost = crate::resources::stage_assembly_cost();
         let expected = engine_cost + tank_cost + assembly_cost;
         let actual = design.stage_cost(0);
@@ -2604,5 +2617,57 @@ mod tests {
             dv_with_boosters,
             dv_with_boosters - dv_without_boosters
         );
+    }
+
+    #[test]
+    fn test_design_signature_changes_with_material() {
+        let mut design = RocketDesign::default_design();
+        let sig1 = design.compute_design_signature();
+
+        design.set_tank_material(crate::resources::TankMaterial::CarbonComposite);
+        let sig2 = design.compute_design_signature();
+
+        assert_ne!(sig1, sig2,
+            "Design signature should change with different tank material");
+    }
+
+    #[test]
+    fn test_set_tank_material_propagates_to_stages() {
+        let mut design = RocketDesign::default_design();
+        design.set_tank_material(crate::resources::TankMaterial::CarbonComposite);
+
+        for stage in &design.stages {
+            assert_eq!(stage.tank_material, crate::resources::TankMaterial::CarbonComposite,
+                "All stages should have CarbonComposite after set_tank_material");
+        }
+    }
+
+    #[test]
+    fn test_add_stage_inherits_tank_material() {
+        let mut design = RocketDesign::new();
+        design.set_tank_material(crate::resources::TankMaterial::CarbonComposite);
+        design.add_stage(default_snapshot(1));
+
+        assert_eq!(design.stages[0].tank_material, crate::resources::TankMaterial::CarbonComposite,
+            "New stage should inherit design's tank material");
+    }
+
+    #[test]
+    fn test_composite_tanks_lighter_and_costlier() {
+        let alu_design = RocketDesign::default_design();
+        let mut comp_design = RocketDesign::default_design();
+        comp_design.set_tank_material(crate::resources::TankMaterial::CarbonComposite);
+
+        // Composite should have lower dry mass (lighter tanks)
+        assert!(comp_design.total_dry_mass_kg() < alu_design.total_dry_mass_kg(),
+            "Composite should have less dry mass: comp={:.0}, alu={:.0}",
+            comp_design.total_dry_mass_kg(), alu_design.total_dry_mass_kg());
+
+        // Composite should cost more per stage (higher material cost despite lighter)
+        let alu_cost = alu_design.total_cost();
+        let comp_cost = comp_design.total_cost();
+        assert!(comp_cost > alu_cost,
+            "Composite should cost more: comp=${:.0}, alu=${:.0}",
+            comp_cost, alu_cost);
     }
 }

@@ -598,6 +598,21 @@ impl GameManager {
             .unwrap_or(0)
     }
 
+    /// Get design tank material name at index
+    #[func]
+    pub fn get_rocket_design_tank_material_name(&self, index: i32) -> GString {
+        if index < 0 {
+            return GString::from("");
+        }
+        GString::from(
+            self.state
+                .player_company
+                .get_rocket_design(index as usize)
+                .map(|d| d.tank_material.display_name())
+                .unwrap_or("")
+        )
+    }
+
     /// Get design testing level name at index
     #[func]
     pub fn get_rocket_design_testing_level_name(&self, index: i32) -> GString {

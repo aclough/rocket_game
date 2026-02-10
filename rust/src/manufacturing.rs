@@ -598,7 +598,7 @@ pub fn stage_material_cost(stage: &RocketStage) -> f64 {
         crate::resources::stage_assembly_cost()
     } else {
         let tank_cost =
-            crate::resources::tank_resource_cost(fuel_type, stage.tank_mass_kg());
+            crate::resources::tank_resource_cost(fuel_type, stage.tank_material, stage.tank_mass_kg());
         tank_cost + crate::resources::stage_assembly_cost()
     }
 }
@@ -610,9 +610,12 @@ pub fn rocket_material_cost(design: &RocketDesign) -> f64 {
 }
 
 /// Calculate assembly work for a single stage (team-days)
+/// Base assembly days are scaled by tank material build time multiplier.
+/// Extra-engine days are unaffected by material choice.
 pub fn stage_assembly_work(stage: &RocketStage) -> f64 {
     let extra_engines = stage.engine_count.saturating_sub(1) as f64;
-    STAGE_BASE_ASSEMBLY_DAYS + (extra_engines * ASSEMBLY_DAYS_PER_EXTRA_ENGINE)
+    STAGE_BASE_ASSEMBLY_DAYS * stage.tank_material.build_time_multiplier()
+        + (extra_engines * ASSEMBLY_DAYS_PER_EXTRA_ENGINE)
 }
 
 /// Calculate total assembly work for a rocket design (team-days)
@@ -1219,5 +1222,47 @@ mod tests {
         let expected = 120.0 * (4.0_f64 / 6.0).powi(2);
         assert!((work - expected).abs() < 0.1,
             "Low complexity build work should be {:.1} days, got {:.1}", expected, work);
+    }
+
+    // ==========================================
+    // Tank Material Effect Tests
+    // ==========================================
+
+    #[test]
+    fn test_composite_stage_assembly_work() {
+        use crate::stage::RocketStage;
+        use crate::resources::TankMaterial;
+
+        let mut alu_stage = RocketStage::new(kerolox_snapshot());
+        alu_stage.engine_count = 1;
+        let alu_work = stage_assembly_work(&alu_stage);
+        // Aluminium: 60 base + 0 extra = 60 days
+        assert!((alu_work - 60.0).abs() < 0.1);
+
+        let mut comp_stage = RocketStage::new(kerolox_snapshot());
+        comp_stage.engine_count = 1;
+        comp_stage.tank_material = TankMaterial::CarbonComposite;
+        let comp_work = stage_assembly_work(&comp_stage);
+        // Composite: 60 * 1.4 + 0 extra = 84 days
+        assert!((comp_work - 84.0).abs() < 0.1,
+            "Composite stage assembly should be 84 days, got {}", comp_work);
+    }
+
+    #[test]
+    fn test_composite_tank_lighter_in_stage() {
+        use crate::stage::RocketStage;
+        use crate::resources::TankMaterial;
+
+        let mut alu_stage = RocketStage::new(kerolox_snapshot());
+        alu_stage.propellant_mass_kg = 10000.0;
+        let alu_tank = alu_stage.tank_mass_kg();
+
+        let mut comp_stage = RocketStage::new(kerolox_snapshot());
+        comp_stage.propellant_mass_kg = 10000.0;
+        comp_stage.tank_material = TankMaterial::CarbonComposite;
+        let comp_tank = comp_stage.tank_mass_kg();
+
+        assert!((comp_tank / alu_tank - 0.70).abs() < 0.01,
+            "Composite tank should be 70% of aluminium: alu={:.1}, comp={:.1}", alu_tank, comp_tank);
     }
 }

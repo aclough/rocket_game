@@ -6,6 +6,67 @@ use crate::engine::costs;
 use crate::engine_design::FuelType;
 
 // ==========================================
+// Tank Material
+// ==========================================
+
+/// Tank construction material choice — per-rocket, affects tank mass and cost
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TankMaterial {
+    Aluminium,
+    CarbonComposite,
+}
+
+impl TankMaterial {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            TankMaterial::Aluminium => "Aluminium",
+            TankMaterial::CarbonComposite => "Carbon Composite",
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        match self {
+            TankMaterial::Aluminium => 0,
+            TankMaterial::CarbonComposite => 1,
+        }
+    }
+
+    pub fn from_index(i: usize) -> Option<TankMaterial> {
+        match i {
+            0 => Some(TankMaterial::Aluminium),
+            1 => Some(TankMaterial::CarbonComposite),
+            _ => None,
+        }
+    }
+
+    pub fn count() -> usize {
+        2
+    }
+
+    /// Tank mass multiplier: composite tanks are 30% lighter
+    pub fn mass_ratio_multiplier(&self) -> f64 {
+        match self {
+            TankMaterial::Aluminium => 1.0,
+            TankMaterial::CarbonComposite => 0.70,
+        }
+    }
+
+    /// Stage assembly build time multiplier: composite takes 40% longer
+    pub fn build_time_multiplier(&self) -> f64 {
+        match self {
+            TankMaterial::Aluminium => 1.0,
+            TankMaterial::CarbonComposite => 1.4,
+        }
+    }
+}
+
+impl Default for TankMaterial {
+    fn default() -> Self {
+        TankMaterial::Aluminium
+    }
+}
+
+// ==========================================
 // Resource Types and Prices
 // ==========================================
 
@@ -146,11 +207,11 @@ pub fn engine_bom(fuel_type: FuelType) -> BillOfMaterials {
 // Tank BOMs
 // ==========================================
 
-/// Bill of materials for propellant tanks by fuel type.
+/// Bill of materials for propellant tanks by fuel type and material.
 /// Solid motors have no separate tanks (casing is the engine).
-pub fn tank_bom(fuel_type: FuelType) -> BillOfMaterials {
-    match fuel_type {
-        FuelType::Kerolox => BillOfMaterials {
+pub fn tank_bom(fuel_type: FuelType, material: TankMaterial) -> BillOfMaterials {
+    match (fuel_type, material) {
+        (FuelType::Kerolox, TankMaterial::Aluminium) => BillOfMaterials {
             entries: vec![
                 (Resource::Aluminium, 0.88),
                 (Resource::Steel, 0.06),
@@ -159,7 +220,17 @@ pub fn tank_bom(fuel_type: FuelType) -> BillOfMaterials {
                 (Resource::Composites, 0.01),
             ],
         },
-        FuelType::Hydrolox => BillOfMaterials {
+        (FuelType::Kerolox, TankMaterial::CarbonComposite) => BillOfMaterials {
+            entries: vec![
+                (Resource::Composites, 0.72),
+                (Resource::Aluminium, 0.10),
+                (Resource::Steel, 0.06),
+                (Resource::Superalloys, 0.05),
+                (Resource::Wiring, 0.04),
+                (Resource::Plumbing, 0.03),
+            ],
+        },
+        (FuelType::Hydrolox, TankMaterial::Aluminium) => BillOfMaterials {
             entries: vec![
                 (Resource::Aluminium, 0.74),
                 (Resource::Composites, 0.14),
@@ -169,7 +240,17 @@ pub fn tank_bom(fuel_type: FuelType) -> BillOfMaterials {
                 (Resource::Superalloys, 0.005),
             ],
         },
-        FuelType::Solid => BillOfMaterials {
+        (FuelType::Hydrolox, TankMaterial::CarbonComposite) => BillOfMaterials {
+            entries: vec![
+                (Resource::Composites, 0.72),
+                (Resource::Aluminium, 0.08),
+                (Resource::Superalloys, 0.075),
+                (Resource::Steel, 0.05),
+                (Resource::Wiring, 0.04),
+                (Resource::Plumbing, 0.035),
+            ],
+        },
+        (FuelType::Solid, _) => BillOfMaterials {
             entries: vec![],
         },
     }
@@ -237,8 +318,8 @@ pub fn engine_resource_cost(fuel_type: FuelType, engine_mass_kg: f64) -> f64 {
 }
 
 /// Material cost for propellant tanks
-pub fn tank_resource_cost(fuel_type: FuelType, tank_mass_kg: f64) -> f64 {
-    tank_bom(fuel_type).material_cost(tank_mass_kg)
+pub fn tank_resource_cost(fuel_type: FuelType, material: TankMaterial, tank_mass_kg: f64) -> f64 {
+    tank_bom(fuel_type, material).material_cost(tank_mass_kg)
 }
 
 /// Material cost for stage assembly hardware (~$565K)
@@ -299,17 +380,33 @@ mod tests {
 
     #[test]
     fn test_kerolox_tank_bom_sums_to_one() {
-        assert_bom_sums_to_one(&tank_bom(FuelType::Kerolox));
+        assert_bom_sums_to_one(&tank_bom(FuelType::Kerolox, TankMaterial::Aluminium));
     }
 
     #[test]
     fn test_hydrolox_tank_bom_sums_to_one() {
-        assert_bom_sums_to_one(&tank_bom(FuelType::Hydrolox));
+        assert_bom_sums_to_one(&tank_bom(FuelType::Hydrolox, TankMaterial::Aluminium));
     }
 
     #[test]
     fn test_solid_tank_bom_empty() {
-        let bom = tank_bom(FuelType::Solid);
+        let bom = tank_bom(FuelType::Solid, TankMaterial::Aluminium);
+        assert!(bom.entries.is_empty());
+    }
+
+    #[test]
+    fn test_kerolox_composite_tank_bom_sums_to_one() {
+        assert_bom_sums_to_one(&tank_bom(FuelType::Kerolox, TankMaterial::CarbonComposite));
+    }
+
+    #[test]
+    fn test_hydrolox_composite_tank_bom_sums_to_one() {
+        assert_bom_sums_to_one(&tank_bom(FuelType::Hydrolox, TankMaterial::CarbonComposite));
+    }
+
+    #[test]
+    fn test_solid_composite_tank_bom_empty() {
+        let bom = tank_bom(FuelType::Solid, TankMaterial::CarbonComposite);
         assert!(bom.entries.is_empty());
     }
 
@@ -378,7 +475,7 @@ mod tests {
     #[test]
     fn test_kerolox_tank_cost() {
         // 6,000 kg tank → ~$318K (dominated by plumbing)
-        let cost = tank_resource_cost(FuelType::Kerolox, 6_000.0);
+        let cost = tank_resource_cost(FuelType::Kerolox, TankMaterial::Aluminium, 6_000.0);
         assert!(
             cost > 310_000.0 && cost < 325_000.0,
             "Kerolox 6000 kg tank should be ~$318K, got ${:.0}",
@@ -389,7 +486,7 @@ mod tests {
     #[test]
     fn test_hydrolox_tank_cost() {
         // 2,000 kg tank → higher composite fraction
-        let cost = tank_resource_cost(FuelType::Hydrolox, 2_000.0);
+        let cost = tank_resource_cost(FuelType::Hydrolox, TankMaterial::Aluminium, 2_000.0);
         assert!(
             cost > 120_000.0 && cost < 140_000.0,
             "Hydrolox 2000 kg tank cost: ${:.0}",
@@ -399,7 +496,57 @@ mod tests {
 
     #[test]
     fn test_solid_tank_cost_zero() {
-        assert_eq!(tank_resource_cost(FuelType::Solid, 1000.0), 0.0);
+        assert_eq!(tank_resource_cost(FuelType::Solid, TankMaterial::Aluminium, 1000.0), 0.0);
+    }
+
+    // ==========================================
+    // Composite tank tests
+    // ==========================================
+
+    #[test]
+    fn test_composite_tank_cost_higher_per_kg() {
+        // Carbon composite should cost more per kg than aluminium
+        let alu_cost = tank_resource_cost(FuelType::Kerolox, TankMaterial::Aluminium, 1000.0);
+        let comp_cost = tank_resource_cost(FuelType::Kerolox, TankMaterial::CarbonComposite, 1000.0);
+        assert!(
+            comp_cost > alu_cost * 1.5,
+            "Composite cost/kg should be ~1.7x aluminium: alu=${:.0}, comp=${:.0}",
+            alu_cost, comp_cost
+        );
+    }
+
+    #[test]
+    fn test_composite_tank_net_cost_higher() {
+        // With 30% lighter tanks, net cost should still be ~20% more
+        let mass = 1000.0;
+        let alu_mass = mass * TankMaterial::Aluminium.mass_ratio_multiplier();
+        let comp_mass = mass * TankMaterial::CarbonComposite.mass_ratio_multiplier();
+        let alu_cost = tank_resource_cost(FuelType::Kerolox, TankMaterial::Aluminium, alu_mass);
+        let comp_cost = tank_resource_cost(FuelType::Kerolox, TankMaterial::CarbonComposite, comp_mass);
+        assert!(
+            comp_cost > alu_cost,
+            "Net composite cost should exceed aluminium: alu=${:.0}, comp=${:.0}",
+            alu_cost, comp_cost
+        );
+    }
+
+    #[test]
+    fn test_tank_material_mass_multipliers() {
+        assert_eq!(TankMaterial::Aluminium.mass_ratio_multiplier(), 1.0);
+        assert!((TankMaterial::CarbonComposite.mass_ratio_multiplier() - 0.70).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_tank_material_build_multipliers() {
+        assert_eq!(TankMaterial::Aluminium.build_time_multiplier(), 1.0);
+        assert!((TankMaterial::CarbonComposite.build_time_multiplier() - 1.4).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_tank_material_from_index() {
+        assert_eq!(TankMaterial::from_index(0), Some(TankMaterial::Aluminium));
+        assert_eq!(TankMaterial::from_index(1), Some(TankMaterial::CarbonComposite));
+        assert_eq!(TankMaterial::from_index(2), None);
     }
 
     // ==========================================
