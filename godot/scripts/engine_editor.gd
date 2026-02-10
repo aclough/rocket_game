@@ -23,7 +23,7 @@ var _config_container: VBoxContainer
 var _footer_btn: Button
 
 # Fuel type names matching FuelType enum order
-const FUEL_TYPES = ["Kerolox", "Hydrolox", "Solid"]
+const FUEL_TYPES = ["Kerolox", "Hydrolox", "Solid", "Methalox", "Hypergolic"]
 
 func _ready():
 	_build_ui()
@@ -370,6 +370,10 @@ func _update_stats():
 			_stats_labels["Tank Ratio"].text = "Tank Ratio: 10%"
 		2:  # Solid
 			_stats_labels["Tank Ratio"].text = "Tank Ratio: 13.6% (fixed mass ratio)"
+		3:  # Methalox
+			_stats_labels["Tank Ratio"].text = "Tank Ratio: 7%"
+		4:  # Hypergolic
+			_stats_labels["Tank Ratio"].text = "Tank Ratio: 5%"
 
 # === Signal handlers ===
 

@@ -273,6 +273,8 @@ pub fn engine_failure_rate_mean(fuel_type: FuelType, scale: f64) -> f64 {
         FuelType::Kerolox => 0.25,
         FuelType::Hydrolox => 0.35,
         FuelType::Solid => 0.15,
+        FuelType::Methalox => 0.30,
+        FuelType::Hypergolic => 0.12,
     };
     let scale_mult = 1.0 + 0.1 * (scale - 1.0);
     base * scale_mult
@@ -286,6 +288,8 @@ pub fn engine_testing_modifier_mean(fuel_type: FuelType, _scale: f64) -> f64 {
         FuelType::Kerolox => 0.55,
         FuelType::Hydrolox => 0.40,
         FuelType::Solid => 0.65,
+        FuelType::Methalox => 0.50,
+        FuelType::Hypergolic => 0.70,
     }
 }
 
@@ -875,12 +879,18 @@ mod tests {
         let kerolox = engine_failure_rate_mean(FuelType::Kerolox, 1.0);
         let hydrolox = engine_failure_rate_mean(FuelType::Hydrolox, 1.0);
         let solid = engine_failure_rate_mean(FuelType::Solid, 1.0);
+        let methalox = engine_failure_rate_mean(FuelType::Methalox, 1.0);
+        let hypergolic = engine_failure_rate_mean(FuelType::Hypergolic, 1.0);
 
         assert_eq!(kerolox, 0.25);
         assert_eq!(hydrolox, 0.35);
         assert_eq!(solid, 0.15);
+        assert_eq!(methalox, 0.30);
+        assert_eq!(hypergolic, 0.12);
+        assert!(hypergolic < solid);
         assert!(solid < kerolox);
-        assert!(kerolox < hydrolox);
+        assert!(kerolox < methalox);
+        assert!(methalox < hydrolox);
     }
 
     #[test]
@@ -888,12 +898,18 @@ mod tests {
         let kerolox = engine_testing_modifier_mean(FuelType::Kerolox, 1.0);
         let hydrolox = engine_testing_modifier_mean(FuelType::Hydrolox, 1.0);
         let solid = engine_testing_modifier_mean(FuelType::Solid, 1.0);
+        let methalox = engine_testing_modifier_mean(FuelType::Methalox, 1.0);
+        let hypergolic = engine_testing_modifier_mean(FuelType::Hypergolic, 1.0);
 
         assert_eq!(kerolox, 0.55);
         assert_eq!(hydrolox, 0.40);
         assert_eq!(solid, 0.65);
-        assert!(hydrolox < kerolox);
+        assert_eq!(methalox, 0.50);
+        assert_eq!(hypergolic, 0.70);
+        assert!(hydrolox < methalox);
+        assert!(methalox < kerolox);
         assert!(kerolox < solid);
+        assert!(solid < hypergolic);
     }
 
     #[test]

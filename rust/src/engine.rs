@@ -130,6 +130,18 @@ pub mod costs {
     /// Solid motor "tank" mass ratio (casing mass as fraction of propellant)
     pub const SOLID_TANK_MASS_RATIO: f64 = 0.136;
 
+    /// Methalox (CH4/LOX) effective combined density in kg/m³
+    pub const METHALOX_DENSITY_KG_M3: f64 = 830.0;
+
+    /// Methalox tank structural mass as a fraction of propellant mass
+    pub const METHALOX_TANK_MASS_RATIO: f64 = 0.07;
+
+    /// Hypergolic (NTO/UDMH) effective combined density in kg/m³
+    pub const HYPERGOLIC_DENSITY_KG_M3: f64 = 1200.0;
+
+    /// Hypergolic tank structural mass as a fraction of propellant mass
+    pub const HYPERGOLIC_TANK_MASS_RATIO: f64 = 0.05;
+
     /// Structural mass for booster attachment points in kg
     pub const BOOSTER_ATTACHMENT_MASS_KG: f64 = 500.0;
 

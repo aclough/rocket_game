@@ -13,6 +13,8 @@ pub enum FuelType {
     Kerolox,
     Hydrolox,
     Solid,
+    Methalox,
+    Hypergolic,
 }
 
 impl FuelType {
@@ -21,6 +23,8 @@ impl FuelType {
             FuelType::Kerolox => vec![EngineComponent::Kerolox, EngineComponent::Turbopump],
             FuelType::Hydrolox => vec![EngineComponent::Hydrolox, EngineComponent::Turbopump],
             FuelType::Solid => vec![EngineComponent::SolidMotor],
+            FuelType::Methalox => vec![EngineComponent::Methalox, EngineComponent::Turbopump],
+            FuelType::Hypergolic => vec![EngineComponent::Hypergolic],
         }
     }
 
@@ -29,6 +33,8 @@ impl FuelType {
             FuelType::Kerolox => "Kerolox",
             FuelType::Hydrolox => "Hydrolox",
             FuelType::Solid => "Solid",
+            FuelType::Methalox => "Methalox",
+            FuelType::Hypergolic => "Hypergolic",
         }
     }
 
@@ -37,6 +43,8 @@ impl FuelType {
             0 => Some(FuelType::Kerolox),
             1 => Some(FuelType::Hydrolox),
             2 => Some(FuelType::Solid),
+            3 => Some(FuelType::Methalox),
+            4 => Some(FuelType::Hypergolic),
             _ => None,
         }
     }
@@ -46,6 +54,8 @@ impl FuelType {
             FuelType::Kerolox => 0,
             FuelType::Hydrolox => 1,
             FuelType::Solid => 2,
+            FuelType::Methalox => 3,
+            FuelType::Hypergolic => 4,
         }
     }
 }
@@ -60,8 +70,12 @@ pub enum EngineComponent {
     Hydrolox,
     /// HTPB/AP solid propellant
     SolidMotor,
-    /// Required for liquid engines
+    /// Required for turbopump-fed liquid engines
     Turbopump,
+    /// CH4/LOX propellant
+    Methalox,
+    /// NTO/UDMH storable propellant (pressure-fed, no turbopump)
+    Hypergolic,
 }
 
 /// A designable engine: composed of components at a scale, with derived stats and hidden flaws.
@@ -111,6 +125,10 @@ impl EngineDesign {
     pub fn fuel_type(&self) -> FuelType {
         if self.components.contains(&EngineComponent::SolidMotor) {
             FuelType::Solid
+        } else if self.components.contains(&EngineComponent::Methalox) {
+            FuelType::Methalox
+        } else if self.components.contains(&EngineComponent::Hypergolic) {
+            FuelType::Hypergolic
         } else if self.components.contains(&EngineComponent::Hydrolox) {
             FuelType::Hydrolox
         } else {
@@ -159,9 +177,10 @@ impl EngineDesign {
     pub fn snapshot(&self, id: usize, name: &str) -> EngineDesignSnapshot {
         let is_solid = self.components.contains(&EngineComponent::SolidMotor);
 
+        let fuel_type = self.fuel_type();
         let (base_mass, base_thrust, ve, density, tank_ratio, fixed_mass_ratio, flaw_category) =
-            if is_solid {
-                (
+            match fuel_type {
+                FuelType::Solid => (
                     40_000.0,
                     8_000.0,
                     2650.0,
@@ -169,9 +188,8 @@ impl EngineDesign {
                     costs::SOLID_TANK_MASS_RATIO,
                     Some(costs::SOLID_MASS_RATIO),
                     FlawCategory::SolidMotor,
-                )
-            } else if self.components.contains(&EngineComponent::Hydrolox) {
-                (
+                ),
+                FuelType::Hydrolox => (
                     300.0,
                     100.0,
                     4500.0,
@@ -179,10 +197,26 @@ impl EngineDesign {
                     costs::HYDROLOX_TANK_MASS_RATIO,
                     None,
                     FlawCategory::LiquidEngine,
-                )
-            } else {
-                // Kerolox (default liquid)
-                (
+                ),
+                FuelType::Methalox => (
+                    400.0,
+                    400.0,
+                    3300.0,
+                    costs::METHALOX_DENSITY_KG_M3,
+                    costs::METHALOX_TANK_MASS_RATIO,
+                    None,
+                    FlawCategory::LiquidEngine,
+                ),
+                FuelType::Hypergolic => (
+                    200.0,
+                    50.0,
+                    2800.0,
+                    costs::HYPERGOLIC_DENSITY_KG_M3,
+                    costs::HYPERGOLIC_TANK_MASS_RATIO,
+                    None,
+                    FlawCategory::LiquidEngine,
+                ),
+                FuelType::Kerolox => (
                     450.0,
                     500.0,
                     3000.0,
@@ -190,10 +224,9 @@ impl EngineDesign {
                     costs::KEROLOX_TANK_MASS_RATIO,
                     None,
                     FlawCategory::LiquidEngine,
-                )
+                ),
             };
 
-        let fuel_type = self.fuel_type();
         let range = complexity_range(fuel_type);
         let center = range.center;
 
@@ -467,6 +500,40 @@ mod tests {
     }
 
     #[test]
+    fn test_methalox_snapshot() {
+        let design = create_engine(FuelType::Methalox, 1.0);
+        let snap = design.snapshot(3, "Methalox");
+        assert_eq!(snap.mass_kg, 400.0);
+        assert_eq!(snap.thrust_kn, 400.0);
+        assert_eq!(snap.exhaust_velocity_ms, 3300.0);
+        assert_eq!(snap.fuel_type, FuelType::Methalox);
+        let expected_cost = crate::resources::engine_resource_cost(FuelType::Methalox, 400.0);
+        assert!((snap.base_cost - expected_cost).abs() < 1.0);
+        assert_eq!(snap.propellant_density, costs::METHALOX_DENSITY_KG_M3);
+        assert_eq!(snap.tank_mass_ratio, costs::METHALOX_TANK_MASS_RATIO);
+        assert!(!snap.is_solid);
+        assert!(snap.fixed_mass_ratio.is_none());
+        assert_eq!(snap.flaw_category, FlawCategory::LiquidEngine);
+    }
+
+    #[test]
+    fn test_hypergolic_snapshot() {
+        let design = create_engine(FuelType::Hypergolic, 1.0);
+        let snap = design.snapshot(4, "Hypergolic");
+        assert_eq!(snap.mass_kg, 200.0);
+        assert_eq!(snap.thrust_kn, 50.0);
+        assert_eq!(snap.exhaust_velocity_ms, 2800.0);
+        assert_eq!(snap.fuel_type, FuelType::Hypergolic);
+        let expected_cost = crate::resources::engine_resource_cost(FuelType::Hypergolic, 200.0);
+        assert!((snap.base_cost - expected_cost).abs() < 1.0);
+        assert_eq!(snap.propellant_density, costs::HYPERGOLIC_DENSITY_KG_M3);
+        assert_eq!(snap.tank_mass_ratio, costs::HYPERGOLIC_TANK_MASS_RATIO);
+        assert!(!snap.is_solid);
+        assert!(snap.fixed_mass_ratio.is_none());
+        assert_eq!(snap.flaw_category, FlawCategory::LiquidEngine);
+    }
+
+    #[test]
     fn test_scale_linearity() {
         let mut design = default_kerolox();
         design.scale = 2.0;
@@ -632,11 +699,11 @@ mod tests {
 
     #[test]
     fn test_fuel_type_index_roundtrip() {
-        for i in 0..3 {
+        for i in 0..5 {
             let ft = FuelType::from_index(i).unwrap();
             assert_eq!(ft.index(), i);
         }
-        assert!(FuelType::from_index(3).is_none());
+        assert!(FuelType::from_index(5).is_none());
     }
 
     // ==========================================
@@ -661,6 +728,10 @@ mod tests {
         assert_eq!(e.complexity, 7);
         let e = create_engine(FuelType::Solid, 1.0);
         assert_eq!(e.complexity, 3);
+        let e = create_engine(FuelType::Methalox, 1.0);
+        assert_eq!(e.complexity, 7);
+        let e = create_engine(FuelType::Hypergolic, 1.0);
+        assert_eq!(e.complexity, 2);
     }
 
     #[test]

@@ -33,6 +33,8 @@ pub fn complexity_range(fuel_type: FuelType) -> ComplexityRange {
         FuelType::Solid => ComplexityRange { min: 2, max: 4, center: 3 },
         FuelType::Kerolox => ComplexityRange { min: 4, max: 8, center: 6 },
         FuelType::Hydrolox => ComplexityRange { min: 5, max: 9, center: 7 },
+        FuelType::Methalox => ComplexityRange { min: 5, max: 9, center: 7 },
+        FuelType::Hypergolic => ComplexityRange { min: 1, max: 4, center: 2 },
     }
 }
 
@@ -79,12 +81,18 @@ mod tests {
 
         let hydrolox = complexity_range(FuelType::Hydrolox);
         assert_eq!((hydrolox.min, hydrolox.max, hydrolox.center), (5, 9, 7));
+
+        let methalox = complexity_range(FuelType::Methalox);
+        assert_eq!((methalox.min, methalox.max, methalox.center), (5, 9, 7));
+
+        let hypergolic = complexity_range(FuelType::Hypergolic);
+        assert_eq!((hypergolic.min, hypergolic.max, hypergolic.center), (1, 4, 2));
     }
 
     #[test]
     fn test_center_complexity_is_neutral() {
         // At center, all multipliers should be 1.0
-        for ft in [FuelType::Solid, FuelType::Kerolox, FuelType::Hydrolox] {
+        for ft in [FuelType::Solid, FuelType::Kerolox, FuelType::Hydrolox, FuelType::Methalox, FuelType::Hypergolic] {
             let range = complexity_range(ft);
             let c = range.center;
             assert!((complexity_mass_multiplier(c, c) - 1.0).abs() < 1e-10);

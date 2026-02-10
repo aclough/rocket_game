@@ -200,6 +200,28 @@ pub fn engine_bom(fuel_type: FuelType) -> BillOfMaterials {
                 (Resource::Electronics, 0.005),
             ],
         },
+        FuelType::Methalox => BillOfMaterials {
+            entries: vec![
+                (Resource::Steel, 0.28),
+                (Resource::Superalloys, 0.29),
+                (Resource::Aluminium, 0.26),
+                (Resource::Plumbing, 0.09),
+                (Resource::Wiring, 0.04),
+                (Resource::Composites, 0.03),
+                (Resource::Electronics, 0.01),
+            ],
+        },
+        FuelType::Hypergolic => BillOfMaterials {
+            entries: vec![
+                (Resource::Steel, 0.40),
+                (Resource::Aluminium, 0.30),
+                (Resource::Superalloys, 0.10),
+                (Resource::Plumbing, 0.10),
+                (Resource::Wiring, 0.05),
+                (Resource::Composites, 0.03),
+                (Resource::Electronics, 0.02),
+            ],
+        },
     }
 }
 
@@ -248,6 +270,44 @@ pub fn tank_bom(fuel_type: FuelType, material: TankMaterial) -> BillOfMaterials 
                 (Resource::Steel, 0.05),
                 (Resource::Wiring, 0.04),
                 (Resource::Plumbing, 0.035),
+            ],
+        },
+        (FuelType::Methalox, TankMaterial::Aluminium) => BillOfMaterials {
+            entries: vec![
+                (Resource::Aluminium, 0.85),
+                (Resource::Steel, 0.07),
+                (Resource::Plumbing, 0.04),
+                (Resource::Wiring, 0.02),
+                (Resource::Composites, 0.02),
+            ],
+        },
+        (FuelType::Methalox, TankMaterial::CarbonComposite) => BillOfMaterials {
+            entries: vec![
+                (Resource::Composites, 0.72),
+                (Resource::Aluminium, 0.10),
+                (Resource::Steel, 0.06),
+                (Resource::Superalloys, 0.05),
+                (Resource::Wiring, 0.04),
+                (Resource::Plumbing, 0.03),
+            ],
+        },
+        (FuelType::Hypergolic, TankMaterial::Aluminium) => BillOfMaterials {
+            entries: vec![
+                (Resource::Aluminium, 0.82),
+                (Resource::Steel, 0.08),
+                (Resource::Plumbing, 0.05),
+                (Resource::Wiring, 0.03),
+                (Resource::Composites, 0.02),
+            ],
+        },
+        (FuelType::Hypergolic, TankMaterial::CarbonComposite) => BillOfMaterials {
+            entries: vec![
+                (Resource::Composites, 0.70),
+                (Resource::Aluminium, 0.10),
+                (Resource::Steel, 0.08),
+                (Resource::Superalloys, 0.05),
+                (Resource::Wiring, 0.04),
+                (Resource::Plumbing, 0.03),
             ],
         },
         (FuelType::Solid, _) => BillOfMaterials {
@@ -343,6 +403,8 @@ pub fn engine_base_build_days(fuel_type: FuelType) -> f64 {
         FuelType::Kerolox => 120.0,
         FuelType::Hydrolox => 180.0,
         FuelType::Solid => 45.0,
+        FuelType::Methalox => 150.0,
+        FuelType::Hypergolic => 60.0,
     }
 }
 
@@ -408,6 +470,36 @@ mod tests {
     fn test_solid_composite_tank_bom_empty() {
         let bom = tank_bom(FuelType::Solid, TankMaterial::CarbonComposite);
         assert!(bom.entries.is_empty());
+    }
+
+    #[test]
+    fn test_methalox_engine_bom_sums_to_one() {
+        assert_bom_sums_to_one(&engine_bom(FuelType::Methalox));
+    }
+
+    #[test]
+    fn test_hypergolic_engine_bom_sums_to_one() {
+        assert_bom_sums_to_one(&engine_bom(FuelType::Hypergolic));
+    }
+
+    #[test]
+    fn test_methalox_tank_bom_sums_to_one() {
+        assert_bom_sums_to_one(&tank_bom(FuelType::Methalox, TankMaterial::Aluminium));
+    }
+
+    #[test]
+    fn test_methalox_composite_tank_bom_sums_to_one() {
+        assert_bom_sums_to_one(&tank_bom(FuelType::Methalox, TankMaterial::CarbonComposite));
+    }
+
+    #[test]
+    fn test_hypergolic_tank_bom_sums_to_one() {
+        assert_bom_sums_to_one(&tank_bom(FuelType::Hypergolic, TankMaterial::Aluminium));
+    }
+
+    #[test]
+    fn test_hypergolic_composite_tank_bom_sums_to_one() {
+        assert_bom_sums_to_one(&tank_bom(FuelType::Hypergolic, TankMaterial::CarbonComposite));
     }
 
     #[test]
@@ -594,6 +686,8 @@ mod tests {
         assert_eq!(engine_base_build_days(FuelType::Kerolox), 120.0);
         assert_eq!(engine_base_build_days(FuelType::Hydrolox), 180.0);
         assert_eq!(engine_base_build_days(FuelType::Solid), 45.0);
+        assert_eq!(engine_base_build_days(FuelType::Methalox), 150.0);
+        assert_eq!(engine_base_build_days(FuelType::Hypergolic), 60.0);
     }
 
     #[test]
