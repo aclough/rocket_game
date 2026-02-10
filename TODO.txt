@@ -1,6 +1,6 @@
+* Fixes
+    * Display part complexity to the user.
 * Create new parts
-    * Made more or less complex strongly affecting price but also changing performance and reliability.
-    * Complexity should be a number stored with the part instead of just being used to derive other things, we'll want more cmoplex designs to have more of a penalty when someone tries to make one on the Moon or somewhere else far away from Earth's resoruces.
 * Part improvements
     * Refined over time for better stats with diminishing returns but benefit from flight experience
         * Things like increase chamber pressure or reduce complexity
@@ -10,7 +10,10 @@
 * Design versioning improvements:
     * Making changes to a design (engines, tank size) when cutting a new version should introduce flaws depending on how large the change is.
     * Flaws fixed on the "head" should not affect existing parts from older versions.
+    * Changes to the design of parts can introduce flaws.
 * UI
+    * Add ability to increase size of already exiting production runs in the manufacturing queue.
+    * Faster time rate.  Maybe make it variable.
 * Prices
     * Keep track of the number of parts and rockets built.
     * Keep track of the amount of engineering that goes into parts and engines.
