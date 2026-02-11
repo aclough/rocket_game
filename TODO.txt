@@ -1,7 +1,11 @@
 * Fixes
     * For boosters, let the user change the fuel level between a minimum and the maximum burn time of the base stage.
 * UI
-* Create new part types
+* Track success rate and streaks for rocket designs.
+* Hardware rich development
+    * Diminsighing returns to development over time without sacrificing hardware.
+    * Mission flights or test flight work for rockets.
+    * For engines or other parts a test stand is good enough.
 * Rockets record how much of what sort of propellant they have, and how much they have at the end of a mission.
     * Will be important later when we have multi-stage missions and propellant depots
     * And important for endurance.
@@ -11,9 +15,10 @@
     * Get delta-v map at https://en.wikipedia.org/wiki/File:Deltavs.svg
 * Add endurance to rockets
     * A big difference between GTO and GEO capable rockets
-    * COnsumables
+    * Consumables
     * Affects cryonic propellants
 * Add electricity
+    * Batteries
     * Solar panels
     * Ion drives
 * Part improvements
@@ -31,8 +36,14 @@
     * Use these to calculate the marginal and average cost of rockts and parts.
 * Prestige system
     * A bunch of modifiers with natural decays.
-    * A 10, 100, etc customer launches without a failure one.
-        * Test launches don't count here.
+    * Types with no decay
+        * N launches without a failure (no decay)
+        * Success rate
+    * Types with decay
+        * First mission of N type
+            * Launching to a new place
+            * Bringing people to a new place
+        * Technical innovations
 * Tooltips
     * Income/expenses
     * Prestige
