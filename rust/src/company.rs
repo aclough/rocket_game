@@ -423,10 +423,10 @@ impl Company {
         }
     }
 
-    /// Set the complexity of an engine design
-    pub fn set_engine_design_complexity(&mut self, index: usize, complexity: i32) -> bool {
+    /// Set the engine cycle of an engine design
+    pub fn set_engine_design_cycle(&mut self, index: usize, cycle: crate::engine_design::EngineCycle) -> bool {
         if let Some(lineage) = self.engine_designs.get_mut(index) {
-            lineage.head_mut().set_complexity(complexity)
+            lineage.head_mut().set_cycle(cycle)
         } else {
             false
         }

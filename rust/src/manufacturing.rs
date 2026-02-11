@@ -601,12 +601,11 @@ pub fn engine_material_cost(snapshot: &EngineDesignSnapshot) -> f64 {
 
 /// Calculate engine build work (team-days) from a snapshot.
 /// Build time varies by engine type (kerolox 120, hydrolox 180, solid 45 base days).
-/// Complexity scales build time quadratically: (complexity / center)^2.
+/// Engine cycle scales build time (e.g. FullFlow = 2.2x, PressureFed = 0.5x).
 pub fn engine_build_work(snapshot: &EngineDesignSnapshot) -> f64 {
-    let range = crate::balance::complexity_range(snapshot.fuel_type);
     crate::resources::engine_base_build_days(snapshot.fuel_type)
         * snapshot.scale.powf(ENGINE_BUILD_SCALE_EXPONENT)
-        * crate::balance::complexity_build_multiplier(snapshot.complexity, range.center)
+        * crate::balance::cycle_build_multiplier(snapshot.cycle)
 }
 
 /// Calculate material cost for a stage (tanks + assembly hardware, no engines)
@@ -747,25 +746,25 @@ mod tests {
             "Kerolox material cost should be ~$158K, got ${:.0}", cost);
 
         let snap = hydrolox_snapshot();
-        // Hydrolox 300 kg → ~$124K
+        // Hydrolox Expander 270 kg (300 * 0.9 cycle mass) → ~$112K
         let cost = engine_material_cost(&snap);
-        assert!(cost > 120_000.0 && cost < 130_000.0,
-            "Hydrolox material cost should be ~$124K, got ${:.0}", cost);
+        assert!(cost > 108_000.0 && cost < 116_000.0,
+            "Hydrolox material cost should be ~$112K, got ${:.0}", cost);
     }
 
     #[test]
     fn test_engine_build_work() {
         let snap = kerolox_snapshot();
-        // Kerolox at scale 1.0: 120 * 1.0^0.75 = 120 days
+        // Kerolox GasGenerator at scale 1.0: 120 * 1.0^0.75 * 1.0 = 120 days
         let work = engine_build_work(&snap);
         assert!((work - 120.0).abs() < 0.1,
-            "Kerolox build work should be 120 days, got {}", work);
+            "Kerolox GasGenerator build work should be 120 days, got {}", work);
 
         let snap = hydrolox_snapshot();
-        // Hydrolox at scale 1.0: 180 * 1.0^0.75 = 180 days
+        // Hydrolox Expander at scale 1.0: 180 * 1.0^0.75 * 1.2 = 216 days
         let work = engine_build_work(&snap);
-        assert!((work - 180.0).abs() < 0.1,
-            "Hydrolox build work should be 180 days, got {}", work);
+        assert!((work - 216.0).abs() < 0.1,
+            "Hydrolox Expander build work should be 216 days, got {}", work);
     }
 
     #[test]
@@ -1206,40 +1205,42 @@ mod tests {
     }
 
     // ==========================================
-    // Complexity Effect on Build Time Tests
+    // Cycle Effect on Build Time Tests
     // ==========================================
 
     #[test]
-    fn test_engine_build_work_complexity_center() {
-        // Center complexity should give the same result as before
+    fn test_engine_build_work_gas_generator_baseline() {
+        // GasGenerator cycle_build_multiplier = 1.0
         let snap = kerolox_snapshot();
-        assert_eq!(snap.complexity, 6); // center for kerolox
+        assert_eq!(snap.cycle, crate::engine_design::EngineCycle::GasGenerator);
         let work = engine_build_work(&snap);
-        // 120 * 1.0^0.75 * (6/6)^2 = 120
+        // 120 * 1.0^0.75 * 1.0 = 120
         assert!((work - 120.0).abs() < 0.1,
-            "Center complexity build work should be 120 days, got {}", work);
+            "GasGenerator build work should be 120 days, got {}", work);
     }
 
     #[test]
-    fn test_engine_build_work_high_complexity() {
-        let mut snap = kerolox_snapshot();
-        snap.complexity = 8;
+    fn test_engine_build_work_staged_combustion() {
+        use crate::engine_design::{create_engine, FuelType};
+        let mut design = create_engine(FuelType::Kerolox, 1.0);
+        design.set_cycle(crate::engine_design::EngineCycle::StagedCombustion);
+        let snap = design.snapshot(1, "Kerolox");
         let work = engine_build_work(&snap);
-        // 120 * 1.0^0.75 * (8/6)^2 = 120 * 1.778 ≈ 213.3
-        let expected = 120.0 * (8.0_f64 / 6.0).powi(2);
-        assert!((work - expected).abs() < 0.1,
-            "High complexity build work should be {:.1} days, got {:.1}", expected, work);
+        // 120 * 1.0^0.75 * 1.6 = 192
+        assert!((work - 192.0).abs() < 0.1,
+            "StagedCombustion build work should be 192 days, got {:.1}", work);
     }
 
     #[test]
-    fn test_engine_build_work_low_complexity() {
-        let mut snap = kerolox_snapshot();
-        snap.complexity = 4;
+    fn test_engine_build_work_pressure_fed() {
+        use crate::engine_design::{create_engine, FuelType};
+        let mut design = create_engine(FuelType::Kerolox, 1.0);
+        design.set_cycle(crate::engine_design::EngineCycle::PressureFed);
+        let snap = design.snapshot(1, "Kerolox");
         let work = engine_build_work(&snap);
-        // 120 * 1.0^0.75 * (4/6)^2 = 120 * 0.444 ≈ 53.3
-        let expected = 120.0 * (4.0_f64 / 6.0).powi(2);
-        assert!((work - expected).abs() < 0.1,
-            "Low complexity build work should be {:.1} days, got {:.1}", expected, work);
+        // 120 * 1.0^0.75 * 0.5 = 60
+        assert!((work - 60.0).abs() < 0.1,
+            "PressureFed build work should be 60 days, got {:.1}", work);
     }
 
     // ==========================================

@@ -1815,10 +1815,10 @@ mod tests {
         design.stages.push(stage2);
 
         // Mass above stage 1 (bottom): stage 2 + payload
-        // Stage 2: 300 kg engine + 300 kg tank (3000 × 0.10 Hydrolox) + 3000 kg prop = 3600 kg
-        // + 1000 kg payload = 4600 kg
+        // Stage 2: 270 kg engine (Expander) + 300 kg tank (3000 × 0.10) + 3000 kg prop = 3570 kg
+        // + 1000 kg payload = 4570 kg
         let mass_above_0 = design.mass_above_stage(0);
-        assert_eq!(mass_above_0, 4600.0);
+        assert_eq!(mass_above_0, 4570.0);
 
         // Mass above stage 2 (top): just payload
         let mass_above_1 = design.mass_above_stage(1);
@@ -1971,14 +1971,14 @@ mod tests {
     #[test]
     fn test_delta_v_hand_calculated_single_stage() {
         // Hand calculation for a single stage rocket:
-        // Hydrolox engine: Ve = 4500 m/s, engine mass = 300 kg
+        // Hydrolox Expander: Ve = 4680 m/s, engine mass = 270 kg
         // Propellant: 9000 kg
         // Tank mass: 9000 × 0.10 = 900 kg (Hydrolox uses 10% tank mass ratio)
         // Payload: 1000 kg
         //
-        // Wet mass (m0) = 300 + 900 + 9000 + 1000 = 11200 kg
-        // Dry mass (mf) = 300 + 900 + 1000 = 2200 kg
-        // Δv = 4500 * ln(11200/2200) = 4500 * ln(5.091) = 4500 * 1.627 = 7322 m/s
+        // Wet mass (m0) = 270 + 900 + 9000 + 1000 = 11170 kg
+        // Dry mass (mf) = 270 + 900 + 1000 = 2170 kg
+        // Δv = 4680 * ln(11170/2170)
 
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
@@ -1987,7 +1987,7 @@ mod tests {
         design.stages[0].propellant_mass_kg = 9000.0;
 
         let dv = design.total_delta_v();
-        let expected = 4500.0 * (11200.0_f64 / 2200.0).ln();
+        let expected = 4680.0 * (11170.0_f64 / 2170.0).ln();
 
         assert!(
             (dv - expected).abs() < 1.0,
@@ -2004,22 +2004,20 @@ mod tests {
         // - Hydrolox: 10% tank mass ratio
         //
         // Stage 2 (upper, fires second):
-        //   Hydrolox: Ve = 4500 m/s, engine = 300 kg
+        //   Hydrolox Expander: Ve = 4680 m/s, engine = 270 kg
         //   Propellant: 3000 kg, Tank: 3000 × 0.10 = 300 kg
         //   Payload: 1000 kg
-        //   m0 = 300 + 300 + 3000 + 1000 = 4600 kg
-        //   mf = 300 + 300 + 1000 = 1600 kg
-        //   Δv2 = 4500 * ln(4600/1600) = 4500 * ln(2.875) = 4500 * 1.056 = 4752 m/s
+        //   m0 = 270 + 300 + 3000 + 1000 = 4570 kg
+        //   mf = 270 + 300 + 1000 = 1570 kg
+        //   Δv2 = 4680 * ln(4570/1570)
         //
         // Stage 1 (lower, fires first):
-        //   Kerolox: Ve = 3000 m/s, engine = 450 kg
+        //   Kerolox GasGenerator: Ve = 3000 m/s, engine = 450 kg
         //   Propellant: 10000 kg, Tank: 10000 × 0.06 = 600 kg
-        //   Payload above = stage 2 wet mass = 4600 kg
-        //   m0 = 450 + 600 + 10000 + 4600 = 15650 kg
-        //   mf = 450 + 600 + 4600 = 5650 kg
-        //   Δv1 = 3000 * ln(15650/5650) = 3000 * ln(2.770) = 3000 * 1.019 = 3056 m/s
-        //
-        // Total Δv = 4752 + 3056 = 7808 m/s
+        //   Payload above = stage 2 wet mass = 3570 kg + 1000 = 4570 kg
+        //   m0 = 450 + 600 + 10000 + 4570 = 15620 kg
+        //   mf = 450 + 600 + 4570 = 5620 kg
+        //   Δv1 = 3000 * ln(15620/5620)
 
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
@@ -2040,8 +2038,8 @@ mod tests {
         let dv2 = design.stage_delta_v(1);
         let total = design.total_delta_v();
 
-        let expected_dv2 = 4500.0 * (4600.0_f64 / 1600.0).ln();
-        let expected_dv1 = 3000.0 * (15650.0_f64 / 5650.0).ln();
+        let expected_dv2 = 4680.0 * (4570.0_f64 / 1570.0).ln();
+        let expected_dv1 = 3000.0 * (15620.0_f64 / 5620.0).ln();
         let expected_total = expected_dv1 + expected_dv2;
 
         assert!(
@@ -2177,13 +2175,13 @@ mod tests {
         design.add_stage(hydrolox_snap());
         design.stages[1].engine_count = 1;
         design.stages[1].propellant_mass_kg = 2000.0;
-        // Engine: 300 kg, Tank: 2000 × 0.10 = 200 kg (Hydrolox)
-        // Dry: 500 kg, Wet: 2500 kg
+        // Engine: 270 kg (Expander), Tank: 2000 × 0.10 = 200 kg (Hydrolox)
+        // Dry: 470 kg, Wet: 2470 kg
 
-        // Total dry = 1200 + 500 + 1000 = 2700 kg
-        // Total wet = 6200 + 2500 + 1000 = 9700 kg
-        assert_eq!(design.total_dry_mass_kg(), 2700.0);
-        assert_eq!(design.total_wet_mass_kg(), 9700.0);
+        // Total dry = 1200 + 470 + 1000 = 2670 kg
+        // Total wet = 6200 + 2470 + 1000 = 9670 kg
+        assert_eq!(design.total_dry_mass_kg(), 2670.0);
+        assert_eq!(design.total_wet_mass_kg(), 9670.0);
     }
 
     #[test]
@@ -2232,12 +2230,11 @@ mod tests {
         let mut design = RocketDesign::new();
         design.payload_mass_kg = 1000.0;
         design.add_stage(hydrolox_snap());
-        // Need enough propellant to exceed 100% ideal delta-v even with 2 engines
+        // Need enough propellant to exceed 100% ideal delta-v
         design.stages[0].propellant_mass_kg = 17000.0;
         // Need multiple engines to achieve TWR > 1 for liftoff
-        // 1 Hydrolox engine (100 kN) with this mass gives TWR ~0.55, which can't lift off
-        // 2 engines gives TWR ~1.1, which can lift off
-        design.stages[0].engine_count = 2;
+        // Hydrolox Expander: 80 kN per engine. 3 engines = 240 kN, TWR ~1.2
+        design.stages[0].engine_count = 3;
 
         // Test that effective percentage is less than ideal
         let effective_percentage = design.delta_v_percentage();

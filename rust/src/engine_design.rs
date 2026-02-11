@@ -1,4 +1,4 @@
-use crate::balance::{self, complexity_range, complexity_mass_multiplier, complexity_ve_multiplier, complexity_cost_multiplier};
+use crate::balance::{complexity_range, complexity_cost_multiplier, cycle_thrust_multiplier, cycle_ve_multiplier, cycle_mass_multiplier, cycle_cost_multiplier};
 use crate::engine::{costs, EngineStatus};
 use crate::flaw::{Flaw, FlawCategory, FlawGenerator};
 
@@ -18,16 +18,6 @@ pub enum FuelType {
 }
 
 impl FuelType {
-    pub fn components(&self) -> Vec<EngineComponent> {
-        match self {
-            FuelType::Kerolox => vec![EngineComponent::Kerolox, EngineComponent::Turbopump],
-            FuelType::Hydrolox => vec![EngineComponent::Hydrolox, EngineComponent::Turbopump],
-            FuelType::Solid => vec![EngineComponent::SolidMotor],
-            FuelType::Methalox => vec![EngineComponent::Methalox, EngineComponent::Turbopump],
-            FuelType::Hypergolic => vec![EngineComponent::Hypergolic],
-        }
-    }
-
     pub fn display_name(&self) -> &'static str {
         match self {
             FuelType::Kerolox => "Kerolox",
@@ -60,8 +50,176 @@ impl FuelType {
     }
 }
 
+/// Engine cycle (pump type) determines how propellants are fed to the combustion chamber.
+/// Higher-performance cycles are more complex and expensive.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EngineCycle {
+    PressureFed,
+    GasGenerator,
+    Expander,
+    StagedCombustion,
+    FullFlowStagedCombustion,
+}
+
+impl EngineCycle {
+    pub fn from_index(i: usize) -> Option<EngineCycle> {
+        match i {
+            0 => Some(EngineCycle::PressureFed),
+            1 => Some(EngineCycle::GasGenerator),
+            2 => Some(EngineCycle::Expander),
+            3 => Some(EngineCycle::StagedCombustion),
+            4 => Some(EngineCycle::FullFlowStagedCombustion),
+            _ => None,
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        match self {
+            EngineCycle::PressureFed => 0,
+            EngineCycle::GasGenerator => 1,
+            EngineCycle::Expander => 2,
+            EngineCycle::StagedCombustion => 3,
+            EngineCycle::FullFlowStagedCombustion => 4,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            EngineCycle::PressureFed => "Pressure-Fed",
+            EngineCycle::GasGenerator => "Gas Generator",
+            EngineCycle::Expander => "Expander",
+            EngineCycle::StagedCombustion => "Staged Combustion",
+            EngineCycle::FullFlowStagedCombustion => "Full-Flow Staged",
+        }
+    }
+
+    /// Whether this cycle uses a turbopump (all except PressureFed)
+    pub fn has_turbopump(&self) -> bool {
+        !matches!(self, EngineCycle::PressureFed)
+    }
+}
+
+/// Check if a (fuel, cycle) combination is valid
+pub fn is_cycle_compatible(fuel: FuelType, cycle: EngineCycle) -> bool {
+    match (fuel, cycle) {
+        // PressureFed: all fuels
+        (_, EngineCycle::PressureFed) => true,
+        // GasGenerator: all liquid fuels
+        (FuelType::Kerolox, EngineCycle::GasGenerator) => true,
+        (FuelType::Hydrolox, EngineCycle::GasGenerator) => true,
+        (FuelType::Methalox, EngineCycle::GasGenerator) => true,
+        (FuelType::Hypergolic, EngineCycle::GasGenerator) => true,
+        // Expander: Hydrolox and Methalox only
+        (FuelType::Hydrolox, EngineCycle::Expander) => true,
+        (FuelType::Methalox, EngineCycle::Expander) => true,
+        // StagedCombustion: all liquid fuels
+        (FuelType::Kerolox, EngineCycle::StagedCombustion) => true,
+        (FuelType::Hydrolox, EngineCycle::StagedCombustion) => true,
+        (FuelType::Methalox, EngineCycle::StagedCombustion) => true,
+        (FuelType::Hypergolic, EngineCycle::StagedCombustion) => true,
+        // FullFlow: Kerolox, Hydrolox, Methalox
+        (FuelType::Kerolox, EngineCycle::FullFlowStagedCombustion) => true,
+        (FuelType::Hydrolox, EngineCycle::FullFlowStagedCombustion) => true,
+        (FuelType::Methalox, EngineCycle::FullFlowStagedCombustion) => true,
+        // Everything else invalid
+        _ => false,
+    }
+}
+
+/// Get the complexity value for a (fuel, cycle) combination.
+/// Returns None for invalid combinations.
+pub fn cycle_complexity(fuel: FuelType, cycle: EngineCycle) -> Option<i32> {
+    if !is_cycle_compatible(fuel, cycle) {
+        return None;
+    }
+    Some(match (fuel, cycle) {
+        (FuelType::Kerolox, EngineCycle::PressureFed) => 4,
+        (FuelType::Kerolox, EngineCycle::GasGenerator) => 6,
+        (FuelType::Kerolox, EngineCycle::StagedCombustion) => 7,
+        (FuelType::Kerolox, EngineCycle::FullFlowStagedCombustion) => 8,
+
+        (FuelType::Hydrolox, EngineCycle::PressureFed) => 5,
+        (FuelType::Hydrolox, EngineCycle::GasGenerator) => 6,
+        (FuelType::Hydrolox, EngineCycle::Expander) => 7,
+        (FuelType::Hydrolox, EngineCycle::StagedCombustion) => 8,
+        (FuelType::Hydrolox, EngineCycle::FullFlowStagedCombustion) => 9,
+
+        (FuelType::Methalox, EngineCycle::PressureFed) => 5,
+        (FuelType::Methalox, EngineCycle::GasGenerator) => 6,
+        (FuelType::Methalox, EngineCycle::Expander) => 7,
+        (FuelType::Methalox, EngineCycle::StagedCombustion) => 8,
+        (FuelType::Methalox, EngineCycle::FullFlowStagedCombustion) => 9,
+
+        (FuelType::Hypergolic, EngineCycle::PressureFed) => 1,
+        (FuelType::Hypergolic, EngineCycle::GasGenerator) => 2,
+        (FuelType::Hypergolic, EngineCycle::StagedCombustion) => 4,
+
+        (FuelType::Solid, EngineCycle::PressureFed) => 3,
+
+        _ => unreachable!(), // guarded by is_cycle_compatible check
+    })
+}
+
+/// Get the default cycle for a fuel type
+pub fn default_cycle(fuel: FuelType) -> EngineCycle {
+    match fuel {
+        FuelType::Kerolox => EngineCycle::GasGenerator,
+        FuelType::Hydrolox => EngineCycle::Expander,
+        FuelType::Methalox => EngineCycle::GasGenerator,
+        FuelType::Hypergolic => EngineCycle::PressureFed,
+        FuelType::Solid => EngineCycle::PressureFed,
+    }
+}
+
+/// Get the list of valid cycles for a fuel type (in index order)
+pub fn valid_cycles_for_fuel(fuel: FuelType) -> Vec<EngineCycle> {
+    let all = [
+        EngineCycle::PressureFed,
+        EngineCycle::GasGenerator,
+        EngineCycle::Expander,
+        EngineCycle::StagedCombustion,
+        EngineCycle::FullFlowStagedCombustion,
+    ];
+    all.iter().copied().filter(|c| is_cycle_compatible(fuel, *c)).collect()
+}
+
+/// Get the engine components for a (fuel, cycle) combination
+pub fn components_for(fuel: FuelType, cycle: EngineCycle) -> Vec<EngineComponent> {
+    match fuel {
+        FuelType::Solid => vec![EngineComponent::SolidMotor],
+        FuelType::Kerolox => {
+            if cycle.has_turbopump() {
+                vec![EngineComponent::Kerolox, EngineComponent::Turbopump]
+            } else {
+                vec![EngineComponent::Kerolox]
+            }
+        }
+        FuelType::Hydrolox => {
+            if cycle.has_turbopump() {
+                vec![EngineComponent::Hydrolox, EngineComponent::Turbopump]
+            } else {
+                vec![EngineComponent::Hydrolox]
+            }
+        }
+        FuelType::Methalox => {
+            if cycle.has_turbopump() {
+                vec![EngineComponent::Methalox, EngineComponent::Turbopump]
+            } else {
+                vec![EngineComponent::Methalox]
+            }
+        }
+        FuelType::Hypergolic => {
+            if cycle.has_turbopump() {
+                vec![EngineComponent::Hypergolic, EngineComponent::Turbopump]
+            } else {
+                vec![EngineComponent::Hypergolic]
+            }
+        }
+    }
+}
+
 /// Components that make up an engine design.
-/// Propellant chemistry determines base performance; Turbopump is required for liquids.
+/// Propellant chemistry determines base performance; Turbopump is required for turbopump-fed cycles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EngineComponent {
     /// RP-1/LOX propellant
@@ -74,7 +232,7 @@ pub enum EngineComponent {
     Turbopump,
     /// CH4/LOX propellant
     Methalox,
-    /// NTO/UDMH storable propellant (pressure-fed, no turbopump)
+    /// NTO/UDMH storable propellant
     Hypergolic,
 }
 
@@ -83,9 +241,11 @@ pub enum EngineComponent {
 pub struct EngineDesign {
     pub components: Vec<EngineComponent>,
     pub scale: f64,
-    /// Complexity level (integer within fuel-type-specific range).
+    /// Complexity level (derived from fuel type + cycle).
     /// Higher = better performance, higher cost/build time, more flaws.
     pub complexity: i32,
+    /// Engine cycle (pump type) — determines complexity
+    pub cycle: EngineCycle,
     // Flaw system fields (same role as old EngineSpec)
     pub active_flaws: Vec<Flaw>,
     pub fixed_flaws: Vec<Flaw>,
@@ -102,6 +262,7 @@ pub struct EngineDesignSnapshot {
     pub engine_design_id: usize,
     pub name: String,
     pub fuel_type: FuelType,
+    pub cycle: EngineCycle,
     pub scale: f64,
     pub complexity: i32,
     pub mass_kg: f64,
@@ -136,31 +297,38 @@ impl EngineDesign {
         }
     }
 
-    /// Set fuel type by replacing components. Re-clamps complexity to new range.
+    /// Set fuel type. If current cycle is compatible with the new fuel, keep it;
+    /// otherwise switch to the default cycle for the new fuel.
+    /// Complexity is always derived from (fuel, cycle).
     /// Returns false if not modifiable.
     pub fn set_fuel_type(&mut self, fuel: FuelType) -> bool {
         if !self.can_modify() {
             return false;
         }
-        self.components = fuel.components();
-        // Re-clamp complexity to the new fuel type's range
-        let range = complexity_range(fuel);
-        self.complexity = self.complexity.clamp(range.min, range.max);
+        // Keep current cycle if compatible, otherwise use default
+        let new_cycle = if is_cycle_compatible(fuel, self.cycle) {
+            self.cycle
+        } else {
+            default_cycle(fuel)
+        };
+        self.cycle = new_cycle;
+        self.components = components_for(fuel, new_cycle);
+        self.complexity = cycle_complexity(fuel, new_cycle).unwrap();
         true
     }
 
-    /// Get the complexity range for the current fuel type
-    pub fn complexity_range(&self) -> balance::ComplexityRange {
-        complexity_range(self.fuel_type())
-    }
-
-    /// Set complexity (clamped to fuel-type range). Returns false if not modifiable.
-    pub fn set_complexity(&mut self, complexity: i32) -> bool {
+    /// Set the engine cycle. Returns false if not modifiable or incompatible.
+    pub fn set_cycle(&mut self, cycle: EngineCycle) -> bool {
         if !self.can_modify() {
             return false;
         }
-        let range = self.complexity_range();
-        self.complexity = complexity.clamp(range.min, range.max);
+        let fuel = self.fuel_type();
+        if !is_cycle_compatible(fuel, cycle) {
+            return false;
+        }
+        self.cycle = cycle;
+        self.components = components_for(fuel, cycle);
+        self.complexity = cycle_complexity(fuel, cycle).unwrap();
         true
     }
 
@@ -230,19 +398,20 @@ impl EngineDesign {
         let range = complexity_range(fuel_type);
         let center = range.center;
 
-        let mass_kg = base_mass * self.scale * complexity_mass_multiplier(self.complexity, center);
-        let exhaust_velocity_ms = ve * complexity_ve_multiplier(self.complexity, center);
+        let mass_kg = base_mass * self.scale * cycle_mass_multiplier(self.cycle);
+        let exhaust_velocity_ms = ve * cycle_ve_multiplier(self.cycle);
         let raw_cost = crate::resources::engine_resource_cost(fuel_type, mass_kg);
-        let base_cost = raw_cost * complexity_cost_multiplier(self.complexity, center);
+        let base_cost = raw_cost * cycle_cost_multiplier(self.cycle) * complexity_cost_multiplier(self.complexity, center);
 
         EngineDesignSnapshot {
             engine_design_id: id,
             name: name.to_string(),
             fuel_type,
+            cycle: self.cycle,
             scale: self.scale,
             complexity: self.complexity,
             mass_kg,
-            thrust_kn: base_thrust * self.scale,
+            thrust_kn: base_thrust * self.scale * cycle_thrust_multiplier(self.cycle),
             exhaust_velocity_ms,
             base_cost,
             propellant_density: density,
@@ -372,13 +541,15 @@ impl EngineDesign {
 // ==========================================
 
 /// Create an engine design with the given fuel type and scale.
-/// Complexity defaults to the center of the fuel type's range.
+/// Uses the default cycle for the fuel type; complexity derived from (fuel, cycle).
 pub fn create_engine(fuel: FuelType, scale: f64) -> EngineDesign {
-    let range = complexity_range(fuel);
+    let cycle = default_cycle(fuel);
+    let complexity = cycle_complexity(fuel, cycle).unwrap();
     EngineDesign {
-        components: fuel.components(),
+        components: components_for(fuel, cycle),
         scale: scale.clamp(ENGINE_SCALE_MIN, ENGINE_SCALE_MAX),
-        complexity: range.center,
+        complexity,
+        cycle,
         active_flaws: Vec::new(),
         fixed_flaws: Vec::new(),
         flaws_generated: false,
@@ -391,45 +562,17 @@ pub fn create_engine(fuel: FuelType, scale: f64) -> EngineDesign {
 // Default Engine Creation Functions
 // ==========================================
 
-/// Create the default Kerolox engine design (index 0 in the legacy mapping was Hydrolox,
-/// but we keep the same indices: 0=Hydrolox, 1=Kerolox, 2=Solid)
+/// Create the default Kerolox engine design
 pub fn default_kerolox() -> EngineDesign {
-    EngineDesign {
-        components: vec![EngineComponent::Kerolox, EngineComponent::Turbopump],
-        scale: 1.0,
-        complexity: 6, // center for Kerolox
-        active_flaws: Vec::new(),
-        fixed_flaws: Vec::new(),
-        flaws_generated: false,
-        status: EngineStatus::Untested,
-        testing_work_completed: 0.0,
-    }
+    create_engine(FuelType::Kerolox, 1.0)
 }
 
 pub fn default_hydrolox() -> EngineDesign {
-    EngineDesign {
-        components: vec![EngineComponent::Hydrolox, EngineComponent::Turbopump],
-        scale: 1.0,
-        complexity: 7, // center for Hydrolox
-        active_flaws: Vec::new(),
-        fixed_flaws: Vec::new(),
-        flaws_generated: false,
-        status: EngineStatus::Untested,
-        testing_work_completed: 0.0,
-    }
+    create_engine(FuelType::Hydrolox, 1.0)
 }
 
 pub fn default_solid() -> EngineDesign {
-    EngineDesign {
-        components: vec![EngineComponent::SolidMotor],
-        scale: 1.0,
-        complexity: 3, // center for Solid
-        active_flaws: Vec::new(),
-        fixed_flaws: Vec::new(),
-        flaws_generated: false,
-        status: EngineStatus::Untested,
-        testing_work_completed: 0.0,
-    }
+    create_engine(FuelType::Solid, 1.0)
 }
 
 /// Create the 3 default engine design lineages.
@@ -477,11 +620,13 @@ mod tests {
     fn test_hydrolox_snapshot() {
         let design = default_hydrolox();
         let snap = design.snapshot(0, "Hydrolox");
-        assert_eq!(snap.mass_kg, 300.0);
-        assert_eq!(snap.thrust_kn, 100.0);
-        assert_eq!(snap.exhaust_velocity_ms, 4500.0);
+        // Default Hydrolox cycle = Expander: mass*0.9, thrust*0.8, ve*1.04, cost*1.3
+        assert!((snap.mass_kg - 270.0).abs() < 0.1); // 300 * 0.9
+        assert!((snap.thrust_kn - 80.0).abs() < 0.1); // 100 * 0.8
+        assert!((snap.exhaust_velocity_ms - 4680.0).abs() < 0.1); // 4500 * 1.04
         assert_eq!(snap.fuel_type, FuelType::Hydrolox);
-        let expected_cost = crate::resources::engine_resource_cost(FuelType::Hydrolox, 300.0);
+        // cost = resource_cost(270) * cycle_cost(1.3) * complexity_cost(7/7=1.0)
+        let expected_cost = crate::resources::engine_resource_cost(FuelType::Hydrolox, 270.0) * 1.3;
         assert!((snap.base_cost - expected_cost).abs() < 1.0);
         assert!(!snap.is_solid);
     }
@@ -490,9 +635,10 @@ mod tests {
     fn test_solid_snapshot() {
         let design = default_solid();
         let snap = design.snapshot(2, "Solid");
-        assert_eq!(snap.mass_kg, 40_000.0);
-        assert_eq!(snap.thrust_kn, 8_000.0);
-        assert_eq!(snap.exhaust_velocity_ms, 2650.0);
+        // Default Solid cycle = PressureFed: mass*0.7, thrust*0.6, ve*0.92
+        assert!((snap.mass_kg - 28_000.0).abs() < 0.1); // 40000 * 0.7
+        assert!((snap.thrust_kn - 4_800.0).abs() < 0.1); // 8000 * 0.6
+        assert!((snap.exhaust_velocity_ms - 2438.0).abs() < 0.1); // 2650 * 0.92
         assert_eq!(snap.fuel_type, FuelType::Solid);
         assert!(snap.is_solid);
         assert!((snap.fixed_mass_ratio.unwrap() - 0.88).abs() < 0.01);
@@ -503,12 +649,12 @@ mod tests {
     fn test_methalox_snapshot() {
         let design = create_engine(FuelType::Methalox, 1.0);
         let snap = design.snapshot(3, "Methalox");
-        assert_eq!(snap.mass_kg, 400.0);
-        assert_eq!(snap.thrust_kn, 400.0);
-        assert_eq!(snap.exhaust_velocity_ms, 3300.0);
+        // Default Methalox cycle = GasGenerator (all cycle multipliers = 1.0)
+        // complexity = 6, center = 7 (only affects cost)
+        assert!((snap.mass_kg - 400.0).abs() < 0.1); // 400 * 1.0
+        assert!((snap.thrust_kn - 400.0).abs() < 0.1); // 400 * 1.0
+        assert!((snap.exhaust_velocity_ms - 3300.0).abs() < 0.1); // 3300 * 1.0
         assert_eq!(snap.fuel_type, FuelType::Methalox);
-        let expected_cost = crate::resources::engine_resource_cost(FuelType::Methalox, 400.0);
-        assert!((snap.base_cost - expected_cost).abs() < 1.0);
         assert_eq!(snap.propellant_density, costs::METHALOX_DENSITY_KG_M3);
         assert_eq!(snap.tank_mass_ratio, costs::METHALOX_TANK_MASS_RATIO);
         assert!(!snap.is_solid);
@@ -520,12 +666,12 @@ mod tests {
     fn test_hypergolic_snapshot() {
         let design = create_engine(FuelType::Hypergolic, 1.0);
         let snap = design.snapshot(4, "Hypergolic");
-        assert_eq!(snap.mass_kg, 200.0);
-        assert_eq!(snap.thrust_kn, 50.0);
-        assert_eq!(snap.exhaust_velocity_ms, 2800.0);
+        // Default Hypergolic cycle = PressureFed: mass*0.7, thrust*0.6, ve*0.92
+        // complexity = 1, center = 2 (only affects cost)
+        assert!((snap.mass_kg - 140.0).abs() < 0.1); // 200 * 0.7
+        assert!((snap.thrust_kn - 30.0).abs() < 0.1); // 50 * 0.6
+        assert!((snap.exhaust_velocity_ms - 2576.0).abs() < 0.1); // 2800 * 0.92
         assert_eq!(snap.fuel_type, FuelType::Hypergolic);
-        let expected_cost = crate::resources::engine_resource_cost(FuelType::Hypergolic, 200.0);
-        assert!((snap.base_cost - expected_cost).abs() < 1.0);
         assert_eq!(snap.propellant_density, costs::HYPERGOLIC_DENSITY_KG_M3);
         assert_eq!(snap.tank_mass_ratio, costs::HYPERGOLIC_TANK_MASS_RATIO);
         assert!(!snap.is_solid);
@@ -632,16 +778,29 @@ mod tests {
     #[test]
     fn test_set_fuel_type() {
         let mut design = default_kerolox();
+        // Kerolox default cycle = GasGenerator
+        assert_eq!(design.cycle, EngineCycle::GasGenerator);
         assert!(design.set_fuel_type(FuelType::Hydrolox));
         assert_eq!(design.fuel_type(), FuelType::Hydrolox);
-
-        // Complexity 6 stays at 6 (within Hydrolox range 5-9)
+        // GasGenerator is compatible with Hydrolox, so cycle stays
+        assert_eq!(design.cycle, EngineCycle::GasGenerator);
+        // Complexity for (Hydrolox, GasGenerator) = 6
         assert_eq!(design.complexity, 6);
+    }
 
-        // Verify snapshot uses new fuel type
-        // ve = 4500 * (1 + 0.01 * (6 - 7)) = 4500 * 0.99 = 4455
-        let snap = design.snapshot(0, "Changed");
-        assert!((snap.exhaust_velocity_ms - 4455.0).abs() < 0.1);
+    #[test]
+    fn test_set_fuel_type_switches_incompatible_cycle() {
+        let mut design = default_kerolox();
+        // Set to FullFlow first
+        design.set_cycle(EngineCycle::FullFlowStagedCombustion);
+        assert_eq!(design.cycle, EngineCycle::FullFlowStagedCombustion);
+
+        // Switch to Hypergolic - FullFlow is not compatible
+        assert!(design.set_fuel_type(FuelType::Hypergolic));
+        assert_eq!(design.fuel_type(), FuelType::Hypergolic);
+        // Should fall back to default cycle for Hypergolic = PressureFed
+        assert_eq!(design.cycle, EngineCycle::PressureFed);
+        assert_eq!(design.complexity, 1);
     }
 
     #[test]
@@ -695,6 +854,7 @@ mod tests {
         assert_eq!(engine.fuel_type(), FuelType::Hydrolox);
         assert_eq!(engine.scale, 2.0);
         assert!(engine.can_modify());
+        assert_eq!(engine.cycle, EngineCycle::Expander);
     }
 
     #[test]
@@ -707,124 +867,245 @@ mod tests {
     }
 
     // ==========================================
-    // Complexity Tests
+    // Cycle Tests
     // ==========================================
 
     #[test]
-    fn test_default_complexity_at_center() {
-        let kerolox = default_kerolox();
-        assert_eq!(kerolox.complexity, 6);
-        let hydrolox = default_hydrolox();
-        assert_eq!(hydrolox.complexity, 7);
-        let solid = default_solid();
-        assert_eq!(solid.complexity, 3);
+    fn test_default_cycles() {
+        assert_eq!(default_cycle(FuelType::Kerolox), EngineCycle::GasGenerator);
+        assert_eq!(default_cycle(FuelType::Hydrolox), EngineCycle::Expander);
+        assert_eq!(default_cycle(FuelType::Methalox), EngineCycle::GasGenerator);
+        assert_eq!(default_cycle(FuelType::Hypergolic), EngineCycle::PressureFed);
+        assert_eq!(default_cycle(FuelType::Solid), EngineCycle::PressureFed);
     }
 
     #[test]
-    fn test_create_engine_defaults_to_center() {
+    fn test_default_complexity_from_cycle() {
+        let kerolox = default_kerolox();
+        assert_eq!(kerolox.complexity, 6); // GasGenerator
+        assert_eq!(kerolox.cycle, EngineCycle::GasGenerator);
+
+        let hydrolox = default_hydrolox();
+        assert_eq!(hydrolox.complexity, 7); // Expander
+        assert_eq!(hydrolox.cycle, EngineCycle::Expander);
+
+        let solid = default_solid();
+        assert_eq!(solid.complexity, 3); // PressureFed
+        assert_eq!(solid.cycle, EngineCycle::PressureFed);
+    }
+
+    #[test]
+    fn test_create_engine_complexity_from_cycle() {
         let e = create_engine(FuelType::Kerolox, 1.0);
         assert_eq!(e.complexity, 6);
+        assert_eq!(e.cycle, EngineCycle::GasGenerator);
+
         let e = create_engine(FuelType::Hydrolox, 1.0);
         assert_eq!(e.complexity, 7);
+        assert_eq!(e.cycle, EngineCycle::Expander);
+
         let e = create_engine(FuelType::Solid, 1.0);
         assert_eq!(e.complexity, 3);
+        assert_eq!(e.cycle, EngineCycle::PressureFed);
+
         let e = create_engine(FuelType::Methalox, 1.0);
-        assert_eq!(e.complexity, 7);
+        assert_eq!(e.complexity, 6);
+        assert_eq!(e.cycle, EngineCycle::GasGenerator);
+
         let e = create_engine(FuelType::Hypergolic, 1.0);
-        assert_eq!(e.complexity, 2);
+        assert_eq!(e.complexity, 1);
+        assert_eq!(e.cycle, EngineCycle::PressureFed);
     }
 
     #[test]
-    fn test_set_complexity() {
+    fn test_set_cycle() {
         let mut design = default_kerolox();
-        assert!(design.set_complexity(8));
+        assert!(design.set_cycle(EngineCycle::StagedCombustion));
+        assert_eq!(design.cycle, EngineCycle::StagedCombustion);
+        assert_eq!(design.complexity, 7);
+
+        assert!(design.set_cycle(EngineCycle::FullFlowStagedCombustion));
         assert_eq!(design.complexity, 8);
 
-        // Clamped to range bounds
-        assert!(design.set_complexity(2));
-        assert_eq!(design.complexity, 4); // Kerolox min
-
-        assert!(design.set_complexity(20));
-        assert_eq!(design.complexity, 8); // Kerolox max
+        assert!(design.set_cycle(EngineCycle::PressureFed));
+        assert_eq!(design.complexity, 4);
     }
 
     #[test]
-    fn test_set_complexity_blocked_when_not_untested() {
+    fn test_set_cycle_incompatible() {
+        let mut design = default_kerolox();
+        // Expander is not compatible with Kerolox
+        assert!(!design.set_cycle(EngineCycle::Expander));
+        assert_eq!(design.cycle, EngineCycle::GasGenerator); // unchanged
+    }
+
+    #[test]
+    fn test_set_cycle_blocked_when_not_untested() {
         let mut design = default_kerolox();
         let mut gen = FlawGenerator::new();
         design.submit_to_testing(&mut gen, 0);
 
-        assert!(!design.set_complexity(8));
-        assert_eq!(design.complexity, 6);
+        assert!(!design.set_cycle(EngineCycle::StagedCombustion));
+        assert_eq!(design.cycle, EngineCycle::GasGenerator);
     }
 
     #[test]
-    fn test_fuel_type_switch_reclamps_complexity() {
-        let mut design = default_kerolox();
-        design.set_complexity(8); // Kerolox max
-        assert_eq!(design.complexity, 8);
+    fn test_cycle_compatibility_matrix() {
+        // PressureFed: all fuels
+        for fuel in [FuelType::Kerolox, FuelType::Hydrolox, FuelType::Solid, FuelType::Methalox, FuelType::Hypergolic] {
+            assert!(is_cycle_compatible(fuel, EngineCycle::PressureFed), "PressureFed should work with {:?}", fuel);
+        }
 
-        // Switch to Solid (range 2-4): must clamp down
-        design.set_fuel_type(FuelType::Solid);
-        assert_eq!(design.complexity, 4); // Solid max
+        // GasGenerator: all liquid fuels, not solid
+        assert!(is_cycle_compatible(FuelType::Kerolox, EngineCycle::GasGenerator));
+        assert!(is_cycle_compatible(FuelType::Hydrolox, EngineCycle::GasGenerator));
+        assert!(is_cycle_compatible(FuelType::Methalox, EngineCycle::GasGenerator));
+        assert!(is_cycle_compatible(FuelType::Hypergolic, EngineCycle::GasGenerator));
+        assert!(!is_cycle_compatible(FuelType::Solid, EngineCycle::GasGenerator));
+
+        // Expander: Hydrolox and Methalox only
+        assert!(!is_cycle_compatible(FuelType::Kerolox, EngineCycle::Expander));
+        assert!(is_cycle_compatible(FuelType::Hydrolox, EngineCycle::Expander));
+        assert!(is_cycle_compatible(FuelType::Methalox, EngineCycle::Expander));
+        assert!(!is_cycle_compatible(FuelType::Hypergolic, EngineCycle::Expander));
+        assert!(!is_cycle_compatible(FuelType::Solid, EngineCycle::Expander));
+
+        // StagedCombustion: all liquid, not solid
+        assert!(is_cycle_compatible(FuelType::Kerolox, EngineCycle::StagedCombustion));
+        assert!(is_cycle_compatible(FuelType::Hydrolox, EngineCycle::StagedCombustion));
+        assert!(is_cycle_compatible(FuelType::Methalox, EngineCycle::StagedCombustion));
+        assert!(is_cycle_compatible(FuelType::Hypergolic, EngineCycle::StagedCombustion));
+        assert!(!is_cycle_compatible(FuelType::Solid, EngineCycle::StagedCombustion));
+
+        // FullFlow: Kerolox, Hydrolox, Methalox
+        assert!(is_cycle_compatible(FuelType::Kerolox, EngineCycle::FullFlowStagedCombustion));
+        assert!(is_cycle_compatible(FuelType::Hydrolox, EngineCycle::FullFlowStagedCombustion));
+        assert!(is_cycle_compatible(FuelType::Methalox, EngineCycle::FullFlowStagedCombustion));
+        assert!(!is_cycle_compatible(FuelType::Hypergolic, EngineCycle::FullFlowStagedCombustion));
+        assert!(!is_cycle_compatible(FuelType::Solid, EngineCycle::FullFlowStagedCombustion));
     }
 
     #[test]
-    fn test_high_complexity_improves_mass_and_ve() {
-        let mut design = default_kerolox();
-        let center_snap = design.snapshot(0, "Center");
+    fn test_valid_cycles_for_fuel() {
+        let kerolox_cycles = valid_cycles_for_fuel(FuelType::Kerolox);
+        assert_eq!(kerolox_cycles.len(), 4); // PressureFed, GasGen, Staged, FullFlow
+        assert!(!kerolox_cycles.contains(&EngineCycle::Expander));
 
-        design.set_complexity(8); // +2 above center
-        let high_snap = design.snapshot(0, "High");
+        let hydrolox_cycles = valid_cycles_for_fuel(FuelType::Hydrolox);
+        assert_eq!(hydrolox_cycles.len(), 5); // All 5
 
-        // Mass should be lower (2% per unit * 2 = 4% lighter)
-        assert!(high_snap.mass_kg < center_snap.mass_kg);
-        let expected_mass = 450.0 * (1.0 - 0.02 * 2.0);
-        assert!((high_snap.mass_kg - expected_mass).abs() < 0.01);
+        let solid_cycles = valid_cycles_for_fuel(FuelType::Solid);
+        assert_eq!(solid_cycles.len(), 1); // PressureFed only
+        assert_eq!(solid_cycles[0], EngineCycle::PressureFed);
 
-        // VE should be higher (1% per unit * 2 = 2% better)
-        assert!(high_snap.exhaust_velocity_ms > center_snap.exhaust_velocity_ms);
-        let expected_ve = 3000.0 * (1.0 + 0.01 * 2.0);
-        assert!((high_snap.exhaust_velocity_ms - expected_ve).abs() < 0.01);
+        let hypergolic_cycles = valid_cycles_for_fuel(FuelType::Hypergolic);
+        assert_eq!(hypergolic_cycles.len(), 3); // PressureFed, GasGen, Staged
     }
 
     #[test]
-    fn test_high_complexity_increases_cost() {
-        let mut design = default_kerolox();
-        let center_snap = design.snapshot(0, "Center");
-
-        design.set_complexity(8);
-        let high_snap = design.snapshot(0, "High");
-
-        // Cost goes up quadratically: (8/6)^2 ≈ 1.778
-        assert!(high_snap.base_cost > center_snap.base_cost);
+    fn test_cycle_index_roundtrip() {
+        for i in 0..5 {
+            let cycle = EngineCycle::from_index(i).unwrap();
+            assert_eq!(cycle.index(), i);
+        }
+        assert!(EngineCycle::from_index(5).is_none());
     }
 
     #[test]
-    fn test_low_complexity_reduces_cost() {
-        let mut design = default_kerolox();
-        let center_snap = design.snapshot(0, "Center");
+    fn test_cycle_complexity_values() {
+        // Spot-check the table
+        assert_eq!(cycle_complexity(FuelType::Kerolox, EngineCycle::PressureFed), Some(4));
+        assert_eq!(cycle_complexity(FuelType::Kerolox, EngineCycle::GasGenerator), Some(6));
+        assert_eq!(cycle_complexity(FuelType::Kerolox, EngineCycle::FullFlowStagedCombustion), Some(8));
+        assert_eq!(cycle_complexity(FuelType::Hydrolox, EngineCycle::Expander), Some(7));
+        assert_eq!(cycle_complexity(FuelType::Solid, EngineCycle::PressureFed), Some(3));
+        assert_eq!(cycle_complexity(FuelType::Hypergolic, EngineCycle::PressureFed), Some(1));
 
-        design.set_complexity(4);
-        let low_snap = design.snapshot(0, "Low");
-
-        // Cost goes down: (4/6)^2 ≈ 0.444
-        assert!(low_snap.base_cost < center_snap.base_cost);
+        // Invalid combos return None
+        assert_eq!(cycle_complexity(FuelType::Kerolox, EngineCycle::Expander), None);
+        assert_eq!(cycle_complexity(FuelType::Solid, EngineCycle::GasGenerator), None);
     }
 
     #[test]
-    fn test_complexity_range_accessor() {
-        let design = default_kerolox();
-        let range = design.complexity_range();
-        assert_eq!(range.min, 4);
-        assert_eq!(range.max, 8);
-        assert_eq!(range.center, 6);
-    }
-
-    #[test]
-    fn test_snapshot_includes_complexity() {
+    fn test_snapshot_includes_cycle() {
         let design = default_kerolox();
         let snap = design.snapshot(0, "Test");
+        assert_eq!(snap.cycle, EngineCycle::GasGenerator);
         assert_eq!(snap.complexity, 6);
+    }
+
+    #[test]
+    fn test_components_for_pressure_fed_no_turbopump() {
+        let comps = components_for(FuelType::Kerolox, EngineCycle::PressureFed);
+        assert!(!comps.contains(&EngineComponent::Turbopump));
+        assert!(comps.contains(&EngineComponent::Kerolox));
+
+        let comps = components_for(FuelType::Kerolox, EngineCycle::GasGenerator);
+        assert!(comps.contains(&EngineComponent::Turbopump));
+    }
+
+    // ==========================================
+    // Cycle Performance Tests
+    // ==========================================
+
+    #[test]
+    fn test_full_flow_cycle_effects_on_kerolox() {
+        // Default Kerolox (GasGenerator) vs FullFlow
+        let gg_snap = default_kerolox().snapshot(0, "GG");
+
+        let mut design_ff = default_kerolox();
+        design_ff.set_cycle(EngineCycle::FullFlowStagedCombustion);
+        let ff_snap = design_ff.snapshot(0, "FF");
+
+        // FullFlow: thrust*1.3, mass*1.3, ve*1.08
+        assert!((ff_snap.mass_kg - 450.0 * 1.3).abs() < 0.1);
+        assert!((ff_snap.thrust_kn - 500.0 * 1.3).abs() < 0.1);
+        assert!((ff_snap.exhaust_velocity_ms - 3000.0 * 1.08).abs() < 0.1);
+
+        // Heavier, more thrust, better VE than GasGenerator
+        assert!(ff_snap.mass_kg > gg_snap.mass_kg);
+        assert!(ff_snap.thrust_kn > gg_snap.thrust_kn);
+        assert!(ff_snap.exhaust_velocity_ms > gg_snap.exhaust_velocity_ms);
+    }
+
+    #[test]
+    fn test_pressure_fed_cycle_effects_on_kerolox() {
+        let gg_snap = default_kerolox().snapshot(0, "GG");
+
+        let mut design_pf = default_kerolox();
+        design_pf.set_cycle(EngineCycle::PressureFed);
+        let pf_snap = design_pf.snapshot(0, "PF");
+
+        // PressureFed: thrust*0.6, mass*0.7, ve*0.92
+        assert!((pf_snap.mass_kg - 450.0 * 0.7).abs() < 0.1);
+        assert!((pf_snap.thrust_kn - 500.0 * 0.6).abs() < 0.1);
+        assert!((pf_snap.exhaust_velocity_ms - 3000.0 * 0.92).abs() < 0.1);
+
+        // Lighter, less thrust, worse VE than GasGenerator
+        assert!(pf_snap.mass_kg < gg_snap.mass_kg);
+        assert!(pf_snap.thrust_kn < gg_snap.thrust_kn);
+        assert!(pf_snap.exhaust_velocity_ms < gg_snap.exhaust_velocity_ms);
+    }
+
+    #[test]
+    fn test_cycle_cost_multiplier_in_snapshot() {
+        // GasGenerator (complexity=6, center=6): cost = raw * 1.0 * 1.0
+        let gg_snap = default_kerolox().snapshot(0, "GG");
+
+        // FullFlow (complexity=8, center=6): cost = raw * 3.0 * (8/6)^2
+        let mut design_ff = default_kerolox();
+        design_ff.set_cycle(EngineCycle::FullFlowStagedCombustion);
+        let ff_snap = design_ff.snapshot(0, "FF");
+
+        // FullFlow should be much more expensive (cycle*3.0 + complexity*(8/6)^2)
+        assert!(ff_snap.base_cost > gg_snap.base_cost * 4.0);
+
+        // PressureFed (complexity=4, center=6): cost = raw * 0.4 * (4/6)^2
+        let mut design_pf = default_kerolox();
+        design_pf.set_cycle(EngineCycle::PressureFed);
+        let pf_snap = design_pf.snapshot(0, "PF");
+
+        // PressureFed should be much cheaper
+        assert!(pf_snap.base_cost < gg_snap.base_cost * 0.2);
     }
 }

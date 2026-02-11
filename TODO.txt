@@ -1,9 +1,7 @@
 * Fixes
-    * Acutally just remove the complexity slider.  Complexity is just a matter of the fuel and pump for now.
     * For boosters, let the user change the fuel level between a minimum and the maximum burn time of the base stage.
 * UI
 * Create new part types
-    * Different types of increasing chamber pressure (expander, oxygen full flow, etc)
 * Rockets record how much of what sort of propellant they have, and how much they have at the end of a mission.
     * Will be important later when we have multi-stage missions and propellant depots
     * And important for endurance.

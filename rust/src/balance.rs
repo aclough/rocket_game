@@ -1,7 +1,7 @@
 /// Tuning parameters for game balance.
 /// Centralizes constants that affect cost, build time, performance, and risk tradeoffs.
 
-use crate::engine_design::FuelType;
+use crate::engine_design::{FuelType, EngineCycle};
 
 // ==========================================
 // Engine Complexity
@@ -15,17 +15,8 @@ pub struct ComplexityRange {
     pub center: i32,
 }
 
-/// Per-unit mass reduction from complexity above center (2% per unit).
-pub const COMPLEXITY_MASS_BONUS_PER_UNIT: f64 = 0.02;
-
-/// Per-unit exhaust velocity bonus from complexity above center (1% per unit).
-pub const COMPLEXITY_VE_BONUS_PER_UNIT: f64 = 0.01;
-
 /// Exponent for complexity cost scaling: (complexity / center)^EXPONENT.
 pub const COMPLEXITY_COST_EXPONENT: f64 = 2.0;
-
-/// Exponent for complexity build-time scaling: (complexity / center)^EXPONENT.
-pub const COMPLEXITY_BUILD_EXPONENT: f64 = 2.0;
 
 /// Get the complexity range for a given fuel type.
 pub fn complexity_range(fuel_type: FuelType) -> ComplexityRange {
@@ -38,26 +29,74 @@ pub fn complexity_range(fuel_type: FuelType) -> ComplexityRange {
     }
 }
 
-/// Mass multiplier from complexity: 1.0 - BONUS_PER_UNIT * (complexity - center).
-/// Higher complexity = lighter engine.
-pub fn complexity_mass_multiplier(complexity: i32, center: i32) -> f64 {
-    1.0 - COMPLEXITY_MASS_BONUS_PER_UNIT * (complexity - center) as f64
-}
-
-/// Exhaust velocity multiplier from complexity: 1.0 + BONUS_PER_UNIT * (complexity - center).
-/// Higher complexity = better exhaust velocity.
-pub fn complexity_ve_multiplier(complexity: i32, center: i32) -> f64 {
-    1.0 + COMPLEXITY_VE_BONUS_PER_UNIT * (complexity - center) as f64
-}
-
-/// Cost/build-time multiplier from complexity: (complexity / center)^EXPONENT.
+/// Cost multiplier from complexity: (complexity / center)^EXPONENT.
 pub fn complexity_cost_multiplier(complexity: i32, center: i32) -> f64 {
     (complexity as f64 / center as f64).powf(COMPLEXITY_COST_EXPONENT)
 }
 
-/// Build-time multiplier from complexity: (complexity / center)^EXPONENT.
-pub fn complexity_build_multiplier(complexity: i32, center: i32) -> f64 {
-    (complexity as f64 / center as f64).powf(COMPLEXITY_BUILD_EXPONENT)
+// ==========================================
+// Engine Cycle Performance Multipliers
+// ==========================================
+// All values are relative to GasGenerator = 1.0.
+// PressureFed: no turbopump → lightest/cheapest, low chamber pressure.
+// GasGenerator: workhorse baseline.
+// Expander: efficient closed cycle, heat-limited thrust (cryogenics only).
+// StagedCombustion: high chamber pressure → excellent perf, heavy/expensive.
+// FullFlow: most extreme staged combustion variant.
+
+/// Thrust multiplier by engine cycle.
+pub fn cycle_thrust_multiplier(cycle: EngineCycle) -> f64 {
+    match cycle {
+        EngineCycle::PressureFed => 0.6,
+        EngineCycle::GasGenerator => 1.0,
+        EngineCycle::Expander => 0.8,
+        EngineCycle::StagedCombustion => 1.15,
+        EngineCycle::FullFlowStagedCombustion => 1.3,
+    }
+}
+
+/// Exhaust velocity (ISP) multiplier by engine cycle.
+pub fn cycle_ve_multiplier(cycle: EngineCycle) -> f64 {
+    match cycle {
+        EngineCycle::PressureFed => 0.92,
+        EngineCycle::GasGenerator => 1.0,
+        EngineCycle::Expander => 1.04,
+        EngineCycle::StagedCombustion => 1.06,
+        EngineCycle::FullFlowStagedCombustion => 1.08,
+    }
+}
+
+/// Mass multiplier by engine cycle.
+pub fn cycle_mass_multiplier(cycle: EngineCycle) -> f64 {
+    match cycle {
+        EngineCycle::PressureFed => 0.7,
+        EngineCycle::GasGenerator => 1.0,
+        EngineCycle::Expander => 0.9,
+        EngineCycle::StagedCombustion => 1.15,
+        EngineCycle::FullFlowStagedCombustion => 1.3,
+    }
+}
+
+/// Cost multiplier by engine cycle (on top of material cost and complexity).
+pub fn cycle_cost_multiplier(cycle: EngineCycle) -> f64 {
+    match cycle {
+        EngineCycle::PressureFed => 0.4,
+        EngineCycle::GasGenerator => 1.0,
+        EngineCycle::Expander => 1.3,
+        EngineCycle::StagedCombustion => 2.0,
+        EngineCycle::FullFlowStagedCombustion => 3.0,
+    }
+}
+
+/// Build time multiplier by engine cycle.
+pub fn cycle_build_multiplier(cycle: EngineCycle) -> f64 {
+    match cycle {
+        EngineCycle::PressureFed => 0.5,
+        EngineCycle::GasGenerator => 1.0,
+        EngineCycle::Expander => 1.2,
+        EngineCycle::StagedCombustion => 1.6,
+        EngineCycle::FullFlowStagedCombustion => 2.2,
+    }
 }
 
 /// Flaw count modifier from complexity.
@@ -90,30 +129,21 @@ mod tests {
     }
 
     #[test]
-    fn test_center_complexity_is_neutral() {
-        // At center, all multipliers should be 1.0
+    fn test_center_complexity_cost_is_neutral() {
+        // At center, cost multiplier should be 1.0
         for ft in [FuelType::Solid, FuelType::Kerolox, FuelType::Hydrolox, FuelType::Methalox, FuelType::Hypergolic] {
             let range = complexity_range(ft);
             let c = range.center;
-            assert!((complexity_mass_multiplier(c, c) - 1.0).abs() < 1e-10);
-            assert!((complexity_ve_multiplier(c, c) - 1.0).abs() < 1e-10);
             assert!((complexity_cost_multiplier(c, c) - 1.0).abs() < 1e-10);
-            assert!((complexity_build_multiplier(c, c) - 1.0).abs() < 1e-10);
             assert_eq!(complexity_flaw_modifier(c, c), 0);
         }
     }
 
     #[test]
-    fn test_high_complexity_effects() {
+    fn test_high_complexity_cost_and_flaws() {
         // Kerolox at max complexity (8, center 6)
         let c = 6;
         let high = 8;
-
-        // Mass: 1.0 - 0.02 * 2 = 0.96 (lighter)
-        assert!((complexity_mass_multiplier(high, c) - 0.96).abs() < 1e-10);
-
-        // VE: 1.0 + 0.01 * 2 = 1.02 (better)
-        assert!((complexity_ve_multiplier(high, c) - 1.02).abs() < 1e-10);
 
         // Cost: (8/6)^2 ≈ 1.778 (more expensive)
         let cost_mult = complexity_cost_multiplier(high, c);
@@ -124,16 +154,10 @@ mod tests {
     }
 
     #[test]
-    fn test_low_complexity_effects() {
+    fn test_low_complexity_cost_and_flaws() {
         // Kerolox at min complexity (4, center 6)
         let c = 6;
         let low = 4;
-
-        // Mass: 1.0 - 0.02 * (-2) = 1.04 (heavier)
-        assert!((complexity_mass_multiplier(low, c) - 1.04).abs() < 1e-10);
-
-        // VE: 1.0 + 0.01 * (-2) = 0.98 (worse)
-        assert!((complexity_ve_multiplier(low, c) - 0.98).abs() < 1e-10);
 
         // Cost: (4/6)^2 ≈ 0.444 (cheaper)
         let cost_mult = complexity_cost_multiplier(low, c);
@@ -141,5 +165,60 @@ mod tests {
 
         // Flaw modifier: -2
         assert_eq!(complexity_flaw_modifier(low, c), -2);
+    }
+
+    // ==========================================
+    // Cycle Multiplier Tests
+    // ==========================================
+
+    #[test]
+    fn test_gas_generator_is_baseline() {
+        assert_eq!(cycle_thrust_multiplier(EngineCycle::GasGenerator), 1.0);
+        assert_eq!(cycle_ve_multiplier(EngineCycle::GasGenerator), 1.0);
+        assert_eq!(cycle_mass_multiplier(EngineCycle::GasGenerator), 1.0);
+        assert_eq!(cycle_cost_multiplier(EngineCycle::GasGenerator), 1.0);
+        assert_eq!(cycle_build_multiplier(EngineCycle::GasGenerator), 1.0);
+    }
+
+    #[test]
+    fn test_pressure_fed_multipliers() {
+        assert_eq!(cycle_thrust_multiplier(EngineCycle::PressureFed), 0.6);
+        assert_eq!(cycle_ve_multiplier(EngineCycle::PressureFed), 0.92);
+        assert_eq!(cycle_mass_multiplier(EngineCycle::PressureFed), 0.7);
+        assert_eq!(cycle_cost_multiplier(EngineCycle::PressureFed), 0.4);
+        assert_eq!(cycle_build_multiplier(EngineCycle::PressureFed), 0.5);
+    }
+
+    #[test]
+    fn test_full_flow_multipliers() {
+        assert_eq!(cycle_thrust_multiplier(EngineCycle::FullFlowStagedCombustion), 1.3);
+        assert_eq!(cycle_ve_multiplier(EngineCycle::FullFlowStagedCombustion), 1.08);
+        assert_eq!(cycle_mass_multiplier(EngineCycle::FullFlowStagedCombustion), 1.3);
+        assert_eq!(cycle_cost_multiplier(EngineCycle::FullFlowStagedCombustion), 3.0);
+        assert_eq!(cycle_build_multiplier(EngineCycle::FullFlowStagedCombustion), 2.2);
+    }
+
+    #[test]
+    fn test_higher_cycles_have_more_thrust() {
+        let pf = cycle_thrust_multiplier(EngineCycle::PressureFed);
+        let gg = cycle_thrust_multiplier(EngineCycle::GasGenerator);
+        let sc = cycle_thrust_multiplier(EngineCycle::StagedCombustion);
+        let ff = cycle_thrust_multiplier(EngineCycle::FullFlowStagedCombustion);
+        assert!(pf < gg);
+        assert!(gg < sc);
+        assert!(sc < ff);
+    }
+
+    #[test]
+    fn test_higher_cycles_cost_more() {
+        let pf = cycle_cost_multiplier(EngineCycle::PressureFed);
+        let gg = cycle_cost_multiplier(EngineCycle::GasGenerator);
+        let ex = cycle_cost_multiplier(EngineCycle::Expander);
+        let sc = cycle_cost_multiplier(EngineCycle::StagedCombustion);
+        let ff = cycle_cost_multiplier(EngineCycle::FullFlowStagedCombustion);
+        assert!(pf < gg);
+        assert!(gg < ex);
+        assert!(ex < sc);
+        assert!(sc < ff);
     }
 }

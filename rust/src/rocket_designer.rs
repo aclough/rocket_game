@@ -96,6 +96,16 @@ impl RocketDesigner {
         }
     }
 
+    /// Returns the engine cycle display name for an engine type
+    #[func]
+    pub fn get_engine_cycle_name(&self, engine_type: i32) -> GString {
+        if engine_type >= 0 && (engine_type as usize) < self.engine_snapshots.len() {
+            GString::from(self.engine_snapshots[engine_type as usize].cycle.display_name())
+        } else {
+            GString::from("")
+        }
+    }
+
     /// Returns the exhaust velocity of an engine type in m/s
     #[func]
     pub fn get_engine_exhaust_velocity(&self, engine_type: i32) -> f64 {

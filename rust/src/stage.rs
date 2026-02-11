@@ -416,11 +416,11 @@ mod tests {
         let mut stage = RocketStage::new(hydrolox_snapshot());
         stage.engine_count = 2;
         stage.propellant_mass_kg = 5000.0;
-        // 2 Hydrolox at 300 kg each = 600 kg engines
+        // 2 Hydrolox Expander at 270 kg each = 540 kg engines
         // Tank mass = 5000 × 0.10 = 500 kg (Hydrolox has higher ratio)
-        // Dry mass = 600 + 500 = 1100 kg
-        // Wet mass = 1100 + 5000 = 6100 kg
-        assert_eq!(stage.wet_mass_kg(), 6100.0);
+        // Dry mass = 540 + 500 = 1040 kg
+        // Wet mass = 1040 + 5000 = 6040 kg
+        assert_eq!(stage.wet_mass_kg(), 6040.0);
     }
 
     #[test]
@@ -429,20 +429,20 @@ mod tests {
         stage.engine_count = 1;
         stage.propellant_mass_kg = 2700.0;
 
-        // Hydrolox: Ve = 4500 m/s
-        // Engine mass: 300 kg
+        // Hydrolox Expander: Ve = 4680 m/s, engine mass = 270 kg
         // Tank mass: 2700 × 0.10 = 270 kg
-        // Dry mass: 300 + 270 = 570 kg
-        // Wet mass: 570 + 2700 = 3270 kg
+        // Dry mass: 270 + 270 = 540 kg
+        // Wet mass: 540 + 2700 = 3240 kg
         // With 1000 kg payload:
-        // m0 = 4270, mf = 1570
-        // Δv = 4500 * ln(4270/1570) = 4500 * ln(2.72) = 4500 * 1.00 = ~4500 m/s
+        // m0 = 4240, mf = 1540
+        // Δv = 4680 * ln(4240/1540) ≈ 4740 m/s
 
         let delta_v = stage.delta_v(1000.0);
+        let expected = 4680.0 * (4240.0_f64 / 1540.0).ln();
         assert!(
-            delta_v > 4400.0 && delta_v < 4600.0,
-            "Expected ~4500 m/s, got {}",
-            delta_v
+            (delta_v - expected).abs() < 1.0,
+            "Expected ~{:.0} m/s, got {:.0}",
+            expected, delta_v
         );
     }
 
@@ -530,9 +530,9 @@ mod tests {
 
         let mut hydrolox_stage = RocketStage::new(hydrolox_snapshot());
         hydrolox_stage.engine_count = 2;
-        // 2 × ~$124K = ~$249K
+        // Hydrolox Expander: 270 kg each, base_cost includes 1.3x cycle cost multiplier
         let expected = crate::resources::engine_resource_cost(
-            crate::engine_design::FuelType::Hydrolox, 300.0) * 2.0;
+            crate::engine_design::FuelType::Hydrolox, 270.0) * 1.3 * 2.0;
         assert!((hydrolox_stage.engine_cost() - expected).abs() < 100.0);
     }
 

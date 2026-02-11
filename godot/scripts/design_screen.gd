@@ -142,15 +142,15 @@ func _create_engine_card(engine_type: int) -> Control:
 		material_cost_str = "$%sM" % _format_money_short(mat_cost / 1_000_000.0)
 		build_days_str = " | Build: ~%.0f days" % build_days
 
-	var complexity = designer.get_engine_complexity(engine_type)
+	var cycle_name = designer.get_engine_cycle_name(engine_type)
 	var stats_label = Label.new()
 	stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if is_solid:
 		# Solid motors show different info
-		stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMotor: %.0f kg\nComplexity: %d\nFixed ratio: 88%%\nMaterial: %s%s" % [thrust, ve, mass, complexity, material_cost_str, build_days_str]
+		stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMotor: %.0f kg\nCycle: %s\nFixed ratio: 88%%\nMaterial: %s%s" % [thrust, ve, mass, cycle_name, material_cost_str, build_days_str]
 		stats_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.4))
 	else:
-		stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMass: %.0f kg\nComplexity: %d\nMaterial: %s%s" % [thrust, ve, mass, complexity, material_cost_str, build_days_str]
+		stats_label.text = "Thrust: %.0f kN\nIsp: %.0f m/s\nMass: %.0f kg\nCycle: %s\nMaterial: %s%s" % [thrust, ve, mass, cycle_name, material_cost_str, build_days_str]
 		stats_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	stats_label.add_theme_font_size_override("font_size", 12)
 	vbox.add_child(stats_label)

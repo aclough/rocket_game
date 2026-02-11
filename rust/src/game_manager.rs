@@ -1921,20 +1921,44 @@ impl GameManager {
         result
     }
 
-    /// Set the complexity of an engine design
+    /// Set the engine cycle of an engine design
     #[func]
-    pub fn set_engine_design_complexity(&mut self, index: i32, complexity: i32) -> bool {
+    pub fn set_engine_design_cycle(&mut self, index: i32, cycle_index: i32) -> bool {
         if index < 0 {
             return false;
         }
-        let result = self.state.player_company.set_engine_design_complexity(index as usize, complexity);
+        let cycle = match crate::engine_design::EngineCycle::from_index(cycle_index as usize) {
+            Some(c) => c,
+            None => return false,
+        };
+        let result = self.state.player_company.set_engine_design_cycle(index as usize, cycle);
         if result {
             self.base_mut().emit_signal("designs_changed", &[]);
         }
         result
     }
 
-    /// Get the complexity of an engine design
+    /// Get the engine cycle index of an engine design
+    #[func]
+    pub fn get_engine_design_cycle(&self, index: i32) -> i32 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            self.state.player_company.engine_designs[index as usize].head().cycle.index() as i32
+        } else {
+            0
+        }
+    }
+
+    /// Get the engine cycle display name of an engine design
+    #[func]
+    pub fn get_engine_design_cycle_name(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            GString::from(self.state.player_company.engine_designs[index as usize].head().cycle.display_name())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Get the complexity of an engine design (read-only, derived from cycle)
     #[func]
     pub fn get_engine_design_complexity(&self, index: i32) -> i32 {
         if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
@@ -1944,19 +1968,47 @@ impl GameManager {
         }
     }
 
-    /// Get the complexity range for an engine design as [min, max]
+    /// Get the number of valid cycles for an engine's fuel type
     #[func]
-    pub fn get_engine_design_complexity_range(&self, index: i32) -> Array<i32> {
-        let mut arr = Array::new();
-        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
-            let range = self.state.player_company.engine_designs[index as usize].head().complexity_range();
-            arr.push(range.min);
-            arr.push(range.max);
+    pub fn get_valid_cycle_count(&self, engine_index: i32) -> i32 {
+        if engine_index >= 0 && (engine_index as usize) < self.state.player_company.engine_designs.len() {
+            let fuel = self.state.player_company.engine_designs[engine_index as usize].head().fuel_type();
+            crate::engine_design::valid_cycles_for_fuel(fuel).len() as i32
         } else {
-            arr.push(0);
-            arr.push(0);
+            0
         }
-        arr
+    }
+
+    /// Get the cycle index for a UI option position (maps option_i to cycle enum index)
+    #[func]
+    pub fn get_valid_cycle_index(&self, engine_index: i32, option_i: i32) -> i32 {
+        if engine_index >= 0 && (engine_index as usize) < self.state.player_company.engine_designs.len() {
+            let fuel = self.state.player_company.engine_designs[engine_index as usize].head().fuel_type();
+            let valid = crate::engine_design::valid_cycles_for_fuel(fuel);
+            if option_i >= 0 && (option_i as usize) < valid.len() {
+                valid[option_i as usize].index() as i32
+            } else {
+                -1
+            }
+        } else {
+            -1
+        }
+    }
+
+    /// Get the cycle display name for a UI option position
+    #[func]
+    pub fn get_valid_cycle_name(&self, engine_index: i32, option_i: i32) -> GString {
+        if engine_index >= 0 && (engine_index as usize) < self.state.player_company.engine_designs.len() {
+            let fuel = self.state.player_company.engine_designs[engine_index as usize].head().fuel_type();
+            let valid = crate::engine_design::valid_cycles_for_fuel(fuel);
+            if option_i >= 0 && (option_i as usize) < valid.len() {
+                GString::from(valid[option_i as usize].display_name())
+            } else {
+                GString::from("")
+            }
+        } else {
+            GString::from("")
+        }
     }
 
     /// Check if an engine design can be modified (only when Untested)
