@@ -1,6 +1,7 @@
 * Fixes
     * For boosters, let the user change the fuel level between a minimum and the maximum burn time of the base stage.
 * UI
+* Refactoring
 * Track success rate and streaks for rocket designs.
 * Hardware rich development
     * Diminsighing returns to development over time without sacrificing hardware.
