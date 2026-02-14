@@ -273,6 +273,10 @@ func _update_stage_values_only():
 					card_data["dry_label"].text = "Motor Mass: %.0f kg" % dry_mass
 				else:
 					card_data["dry_label"].text = "Dry: %.0f kg" % dry_mass
+			# Update burn time label
+			if card_data.has("burn_label"):
+				var burn_time = designer.get_stage_burn_time(stage_index)
+				card_data["burn_label"].text = "Burn: %.0fs" % burn_time
 			# Update cost label
 			if card_data.has("cost_label"):
 				var stage_cost = designer.get_stage_cost(stage_index)
@@ -569,6 +573,14 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 		dry_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 		info_hbox.add_child(dry_label)
 
+	# Burn time
+	var burn_time = designer.get_stage_burn_time(stage_index)
+	var burn_label = Label.new()
+	burn_label.text = "Burn: %.0fs" % burn_time
+	burn_label.add_theme_font_size_override("font_size", 12)
+	burn_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	info_hbox.add_child(burn_label)
+
 	# Stage cost
 	var stage_cost = designer.get_stage_cost(stage_index)
 	var cost_label_stage = Label.new()
@@ -584,6 +596,7 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 		"twr_label": twr_label,
 		"prop_label": prop_label,
 		"dry_label": dry_label,
+		"burn_label": burn_label,
 		"cost_label": cost_label_stage,
 		"is_solid": is_solid,
 	}

@@ -336,6 +336,15 @@ impl RocketDesigner {
         self.design.stages[stage_index as usize].dry_mass_kg()
     }
 
+    /// Gets the burn time for a stage in seconds
+    #[func]
+    pub fn get_stage_burn_time(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
+            return 0.0;
+        }
+        self.design.stages[stage_index as usize].burn_time_seconds()
+    }
+
     /// Gets the wet mass (engines + propellant) for a stage in kg
     #[func]
     pub fn get_stage_wet_mass(&self, stage_index: i32) -> f64 {

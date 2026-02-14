@@ -1,6 +1,6 @@
 * Fixes
 * UI
-    * Add burn time to stage info in Rocket Designer
+    * The "ADD STAGE" button on the bottom of the available engines isn't visible.
 * Refactoring
     * Parts and vehicles should be treated symmetrically as much as possible in things like how they relate to flaws.
 * Track success rate and streaks for rocket designs.
