@@ -1,5 +1,7 @@
 use rand::Rng;
 
+use crate::location::DELTA_V_MAP;
+
 /// Destinations for rocket missions
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Destination {
@@ -12,40 +14,41 @@ pub enum Destination {
 }
 
 impl Destination {
-    /// Delta-v required to reach this destination from Earth's surface (m/s)
-    pub fn required_delta_v(&self) -> f64 {
+    /// Map destination to its location graph ID
+    pub fn location_id(&self) -> &'static str {
         match self {
-            Destination::Suborbital => 3_500.0,
-            Destination::LEO => 9_400.0,
-            Destination::SSO => 9_900.0,
-            Destination::MEO => 11_500.0,
-            Destination::GTO => 12_000.0,
-            Destination::GEO => 13_500.0,
+            Destination::Suborbital => "suborbital",
+            Destination::LEO => "leo",
+            Destination::SSO => "sso",
+            Destination::MEO => "meo",
+            Destination::GTO => "gto",
+            Destination::GEO => "geo",
         }
+    }
+
+    /// Delta-v required to reach this destination from Earth's surface (m/s)
+    /// Uses the location graph shortest path for physically correct values
+    pub fn required_delta_v(&self) -> f64 {
+        DELTA_V_MAP
+            .shortest_path("earth_surface", self.location_id())
+            .map(|(_, dv)| dv)
+            .expect("All destinations must be reachable from earth_surface")
     }
 
     /// Display name for UI
     pub fn display_name(&self) -> &'static str {
-        match self {
-            Destination::Suborbital => "Suborbital",
-            Destination::LEO => "Low Earth Orbit",
-            Destination::SSO => "Sun-Synchronous Orbit",
-            Destination::MEO => "Medium Earth Orbit",
-            Destination::GTO => "Geostationary Transfer",
-            Destination::GEO => "Geostationary Orbit",
-        }
+        DELTA_V_MAP
+            .location(self.location_id())
+            .expect("All destinations must exist in location graph")
+            .display_name
     }
 
     /// Short code for UI
     pub fn short_name(&self) -> &'static str {
-        match self {
-            Destination::Suborbital => "SUB",
-            Destination::LEO => "LEO",
-            Destination::SSO => "SSO",
-            Destination::MEO => "MEO",
-            Destination::GTO => "GTO",
-            Destination::GEO => "GEO",
-        }
+        DELTA_V_MAP
+            .location(self.location_id())
+            .expect("All destinations must exist in location graph")
+            .short_name
     }
 
     /// All destinations in order of difficulty
@@ -368,9 +371,21 @@ mod tests {
 
     #[test]
     fn test_destination_delta_v() {
+        // Values from location graph shortest paths (no baked-in gravity losses)
         assert_eq!(Destination::Suborbital.required_delta_v(), 3500.0);
-        assert_eq!(Destination::LEO.required_delta_v(), 9400.0);
-        assert_eq!(Destination::GEO.required_delta_v(), 13500.0);
+        assert_eq!(Destination::LEO.required_delta_v(), 8100.0);
+        assert_eq!(Destination::SSO.required_delta_v(), 8600.0);
+        assert_eq!(Destination::MEO.required_delta_v(), 10200.0);
+        assert_eq!(Destination::GTO.required_delta_v(), 10540.0);
+        assert_eq!(Destination::GEO.required_delta_v(), 12040.0);
+    }
+
+    #[test]
+    fn test_destination_names_from_graph() {
+        assert_eq!(Destination::LEO.display_name(), "Low Earth Orbit");
+        assert_eq!(Destination::LEO.short_name(), "LEO");
+        assert_eq!(Destination::GEO.display_name(), "Geostationary Orbit");
+        assert_eq!(Destination::GEO.short_name(), "GEO");
     }
 
     #[test]
