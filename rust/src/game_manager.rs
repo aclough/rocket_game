@@ -77,7 +77,7 @@ impl GameManager {
     fn speed_changed(new_speed: f64);
 
     #[signal]
-    fn work_event_occurred(event_type: GString, data: Dictionary);
+    fn work_event_occurred(event_type: GString, data: VarDictionary);
 
     #[signal]
     fn teams_changed();
@@ -1177,7 +1177,7 @@ impl GameManager {
     /// Advance time by delta_seconds (called from _process)
     /// Returns an array of work event dictionaries
     #[func]
-    pub fn advance_time(&mut self, delta_seconds: f64) -> Array<Dictionary> {
+    pub fn advance_time(&mut self, delta_seconds: f64) -> Array<VarDictionary> {
         let events = self.state.advance_time(delta_seconds);
 
         // Emit date_changed if day changed
@@ -1330,11 +1330,11 @@ impl GameManager {
         self.state.days_until_salary() as i32
     }
 
-    /// Convert a WorkEvent to a Godot Dictionary
-    fn work_event_to_dict(&self, event: &crate::engineering_team::WorkEvent) -> Dictionary {
+    /// Convert a WorkEvent to a Godot VarDictionary
+    fn work_event_to_dict(&self, event: &crate::engineering_team::WorkEvent) -> VarDictionary {
         use crate::engineering_team::WorkEvent;
 
-        let mut dict = Dictionary::new();
+        let mut dict = VarDictionary::new();
         match event {
             WorkEvent::DesignPhaseComplete {
                 rocket_design_id,
@@ -1753,10 +1753,10 @@ impl GameManager {
     /// Keys: "type" (string: "none", "design", "engine", "manufacturing"),
     ///        "team_type" (string: "engineering" or "manufacturing"), and type-specific data
     #[func]
-    pub fn get_team_assignment(&self, team_id: i32) -> Dictionary {
+    pub fn get_team_assignment(&self, team_id: i32) -> VarDictionary {
         use crate::engineering_team::{TeamAssignment, TeamType};
 
-        let mut dict = Dictionary::new();
+        let mut dict = VarDictionary::new();
 
         if let Some(team) = self.state.player_company.get_team(team_id as u32) {
             dict.set("team_type", match team.team_type {
@@ -2427,8 +2427,8 @@ impl GameManager {
 
     /// Get info about an active order as a dictionary
     #[func]
-    pub fn get_order_info(&self, order_id: i32) -> Dictionary {
-        let mut dict = Dictionary::new();
+    pub fn get_order_info(&self, order_id: i32) -> VarDictionary {
+        let mut dict = VarDictionary::new();
         if order_id < 0 {
             return dict;
         }
@@ -2468,10 +2468,10 @@ impl GameManager {
 
     /// Get engine inventory as an array of dictionaries
     #[func]
-    pub fn get_engine_inventory(&self) -> Array<Dictionary> {
+    pub fn get_engine_inventory(&self) -> Array<VarDictionary> {
         let mut result = Array::new();
         for entry in &self.state.player_company.manufacturing.engine_inventory {
-            let mut dict = Dictionary::new();
+            let mut dict = VarDictionary::new();
             dict.set("engine_design_id", entry.engine_design_id as i32);
             dict.set("revision_number", entry.revision_number as i32);
             dict.set("name", GString::from(entry.snapshot.name.as_str()));
@@ -2483,10 +2483,10 @@ impl GameManager {
 
     /// Get rocket inventory as an array of dictionaries
     #[func]
-    pub fn get_rocket_inventory(&self) -> Array<Dictionary> {
+    pub fn get_rocket_inventory(&self) -> Array<VarDictionary> {
         let mut result = Array::new();
         for entry in &self.state.player_company.manufacturing.rocket_inventory {
-            let mut dict = Dictionary::new();
+            let mut dict = VarDictionary::new();
             dict.set("rocket_design_id", entry.rocket_design_id as i32);
             dict.set("revision_number", entry.revision_number as i32);
             dict.set("serial_number", entry.serial_number as i32);
@@ -2555,14 +2555,14 @@ impl GameManager {
     /// Get engines required for a rocket design as an array of dictionaries
     /// Each dict has: engine_design_id, count
     #[func]
-    pub fn get_engines_required_for_rocket(&self, index: i32) -> Array<Dictionary> {
+    pub fn get_engines_required_for_rocket(&self, index: i32) -> Array<VarDictionary> {
         let mut result = Array::new();
         if index < 0 {
             return result;
         }
         if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
             for (engine_design_id, count) in design.engines_required() {
-                let mut dict = Dictionary::new();
+                let mut dict = VarDictionary::new();
                 dict.set("engine_design_id", engine_design_id as i32);
                 dict.set("count", count as i32);
                 // Include engine name if available
@@ -2579,7 +2579,7 @@ impl GameManager {
     /// Get missing engines for a rocket design as an array of dictionaries
     /// Each dict has: engine_design_id, name, needed, available, deficit
     #[func]
-    pub fn get_missing_engines_for_rocket(&self, index: i32) -> Array<Dictionary> {
+    pub fn get_missing_engines_for_rocket(&self, index: i32) -> Array<VarDictionary> {
         let mut result = Array::new();
         if index < 0 {
             return result;
@@ -2589,7 +2589,7 @@ impl GameManager {
                 let available = self.state.player_company.manufacturing.get_engines_available(engine_design_id);
                 let deficit = (needed as i32) - (available as i32);
                 if deficit > 0 {
-                    let mut dict = Dictionary::new();
+                    let mut dict = VarDictionary::new();
                     dict.set("engine_design_id", engine_design_id as i32);
                     if engine_design_id < self.state.player_company.engine_designs.len() {
                         dict.set("name", GString::from(self.state.player_company.engine_designs[engine_design_id].name.as_str()));
