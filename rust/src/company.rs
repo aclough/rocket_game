@@ -171,6 +171,10 @@ impl Company {
         let testing_cost = design.get_testing_spent();
         self.money -= rocket_cost + testing_cost;
 
+        // Record success on both the design version and the lineage
+        self.rocket_designs[rocket_design_id].head_mut().launch_record.record_success();
+        self.rocket_designs[rocket_design_id].launch_record.record_success();
+
         // Reset testing_spent so we don't double-charge if design is reused
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
 
@@ -204,6 +208,10 @@ impl Company {
         let rocket_cost = design.total_cost();
         let testing_cost = design.get_testing_spent();
         self.money -= rocket_cost + testing_cost;
+
+        // Record failure on both the design version and the lineage
+        self.rocket_designs[rocket_design_id].head_mut().launch_record.record_failure();
+        self.rocket_designs[rocket_design_id].launch_record.record_failure();
 
         // Reset testing_spent so we don't double-charge on retry
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
@@ -251,6 +259,11 @@ impl Company {
     /// Get a rocket design head by index
     pub fn get_rocket_design(&self, index: usize) -> Option<&RocketDesign> {
         self.rocket_designs.get(index).map(|l| l.head())
+    }
+
+    /// Get the full lineage at a given index (for lineage-level stats)
+    pub fn get_rocket_lineage(&self, index: usize) -> Option<&DesignLineage<RocketDesign>> {
+        self.rocket_designs.get(index)
     }
 
     /// Save a new design as a new lineage

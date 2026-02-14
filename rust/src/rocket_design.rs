@@ -5,6 +5,39 @@ use crate::flaw::{calculate_flaw_failure_rate, run_test, Flaw, FlawGenerator, Fl
 use crate::resources::TankMaterial;
 use crate::stage::RocketStage;
 
+/// Tracks launch outcomes: successes, failures, and consecutive success streaks.
+#[derive(Debug, Clone, Default)]
+pub struct LaunchRecord {
+    pub total_launches: u32,
+    pub successes: u32,
+    pub failures: u32,
+    /// Current consecutive successes, reset to 0 on failure
+    pub success_streak: u32,
+}
+
+impl LaunchRecord {
+    pub fn record_success(&mut self) {
+        self.total_launches += 1;
+        self.successes += 1;
+        self.success_streak += 1;
+    }
+
+    pub fn record_failure(&mut self) {
+        self.total_launches += 1;
+        self.failures += 1;
+        self.success_streak = 0;
+    }
+
+    /// Success rate as a percentage (0-100), or 0 if no launches
+    pub fn success_rate(&self) -> f64 {
+        if self.total_launches == 0 {
+            0.0
+        } else {
+            (self.successes as f64 / self.total_launches as f64) * 100.0
+        }
+    }
+}
+
 /// Work required to fix a discovered flaw (14 days with 1 team)
 pub const FLAW_FIX_WORK: f64 = 14.0;
 
@@ -220,8 +253,8 @@ pub struct RocketDesign {
 
     /// Name of this rocket design
     pub name: String,
-    /// Number of times this design has been launched (for reliability progression)
-    pub launch_count: u32,
+    /// Launch outcome tracking (successes, failures, streaks)
+    pub launch_record: LaunchRecord,
 
     // Flaw system fields
 
@@ -254,7 +287,7 @@ impl RocketDesign {
             payload_mass_kg: DEFAULT_PAYLOAD_KG,
             target_delta_v: TARGET_DELTA_V_MS,
             name: "Unnamed Rocket".to_string(),
-            launch_count: 0,
+            launch_record: LaunchRecord::default(),
             active_flaws: Vec::new(),
             fixed_flaws: Vec::new(),
             flaws_generated: false,

@@ -721,6 +721,94 @@ impl GameManager {
         result
     }
 
+    // ==========================================
+    // Rocket Design Launch Record (per-version)
+    // ==========================================
+
+    #[func]
+    pub fn get_rocket_design_total_launches(&self, index: i32) -> i32 {
+        if index < 0 { return 0; }
+        self.state.player_company.get_rocket_design(index as usize)
+            .map(|d| d.launch_record.total_launches as i32)
+            .unwrap_or(0)
+    }
+
+    #[func]
+    pub fn get_rocket_design_successes(&self, index: i32) -> i32 {
+        if index < 0 { return 0; }
+        self.state.player_company.get_rocket_design(index as usize)
+            .map(|d| d.launch_record.successes as i32)
+            .unwrap_or(0)
+    }
+
+    #[func]
+    pub fn get_rocket_design_failures(&self, index: i32) -> i32 {
+        if index < 0 { return 0; }
+        self.state.player_company.get_rocket_design(index as usize)
+            .map(|d| d.launch_record.failures as i32)
+            .unwrap_or(0)
+    }
+
+    #[func]
+    pub fn get_rocket_design_success_streak(&self, index: i32) -> i32 {
+        if index < 0 { return 0; }
+        self.state.player_company.get_rocket_design(index as usize)
+            .map(|d| d.launch_record.success_streak as i32)
+            .unwrap_or(0)
+    }
+
+    #[func]
+    pub fn get_rocket_design_success_rate(&self, index: i32) -> f64 {
+        if index < 0 { return 0.0; }
+        self.state.player_company.get_rocket_design(index as usize)
+            .map(|d| d.launch_record.success_rate())
+            .unwrap_or(0.0)
+    }
+
+    // ==========================================
+    // Rocket Lineage Launch Record (across all versions)
+    // ==========================================
+
+    #[func]
+    pub fn get_rocket_lineage_total_launches(&self, index: i32) -> i32 {
+        if index < 0 { return 0; }
+        self.state.player_company.get_rocket_lineage(index as usize)
+            .map(|l| l.launch_record.total_launches as i32)
+            .unwrap_or(0)
+    }
+
+    #[func]
+    pub fn get_rocket_lineage_successes(&self, index: i32) -> i32 {
+        if index < 0 { return 0; }
+        self.state.player_company.get_rocket_lineage(index as usize)
+            .map(|l| l.launch_record.successes as i32)
+            .unwrap_or(0)
+    }
+
+    #[func]
+    pub fn get_rocket_lineage_failures(&self, index: i32) -> i32 {
+        if index < 0 { return 0; }
+        self.state.player_company.get_rocket_lineage(index as usize)
+            .map(|l| l.launch_record.failures as i32)
+            .unwrap_or(0)
+    }
+
+    #[func]
+    pub fn get_rocket_lineage_success_streak(&self, index: i32) -> i32 {
+        if index < 0 { return 0; }
+        self.state.player_company.get_rocket_lineage(index as usize)
+            .map(|l| l.launch_record.success_streak as i32)
+            .unwrap_or(0)
+    }
+
+    #[func]
+    pub fn get_rocket_lineage_success_rate(&self, index: i32) -> f64 {
+        if index < 0 { return 0.0; }
+        self.state.player_company.get_rocket_lineage(index as usize)
+            .map(|l| l.launch_record.success_rate())
+            .unwrap_or(0.0)
+    }
+
     /// Save the designer's current design as a new lineage
     /// Returns the index of the new lineage
     #[func]
