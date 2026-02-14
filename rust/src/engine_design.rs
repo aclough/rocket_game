@@ -9,7 +9,7 @@ pub const ENGINE_SCALE_STEP: f64 = 0.25;
 
 /// Chemical engine fuel types.
 /// Future propulsion categories (nuclear pulse, sail) would be a separate enum.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FuelType {
     Kerolox,
     Hydrolox,

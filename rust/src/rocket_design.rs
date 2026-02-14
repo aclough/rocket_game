@@ -1,9 +1,10 @@
 use crate::design_workflow::{DesignStatus, DesignWorkflow};
 use crate::engine::costs;
-use crate::engine_design::{default_snapshot, EngineDesignSnapshot};
+use crate::engine_design::{default_snapshot, EngineDesignSnapshot, FuelType};
 use crate::flaw::{calculate_flaw_failure_rate, run_test, Flaw, FlawGenerator, FlawType};
 use crate::resources::TankMaterial;
 use crate::stage::RocketStage;
+use std::collections::BTreeMap;
 
 /// Tracks launch outcomes: successes, failures, and consecutive success streaks.
 #[derive(Debug, Clone, Default)]
@@ -13,6 +14,11 @@ pub struct LaunchRecord {
     pub failures: u32,
     /// Current consecutive successes, reset to 0 on failure
     pub success_streak: u32,
+    /// Propellant loaded on the most recent launch, grouped by fuel type
+    pub last_propellant_loaded: Option<Vec<(FuelType, f64)>>,
+    /// Propellant remaining after the most recent launch, grouped by fuel type.
+    /// None on failure (rocket destroyed).
+    pub last_propellant_remaining: Option<Vec<(FuelType, f64)>>,
 }
 
 impl LaunchRecord {
@@ -1514,6 +1520,163 @@ impl RocketDesign {
     pub fn get_testing_spent(&self) -> f64 {
         self.testing_spent
     }
+
+    // ==========================================
+    // Propellant Tracking
+    // ==========================================
+
+    /// Get total propellant across all stages in kg
+    pub fn total_propellant_kg(&self) -> f64 {
+        self.stages.iter().map(|s| s.propellant_mass_kg).sum()
+    }
+
+    /// Get propellant grouped by fuel type, sorted by fuel type order.
+    /// Returns a list of (FuelType, total_kg) pairs.
+    pub fn propellant_by_fuel_type(&self) -> Vec<(FuelType, f64)> {
+        let mut by_type: BTreeMap<FuelType, f64> = BTreeMap::new();
+        for stage in &self.stages {
+            *by_type.entry(stage.engine_snapshot().fuel_type).or_insert(0.0) += stage.propellant_mass_kg;
+        }
+        by_type.into_iter().collect()
+    }
+
+    /// Calculate propellant remaining in each stage after reaching target_delta_v.
+    /// Returns `(stage_index, remaining_kg)` for each stage.
+    /// Returns empty if the rocket can't reach its target (`!is_sufficient()`).
+    ///
+    /// Walks stages bottom-to-top, accumulating effective delta-v.
+    /// Fully burned stages have 0 remaining. The partially burned stage has
+    /// its remaining propellant computed by inverting the Tsiolkovsky equation.
+    /// Upper stages that never fire retain full propellant.
+    pub fn propellant_remaining_kg(&self) -> Vec<(usize, f64)> {
+        if !self.is_sufficient() {
+            return Vec::new();
+        }
+
+        let target_dv = self.target_delta_v;
+        let mut cumulative_effective_dv = 0.0;
+        let mut result: Vec<(usize, f64)> = Vec::new();
+
+        // Process stages bottom-to-top (firing order)
+        // We need to walk through booster groups properly
+        let groups = self.find_booster_groups();
+
+        for i in 0..self.stages.len() {
+            if self.stages[i].is_booster {
+                // Boosters are handled with their core stage
+                continue;
+            }
+
+            if cumulative_effective_dv >= target_dv {
+                // This stage never fires — full propellant remaining
+                result.push((i, self.stages[i].propellant_mass_kg));
+                // Also add any boosters attached to this stage
+                for group in &groups {
+                    if group.core_stage_index == i {
+                        for &bi in &group.booster_indices {
+                            result.push((bi, self.stages[bi].propellant_mass_kg));
+                        }
+                    }
+                }
+                continue;
+            }
+
+            let stage_eff_dv = self.stage_effective_delta_v_internal(i, cumulative_effective_dv);
+            let stage_ideal_dv = self.stage_delta_v(i);
+
+            if cumulative_effective_dv + stage_eff_dv <= target_dv {
+                // This stage burns completely
+                result.push((i, 0.0));
+                // Boosters attached to this stage also burn completely
+                for group in &groups {
+                    if group.core_stage_index == i {
+                        for &bi in &group.booster_indices {
+                            result.push((bi, 0.0));
+                        }
+                    }
+                }
+                cumulative_effective_dv += stage_eff_dv;
+            } else {
+                // This stage is partially burned — it provides the remaining delta-v needed
+                let dv_eff_needed = target_dv - cumulative_effective_dv;
+
+                // Scale from effective to ideal proportionally
+                let dv_ideal_needed = if stage_eff_dv > 0.0 {
+                    dv_eff_needed * (stage_ideal_dv / stage_eff_dv)
+                } else {
+                    0.0
+                };
+
+                // Check if this is a boosted stage
+                let mut is_boosted = false;
+                for group in &groups {
+                    if group.core_stage_index == i && !group.booster_indices.is_empty() {
+                        is_boosted = true;
+                        // For boosted stages, the calculation is complex.
+                        // Use a simplified approach: compute the fraction of the stage's
+                        // total ideal delta-v that was needed, then apply to propellant.
+                        let fraction_used = if stage_ideal_dv > 0.0 {
+                            (dv_ideal_needed / stage_ideal_dv).min(1.0)
+                        } else {
+                            0.0
+                        };
+
+                        // Core stage remaining propellant
+                        let core_remaining = self.stages[i].propellant_mass_kg * (1.0 - fraction_used);
+                        result.push((i, core_remaining.max(0.0)));
+
+                        // Boosters: they fire for a fixed time and may or may not fully deplete
+                        // If the stage is only partially used, boosters may have remaining propellant too
+                        for &bi in &group.booster_indices {
+                            let booster_remaining = self.stages[bi].propellant_mass_kg * (1.0 - fraction_used);
+                            result.push((bi, booster_remaining.max(0.0)));
+                        }
+                        break;
+                    }
+                }
+
+                if !is_boosted {
+                    // Simple non-boosted stage: invert Tsiolkovsky
+                    let payload_above = self.mass_above_stage(i);
+                    let ve = self.stages[i].exhaust_velocity_ms();
+                    let m0 = self.stages[i].wet_mass_kg() + payload_above;
+
+                    let remaining = if ve > 0.0 && dv_ideal_needed > 0.0 {
+                        let mf = m0 / (dv_ideal_needed / ve).exp();
+                        let dry_plus_payload = self.stages[i].dry_mass_kg() + payload_above;
+                        (mf - dry_plus_payload).max(0.0)
+                    } else {
+                        self.stages[i].propellant_mass_kg
+                    };
+
+                    result.push((i, remaining));
+                }
+
+                cumulative_effective_dv = target_dv; // We've reached the target
+
+                // Any remaining stages above don't fire
+                // (they'll be caught by the cumulative_effective_dv >= target_dv check)
+            }
+        }
+
+        result
+    }
+
+    /// Get propellant remaining after reaching target, grouped by fuel type.
+    /// Returns empty if the rocket can't reach its target.
+    pub fn propellant_remaining_by_fuel_type(&self) -> Vec<(FuelType, f64)> {
+        let per_stage = self.propellant_remaining_kg();
+        if per_stage.is_empty() {
+            return Vec::new();
+        }
+
+        let mut by_type: BTreeMap<FuelType, f64> = BTreeMap::new();
+        for (stage_idx, remaining_kg) in per_stage {
+            let fuel_type = self.stages[stage_idx].engine_snapshot().fuel_type;
+            *by_type.entry(fuel_type).or_insert(0.0) += remaining_kg;
+        }
+        by_type.into_iter().collect()
+    }
 }
 
 impl Default for RocketDesign {
@@ -2637,5 +2800,176 @@ mod tests {
             assert!((legacy - body).abs() < 0.005,
                 "At dv={}, legacy={} vs body={}", dv, legacy, body);
         }
+    }
+
+    // ==========================================
+    // Propellant Tracking Tests
+    // ==========================================
+
+    #[test]
+    fn test_propellant_by_fuel_type_single() {
+        let mut design = RocketDesign::new();
+        let mut stage1 = RocketStage::new(kerolox_snap());
+        stage1.propellant_mass_kg = 50000.0;
+        let mut stage2 = RocketStage::new(kerolox_snap());
+        stage2.propellant_mass_kg = 10000.0;
+        design.stages.push(stage1);
+        design.stages.push(stage2);
+
+        let by_type = design.propellant_by_fuel_type();
+        assert_eq!(by_type.len(), 1);
+        assert_eq!(by_type[0].0, crate::engine_design::FuelType::Kerolox);
+        assert!((by_type[0].1 - 60000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_propellant_by_fuel_type_mixed() {
+        let mut design = RocketDesign::new();
+        let mut stage1 = RocketStage::new(kerolox_snap());
+        stage1.propellant_mass_kg = 80000.0;
+        let mut stage2 = RocketStage::new(hydrolox_snap());
+        stage2.propellant_mass_kg = 20000.0;
+        design.stages.push(stage1);
+        design.stages.push(stage2);
+
+        let by_type = design.propellant_by_fuel_type();
+        assert_eq!(by_type.len(), 2);
+        // BTreeMap sorts by Ord — Kerolox (0) before Hydrolox (1)...
+        // Actually Kerolox=0, Hydrolox=1 in the enum derive order
+        // Check both are present
+        let kerolox_kg: f64 = by_type.iter()
+            .filter(|(ft, _)| *ft == crate::engine_design::FuelType::Kerolox)
+            .map(|(_, kg)| *kg)
+            .sum();
+        let hydrolox_kg: f64 = by_type.iter()
+            .filter(|(ft, _)| *ft == crate::engine_design::FuelType::Hydrolox)
+            .map(|(_, kg)| *kg)
+            .sum();
+        assert!((kerolox_kg - 80000.0).abs() < 0.01);
+        assert!((hydrolox_kg - 20000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_total_propellant() {
+        let mut design = RocketDesign::new();
+        let mut stage1 = RocketStage::new(kerolox_snap());
+        stage1.propellant_mass_kg = 50000.0;
+        let mut stage2 = RocketStage::new(hydrolox_snap());
+        stage2.propellant_mass_kg = 15000.0;
+        design.stages.push(stage1);
+        design.stages.push(stage2);
+
+        let total = design.total_propellant_kg();
+        let sum_stages: f64 = design.stages.iter().map(|s| s.propellant_mass_kg).sum();
+        assert!((total - sum_stages).abs() < 0.01);
+        assert!((total - 65000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_propellant_remaining_sufficient() {
+        // Build a rocket with excess delta-v — last stage should have propellant remaining
+        let mut design = RocketDesign::default_design();
+        // Increase propellant to ensure it's well over target
+        design.stages[0].propellant_mass_kg = 150000.0;
+        design.stages[1].propellant_mass_kg = 30000.0;
+
+        assert!(design.is_sufficient(), "Design should be sufficient");
+
+        let remaining = design.propellant_remaining_kg();
+        assert!(!remaining.is_empty(), "Should have remaining data");
+
+        // At least the last stage should have some remaining propellant
+        let total_remaining: f64 = remaining.iter().map(|(_, kg)| *kg).sum();
+        assert!(total_remaining > 0.0,
+            "Should have positive remaining propellant, got {}", total_remaining);
+
+        // Total remaining should be less than total propellant (some was burned)
+        let total_propellant = design.total_propellant_kg();
+        assert!(total_remaining < total_propellant,
+            "Remaining ({}) should be less than total ({})", total_remaining, total_propellant);
+    }
+
+    #[test]
+    fn test_propellant_remaining_barely_sufficient() {
+        // Build a rocket that barely reaches target — near-zero remaining
+        let mut design = RocketDesign::new();
+        let mut stage1 = RocketStage::new(kerolox_snap());
+        stage1.engine_count = 5;
+        stage1.propellant_mass_kg = 100000.0;
+        let mut stage2 = RocketStage::new(hydrolox_snap());
+        stage2.engine_count = 1;
+        stage2.propellant_mass_kg = 20000.0;
+        design.stages.push(stage1);
+        design.stages.push(stage2);
+
+        // Adjust target to be just barely met
+        let effective_dv = design.total_effective_delta_v();
+        design.target_delta_v = effective_dv - 1.0; // 1 m/s margin
+
+        assert!(design.is_sufficient());
+        let remaining = design.propellant_remaining_kg();
+        assert!(!remaining.is_empty());
+
+        let total_remaining: f64 = remaining.iter().map(|(_, kg)| *kg).sum();
+        // With only 1 m/s margin, remaining should be very small relative to total
+        let total_propellant = design.total_propellant_kg();
+        assert!(total_remaining < total_propellant * 0.05,
+            "With barely sufficient design, remaining ({:.0}) should be small relative to total ({:.0})",
+            total_remaining, total_propellant);
+    }
+
+    #[test]
+    fn test_propellant_remaining_insufficient() {
+        let mut design = RocketDesign::new();
+        let mut stage1 = RocketStage::new(kerolox_snap());
+        stage1.propellant_mass_kg = 1000.0; // Way too little propellant
+        design.stages.push(stage1);
+
+        assert!(!design.is_sufficient());
+        let remaining = design.propellant_remaining_kg();
+        assert!(remaining.is_empty(), "Insufficient design should return empty");
+    }
+
+    #[test]
+    fn test_propellant_remaining_by_fuel_type() {
+        let mut design = RocketDesign::default_design();
+        design.stages[0].propellant_mass_kg = 150000.0;
+        design.stages[1].propellant_mass_kg = 30000.0;
+
+        assert!(design.is_sufficient());
+
+        let remaining_by_type = design.propellant_remaining_by_fuel_type();
+        assert!(!remaining_by_type.is_empty());
+
+        // Should have entries for fuel types used
+        let total_remaining: f64 = remaining_by_type.iter().map(|(_, kg)| *kg).sum();
+        assert!(total_remaining > 0.0);
+    }
+
+    #[test]
+    fn test_launch_record_propellant() {
+        let mut record = LaunchRecord::default();
+        assert!(record.last_propellant_loaded.is_none());
+        assert!(record.last_propellant_remaining.is_none());
+
+        // Simulate success
+        let loaded = vec![(crate::engine_design::FuelType::Kerolox, 100000.0)];
+        let remaining = vec![(crate::engine_design::FuelType::Kerolox, 5000.0)];
+        record.record_success();
+        record.last_propellant_loaded = Some(loaded.clone());
+        record.last_propellant_remaining = Some(remaining.clone());
+
+        assert_eq!(record.last_propellant_loaded.as_ref().unwrap().len(), 1);
+        assert_eq!(record.last_propellant_remaining.as_ref().unwrap().len(), 1);
+        assert!((record.last_propellant_loaded.as_ref().unwrap()[0].1 - 100000.0).abs() < 0.01);
+        assert!((record.last_propellant_remaining.as_ref().unwrap()[0].1 - 5000.0).abs() < 0.01);
+
+        // Simulate failure — remaining should be None
+        record.record_failure();
+        record.last_propellant_loaded = Some(vec![(crate::engine_design::FuelType::Kerolox, 100000.0)]);
+        record.last_propellant_remaining = None;
+
+        assert!(record.last_propellant_loaded.is_some());
+        assert!(record.last_propellant_remaining.is_none());
     }
 }

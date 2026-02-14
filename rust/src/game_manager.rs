@@ -809,6 +809,68 @@ impl GameManager {
             .unwrap_or(0.0)
     }
 
+    // ==========================================
+    // Last Launch Propellant Data
+    // ==========================================
+
+    #[func]
+    pub fn get_last_propellant_loaded_count(&self, design_index: i32) -> i32 {
+        if design_index < 0 { return 0; }
+        self.state.player_company.get_rocket_design(design_index as usize)
+            .and_then(|d| d.launch_record.last_propellant_loaded.as_ref())
+            .map(|v| v.len() as i32)
+            .unwrap_or(0)
+    }
+
+    #[func]
+    pub fn get_last_propellant_loaded_type(&self, design_index: i32, index: i32) -> GString {
+        if design_index < 0 || index < 0 { return GString::new(); }
+        self.state.player_company.get_rocket_design(design_index as usize)
+            .and_then(|d| d.launch_record.last_propellant_loaded.as_ref())
+            .and_then(|v| v.get(index as usize))
+            .map(|(ft, _)| GString::from(ft.display_name()))
+            .unwrap_or_default()
+    }
+
+    #[func]
+    pub fn get_last_propellant_loaded_kg(&self, design_index: i32, index: i32) -> f64 {
+        if design_index < 0 || index < 0 { return 0.0; }
+        self.state.player_company.get_rocket_design(design_index as usize)
+            .and_then(|d| d.launch_record.last_propellant_loaded.as_ref())
+            .and_then(|v| v.get(index as usize))
+            .map(|(_, kg)| *kg)
+            .unwrap_or(0.0)
+    }
+
+    #[func]
+    pub fn get_last_propellant_remaining_count(&self, design_index: i32) -> i32 {
+        if design_index < 0 { return 0; }
+        self.state.player_company.get_rocket_design(design_index as usize)
+            .and_then(|d| d.launch_record.last_propellant_remaining.as_ref())
+            .map(|v| v.len() as i32)
+            .unwrap_or(0)
+    }
+
+    #[func]
+    pub fn get_last_propellant_remaining_type(&self, design_index: i32, index: i32) -> GString {
+        if design_index < 0 || index < 0 { return GString::new(); }
+        self.state.player_company.get_rocket_design(design_index as usize)
+            .and_then(|d| d.launch_record.last_propellant_remaining.as_ref())
+            .and_then(|v| v.get(index as usize))
+            .map(|(ft, _)| GString::from(ft.display_name()))
+            .unwrap_or_default()
+    }
+
+    #[func]
+    pub fn get_last_propellant_remaining_kg(&self, design_index: i32, index: i32) -> f64 {
+        if design_index < 0 || index < 0 { return 0.0; }
+        self.state.player_company.get_rocket_design(design_index as usize)
+            .and_then(|d| d.launch_record.last_propellant_remaining.as_ref())
+            .and_then(|v| v.get(index as usize))
+            .map(|(_, kg)| *kg)
+            .unwrap_or(0.0)
+    }
+
     /// Save the designer's current design as a new lineage
     /// Returns the index of the new lineage
     #[func]

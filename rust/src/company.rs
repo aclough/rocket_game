@@ -170,8 +170,15 @@ impl Company {
         let testing_cost = design.get_testing_spent();
         self.money -= rocket_cost + testing_cost;
 
+        // Store propellant data before recording (needs immutable borrow first)
+        let propellant_loaded = design.propellant_by_fuel_type();
+        let propellant_remaining = design.propellant_remaining_by_fuel_type();
+
         // Record success on both the design version and the lineage
-        self.rocket_designs[rocket_design_id].head_mut().launch_record.record_success();
+        let head = self.rocket_designs[rocket_design_id].head_mut();
+        head.launch_record.record_success();
+        head.launch_record.last_propellant_loaded = Some(propellant_loaded);
+        head.launch_record.last_propellant_remaining = Some(propellant_remaining);
         self.rocket_designs[rocket_design_id].launch_record.record_success();
 
         // Reset testing_spent so we don't double-charge if design is reused
@@ -208,8 +215,14 @@ impl Company {
         let testing_cost = design.get_testing_spent();
         self.money -= rocket_cost + testing_cost;
 
+        // Store propellant data (loaded only; remaining is None on failure)
+        let propellant_loaded = design.propellant_by_fuel_type();
+
         // Record failure on both the design version and the lineage
-        self.rocket_designs[rocket_design_id].head_mut().launch_record.record_failure();
+        let head = self.rocket_designs[rocket_design_id].head_mut();
+        head.launch_record.record_failure();
+        head.launch_record.last_propellant_loaded = Some(propellant_loaded);
+        head.launch_record.last_propellant_remaining = None;
         self.rocket_designs[rocket_design_id].launch_record.record_failure();
 
         // Reset testing_spent so we don't double-charge on retry

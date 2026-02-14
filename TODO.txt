@@ -1,16 +1,20 @@
 * Fixes
+    * Double the size of manufacturing teams.  That is, they're twice as expensive but everything now takes half as long.
+    * Sometimes a rocket is marked as selectable under Design after choosing a mission in available contracts, but marked as insufficient delta v at the launch site.
+    * When deciding on the nubmer of engines to add when adding a rocket in manufacturing, factor in the existing rockets queued up.
 * UI
-    * The "ADD STAGE" button on the bottom of the available engines isn't visible.
+    * The color of flaws seems off, and all the engine flaws appear under the rocket
+    * Pressing "Submit to engineering on a design should ove us to the Research tab
 * Refactoring
 * Hardware rich development
     * Diminsighing returns to development over time without sacrificing hardware.
     * Mission flights or test flight work for rockets.
     * For engines or other parts a test stand is good enough.
-* Rockets record how much of what sort of propellant they have, and how much they have at the end of a mission.
+        * By which I mean, if the productivity factor from a lack of tests is below some fraction and there is an engine
+          in storage, it is removed to restore research productivity.
+* Propellant endurance tracking (build on propellant remaining data).
     * Will be important later when we have multi-stage missions and propellant depots
-    * And important for endurance.
 * Places, delta-v map
-    * LEO, GTO, L4, etc.  Just the Earth-Moon system for now.
     * Update map page to show these.
     * Get delta-v map at https://en.wikipedia.org/wiki/File:Deltavs.svg
 * Add endurance to rockets
