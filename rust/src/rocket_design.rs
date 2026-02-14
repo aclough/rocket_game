@@ -62,8 +62,31 @@ pub mod gravity_coefficients {
     pub const MAX_COEFFICIENT: f64 = 0.18;
     /// Minimum coefficient at high velocity (nearly horizontal)
     pub const MIN_COEFFICIENT: f64 = 0.01;
-    /// Delta-v at which trajectory is mostly horizontal
+    /// Delta-v at which trajectory is mostly horizontal (for Earth)
     const HORIZONTAL_DV: f64 = 5000.0;
+    /// Fraction of orbital velocity at which trajectory is mostly horizontal
+    const HORIZONTAL_FRACTION: f64 = 0.633; // HORIZONTAL_DV / ~7900
+
+    /// Get the gravity loss coefficient for a given body based on cumulative delta-v
+    ///
+    /// Scales the horizontal transition point by the body's orbital velocity.
+    /// On Earth (orbital_velocity ~7900), horizontal_dv ≈ 5000.
+    /// On Moon (orbital_velocity ~1680), horizontal_dv ≈ 1063.
+    pub fn for_cumulative_delta_v_with_body(cumulative_delta_v: f64, orbital_velocity: f64) -> f64 {
+        let horizontal_dv = orbital_velocity * HORIZONTAL_FRACTION;
+
+        if cumulative_delta_v <= 0.0 {
+            return MAX_COEFFICIENT;
+        }
+
+        if cumulative_delta_v >= horizontal_dv {
+            return MIN_COEFFICIENT;
+        }
+
+        let decay_rate = (MAX_COEFFICIENT / MIN_COEFFICIENT).ln() / horizontal_dv;
+        let coefficient = MAX_COEFFICIENT * (-decay_rate * cumulative_delta_v).exp();
+        coefficient.max(MIN_COEFFICIENT)
+    }
 
     /// Get the gravity loss coefficient based on cumulative delta-v already achieved
     ///
@@ -169,6 +192,10 @@ pub struct RocketDesign {
     flaw_design_signature: String,
     /// Tank construction material for this rocket (applied to all stages)
     pub tank_material: TankMaterial,
+    /// Surface gravity of the launch body in m/s² (default: Earth 9.81)
+    pub surface_gravity: f64,
+    /// Orbital velocity at the launch body's surface in m/s (default: Earth ~7900)
+    pub orbital_velocity: f64,
 }
 
 impl RocketDesign {
@@ -185,6 +212,8 @@ impl RocketDesign {
             budget: costs::STARTING_BUDGET,
             flaw_design_signature: String::new(),
             tank_material: TankMaterial::default(),
+            surface_gravity: costs::G0,
+            orbital_velocity: 7900.0,
         }
     }
 
@@ -525,7 +554,7 @@ impl RocketDesign {
     pub fn booster_group_initial_twr(&self, group: &BoosterGroup, payload_above: f64) -> f64 {
         let thrust_n = self.booster_group_thrust_kn(group) * 1000.0;
         let mass_kg = self.booster_group_wet_mass_kg(group, payload_above);
-        let weight_n = mass_kg * costs::G0;
+        let weight_n = mass_kg * self.surface_gravity;
 
         if weight_n > 0.0 {
             thrust_n / weight_n
@@ -737,7 +766,7 @@ impl RocketDesign {
     /// from previous stages
     pub fn stage_gravity_coefficient(&self, stage_index: usize) -> f64 {
         let cumulative_dv = self.cumulative_effective_delta_v_before_stage(stage_index);
-        gravity_coefficients::for_cumulative_delta_v(cumulative_dv)
+        gravity_coefficients::for_cumulative_delta_v_with_body(cumulative_dv, self.orbital_velocity)
     }
 
     /// Calculate the cumulative effective delta-v from all stages before the given stage
@@ -780,7 +809,7 @@ impl RocketDesign {
 
         // No boosters - normal calculation
         let payload = self.mass_above_stage(stage_index);
-        self.stages[stage_index].initial_twr(payload)
+        self.stages[stage_index].initial_twr(payload, self.surface_gravity)
     }
 
     /// Get the combined TWR during booster burn for a stage index
@@ -842,7 +871,7 @@ impl RocketDesign {
             return 0.0;
         }
 
-        let coefficient = gravity_coefficients::for_cumulative_delta_v(cumulative_delta_v);
+        let coefficient = gravity_coefficients::for_cumulative_delta_v_with_body(cumulative_delta_v, self.orbital_velocity);
 
         // Check if this core has boosters
         let groups = self.find_booster_groups();
@@ -856,7 +885,7 @@ impl RocketDesign {
         // Non-boosted stage: use the stage's gravity_loss method directly
         let payload = self.mass_above_stage(stage_index);
         let stage = &self.stages[stage_index];
-        stage.effective_delta_v(payload, coefficient)
+        stage.effective_delta_v(payload, coefficient, self.surface_gravity)
     }
 
     /// Calculate effective delta-v for a stage with boosters, accounting for gravity losses
@@ -869,7 +898,7 @@ impl RocketDesign {
         if group.booster_indices.is_empty() {
             // Fallback to non-boosted calculation
             let payload = self.mass_above_stage(group.core_stage_index);
-            return self.stages[group.core_stage_index].effective_delta_v(payload, coefficient);
+            return self.stages[group.core_stage_index].effective_delta_v(payload, coefficient, self.surface_gravity);
         }
 
         let core = &self.stages[group.core_stage_index];
@@ -926,7 +955,7 @@ impl RocketDesign {
             0.0
         };
 
-        let phase1_twr = combined_thrust_n / (m0 * costs::G0);
+        let phase1_twr = combined_thrust_n / (m0 * self.surface_gravity);
         let phase1_mass_ratio = if m1 > 0.0 { m0 / m1 } else { 1.0 };
         let phase1_gravity_loss = calculate_gravity_loss(
             coefficient,
@@ -963,7 +992,7 @@ impl RocketDesign {
         };
 
         let core_thrust_n = core.total_thrust_kn() * 1000.0;
-        let phase2_twr = core_thrust_n / (m2_start * costs::G0);
+        let phase2_twr = core_thrust_n / (m2_start * self.surface_gravity);
         let phase2_mass_ratio = if m2_end > 0.0 { m2_start / m2_end } else { 1.0 };
         let phase2_gravity_loss = calculate_gravity_loss(
             coefficient,
@@ -1075,7 +1104,7 @@ impl RocketDesign {
         for group in &groups {
             if group.core_stage_index == 0 && !group.booster_indices.is_empty() {
                 let thrust_n = self.booster_group_thrust_kn(&group) * 1000.0;
-                let weight_n = self.total_wet_mass_kg() * costs::G0;
+                let weight_n = self.total_wet_mass_kg() * self.surface_gravity;
                 return thrust_n / weight_n;
             }
         }
@@ -1083,7 +1112,7 @@ impl RocketDesign {
         // No boosters on first stage
         let first_stage = &self.stages[0];
         let thrust_n = first_stage.total_thrust_kn() * 1000.0; // kN to N
-        let weight_n = self.total_wet_mass_kg() * costs::G0;
+        let weight_n = self.total_wet_mass_kg() * self.surface_gravity;
 
         thrust_n / weight_n
     }
@@ -2541,5 +2570,72 @@ mod tests {
         assert!(comp_cost > alu_cost,
             "Composite should cost more: comp=${:.0}, alu=${:.0}",
             comp_cost, alu_cost);
+    }
+
+    #[test]
+    fn test_default_design_uses_earth_gravity() {
+        let design = RocketDesign::new();
+        assert_eq!(design.surface_gravity, costs::G0);
+        assert_eq!(design.orbital_velocity, 7900.0);
+    }
+
+    #[test]
+    fn test_moon_design_higher_twr() {
+        let earth_design = RocketDesign::default_design();
+        let mut moon_design = RocketDesign::default_design();
+        moon_design.surface_gravity = 1.62;
+        moon_design.orbital_velocity = 1680.0;
+
+        let earth_twr = earth_design.liftoff_twr();
+        let moon_twr = moon_design.liftoff_twr();
+
+        assert!(moon_twr > earth_twr,
+            "Liftoff TWR should be higher on Moon: {} vs Earth: {}", moon_twr, earth_twr);
+    }
+
+    #[test]
+    fn test_moon_design_more_effective_delta_v() {
+        // Same rocket launched from Moon should have more effective delta-v (less gravity loss)
+        let earth_design = RocketDesign::default_design();
+        let mut moon_design = RocketDesign::default_design();
+        moon_design.surface_gravity = 1.62;
+        moon_design.orbital_velocity = 1680.0;
+
+        let earth_edv = earth_design.total_effective_delta_v();
+        let moon_edv = moon_design.total_effective_delta_v();
+
+        assert!(moon_edv > earth_edv,
+            "Moon effective delta-v should be higher: {} vs Earth: {}", moon_edv, earth_edv);
+    }
+
+    #[test]
+    fn test_gravity_coefficient_with_body() {
+        // Earth: horizontal_dv ≈ 7900 * 0.633 ≈ 5000
+        let earth_coeff = gravity_coefficients::for_cumulative_delta_v_with_body(0.0, 7900.0);
+        assert_eq!(earth_coeff, gravity_coefficients::MAX_COEFFICIENT);
+
+        // Moon: horizontal_dv ≈ 1680 * 0.633 ≈ 1063
+        // At 1200 m/s (past horizontal for Moon), should be at MIN
+        let moon_coeff = gravity_coefficients::for_cumulative_delta_v_with_body(1200.0, 1680.0);
+        assert_eq!(moon_coeff, gravity_coefficients::MIN_COEFFICIENT);
+
+        // Same cumulative_dv on Earth should still be high
+        let earth_coeff_at_1200 = gravity_coefficients::for_cumulative_delta_v_with_body(1200.0, 7900.0);
+        assert!(earth_coeff_at_1200 > moon_coeff,
+            "At 1200 m/s, Earth coefficient ({}) should be higher than Moon ({})",
+            earth_coeff_at_1200, moon_coeff);
+    }
+
+    #[test]
+    fn test_for_cumulative_delta_v_with_body_matches_earth() {
+        // Using Earth's orbital velocity should give similar results to the legacy function
+        let earth_ov = 7900.0;
+        for dv in [0.0, 1000.0, 2500.0, 5000.0, 8000.0] {
+            let legacy = gravity_coefficients::for_cumulative_delta_v(dv);
+            let body = gravity_coefficients::for_cumulative_delta_v_with_body(dv, earth_ov);
+            // Not exact due to HORIZONTAL_FRACTION rounding but should be close
+            assert!((legacy - body).abs() < 0.005,
+                "At dv={}, legacy={} vs body={}", dv, legacy, body);
+        }
     }
 }

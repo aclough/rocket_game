@@ -2934,6 +2934,79 @@ impl GameManager {
         result
     }
 
+    // ==========================================
+    // Location / Delta-V Map
+    // ==========================================
+
+    /// Get the number of locations in the delta-v map
+    #[func]
+    pub fn get_location_count(&self) -> i32 {
+        crate::location::DELTA_V_MAP.location_count() as i32
+    }
+
+    /// Get the display name of a location by index
+    #[func]
+    pub fn get_location_name(&self, index: i32) -> GString {
+        crate::location::DELTA_V_MAP
+            .location_at(index as usize)
+            .map(|l| GString::from(l.display_name))
+            .unwrap_or_default()
+    }
+
+    /// Get the short name of a location by index
+    #[func]
+    pub fn get_location_short_name(&self, index: i32) -> GString {
+        crate::location::DELTA_V_MAP
+            .location_at(index as usize)
+            .map(|l| GString::from(l.short_name))
+            .unwrap_or_default()
+    }
+
+    /// Get the ID of a location by index
+    #[func]
+    pub fn get_location_id(&self, index: i32) -> GString {
+        crate::location::DELTA_V_MAP
+            .location_at(index as usize)
+            .map(|l| GString::from(l.id))
+            .unwrap_or_default()
+    }
+
+    /// Get the type of a location by index ("surface", "orbit", "lagrange_point")
+    #[func]
+    pub fn get_location_type(&self, index: i32) -> GString {
+        crate::location::DELTA_V_MAP
+            .location_at(index as usize)
+            .map(|l| {
+                let type_str = match &l.location_type {
+                    crate::location::LocationType::Surface(_) => "surface",
+                    crate::location::LocationType::Orbit => "orbit",
+                    crate::location::LocationType::LagrangePoint => "lagrange_point",
+                };
+                GString::from(type_str)
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the direct transfer delta-v between two locations (by ID string)
+    /// Returns -1.0 if no direct transfer exists
+    #[func]
+    pub fn get_transfer_delta_v(&self, from_id: GString, to_id: GString) -> f64 {
+        crate::location::DELTA_V_MAP
+            .transfer(&from_id.to_string(), &to_id.to_string())
+            .map(|t| t.total_delta_v())
+            .unwrap_or(-1.0)
+    }
+
+    /// Get the shortest path total delta-v between two locations (by ID string)
+    /// Returns -1.0 if no path exists
+    #[func]
+    pub fn get_path_delta_v(&self, from_id: GString, to_id: GString) -> f64 {
+        crate::location::DELTA_V_MAP
+            .shortest_path(&from_id.to_string(), &to_id.to_string())
+            .map(|(_, dv)| dv)
+            .unwrap_or(-1.0)
+    }
+
     /// Get a summary of the current game state for saving
     #[func]
     pub fn get_save_summary(&self) -> GString {

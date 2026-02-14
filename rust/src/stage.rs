@@ -285,10 +285,10 @@ impl RocketStage {
     ///
     /// # Returns
     /// TWR as a dimensionless ratio (must be > 1.0 to lift off)
-    pub fn initial_twr(&self, payload_mass_kg: f64) -> f64 {
+    pub fn initial_twr(&self, payload_mass_kg: f64, surface_gravity: f64) -> f64 {
         let thrust_n = self.total_thrust_kn() * 1000.0; // kN to N
         let total_mass_kg = self.wet_mass_kg() + payload_mass_kg;
-        let weight_n = total_mass_kg * costs::G0;
+        let weight_n = total_mass_kg * surface_gravity;
 
         if weight_n > 0.0 {
             thrust_n / weight_n
@@ -373,12 +373,12 @@ impl RocketStage {
     ///
     /// # Returns
     /// Gravity loss in m/s
-    pub fn gravity_loss(&self, payload_mass_kg: f64, gravity_loss_coefficient: f64) -> f64 {
+    pub fn gravity_loss(&self, payload_mass_kg: f64, gravity_loss_coefficient: f64, surface_gravity: f64) -> f64 {
         calculate_gravity_loss(
             gravity_loss_coefficient,
             self.exhaust_velocity_ms(),
             self.mass_ratio(payload_mass_kg),
-            self.initial_twr(payload_mass_kg),
+            self.initial_twr(payload_mass_kg, surface_gravity),
             self.delta_v(payload_mass_kg),
         )
     }
@@ -391,13 +391,13 @@ impl RocketStage {
     ///
     /// # Returns
     /// Efficiency as a ratio (0.0 to 1.0)
-    pub fn gravity_efficiency(&self, payload_mass_kg: f64, gravity_loss_coefficient: f64) -> f64 {
+    pub fn gravity_efficiency(&self, payload_mass_kg: f64, gravity_loss_coefficient: f64, surface_gravity: f64) -> f64 {
         let ideal_dv = self.delta_v(payload_mass_kg);
         if ideal_dv <= 0.0 {
             return 0.0;
         }
 
-        let loss = self.gravity_loss(payload_mass_kg, gravity_loss_coefficient);
+        let loss = self.gravity_loss(payload_mass_kg, gravity_loss_coefficient, surface_gravity);
         (1.0 - loss / ideal_dv).max(0.0)
     }
 
@@ -409,9 +409,9 @@ impl RocketStage {
     ///
     /// # Returns
     /// Effective delta-v in m/s
-    pub fn effective_delta_v(&self, payload_mass_kg: f64, gravity_loss_coefficient: f64) -> f64 {
+    pub fn effective_delta_v(&self, payload_mass_kg: f64, gravity_loss_coefficient: f64, surface_gravity: f64) -> f64 {
         let ideal_dv = self.delta_v(payload_mass_kg);
-        let loss = self.gravity_loss(payload_mass_kg, gravity_loss_coefficient);
+        let loss = self.gravity_loss(payload_mass_kg, gravity_loss_coefficient, surface_gravity);
         (ideal_dv - loss).max(0.0)
     }
 }
@@ -635,7 +635,7 @@ mod tests {
         // Thrust = 1,500,000 N
         // TWR = 1,500,000 / 283,019 ≈ 5.30
 
-        let twr = stage.initial_twr(1000.0);
+        let twr = stage.initial_twr(1000.0, costs::G0);
         assert!(twr > 4.5 && twr < 6.0, "TWR should be ~5.3: {}", twr);
     }
 
@@ -645,8 +645,8 @@ mod tests {
         stage.engine_count = 1;
         stage.propellant_mass_kg = 10000.0;
 
-        let twr_light = stage.initial_twr(1000.0);
-        let twr_heavy = stage.initial_twr(50000.0);
+        let twr_light = stage.initial_twr(1000.0, costs::G0);
+        let twr_heavy = stage.initial_twr(50000.0, costs::G0);
 
         assert!(
             twr_light > twr_heavy,
@@ -700,13 +700,13 @@ mod tests {
 
         // With 3 engines (higher TWR)
         stage.engine_count = 3;
-        let loss_high_twr = stage.gravity_loss(payload, coefficient);
-        let twr_high = stage.initial_twr(payload);
+        let loss_high_twr = stage.gravity_loss(payload, coefficient, costs::G0);
+        let twr_high = stage.initial_twr(payload, costs::G0);
 
         // With 1 engine (lower TWR, same mass ratio)
         stage.engine_count = 1;
-        let loss_low_twr = stage.gravity_loss(payload, coefficient);
-        let twr_low = stage.initial_twr(payload);
+        let loss_low_twr = stage.gravity_loss(payload, coefficient, costs::G0);
+        let twr_low = stage.initial_twr(payload, costs::G0);
 
         assert!(
             twr_high > twr_low,
@@ -730,7 +730,7 @@ mod tests {
         stage.propellant_mass_kg = 25000.0;
 
         let ideal_dv = stage.delta_v(5000.0);
-        let effective_dv = stage.effective_delta_v(5000.0, 0.85);
+        let effective_dv = stage.effective_delta_v(5000.0, 0.85, costs::G0);
 
         assert!(
             effective_dv < ideal_dv,
@@ -752,7 +752,7 @@ mod tests {
         stage.engine_count = 3;
         stage.propellant_mass_kg = 25000.0;
 
-        let efficiency = stage.gravity_efficiency(5000.0, 0.85);
+        let efficiency = stage.gravity_efficiency(5000.0, 0.85, costs::G0);
 
         // With good TWR, efficiency should be fairly high (>50%)
         assert!(
@@ -769,7 +769,7 @@ mod tests {
         stage.propellant_mass_kg = 10000.0;
 
         // With coefficient = 0 (fully horizontal burn), no gravity loss
-        let loss = stage.gravity_loss(5000.0, 0.0);
+        let loss = stage.gravity_loss(5000.0, 0.0, costs::G0);
         assert!(loss.abs() < 0.001, "Zero coefficient should mean zero loss: {}", loss);
     }
 
@@ -785,14 +785,14 @@ mod tests {
 
         // Set up a very heavy payload to get TWR well below 1.0
         let heavy_payload = 200000.0; // 200 tons
-        let twr = stage.initial_twr(heavy_payload);
+        let twr = stage.initial_twr(heavy_payload, costs::G0);
         assert!(twr < 0.5, "Should have very low TWR: {}", twr);
 
         let ideal_dv = stage.delta_v(heavy_payload);
 
         // Upper stage coefficient (nearly horizontal burn in orbit)
         let upper_stage_coefficient = 0.01;
-        let effective_dv = stage.effective_delta_v(heavy_payload, upper_stage_coefficient);
+        let effective_dv = stage.effective_delta_v(heavy_payload, upper_stage_coefficient, costs::G0);
 
         // Should retain 99% of delta-v even with terrible TWR
         let efficiency = effective_dv / ideal_dv;
@@ -829,7 +829,7 @@ mod tests {
         let payload_for_twr_one = thrust_n / costs::G0 - wet_mass;
 
         // Verify we actually have TWR = 1.0
-        let twr = stage.initial_twr(payload_for_twr_one);
+        let twr = stage.initial_twr(payload_for_twr_one, costs::G0);
         assert!(
             (twr - 1.0).abs() < 0.001,
             "TWR should be 1.0: {}",
@@ -838,7 +838,7 @@ mod tests {
 
         // Calculate effective delta-v at TWR = 1.0
         let gravity_coefficient = 0.85; // Typical first stage value
-        let effective_dv_before = stage.effective_delta_v(payload_for_twr_one, gravity_coefficient);
+        let effective_dv_before = stage.effective_delta_v(payload_for_twr_one, gravity_coefficient, costs::G0);
 
         // Add more propellant (this will lower TWR below 1.0)
         let additional_propellant = 5000.0;
@@ -848,7 +848,7 @@ mod tests {
         // (the original payload mass doesn't change, but now we have more propellant)
         // TWR will now be < 1.0
 
-        let new_twr = stage.initial_twr(payload_for_twr_one);
+        let new_twr = stage.initial_twr(payload_for_twr_one, costs::G0);
         assert!(
             new_twr < 1.0,
             "Adding propellant should lower TWR below 1.0: {}",
@@ -856,7 +856,7 @@ mod tests {
         );
 
         // Calculate new effective delta-v
-        let effective_dv_after = stage.effective_delta_v(payload_for_twr_one, gravity_coefficient);
+        let effective_dv_after = stage.effective_delta_v(payload_for_twr_one, gravity_coefficient, costs::G0);
 
         // The key assertion: adding propellant at TWR <= 1.0 should not increase effective delta-v
         // In fact, it should decrease or stay roughly the same
@@ -867,5 +867,59 @@ mod tests {
             effective_dv_after,
             new_twr
         );
+    }
+
+    #[test]
+    fn test_moon_gravity_higher_twr() {
+        // Same stage should have higher TWR on the Moon (lower gravity)
+        let mut stage = RocketStage::new(kerolox_snapshot());
+        stage.engine_count = 1;
+        stage.propellant_mass_kg = 10000.0;
+        let payload = 5000.0;
+        let moon_g = 1.62;
+
+        let twr_earth = stage.initial_twr(payload, costs::G0);
+        let twr_moon = stage.initial_twr(payload, moon_g);
+
+        assert!(twr_moon > twr_earth,
+            "TWR should be higher on Moon: {} vs Earth: {}", twr_moon, twr_earth);
+        // Moon gravity is ~1/6 Earth, so TWR should be ~6x higher
+        let ratio = twr_moon / twr_earth;
+        assert!((ratio - costs::G0 / moon_g).abs() < 0.01,
+            "TWR ratio should equal gravity ratio: {}", ratio);
+    }
+
+    #[test]
+    fn test_moon_gravity_lower_losses() {
+        // Gravity losses should be lower on the Moon
+        let mut stage = RocketStage::new(kerolox_snapshot());
+        stage.engine_count = 1;
+        stage.propellant_mass_kg = 10000.0;
+        let payload = 5000.0;
+        let coefficient = 0.18;
+        let moon_g = 1.62;
+
+        let loss_earth = stage.gravity_loss(payload, coefficient, costs::G0);
+        let loss_moon = stage.gravity_loss(payload, coefficient, moon_g);
+
+        assert!(loss_moon < loss_earth,
+            "Gravity losses should be lower on Moon: {} vs Earth: {}", loss_moon, loss_earth);
+    }
+
+    #[test]
+    fn test_moon_effective_delta_v_higher() {
+        // Effective delta-v should be higher on the Moon (less gravity loss)
+        let mut stage = RocketStage::new(kerolox_snapshot());
+        stage.engine_count = 1;
+        stage.propellant_mass_kg = 10000.0;
+        let payload = 5000.0;
+        let coefficient = 0.18;
+        let moon_g = 1.62;
+
+        let edv_earth = stage.effective_delta_v(payload, coefficient, costs::G0);
+        let edv_moon = stage.effective_delta_v(payload, coefficient, moon_g);
+
+        assert!(edv_moon > edv_earth,
+            "Effective delta-v should be higher on Moon: {} vs Earth: {}", edv_moon, edv_earth);
     }
 }

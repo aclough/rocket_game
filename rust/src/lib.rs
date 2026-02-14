@@ -11,6 +11,7 @@ pub mod engineering_team;
 pub mod flaw;
 pub mod game_state;
 pub mod launch_site;
+pub mod location;
 pub mod manufacturing;
 pub mod launcher;
 pub mod resources;
