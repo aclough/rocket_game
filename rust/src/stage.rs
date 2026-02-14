@@ -310,6 +310,44 @@ impl RocketStage {
         m0 / mf
     }
 
+    /// Calculate the propellant mass that would give a specific burn time
+    ///
+    /// # Arguments
+    /// * `seconds` - Desired burn time in seconds
+    ///
+    /// # Returns
+    /// Propellant mass in kg: burn_time × thrust / exhaust_velocity
+    pub fn propellant_mass_for_burn_time(&self, seconds: f64) -> f64 {
+        let thrust_n = self.total_thrust_kn() * 1000.0;
+        let ve = self.exhaust_velocity_ms();
+        if ve > 0.0 {
+            seconds * thrust_n / ve
+        } else {
+            0.0
+        }
+    }
+
+    /// Calculate what mass fraction would result from a given propellant mass
+    /// This is the inverse of set_mass_fraction
+    ///
+    /// # Arguments
+    /// * `propellant_kg` - Propellant mass in kg
+    /// * `payload_mass_kg` - Mass above this stage
+    ///
+    /// # Returns
+    /// Mass fraction (0.0 to 1.0)
+    pub fn mass_fraction_for_propellant(&self, propellant_kg: f64, payload_mass_kg: f64) -> f64 {
+        let engine_mass = self.engine_mass_kg();
+        let t = self.engine_snapshot.tank_mass_ratio * self.tank_material.mass_ratio_multiplier();
+        let tank_mass = propellant_kg * t;
+        let total = propellant_kg + engine_mass + tank_mass + payload_mass_kg;
+        if total > 0.0 {
+            propellant_kg / total
+        } else {
+            0.0
+        }
+    }
+
     /// Calculate the burn time for this stage in seconds
     ///
     /// # Returns

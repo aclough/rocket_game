@@ -710,8 +710,29 @@ impl RocketDesigner {
         }
 
         self.design.stages[stage_index as usize].is_booster = is_booster;
+
+        // Auto-clamp mass fraction if booster burn time would exceed core
+        if is_booster {
+            let idx = stage_index as usize;
+            let max_frac = self.design.booster_max_mass_fraction(idx);
+            let current_frac = self.design.stage_mass_fraction(idx);
+            if current_frac > max_frac {
+                self.design.set_stage_mass_fraction(idx, max_frac);
+            }
+        }
+
         self.emit_design_changed();
         true
+    }
+
+    /// Get the maximum mass fraction for a booster stage
+    /// Returns 0.95 for non-booster stages
+    #[func]
+    pub fn get_booster_max_mass_fraction(&self, stage_index: i32) -> f64 {
+        if stage_index < 0 {
+            return 0.95;
+        }
+        self.design.booster_max_mass_fraction(stage_index as usize)
     }
 
     /// Check if a stage can be made a booster

@@ -515,7 +515,11 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 
 		slider = HSlider.new()
 		slider.min_value = 0.5
-		slider.max_value = 0.95
+		var is_booster_stage = designer.is_stage_booster(stage_index)
+		if is_booster_stage:
+			slider.max_value = designer.get_booster_max_mass_fraction(stage_index)
+		else:
+			slider.max_value = 0.95
 		slider.step = 0.01
 		slider.value = designer.get_stage_mass_fraction(stage_index)
 		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL

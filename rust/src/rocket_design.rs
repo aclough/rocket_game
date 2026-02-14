@@ -628,6 +628,36 @@ impl RocketDesign {
         self.get_booster_validation_error(stage_index).is_none()
     }
 
+    /// Calculate the maximum mass fraction a booster stage can have
+    /// such that its burn time does not exceed the core stage's burn time.
+    /// Returns 0.95 if the stage is not a booster.
+    pub fn booster_max_mass_fraction(&self, stage_index: usize) -> f64 {
+        const DEFAULT_MAX: f64 = 0.95;
+
+        if stage_index >= self.stages.len() || !self.stages[stage_index].is_booster {
+            return DEFAULT_MAX;
+        }
+
+        // Find the core stage (walk backwards past other boosters)
+        let mut core_index = stage_index - 1;
+        while core_index > 0 && self.stages[core_index].is_booster {
+            core_index -= 1;
+        }
+
+        let core_burn_time = self.stages[core_index].burn_time_seconds();
+        if core_burn_time <= 0.0 {
+            return DEFAULT_MAX;
+        }
+
+        // Max propellant for the booster to match core burn time
+        let max_propellant = self.stages[stage_index].propellant_mass_for_burn_time(core_burn_time);
+        let payload = self.mass_above_stage(stage_index);
+        let max_fraction = self.stages[stage_index].mass_fraction_for_propellant(max_propellant, payload);
+
+        // Clamp to valid slider range
+        max_fraction.clamp(0.5, DEFAULT_MAX)
+    }
+
     /// Get combined thrust for a booster group in kN
     pub fn booster_group_thrust_kn(&self, group: &BoosterGroup) -> f64 {
         let mut total = self.stages[group.core_stage_index].total_thrust_kn();

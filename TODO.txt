@@ -1,6 +1,6 @@
 * Fixes
-    * For boosters, let the user change the fuel level between a minimum and the maximum burn time of the base stage.
 * UI
+    * Add burn time to stage info in Rocket Designer
 * Refactoring
     * Parts and vehicles should be treated symmetrically as much as possible in things like how they relate to flaws.
 * Track success rate and streaks for rocket designs.
