@@ -95,15 +95,8 @@ func _setup_engine_cards():
 		engines_container.add_child(card)
 
 func _create_engine_card(engine_type: int) -> Control:
-	# Use a Control as container so we can implement _get_drag_data via script
-	var container = Control.new()
-	container.custom_minimum_size = Vector2(200, 160)  # Increased height for all content
-	container.set_meta("engine_type", engine_type)
-
 	var panel = PanelContainer.new()
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	container.add_child(panel)
+	panel.set_meta("engine_type", engine_type)
 
 	var margin = MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -162,7 +155,7 @@ func _create_engine_card(engine_type: int) -> Control:
 	add_btn.pressed.connect(_on_add_engine_stage_pressed.bind(engine_type))
 	vbox.add_child(add_btn)
 
-	return container
+	return panel
 
 func _on_add_engine_stage_pressed(engine_type: int):
 	designer.add_stage(engine_type)
