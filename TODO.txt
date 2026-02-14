@@ -2,7 +2,6 @@
     * For boosters, let the user change the fuel level between a minimum and the maximum burn time of the base stage.
 * UI
 * Refactoring
-    * Complexity should be the only thing that affects build times or flaw numbers and it should be derived from the elements of the design.
     * Parts and vehicles should be treated symmetrically as much as possible in things like how they relate to flaws.
 * Track success rate and streaks for rocket designs.
 * Hardware rich development

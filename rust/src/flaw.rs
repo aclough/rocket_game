@@ -509,7 +509,7 @@ impl FlawGenerator {
     /// Fixed count per engine design (not scaled by usage in rockets).
     /// Called when an engine design is first submitted for refining.
     /// Flaw severity depends on fuel_type and scale via technology difficulty means.
-    /// Uses center complexity for flaw count (3-4 flaws).
+    /// Uses COMPLEXITY_BASELINE for flaw count.
     pub fn generate_engine_flaws_for_type_with_category(
         &mut self,
         engine_design_id: usize,
@@ -517,19 +517,17 @@ impl FlawGenerator {
         fuel_type: FuelType,
         scale: f64,
     ) -> Vec<Flaw> {
-        let center = crate::balance::complexity_range(fuel_type).center;
         self.generate_engine_flaws_with_complexity(
             engine_design_id,
             category,
             fuel_type,
             scale,
-            center,
-            center,
+            crate::balance::COMPLEXITY_BASELINE,
         )
     }
 
     /// Generate engine flaws with complexity-scaled flaw count.
-    /// Flaw count = max(2, 3 + (complexity - center) + rng(0..2)).
+    /// Flaw count = max(2, 3 + (complexity - COMPLEXITY_BASELINE) + rng(0..2)).
     pub fn generate_engine_flaws_with_complexity(
         &mut self,
         engine_design_id: usize,
@@ -537,7 +535,6 @@ impl FlawGenerator {
         fuel_type: FuelType,
         scale: f64,
         complexity: i32,
-        center: i32,
     ) -> Vec<Flaw> {
         let mut rng = rand::thread_rng();
 
@@ -546,7 +543,7 @@ impl FlawGenerator {
         let fr_mean = engine_failure_rate_mean(fuel_type, scale);
         let tm_mean = engine_testing_modifier_mean(fuel_type, scale);
 
-        let modifier = crate::balance::complexity_flaw_modifier(complexity, center);
+        let modifier = crate::balance::complexity_flaw_modifier(complexity);
         let flaw_count = (3 + modifier + rng.gen_range(0..2)).max(2) as usize;
         let selected = self.select_random_templates(templates, flaw_count, &mut rng);
 
@@ -1024,24 +1021,24 @@ mod tests {
     // ==========================================
 
     #[test]
-    fn test_center_complexity_gives_3_to_4_flaws() {
-        // At center complexity (6 for kerolox), flaw count = max(2, 3 + 0 + rng(0..2)) = 3 or 4
+    fn test_baseline_complexity_gives_3_to_4_flaws() {
+        // At baseline complexity (6), flaw count = max(2, 3 + 0 + rng(0..2)) = 3 or 4
         let mut gen = FlawGenerator::new();
         for _ in 0..20 {
             let flaws = gen.generate_engine_flaws_with_complexity(
-                0, FlawCategory::LiquidEngine, FuelType::Kerolox, 1.0, 6, 6);
+                0, FlawCategory::LiquidEngine, FuelType::Kerolox, 1.0, 6);
             assert!(flaws.len() >= 3 && flaws.len() <= 4,
-                "Center complexity should give 3-4 flaws, got {}", flaws.len());
+                "Baseline complexity should give 3-4 flaws, got {}", flaws.len());
         }
     }
 
     #[test]
     fn test_high_complexity_gives_more_flaws() {
-        // At max kerolox complexity (8, center 6): max(2, 3 + 2 + rng(0..2)) = 5 or 6
+        // At complexity 8: max(2, 3 + 2 + rng(0..2)) = 5 or 6
         let mut gen = FlawGenerator::new();
         for _ in 0..20 {
             let flaws = gen.generate_engine_flaws_with_complexity(
-                0, FlawCategory::LiquidEngine, FuelType::Kerolox, 1.0, 8, 6);
+                0, FlawCategory::LiquidEngine, FuelType::Kerolox, 1.0, 8);
             assert!(flaws.len() >= 5 && flaws.len() <= 6,
                 "High complexity should give 5-6 flaws, got {}", flaws.len());
         }
@@ -1049,11 +1046,11 @@ mod tests {
 
     #[test]
     fn test_low_complexity_minimum_2_flaws() {
-        // At min kerolox complexity (4, center 6): max(2, 3 + (-2) + rng(0..2)) = max(2, 1 or 2) = 2
+        // At complexity 4: max(2, 3 + (-2) + rng(0..2)) = max(2, 1 or 2) = 2
         let mut gen = FlawGenerator::new();
         for _ in 0..20 {
             let flaws = gen.generate_engine_flaws_with_complexity(
-                0, FlawCategory::LiquidEngine, FuelType::Kerolox, 1.0, 4, 6);
+                0, FlawCategory::LiquidEngine, FuelType::Kerolox, 1.0, 4);
             assert!(flaws.len() >= 2,
                 "Low complexity should give at least 2 flaws, got {}", flaws.len());
         }

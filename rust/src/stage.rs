@@ -530,9 +530,9 @@ mod tests {
 
         let mut hydrolox_stage = RocketStage::new(hydrolox_snapshot());
         hydrolox_stage.engine_count = 2;
-        // Hydrolox Expander: 270 kg each, base_cost includes 1.3x cycle cost multiplier
+        // Hydrolox Expander: 270 kg each, complexity=7, cost = raw * (7/6)^2
         let expected = crate::resources::engine_resource_cost(
-            crate::engine_design::FuelType::Hydrolox, 270.0) * 1.3 * 2.0;
+            crate::engine_design::FuelType::Hydrolox, 270.0) * (7.0_f64 / 6.0).powi(2) * 2.0;
         assert!((hydrolox_stage.engine_cost() - expected).abs() < 100.0);
     }
 

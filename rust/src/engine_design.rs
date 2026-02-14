@@ -1,4 +1,4 @@
-use crate::balance::{complexity_range, complexity_cost_multiplier, cycle_thrust_multiplier, cycle_ve_multiplier, cycle_mass_multiplier, cycle_cost_multiplier};
+use crate::balance::{complexity_cost_multiplier, cycle_thrust_multiplier, cycle_ve_multiplier, cycle_mass_multiplier};
 use crate::engine::{costs, EngineStatus};
 use crate::flaw::{Flaw, FlawCategory, FlawGenerator};
 
@@ -395,13 +395,10 @@ impl EngineDesign {
                 ),
             };
 
-        let range = complexity_range(fuel_type);
-        let center = range.center;
-
         let mass_kg = base_mass * self.scale * cycle_mass_multiplier(self.cycle);
         let exhaust_velocity_ms = ve * cycle_ve_multiplier(self.cycle);
         let raw_cost = crate::resources::engine_resource_cost(fuel_type, mass_kg);
-        let base_cost = raw_cost * cycle_cost_multiplier(self.cycle) * complexity_cost_multiplier(self.complexity, center);
+        let base_cost = raw_cost * complexity_cost_multiplier(self.complexity);
 
         EngineDesignSnapshot {
             engine_design_id: id,
@@ -438,14 +435,12 @@ impl EngineDesign {
             FlawCategory::LiquidEngine
         };
         let fuel_type = self.fuel_type();
-        let range = complexity_range(fuel_type);
         self.active_flaws = generator.generate_engine_flaws_with_complexity(
             engine_design_id,
             category,
             fuel_type,
             self.scale,
             self.complexity,
-            range.center,
         );
         self.fixed_flaws.clear();
         self.flaws_generated = true;
@@ -620,13 +615,14 @@ mod tests {
     fn test_hydrolox_snapshot() {
         let design = default_hydrolox();
         let snap = design.snapshot(0, "Hydrolox");
-        // Default Hydrolox cycle = Expander: mass*0.9, thrust*0.8, ve*1.04, cost*1.3
+        // Default Hydrolox cycle = Expander: mass*0.9, thrust*0.8, ve*1.04
         assert!((snap.mass_kg - 270.0).abs() < 0.1); // 300 * 0.9
         assert!((snap.thrust_kn - 80.0).abs() < 0.1); // 100 * 0.8
         assert!((snap.exhaust_velocity_ms - 4680.0).abs() < 0.1); // 4500 * 1.04
         assert_eq!(snap.fuel_type, FuelType::Hydrolox);
-        // cost = resource_cost(270) * cycle_cost(1.3) * complexity_cost(7/7=1.0)
-        let expected_cost = crate::resources::engine_resource_cost(FuelType::Hydrolox, 270.0) * 1.3;
+        // cost = resource_cost(270) * complexity_cost(7/6)^2
+        let expected_cost = crate::resources::engine_resource_cost(FuelType::Hydrolox, 270.0)
+            * (7.0_f64 / 6.0).powi(2);
         assert!((snap.base_cost - expected_cost).abs() < 1.0);
         assert!(!snap.is_solid);
     }
@@ -640,6 +636,10 @@ mod tests {
         assert!((snap.thrust_kn - 4_800.0).abs() < 0.1); // 8000 * 0.6
         assert!((snap.exhaust_velocity_ms - 2438.0).abs() < 0.1); // 2650 * 0.92
         assert_eq!(snap.fuel_type, FuelType::Solid);
+        // cost = resource_cost(28000) * complexity_cost(3/6)^2 = resource_cost * 0.25
+        let expected_cost = crate::resources::engine_resource_cost(FuelType::Solid, 28_000.0)
+            * (3.0_f64 / 6.0).powi(2);
+        assert!((snap.base_cost - expected_cost).abs() < 1.0);
         assert!(snap.is_solid);
         assert!((snap.fixed_mass_ratio.unwrap() - 0.88).abs() < 0.01);
         assert_eq!(snap.flaw_category, FlawCategory::SolidMotor);
@@ -650,7 +650,7 @@ mod tests {
         let design = create_engine(FuelType::Methalox, 1.0);
         let snap = design.snapshot(3, "Methalox");
         // Default Methalox cycle = GasGenerator (all cycle multipliers = 1.0)
-        // complexity = 6, center = 7 (only affects cost)
+        // complexity = 6, baseline = 6: cost multiplier = 1.0
         assert!((snap.mass_kg - 400.0).abs() < 0.1); // 400 * 1.0
         assert!((snap.thrust_kn - 400.0).abs() < 0.1); // 400 * 1.0
         assert!((snap.exhaust_velocity_ms - 3300.0).abs() < 0.1); // 3300 * 1.0
@@ -667,7 +667,7 @@ mod tests {
         let design = create_engine(FuelType::Hypergolic, 1.0);
         let snap = design.snapshot(4, "Hypergolic");
         // Default Hypergolic cycle = PressureFed: mass*0.7, thrust*0.6, ve*0.92
-        // complexity = 1, center = 2 (only affects cost)
+        // complexity = 1, baseline = 6: cost multiplier = (1/6)^2 ≈ 0.028
         assert!((snap.mass_kg - 140.0).abs() < 0.1); // 200 * 0.7
         assert!((snap.thrust_kn - 30.0).abs() < 0.1); // 50 * 0.6
         assert!((snap.exhaust_velocity_ms - 2576.0).abs() < 0.1); // 2800 * 0.92
@@ -1088,24 +1088,32 @@ mod tests {
     }
 
     #[test]
-    fn test_cycle_cost_multiplier_in_snapshot() {
-        // GasGenerator (complexity=6, center=6): cost = raw * 1.0 * 1.0
+    fn test_complexity_cost_in_snapshot() {
+        // GasGenerator (complexity=6): cost = raw * (6/6)^2 = raw * 1.0
         let gg_snap = default_kerolox().snapshot(0, "GG");
+        let gg_raw = crate::resources::engine_resource_cost(FuelType::Kerolox, 450.0);
+        assert!((gg_snap.base_cost - gg_raw).abs() < 1.0);
 
-        // FullFlow (complexity=8, center=6): cost = raw * 3.0 * (8/6)^2
+        // FullFlow (complexity=8): cost = raw_ff * (8/6)^2
+        // raw_ff is for mass 450*1.3=585kg
         let mut design_ff = default_kerolox();
         design_ff.set_cycle(EngineCycle::FullFlowStagedCombustion);
         let ff_snap = design_ff.snapshot(0, "FF");
+        let ff_raw = crate::resources::engine_resource_cost(FuelType::Kerolox, 585.0);
+        let expected_ff = ff_raw * (8.0_f64 / 6.0).powi(2);
+        assert!((ff_snap.base_cost - expected_ff).abs() < 1.0);
 
-        // FullFlow should be much more expensive (cycle*3.0 + complexity*(8/6)^2)
-        assert!(ff_snap.base_cost > gg_snap.base_cost * 4.0);
-
-        // PressureFed (complexity=4, center=6): cost = raw * 0.4 * (4/6)^2
+        // PressureFed (complexity=4): cost = raw_pf * (4/6)^2
+        // raw_pf is for mass 450*0.7=315kg
         let mut design_pf = default_kerolox();
         design_pf.set_cycle(EngineCycle::PressureFed);
         let pf_snap = design_pf.snapshot(0, "PF");
+        let pf_raw = crate::resources::engine_resource_cost(FuelType::Kerolox, 315.0);
+        let expected_pf = pf_raw * (4.0_f64 / 6.0).powi(2);
+        assert!((pf_snap.base_cost - expected_pf).abs() < 1.0);
 
-        // PressureFed should be much cheaper
-        assert!(pf_snap.base_cost < gg_snap.base_cost * 0.2);
+        // FullFlow more expensive than GasGenerator, PressureFed cheaper
+        assert!(ff_snap.base_cost > gg_snap.base_cost);
+        assert!(pf_snap.base_cost < gg_snap.base_cost);
     }
 }
