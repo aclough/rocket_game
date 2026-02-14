@@ -4,6 +4,7 @@ pub mod balance;
 pub mod company;
 pub mod contract;
 pub mod design_lineage;
+pub mod design_workflow;
 pub mod engine;
 pub mod engine_design;
 pub mod engineering_team;

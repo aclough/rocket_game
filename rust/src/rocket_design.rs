@@ -1,6 +1,6 @@
+use crate::design_workflow::{DesignStatus, DesignWorkflow};
 use crate::engine::costs;
 use crate::engine_design::{default_snapshot, EngineDesignSnapshot};
-use crate::engineering_team::{DETAILED_ENGINEERING_WORK, TESTING_WORK};
 use crate::flaw::{calculate_flaw_failure_rate, run_test, Flaw, FlawGenerator, FlawType};
 use crate::resources::TankMaterial;
 use crate::stage::RocketStage;
@@ -35,103 +35,6 @@ impl LaunchRecord {
         } else {
             (self.successes as f64 / self.total_launches as f64) * 100.0
         }
-    }
-}
-
-/// Work required to fix a discovered flaw (14 days with 1 team)
-pub const FLAW_FIX_WORK: f64 = 14.0;
-
-/// Status of a rocket design in the engineering workflow
-#[derive(Debug, Clone, PartialEq)]
-pub enum DesignStatus {
-    /// Player is editing the specification
-    Specification,
-    /// Teams are doing detailed engineering work
-    Engineering {
-        /// Work progress (0.0 to total)
-        progress: f64,
-        /// Total work required
-        total: f64,
-    },
-    /// Teams are testing and looking for flaws
-    Testing {
-        /// Work progress (0.0 to total)
-        progress: f64,
-        /// Total work required per testing cycle
-        total: f64,
-    },
-    /// Teams are fixing a discovered flaw
-    Fixing {
-        /// Name of the flaw being fixed
-        flaw_name: String,
-        /// Index of the flaw in active_flaws
-        flaw_index: usize,
-        /// Work progress (0.0 to total)
-        progress: f64,
-        /// Total work required
-        total: f64,
-    },
-    /// Design is complete and ready for launch
-    Complete,
-}
-
-impl Default for DesignStatus {
-    fn default() -> Self {
-        DesignStatus::Specification
-    }
-}
-
-impl DesignStatus {
-    /// Get the status name for display
-    pub fn name(&self) -> &'static str {
-        match self {
-            DesignStatus::Specification => "Specification",
-            DesignStatus::Engineering { .. } => "Engineering",
-            DesignStatus::Testing { .. } => "Testing",
-            DesignStatus::Fixing { .. } => "Fixing",
-            DesignStatus::Complete => "Complete",
-        }
-    }
-
-    /// Get the full status string for display (includes flaw name if Fixing)
-    pub fn display_name(&self) -> String {
-        match self {
-            DesignStatus::Fixing { flaw_name, .. } => format!("Fixing: {}", flaw_name),
-            other => other.name().to_string(),
-        }
-    }
-
-    /// Get progress as a fraction (0.0 to 1.0)
-    pub fn progress_fraction(&self) -> f64 {
-        match self {
-            DesignStatus::Specification => 0.0,
-            DesignStatus::Engineering { progress, total } => {
-                if *total > 0.0 { progress / total } else { 0.0 }
-            }
-            DesignStatus::Testing { progress, total } => {
-                if *total > 0.0 { progress / total } else { 0.0 }
-            }
-            DesignStatus::Fixing { progress, total, .. } => {
-                if *total > 0.0 { progress / total } else { 0.0 }
-            }
-            DesignStatus::Complete => 1.0,
-        }
-    }
-
-    /// Check if design is in a work phase (Engineering, Testing, or Fixing)
-    pub fn is_working(&self) -> bool {
-        matches!(self, DesignStatus::Engineering { .. } | DesignStatus::Testing { .. } | DesignStatus::Fixing { .. })
-    }
-
-    /// Check if design can be edited
-    pub fn can_edit(&self) -> bool {
-        matches!(self, DesignStatus::Specification)
-    }
-
-    /// Check if design is ready for launch
-    /// Designs in Testing or Fixing can still be launched (with known risks)
-    pub fn can_launch(&self) -> bool {
-        matches!(self, DesignStatus::Complete | DesignStatus::Testing { .. } | DesignStatus::Fixing { .. })
     }
 }
 
@@ -249,21 +152,14 @@ pub struct RocketDesign {
     /// Target delta-v for the mission (can be set per-contract)
     pub target_delta_v: f64,
 
-    // Future-proofing fields (from Rocket Tycoon 1.0 vision)
-
     /// Name of this rocket design
     pub name: String,
     /// Launch outcome tracking (successes, failures, streaks)
     pub launch_record: LaunchRecord,
 
-    // Flaw system fields
+    /// Unified workflow state (status, flaws, testing progress)
+    pub workflow: DesignWorkflow,
 
-    /// Active (unfixed) flaws in this rocket design
-    pub active_flaws: Vec<Flaw>,
-    /// Fixed flaws (kept for history/UI display)
-    pub fixed_flaws: Vec<Flaw>,
-    /// Whether flaws have been generated for this design
-    pub flaws_generated: bool,
     /// Budget spent on testing and fixing (deducted from remaining budget)
     pub testing_spent: f64,
     /// Available budget for this design (defaults to STARTING_BUDGET, updated from game state)
@@ -271,10 +167,6 @@ pub struct RocketDesign {
     /// Signature of the design when flaws were generated
     /// Used to detect when the design has changed significantly
     flaw_design_signature: String,
-    /// Current status in the engineering workflow
-    pub design_status: DesignStatus,
-    /// Cumulative work completed during Testing phase (for testing level estimation)
-    pub testing_work_completed: f64,
     /// Tank construction material for this rocket (applied to all stages)
     pub tank_material: TankMaterial,
 }
@@ -288,14 +180,10 @@ impl RocketDesign {
             target_delta_v: TARGET_DELTA_V_MS,
             name: "Unnamed Rocket".to_string(),
             launch_record: LaunchRecord::default(),
-            active_flaws: Vec::new(),
-            fixed_flaws: Vec::new(),
-            flaws_generated: false,
+            workflow: DesignWorkflow::new(),
             testing_spent: 0.0,
             budget: costs::STARTING_BUDGET,
             flaw_design_signature: String::new(),
-            design_status: DesignStatus::Specification,
-            testing_work_completed: 0.0,
             tank_material: TankMaterial::default(),
         }
     }
@@ -303,112 +191,36 @@ impl RocketDesign {
     /// Submit design from Specification to Engineering phase
     /// Returns false if design is not in Specification state
     pub fn submit_to_engineering(&mut self) -> bool {
-        if !matches!(self.design_status, DesignStatus::Specification) {
-            return false;
-        }
-        self.design_status = DesignStatus::Engineering {
-            progress: 0.0,
-            total: DETAILED_ENGINEERING_WORK,
-        };
-        true
+        self.workflow.submit_to_engineering()
     }
 
     /// Advance work on this design by one day's worth of work
     /// efficiency is the combined team efficiency working on this design
     /// Returns true if work phase completed
     pub fn advance_work(&mut self, efficiency: f64) -> bool {
-        match &mut self.design_status {
-            DesignStatus::Engineering { progress, total } => {
-                *progress += efficiency;
-                if *progress >= *total {
-                    // Move to Testing phase
-                    self.design_status = DesignStatus::Testing {
-                        progress: 0.0,
-                        total: TESTING_WORK,
-                    };
-                    return true;
-                }
-            }
-            DesignStatus::Testing { progress, total } => {
-                *progress += efficiency;
-                if *progress >= *total {
-                    // Testing cycle complete - reset for next cycle
-                    self.design_status = DesignStatus::Testing {
-                        progress: 0.0,
-                        total: TESTING_WORK,
-                    };
-                    return true;
-                }
-            }
-            DesignStatus::Fixing { progress, total, .. } => {
-                *progress += efficiency;
-                if *progress >= *total {
-                    // Fixing complete - will be handled by complete_flaw_fix()
-                    return true;
-                }
-            }
-            _ => {}
-        }
-        false
+        self.workflow.advance_work(efficiency)
     }
 
     /// Start fixing a discovered flaw
     /// Transitions from Testing to Fixing state
     pub fn start_fixing_flaw(&mut self, flaw_index: usize) -> bool {
-        if !matches!(self.design_status, DesignStatus::Testing { .. }) {
-            return false;
-        }
-        if flaw_index >= self.active_flaws.len() {
-            return false;
-        }
-        let flaw = &self.active_flaws[flaw_index];
-        if !flaw.discovered || flaw.fixed {
-            return false;
-        }
-
-        self.design_status = DesignStatus::Fixing {
-            flaw_name: flaw.name.clone(),
-            flaw_index,
-            progress: 0.0,
-            total: FLAW_FIX_WORK,
-        };
-        true
+        self.workflow.start_fixing_flaw(flaw_index)
     }
 
     /// Complete the current flaw fix and return to Testing
     /// Returns the name of the fixed flaw, or None if not in Fixing state
     pub fn complete_flaw_fix(&mut self) -> Option<String> {
-        if let DesignStatus::Fixing { flaw_index, flaw_name, .. } = &self.design_status {
-            let flaw_name = flaw_name.clone();
-            let flaw_index = *flaw_index;
-
-            // Mark flaw as fixed
-            if flaw_index < self.active_flaws.len() {
-                self.active_flaws[flaw_index].fixed = true;
-            }
-
-            // Return to Testing with progress reset for new cycle
-            self.design_status = DesignStatus::Testing {
-                progress: 0.0,
-                total: TESTING_WORK,
-            };
-
-            Some(flaw_name)
-        } else {
-            None
-        }
+        self.workflow.complete_flaw_fix()
     }
 
     /// Get the index of the first discovered but unfixed flaw
     pub fn get_next_unfixed_flaw(&self) -> Option<usize> {
-        self.active_flaws
-            .iter()
-            .position(|f| f.discovered && !f.fixed)
+        self.workflow.get_next_unfixed_flaw()
     }
 
     /// Return design to Specification state (e.g., after significant changes)
     pub fn reset_to_specification(&mut self) {
-        self.design_status = DesignStatus::Specification;
+        self.workflow.status = DesignStatus::Specification;
     }
 
     /// Compute a signature string that captures the essential design characteristics
@@ -432,7 +244,7 @@ impl RocketDesign {
     /// Check if the design has changed significantly since flaws were generated
     /// Returns true if the design signature differs from when flaws were generated
     pub fn design_changed_since_flaws(&self) -> bool {
-        if !self.flaws_generated {
+        if !self.workflow.flaws_generated {
             return false; // No flaws generated yet, nothing to compare
         }
         self.compute_design_signature() != self.flaw_design_signature
@@ -440,12 +252,12 @@ impl RocketDesign {
 
     /// Reset flaws and testing state (call when design changes significantly)
     pub fn reset_flaws(&mut self) {
-        self.active_flaws.clear();
-        self.fixed_flaws.clear();
-        self.flaws_generated = false;
+        self.workflow.active_flaws.clear();
+        self.workflow.fixed_flaws.clear();
+        self.workflow.flaws_generated = false;
         self.testing_spent = 0.0;
         self.flaw_design_signature.clear();
-        self.testing_work_completed = 0.0;
+        self.workflow.testing_work_completed = 0.0;
     }
 
     /// Check if flaws need to be reset due to design changes, and reset if so
@@ -1399,7 +1211,7 @@ impl RocketDesign {
     /// # Arguments
     /// * `generator` - The flaw generator to use
     pub fn generate_flaws(&mut self, generator: &mut FlawGenerator) {
-        if self.flaws_generated {
+        if self.workflow.flaws_generated {
             return;
         }
 
@@ -1421,9 +1233,9 @@ impl RocketDesign {
         let total_engines: u32 = self.stages.iter().map(|s| s.engine_count).sum();
 
         // Only generate design flaws - engine flaws are on EngineDesign
-        self.active_flaws = generator.generate_design_flaws(stage_count, unique_fuel_types, total_engines);
-        self.fixed_flaws.clear();
-        self.flaws_generated = true;
+        self.workflow.active_flaws = generator.generate_design_flaws(stage_count, unique_fuel_types, total_engines);
+        self.workflow.fixed_flaws.clear();
+        self.workflow.flaws_generated = true;
         // Save the design signature so we can detect changes
         self.flaw_design_signature = self.compute_design_signature();
     }
@@ -1457,7 +1269,7 @@ impl RocketDesign {
 
     /// Check if flaws have been generated
     pub fn has_flaws_generated(&self) -> bool {
-        self.flaws_generated
+        self.workflow.flaws_generated
     }
 
     /// Get the stored flaw design signature (for debugging)
@@ -1467,56 +1279,56 @@ impl RocketDesign {
 
     /// Get active (unfixed) flaws
     pub fn get_active_flaws(&self) -> &[Flaw] {
-        &self.active_flaws
+        &self.workflow.active_flaws
     }
 
     /// Get fixed flaws
     pub fn get_fixed_flaws(&self) -> &[Flaw] {
-        &self.fixed_flaws
+        &self.workflow.fixed_flaws
     }
 
     /// Get the total number of flaws (active + fixed)
     pub fn get_flaw_count(&self) -> usize {
-        self.active_flaws.len() + self.fixed_flaws.len()
+        self.workflow.active_flaws.len() + self.workflow.fixed_flaws.len()
     }
 
     /// Get the number of active flaws
     pub fn get_active_flaw_count(&self) -> usize {
-        self.active_flaws.len()
+        self.workflow.active_flaws.len()
     }
 
     /// Get the total number of discovered flaws (including ones already fixed)
     pub fn get_discovered_flaw_count(&self) -> usize {
-        self.active_flaws.iter().filter(|f| f.discovered).count() + self.fixed_flaws.len()
+        self.workflow.active_flaws.iter().filter(|f| f.discovered).count() + self.workflow.fixed_flaws.len()
     }
 
     /// Get the number of fixed flaws
     pub fn get_fixed_flaw_count(&self) -> usize {
-        self.fixed_flaws.len()
+        self.workflow.fixed_flaws.len()
     }
 
     /// Get the number of undiscovered flaws (unknown issues)
     pub fn get_unknown_flaw_count(&self) -> usize {
-        self.active_flaws.iter().filter(|f| !f.discovered).count()
+        self.workflow.active_flaws.iter().filter(|f| !f.discovered).count()
     }
 
     /// Get a flaw by index (searches active flaws first, then fixed)
     pub fn get_flaw(&self, index: usize) -> Option<&Flaw> {
-        let active_len = self.active_flaws.len();
+        let active_len = self.workflow.active_flaws.len();
         if index < active_len {
-            self.active_flaws.get(index)
+            self.workflow.active_flaws.get(index)
         } else {
-            self.fixed_flaws.get(index - active_len)
+            self.workflow.fixed_flaws.get(index - active_len)
         }
     }
 
     /// Get a mutable flaw by index (searches active flaws first, then fixed)
     pub fn get_flaw_mut(&mut self, index: usize) -> Option<&mut Flaw> {
-        let active_len = self.active_flaws.len();
+        let active_len = self.workflow.active_flaws.len();
         if index < active_len {
-            self.active_flaws.get_mut(index)
+            self.workflow.active_flaws.get_mut(index)
         } else {
-            self.fixed_flaws.get_mut(index - active_len)
+            self.workflow.fixed_flaws.get_mut(index - active_len)
         }
     }
 
@@ -1528,7 +1340,7 @@ impl RocketDesign {
         }
 
         self.testing_spent += costs::ENGINE_TEST_COST;
-        run_test(&mut self.active_flaws, FlawType::Engine)
+        run_test(&mut self.workflow.active_flaws, FlawType::Engine)
     }
 
     /// Run an engine test for a specific engine design - returns names of newly discovered flaws
@@ -1539,7 +1351,7 @@ impl RocketDesign {
         }
 
         self.testing_spent += costs::ENGINE_TEST_COST;
-        crate::flaw::run_engine_test_for_type(&mut self.active_flaws, engine_design_id)
+        crate::flaw::run_engine_test_for_type(&mut self.workflow.active_flaws, engine_design_id)
     }
 
     /// Run a rocket test - returns names of newly discovered flaws
@@ -1550,12 +1362,12 @@ impl RocketDesign {
         }
 
         self.testing_spent += costs::ROCKET_TEST_COST;
-        run_test(&mut self.active_flaws, FlawType::Design)
+        run_test(&mut self.workflow.active_flaws, FlawType::Design)
     }
 
     /// Run a rocket test without cost handling (cost managed externally)
     pub fn run_rocket_test_no_cost(&mut self) -> Vec<String> {
-        run_test(&mut self.active_flaws, FlawType::Design)
+        run_test(&mut self.workflow.active_flaws, FlawType::Design)
     }
 
     /// Fix a flaw by ID
@@ -1568,10 +1380,10 @@ impl RocketDesign {
         }
 
         // Find the index of the flaw to fix
-        if let Some(index) = self.active_flaws.iter().position(|f| f.id == flaw_id && f.discovered) {
-            let mut flaw = self.active_flaws.remove(index);
+        if let Some(index) = self.workflow.active_flaws.iter().position(|f| f.id == flaw_id && f.discovered) {
+            let mut flaw = self.workflow.active_flaws.remove(index);
             flaw.fixed = true;
-            self.fixed_flaws.push(flaw);
+            self.workflow.fixed_flaws.push(flaw);
             self.testing_spent += costs::FLAW_FIX_COST;
             return true;
         }
@@ -1589,11 +1401,11 @@ impl RocketDesign {
         }
 
         // Check if the flaw at this index is discovered and can be fixed
-        if index < self.active_flaws.len() {
-            if self.active_flaws[index].discovered {
-                let mut flaw = self.active_flaws.remove(index);
+        if index < self.workflow.active_flaws.len() {
+            if self.workflow.active_flaws[index].discovered {
+                let mut flaw = self.workflow.active_flaws.remove(index);
                 flaw.fixed = true;
-                self.fixed_flaws.push(flaw);
+                self.workflow.fixed_flaws.push(flaw);
                 self.testing_spent += costs::FLAW_FIX_COST;
                 return true;
             }
@@ -1604,11 +1416,11 @@ impl RocketDesign {
 
     /// Fix a flaw by index without cost handling (cost managed externally)
     pub fn fix_flaw_by_index_no_cost(&mut self, index: usize) -> bool {
-        if index < self.active_flaws.len() {
-            if self.active_flaws[index].discovered {
-                let mut flaw = self.active_flaws.remove(index);
+        if index < self.workflow.active_flaws.len() {
+            if self.workflow.active_flaws[index].discovered {
+                let mut flaw = self.workflow.active_flaws.remove(index);
                 flaw.fixed = true;
-                self.fixed_flaws.push(flaw);
+                self.workflow.fixed_flaws.push(flaw);
                 return true;
             }
         }
@@ -1619,7 +1431,7 @@ impl RocketDesign {
     /// stage_engine_design_id: the engine design ID of the stage (for filtering engine flaws)
     /// Only considers active (unfixed) flaws
     pub fn get_flaw_failure_contribution(&self, event_name: &str, stage_engine_design_id: Option<usize>) -> f64 {
-        calculate_flaw_failure_rate(&self.active_flaws, event_name, stage_engine_design_id)
+        calculate_flaw_failure_rate(&self.workflow.active_flaws, event_name, stage_engine_design_id)
     }
 
     /// Check if a flaw can be afforded
@@ -1640,7 +1452,7 @@ impl RocketDesign {
     /// Mark a flaw as discovered (used when failure occurs during launch)
     /// Only searches active flaws since fixed flaws can't be discovered
     pub fn discover_flaw(&mut self, flaw_id: u32) {
-        for flaw in &mut self.active_flaws {
+        for flaw in &mut self.workflow.active_flaws {
             if flaw.id == flaw_id {
                 flaw.discovered = true;
                 break;
@@ -1653,14 +1465,14 @@ impl RocketDesign {
     /// Returns Some(flaw_id) if a flaw triggered failure, None otherwise
     /// Only checks active (unfixed) flaws
     pub fn check_flaw_trigger(&self, event_name: &str, stage_engine_design_id: Option<usize>) -> Option<u32> {
-        crate::flaw::check_flaw_trigger(&self.active_flaws, event_name, stage_engine_design_id)
+        crate::flaw::check_flaw_trigger(&self.workflow.active_flaws, event_name, stage_engine_design_id)
     }
 
     /// Mark a flaw as discovered and return its name
     /// Used when a flaw causes a failure during launch
     /// Only searches active flaws
     pub fn discover_flaw_by_id(&mut self, flaw_id: u32) -> Option<String> {
-        crate::flaw::mark_flaw_discovered(&mut self.active_flaws, flaw_id)
+        crate::flaw::mark_flaw_discovered(&mut self.workflow.active_flaws, flaw_id)
     }
 
     /// Get the engine design ID for a flaw (None for design flaws)

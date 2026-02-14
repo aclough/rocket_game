@@ -831,9 +831,9 @@ impl RocketDesigner {
         // Debug: log flaw state before
         godot_print!(
             "ensure_flaws_generated: BEFORE - active_flaws={}, fixed_flaws={}, flaws_generated={}",
-            self.design.active_flaws.len(),
-            self.design.fixed_flaws.len(),
-            self.design.flaws_generated
+            self.design.workflow.active_flaws.len(),
+            self.design.workflow.fixed_flaws.len(),
+            self.design.workflow.flaws_generated
         );
         godot_print!(
             "ensure_flaws_generated: signature={}, stored={}",
@@ -854,8 +854,8 @@ impl RocketDesigner {
         // Debug: log flaw state after
         godot_print!(
             "ensure_flaws_generated: AFTER - active_flaws={}, fixed_flaws={}",
-            self.design.active_flaws.len(),
-            self.design.fixed_flaws.len()
+            self.design.workflow.active_flaws.len(),
+            self.design.workflow.fixed_flaws.len()
         );
     }
 
@@ -1344,7 +1344,7 @@ impl RocketDesigner {
             self.design.stages.len(),
             unique_fuel_types,
             total_engines,
-            self.design.testing_work_completed,
+            self.design.workflow.testing_work_completed,
         );
 
         // Find worst engine testing level
@@ -1355,7 +1355,7 @@ impl RocketDesigner {
             let engine_testing_work = if snap.engine_design_id < self.engine_snapshots.len() {
                 // We don't store testing_work_completed in snapshots, so we use the design's as a proxy
                 // (engine testing work will be passed separately via get_engine_testing_level)
-                self.design.testing_work_completed
+                self.design.workflow.testing_work_completed
             } else {
                 0.0
             };
@@ -1443,8 +1443,8 @@ impl RocketDesigner {
         // Debug: log what we're cloning
         godot_print!(
             "get_design_clone: BEFORE merge - active_flaws={}, fixed_flaws={}",
-            design.active_flaws.len(),
-            design.fixed_flaws.len()
+            design.workflow.active_flaws.len(),
+            design.workflow.fixed_flaws.len()
         );
 
         // Merge engine flaws into the design clone
@@ -1455,15 +1455,15 @@ impl RocketDesigner {
 
                 // Add active engine flaws that aren't already in the design
                 for flaw in active {
-                    if !design.active_flaws.iter().any(|f| f.id == flaw.id) {
-                        design.active_flaws.push(flaw.clone());
+                    if !design.workflow.active_flaws.iter().any(|f| f.id == flaw.id) {
+                        design.workflow.active_flaws.push(flaw.clone());
                     }
                 }
 
                 // Add fixed engine flaws that aren't already in the design
                 for flaw in fixed {
-                    if !design.fixed_flaws.iter().any(|f| f.id == flaw.id) {
-                        design.fixed_flaws.push(flaw.clone());
+                    if !design.workflow.fixed_flaws.iter().any(|f| f.id == flaw.id) {
+                        design.workflow.fixed_flaws.push(flaw.clone());
                     }
                 }
             }
@@ -1472,8 +1472,8 @@ impl RocketDesigner {
         // Debug: log final state
         godot_print!(
             "get_design_clone: AFTER merge - active_flaws={}, fixed_flaws={}",
-            design.active_flaws.len(),
-            design.fixed_flaws.len()
+            design.workflow.active_flaws.len(),
+            design.workflow.fixed_flaws.len()
         );
 
         design
@@ -1485,26 +1485,26 @@ impl RocketDesigner {
         // Debug: log incoming design
         godot_print!(
             "set_design: INCOMING - active_flaws={}, fixed_flaws={}, flaws_generated={}",
-            design.active_flaws.len(),
-            design.fixed_flaws.len(),
-            design.flaws_generated
+            design.workflow.active_flaws.len(),
+            design.workflow.fixed_flaws.len(),
+            design.workflow.flaws_generated
         );
-        for (i, flaw) in design.active_flaws.iter().enumerate() {
+        for (i, flaw) in design.workflow.active_flaws.iter().enumerate() {
             godot_print!("  active[{}]: {} type={:?}", i, flaw.name, flaw.flaw_type);
         }
-        for (i, flaw) in design.fixed_flaws.iter().enumerate() {
+        for (i, flaw) in design.workflow.fixed_flaws.iter().enumerate() {
             godot_print!("  fixed[{}]: {} type={:?}", i, flaw.name, flaw.flaw_type);
         }
 
         // Extract engine flaws from the design
         let engine_active_flaws: Vec<_> = design
-            .active_flaws
+            .workflow.active_flaws
             .iter()
             .filter(|f| f.flaw_type == crate::flaw::FlawType::Engine)
             .cloned()
             .collect();
         let engine_fixed_flaws: Vec<_> = design
-            .fixed_flaws
+            .workflow.fixed_flaws
             .iter()
             .filter(|f| f.flaw_type == crate::flaw::FlawType::Engine)
             .cloned()
@@ -1548,21 +1548,21 @@ impl RocketDesigner {
 
         // Now set the design (keeping only non-engine flaws in the design's lists)
         let mut clean_design = design;
-        let before_active = clean_design.active_flaws.len();
-        let before_fixed = clean_design.fixed_flaws.len();
-        clean_design.active_flaws.retain(|f| f.flaw_type != crate::flaw::FlawType::Engine);
-        clean_design.fixed_flaws.retain(|f| f.flaw_type != crate::flaw::FlawType::Engine);
+        let before_active = clean_design.workflow.active_flaws.len();
+        let before_fixed = clean_design.workflow.fixed_flaws.len();
+        clean_design.workflow.active_flaws.retain(|f| f.flaw_type != crate::flaw::FlawType::Engine);
+        clean_design.workflow.fixed_flaws.retain(|f| f.flaw_type != crate::flaw::FlawType::Engine);
 
         godot_print!(
             "set_design: AFTER filter - active: {} -> {}, fixed: {} -> {}",
             before_active,
-            clean_design.active_flaws.len(),
+            clean_design.workflow.active_flaws.len(),
             before_fixed,
-            clean_design.fixed_flaws.len()
+            clean_design.workflow.fixed_flaws.len()
         );
         godot_print!(
             "set_design: clean_design flaws_generated={}, signature={}",
-            clean_design.flaws_generated,
+            clean_design.workflow.flaws_generated,
             clean_design.get_flaw_design_signature()
         );
 

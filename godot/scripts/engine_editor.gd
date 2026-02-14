@@ -93,7 +93,7 @@ func _build_ui():
 	title_hbox.add_child(_rename_btn)
 
 	_status_label = Label.new()
-	_status_label.text = "Status: Untested"
+	_status_label.text = "Status: Specification"
 	_status_label.add_theme_font_size_override("font_size", 14)
 	_status_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	header_vbox.add_child(_status_label)
@@ -303,8 +303,10 @@ func _refresh_ui():
 	else:
 		_name_label.text = "- " + engine_name
 		_status_label.text = "Status: " + status
-		if base_status == "Untested":
-			_status_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3))
+		if base_status == "Specification":
+			_status_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		elif base_status == "Engineering":
+			_status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 		elif base_status == "Testing":
 			_status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
 		elif base_status == "Fixing":

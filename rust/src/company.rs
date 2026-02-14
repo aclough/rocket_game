@@ -9,7 +9,6 @@ use crate::launch_site::LaunchSite;
 use crate::manufacturing::{Manufacturing, ManufacturingOrderId, ManufacturingOrderType, manufacturing_team_efficiency};
 
 use crate::rocket_design::RocketDesign;
-use rand::Rng;
 
 /// Cost to refresh the contract list
 pub const CONTRACT_REFRESH_COST: f64 = 10_000_000.0; // $10M
@@ -383,12 +382,8 @@ impl Company {
     pub fn duplicate_engine_design(&mut self, index: usize) -> Option<usize> {
         if let Some(lineage) = self.engine_designs.get(index) {
             let mut new_engine = lineage.head().clone();
-            // Reset to untested so the copy can be modified
-            new_engine.status = crate::engine::EngineStatus::Untested;
-            new_engine.active_flaws.clear();
-            new_engine.fixed_flaws.clear();
-            new_engine.flaws_generated = false;
-            new_engine.testing_work_completed = 0.0;
+            // Reset to specification so the copy can be modified
+            new_engine.workflow = crate::design_workflow::DesignWorkflow::new();
             let new_name = format!("{} (Copy)", lineage.name);
             self.engine_designs.push(DesignLineage::new(&new_name, new_engine));
             Some(self.engine_designs.len() - 1)
@@ -572,34 +567,53 @@ impl Company {
             }
             team.assign(TeamAssignment::RocketDesign {
                 rocket_design_id,
-                work_phase: crate::engineering_team::DesignWorkPhase::DetailedEngineering {
+                work_phase: crate::engineering_team::WorkPhase::Engineering {
                     progress: 0.0,
                     total_work: crate::engineering_team::DETAILED_ENGINEERING_WORK,
                 },
             });
-            true
         } else {
-            false
+            return false;
         }
+
+        // Auto-submit from Specification to Engineering when a team is assigned
+        let design = self.rocket_designs[rocket_design_id].head_mut();
+        if design.workflow.status.can_edit() {
+            design.generate_flaws(&mut self.flaw_generator);
+            design.submit_to_engineering();
+        }
+
+        true
     }
 
     /// Assign a team to work on an engine design (engineering teams only)
     pub fn assign_team_to_engine(&mut self, team_id: u32, engine_design_id: usize) -> bool {
+        if engine_design_id >= self.engine_designs.len() {
+            return false;
+        }
+
         if let Some(team) = self.get_team_mut(team_id) {
             if team.team_type != TeamType::Engineering {
                 return false;
             }
             team.assign(TeamAssignment::EngineDesign {
                 engine_design_id,
-                work_phase: crate::engineering_team::EngineWorkPhase::Testing {
+                work_phase: crate::engineering_team::WorkPhase::Engineering {
                     progress: 0.0,
-                    total_work: crate::engineering_team::TESTING_WORK,
+                    total_work: crate::engineering_team::DETAILED_ENGINEERING_WORK,
                 },
             });
-            true
         } else {
-            false
+            return false;
         }
+
+        // Auto-submit from Specification to Engineering when a team is assigned
+        let design = self.engine_designs[engine_design_id].head_mut();
+        if design.workflow.status.can_edit() {
+            design.submit_to_engineering(&mut self.flaw_generator, engine_design_id);
+        }
+
+        true
     }
 
     /// Unassign a team from its current work
@@ -1037,86 +1051,93 @@ impl Company {
         events
     }
 
-    /// Process work progress on all designs
-    fn process_design_work(&mut self) -> Vec<WorkEvent> {
-        use crate::rocket_design::DesignStatus;
+    /// Shared workflow tick: advance work, discover flaws, auto-start flaw fixing.
+    /// Returns events generated during this tick.
+    fn process_workflow_tick(
+        workflow: &mut crate::design_workflow::DesignWorkflow,
+        efficiency: f64,
+        design_kind: &'static str,
+        design_id: usize,
+    ) -> Vec<WorkEvent> {
+        use crate::design_workflow::DesignStatus;
 
         let mut events = Vec::new();
 
-        // Calculate efficiency for each design being worked on
+        if !workflow.status.is_working() {
+            return events;
+        }
+
+        let phase_before = workflow.status.name();
+        let is_testing = matches!(workflow.status, DesignStatus::Testing { .. });
+        let is_fixing = matches!(workflow.status, DesignStatus::Fixing { .. });
+
+        // Advance work
+        let phase_completed = workflow.advance_work(efficiency);
+
+        if phase_completed {
+            if is_fixing {
+                if let Some(flaw_name) = workflow.complete_flaw_fix() {
+                    events.push(WorkEvent::FlawFixed {
+                        design_kind,
+                        design_id,
+                        flaw_name,
+                    });
+                }
+            } else if !is_testing {
+                // Engineering phase completed (testing cycle completions are silent)
+                events.push(WorkEvent::DesignPhaseComplete {
+                    design_kind,
+                    design_id,
+                    phase_name: phase_before.to_string(),
+                });
+            }
+        }
+
+        // Track cumulative testing work every day
+        if is_testing {
+            workflow.testing_work_completed += efficiency;
+        }
+
+        // Discover flaws only when a testing cycle completes
+        if phase_completed && is_testing {
+            for flaw_name in workflow.discover_flaws_on_cycle_complete() {
+                events.push(WorkEvent::FlawDiscovered {
+                    design_kind,
+                    design_id,
+                    flaw_name,
+                });
+            }
+        }
+
+        // After Testing or completing a fix, check if there are unfixed flaws to work on
+        let now_testing = matches!(workflow.status, DesignStatus::Testing { .. });
+        if now_testing {
+            if let Some(flaw_index) = workflow.get_next_unfixed_flaw() {
+                let flaw_name = workflow.active_flaws[flaw_index].name.clone();
+                workflow.start_fixing_flaw(flaw_index);
+                events.push(WorkEvent::DesignPhaseComplete {
+                    design_kind,
+                    design_id,
+                    phase_name: format!("Started fixing: {}", flaw_name),
+                });
+            }
+        }
+
+        events
+    }
+
+    /// Process work progress on all rocket designs
+    fn process_design_work(&mut self) -> Vec<WorkEvent> {
+        let mut events = Vec::new();
+
         let design_efficiencies: Vec<(usize, f64)> = (0..self.rocket_designs.len())
             .map(|idx| (idx, self.get_design_team_efficiency(idx)))
             .filter(|(_, eff)| *eff > 0.0)
             .collect();
 
-        // Process work for each design with teams assigned
-        for (rocket_design_id, efficiency) in design_efficiencies {
-            let design = self.rocket_designs[rocket_design_id].head_mut();
-
-            // Skip designs not in a work phase
-            if !design.design_status.is_working() {
-                continue;
-            }
-
-            let phase_before = design.design_status.name();
-            let is_testing = matches!(design.design_status, DesignStatus::Testing { .. });
-            let is_fixing = matches!(design.design_status, DesignStatus::Fixing { .. });
-
-            // Advance work
-            let phase_completed = design.advance_work(efficiency);
-
-            if phase_completed {
-                if is_fixing {
-                    // Fixing complete - mark flaw as fixed and return to Testing
-                    if let Some(flaw_name) = design.complete_flaw_fix() {
-                        events.push(WorkEvent::DesignFlawFixed {
-                            rocket_design_id,
-                            flaw_name,
-                        });
-                    }
-                } else if !is_testing {
-                    // Engineering phase completed (testing cycle completions are silent)
-                    events.push(WorkEvent::DesignPhaseComplete {
-                        rocket_design_id,
-                        phase_name: phase_before.to_string(),
-                    });
-                }
-            }
-
-            // Track cumulative testing work every day
-            if is_testing {
-                design.testing_work_completed += efficiency;
-            }
-
-            // Discover flaws only when a testing cycle completes
-            if phase_completed && is_testing {
-                let mut rng = rand::thread_rng();
-                for flaw in design.active_flaws.iter_mut() {
-                    if !flaw.discovered && !flaw.fixed {
-                        let roll = rng.gen::<f64>();
-                        if roll < flaw.discovery_probability() {
-                            flaw.discovered = true;
-                            events.push(WorkEvent::DesignFlawDiscovered {
-                                rocket_design_id,
-                                flaw_name: flaw.name.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-
-            // After Testing or completing a fix, check if there are unfixed flaws to work on
-            let now_testing = matches!(design.design_status, DesignStatus::Testing { .. });
-            if now_testing {
-                if let Some(flaw_index) = design.get_next_unfixed_flaw() {
-                    let flaw_name = design.active_flaws[flaw_index].name.clone();
-                    design.start_fixing_flaw(flaw_index);
-                    events.push(WorkEvent::DesignPhaseComplete {
-                        rocket_design_id,
-                        phase_name: format!("Started fixing: {}", flaw_name),
-                    });
-                }
-            }
+        for (design_id, efficiency) in design_efficiencies {
+            let workflow = &mut self.rocket_designs[design_id].head_mut().workflow;
+            events.extend(Self::process_workflow_tick(workflow, efficiency, "rocket", design_id));
         }
 
         // Auto-unassign teams from completed designs
@@ -1127,17 +1148,15 @@ impl Company {
 
     /// Unassign all teams from designs that are Complete
     fn auto_unassign_completed_designs(&mut self) {
-        use crate::rocket_design::DesignStatus;
+        use crate::design_workflow::DesignStatus;
 
-        // Collect completed design indices
         let completed_indices: Vec<usize> = self.rocket_designs
             .iter()
             .enumerate()
-            .filter(|(_, l)| matches!(l.head().design_status, DesignStatus::Complete))
+            .filter(|(_, l)| matches!(l.head().workflow.status, DesignStatus::Complete))
             .map(|(i, _)| i)
             .collect();
 
-        // Unassign teams working on completed designs
         for team in &mut self.teams {
             if let Some(TeamAssignment::RocketDesign { rocket_design_id, .. }) = &team.assignment {
                 if completed_indices.contains(rocket_design_id) {
@@ -1147,94 +1166,18 @@ impl Company {
         }
     }
 
-    /// Process work progress on all engines
+    /// Process work progress on all engine designs
     fn process_engine_work(&mut self) -> Vec<WorkEvent> {
-        use crate::engine::EngineStatus;
-
         let mut events = Vec::new();
 
-        // Get all engine design indices that have teams working on them
         let engine_efficiencies: Vec<(usize, f64)> = (0..self.engine_designs.len())
             .map(|idx| (idx, self.get_engine_team_efficiency(idx)))
             .filter(|(_, eff)| *eff > 0.0)
             .collect();
 
-        // Process work for each engine with teams assigned
-        for (engine_design_id, efficiency) in engine_efficiencies {
-            let design = self.engine_designs[engine_design_id].head_mut();
-
-            // Skip engines not in a work phase
-            if !design.status.is_working() {
-                continue;
-            }
-
-            let is_testing = matches!(design.status, EngineStatus::Testing { .. });
-            let is_fixing = matches!(design.status, EngineStatus::Fixing { .. });
-
-            // Handle Fixing phase
-            if is_fixing {
-                if let EngineStatus::Fixing { flaw_index, progress, total, .. } = &mut design.status {
-                    *progress += efficiency;
-                    if *progress >= *total {
-                        let flaw_index_copy = *flaw_index;
-                        // Fix complete - mark flaw as fixed and return to Testing
-                        if let Some(flaw_name) = design.fix_flaw_by_index(flaw_index_copy) {
-                            events.push(WorkEvent::EngineFlawFixed {
-                                engine_design_id,
-                                flaw_name,
-                            });
-                        }
-                        design.status.return_to_testing();
-                    }
-                }
-            }
-
-            // Handle Testing phase - advance work and discover flaws
-            if is_testing {
-                // Advance testing progress
-                let mut cycle_completed = false;
-                if let EngineStatus::Testing { progress, total } = &mut design.status {
-                    *progress += efficiency;
-                    if *progress >= *total {
-                        // Testing cycle complete - reset for next cycle
-                        *progress = 0.0;
-                        cycle_completed = true;
-                    }
-                }
-
-                // Track cumulative work completed during Testing
-                design.testing_work_completed += efficiency;
-
-                // Discover flaws only when a testing cycle completes
-                if cycle_completed {
-                    let mut rng = rand::thread_rng();
-                    for flaw in design.active_flaws.iter_mut() {
-                        if !flaw.discovered && !flaw.fixed {
-                            let roll = rng.gen::<f64>();
-                            if roll < flaw.discovery_probability() {
-                                flaw.discovered = true;
-                                events.push(WorkEvent::EngineFlawDiscovered {
-                                    engine_design_id,
-                                    flaw_name: flaw.name.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-
-            // After Testing or completing a fix, check if there are unfixed flaws to work on
-            let now_testing = matches!(design.status, EngineStatus::Testing { .. });
-            if now_testing {
-                if let Some(flaw_index) = design.get_next_unfixed_flaw() {
-                    let flaw_name = design.active_flaws[flaw_index].name.clone();
-                    design.status.start_fixing(flaw_name.clone(), flaw_index);
-                    events.push(WorkEvent::DesignPhaseComplete {
-                        rocket_design_id: engine_design_id,
-                        phase_name: format!("Started fixing: {}", flaw_name),
-                    });
-                }
-            }
+        for (design_id, efficiency) in engine_efficiencies {
+            let workflow = &mut self.engine_designs[design_id].head_mut().workflow;
+            events.extend(Self::process_workflow_tick(workflow, efficiency, "engine", design_id));
         }
 
         events
@@ -1384,7 +1327,7 @@ mod tests {
         assert!(company.engine_designs[new_idx].name.contains("Copy"));
         // Duplicate should be untested and have no flaws
         assert!(company.engine_designs[new_idx].head().can_modify());
-        assert!(!company.engine_designs[new_idx].head().flaws_generated);
+        assert!(!company.engine_designs[new_idx].head().workflow.flaws_generated);
     }
 
     #[test]

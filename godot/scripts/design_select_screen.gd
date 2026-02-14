@@ -487,13 +487,15 @@ func _create_engine_design_card(index: int) -> Control:
 	info_vbox.add_child(stats_label)
 
 	# Status label
-	if base_status != "Untested":
+	if base_status != "Specification":
 		var status_hbox = HBoxContainer.new()
 		status_hbox.add_theme_constant_override("separation", 8)
 		var status_label = Label.new()
 		status_label.text = status
 		status_label.add_theme_font_size_override("font_size", 11)
-		if base_status == "Testing":
+		if base_status == "Engineering":
+			status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+		elif base_status == "Testing":
 			status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
 		elif base_status == "Fixing":
 			status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
@@ -501,13 +503,26 @@ func _create_engine_design_card(index: int) -> Control:
 		if teams_count > 0:
 			var icons = _create_team_count_icons_hbox(teams_count, _get_eng_team_icon())
 			status_hbox.add_child(icons)
+		# Progress bar for Engineering phase
+		if base_status == "Engineering":
+			var eng_progress = game_manager.get_engine_progress(index)
+			if eng_progress > 0 and eng_progress < 1:
+				var progress_bar = ProgressBar.new()
+				progress_bar.value = eng_progress * 100
+				progress_bar.custom_minimum_size = Vector2(0, 8)
+				progress_bar.show_percentage = false
+				var fill_style = StyleBoxFlat.new()
+				fill_style.set_bg_color(Color(0.3, 0.7, 0.9))
+				fill_style.set_corner_radius_all(2)
+				progress_bar.add_theme_stylebox_override("fill", fill_style)
+				status_hbox.add_child(progress_bar)
 		info_vbox.add_child(status_hbox)
 	else:
-		var untested_label = Label.new()
-		untested_label.text = "Untested"
-		untested_label.add_theme_font_size_override("font_size", 11)
-		untested_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3))
-		info_vbox.add_child(untested_label)
+		var spec_label = Label.new()
+		spec_label.text = "Specification"
+		spec_label.add_theme_font_size_override("font_size", 11)
+		spec_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		info_vbox.add_child(spec_label)
 
 	# Buttons
 	var buttons_vbox = VBoxContainer.new()

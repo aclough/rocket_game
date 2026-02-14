@@ -596,7 +596,7 @@ impl GameManager {
                     fuel_types.len()
                 };
                 let total_engines: u32 = d.stages.iter().map(|s| s.engine_count).sum();
-                rocket_testing_level(stage_count, unique_fuel_types, total_engines, d.testing_work_completed).to_index()
+                rocket_testing_level(stage_count, unique_fuel_types, total_engines, d.workflow.testing_work_completed).to_index()
             })
             .unwrap_or(0)
     }
@@ -636,7 +636,7 @@ impl GameManager {
             .map(|l| {
                 use crate::flaw::engine_testing_level;
                 let d = l.head();
-                engine_testing_level(d.fuel_type(), d.scale, d.testing_work_completed).to_index()
+                engine_testing_level(d.fuel_type(), d.scale, d.workflow.testing_work_completed).to_index()
             })
             .unwrap_or(0)
     }
@@ -695,7 +695,7 @@ impl GameManager {
             return result;
         }
         if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
-            for flaw in &design.active_flaws {
+            for flaw in &design.workflow.active_flaws {
                 if flaw.discovered && !flaw.fixed {
                     result.push(&GString::from(flaw.name.as_str()));
                 }
@@ -712,7 +712,7 @@ impl GameManager {
             return result;
         }
         if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
-            for flaw in &design.active_flaws {
+            for flaw in &design.workflow.active_flaws {
                 if flaw.fixed {
                     result.push(&GString::from(flaw.name.as_str()));
                 }
@@ -970,7 +970,7 @@ impl GameManager {
             self.state.player_company.update_rocket_design(index, design);
             // If the design is Testing and has a discovered unfixed flaw, start fixing it
             let design = self.state.player_company.rocket_designs[index].head_mut();
-            if matches!(design.design_status, crate::rocket_design::DesignStatus::Testing { .. }) {
+            if matches!(design.workflow.status, crate::design_workflow::DesignStatus::Testing { .. }) {
                 if let Some(flaw_index) = design.get_next_unfixed_flaw() {
                     design.start_fixing_flaw(flaw_index);
                 }
@@ -984,27 +984,27 @@ impl GameManager {
     #[func]
     pub fn sync_engine_flaws_from_designer(&mut self, designer: Gd<RocketDesigner>) {
         let design = designer.bind().get_design_clone();
-        for flaw in &design.active_flaws {
+        for flaw in &design.workflow.active_flaws {
             if flaw.flaw_type == crate::flaw::FlawType::Engine {
                 if let Some(idx) = flaw.engine_design_id {
                     if idx < self.state.player_company.engine_designs.len() {
                         let engine_design = self.state.player_company.engine_designs[idx].head_mut();
-                        if let Some(existing) = engine_design.active_flaws.iter_mut().find(|f| f.id == flaw.id) {
+                        if let Some(existing) = engine_design.workflow.active_flaws.iter_mut().find(|f| f.id == flaw.id) {
                             existing.discovered = flaw.discovered;
                         }
                     }
                 }
             }
         }
-        for flaw in &design.fixed_flaws {
+        for flaw in &design.workflow.fixed_flaws {
             if flaw.flaw_type == crate::flaw::FlawType::Engine {
                 if let Some(idx) = flaw.engine_design_id {
                     if idx < self.state.player_company.engine_designs.len() {
                         let engine_design = self.state.player_company.engine_designs[idx].head_mut();
-                        if let Some(pos) = engine_design.active_flaws.iter().position(|f| f.id == flaw.id) {
-                            let mut f = engine_design.active_flaws.remove(pos);
+                        if let Some(pos) = engine_design.workflow.active_flaws.iter().position(|f| f.id == flaw.id) {
+                            let mut f = engine_design.workflow.active_flaws.remove(pos);
                             f.fixed = true;
-                            engine_design.fixed_flaws.push(f);
+                            engine_design.workflow.fixed_flaws.push(f);
                         }
                     }
                 }
@@ -1070,7 +1070,7 @@ impl GameManager {
             .iter()
             .map(|lineage| {
                 let head = lineage.head();
-                (head.active_flaws.clone(), head.fixed_flaws.clone())
+                (head.workflow.active_flaws.clone(), head.workflow.fixed_flaws.clone())
             })
             .collect();
         designer.bind_mut().sync_engine_data(snapshots, flaws);
@@ -1092,7 +1092,7 @@ impl GameManager {
             .iter()
             .map(|lineage| {
                 let head = lineage.head();
-                (head.active_flaws.clone(), head.fixed_flaws.clone())
+                (head.workflow.active_flaws.clone(), head.workflow.fixed_flaws.clone())
             })
             .collect();
         designer.bind_mut().sync_engine_data(snapshots, flaws);
@@ -1111,7 +1111,7 @@ impl GameManager {
         self.state
             .player_company
             .get_rocket_design(index as usize)
-            .map(|d| GString::from(d.design_status.display_name().as_str()))
+            .map(|d| GString::from(d.workflow.status.display_name().as_str()))
             .unwrap_or_default()
     }
 
@@ -1124,7 +1124,7 @@ impl GameManager {
         self.state
             .player_company
             .get_rocket_design(index as usize)
-            .map(|d| GString::from(d.design_status.name()))
+            .map(|d| GString::from(d.workflow.status.name()))
             .unwrap_or_default()
     }
 
@@ -1137,7 +1137,7 @@ impl GameManager {
         self.state
             .player_company
             .get_rocket_design(index as usize)
-            .map(|d| d.design_status.progress_fraction())
+            .map(|d| d.workflow.status.progress_fraction())
             .unwrap_or(0.0)
     }
 
@@ -1150,7 +1150,7 @@ impl GameManager {
         self.state
             .player_company
             .get_rocket_design(index as usize)
-            .map(|d| d.design_status.can_edit())
+            .map(|d| d.workflow.status.can_edit())
             .unwrap_or(false)
     }
 
@@ -1163,7 +1163,7 @@ impl GameManager {
         self.state
             .player_company
             .get_rocket_design(index as usize)
-            .map(|d| d.design_status.can_launch())
+            .map(|d| d.workflow.status.can_launch())
             .unwrap_or(false)
     }
 
@@ -1425,43 +1425,45 @@ impl GameManager {
         let mut dict = VarDictionary::new();
         match event {
             WorkEvent::DesignPhaseComplete {
-                rocket_design_id,
+                design_kind,
+                design_id,
                 phase_name,
             } => {
                 dict.set("type", "design_phase_complete");
-                dict.set("design_index", *rocket_design_id as i32);
+                if *design_kind == "rocket" {
+                    dict.set("design_index", *design_id as i32);
+                } else {
+                    dict.set("engine_design_id", *design_id as i32);
+                }
+                dict.set("design_kind", GString::from(*design_kind));
                 dict.set("phase_name", GString::from(phase_name.as_str()));
             }
-            WorkEvent::DesignFlawDiscovered {
-                rocket_design_id,
+            WorkEvent::FlawDiscovered {
+                design_kind,
+                design_id,
                 flaw_name,
             } => {
-                dict.set("type", "design_flaw_discovered");
-                dict.set("design_index", *rocket_design_id as i32);
+                if *design_kind == "rocket" {
+                    dict.set("type", "design_flaw_discovered");
+                    dict.set("design_index", *design_id as i32);
+                } else {
+                    dict.set("type", "engine_flaw_discovered");
+                    dict.set("engine_design_id", *design_id as i32);
+                }
                 dict.set("flaw_name", GString::from(flaw_name.as_str()));
             }
-            WorkEvent::DesignFlawFixed {
-                rocket_design_id,
+            WorkEvent::FlawFixed {
+                design_kind,
+                design_id,
                 flaw_name,
             } => {
-                dict.set("type", "design_flaw_fixed");
-                dict.set("design_index", *rocket_design_id as i32);
-                dict.set("flaw_name", GString::from(flaw_name.as_str()));
-            }
-            WorkEvent::EngineFlawDiscovered {
-                engine_design_id,
-                flaw_name,
-            } => {
-                dict.set("type", "engine_flaw_discovered");
-                dict.set("engine_design_id", *engine_design_id as i32);
-                dict.set("flaw_name", GString::from(flaw_name.as_str()));
-            }
-            WorkEvent::EngineFlawFixed {
-                engine_design_id,
-                flaw_name,
-            } => {
-                dict.set("type", "engine_flaw_fixed");
-                dict.set("engine_design_id", *engine_design_id as i32);
+                if *design_kind == "rocket" {
+                    dict.set("type", "design_flaw_fixed");
+                    dict.set("design_index", *design_id as i32);
+                } else {
+                    dict.set("type", "engine_flaw_fixed");
+                    dict.set("engine_design_id", *design_id as i32);
+                }
                 dict.set("flaw_name", GString::from(flaw_name.as_str()));
             }
             WorkEvent::TeamRampedUp { team_id } => {
@@ -1515,14 +1517,12 @@ impl GameManager {
             crate::engineering_team::WorkEvent::DesignPhaseComplete { .. } => {
                 "design_phase_complete"
             }
-            crate::engineering_team::WorkEvent::DesignFlawDiscovered { .. } => {
-                "design_flaw_discovered"
+            crate::engineering_team::WorkEvent::FlawDiscovered { design_kind, .. } => {
+                if *design_kind == "rocket" { "design_flaw_discovered" } else { "engine_flaw_discovered" }
             }
-            crate::engineering_team::WorkEvent::DesignFlawFixed { .. } => "design_flaw_fixed",
-            crate::engineering_team::WorkEvent::EngineFlawDiscovered { .. } => {
-                "engine_flaw_discovered"
+            crate::engineering_team::WorkEvent::FlawFixed { design_kind, .. } => {
+                if *design_kind == "rocket" { "design_flaw_fixed" } else { "engine_flaw_fixed" }
             }
-            crate::engineering_team::WorkEvent::EngineFlawFixed { .. } => "engine_flaw_fixed",
             crate::engineering_team::WorkEvent::EngineManufactured { .. } => {
                 "engine_manufactured"
             }
@@ -2212,7 +2212,7 @@ impl GameManager {
     pub fn get_engine_status(&self, index: i32) -> GString {
         if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
             let design = self.state.player_company.engine_designs[index as usize].head();
-            GString::from(design.status.display_name().as_str())
+            GString::from(design.workflow.status.display_name().as_str())
         } else {
             GString::from("")
         }
@@ -2223,7 +2223,7 @@ impl GameManager {
     pub fn get_engine_status_base(&self, index: i32) -> GString {
         if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
             let design = self.state.player_company.engine_designs[index as usize].head();
-            GString::from(design.status.name())
+            GString::from(design.workflow.status.name())
         } else {
             GString::from("")
         }
@@ -2234,7 +2234,7 @@ impl GameManager {
     pub fn get_engine_progress(&self, index: i32) -> f64 {
         if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
             let design = self.state.player_company.engine_designs[index as usize].head();
-            design.status.progress_fraction()
+            design.workflow.status.progress_fraction()
         } else {
             0.0
         }
@@ -2266,14 +2266,14 @@ impl GameManager {
         result
     }
 
-    /// Submit an engine design to testing (generates flaws if needed)
+    /// Submit an engine design to engineering (generates flaws and starts engineering phase)
     #[func]
-    pub fn submit_engine_to_testing(&mut self, index: i32) -> bool {
+    pub fn submit_engine_to_engineering(&mut self, index: i32) -> bool {
         if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
             let idx = index as usize;
             let flaw_gen = &mut self.state.player_company.flaw_generator;
             let design = self.state.player_company.engine_designs[idx].head_mut();
-            let result = design.submit_to_testing(flaw_gen, idx);
+            let result = design.submit_to_engineering(flaw_gen, idx);
             if result {
                 self.base_mut().emit_signal("designs_changed", &[]);
             }
@@ -2289,7 +2289,7 @@ impl GameManager {
     /// Returns the flaw name if found and newly discovered
     #[func]
     pub fn discover_engine_flaw_by_id(&mut self, flaw_id: i32) -> GString {
-        use crate::engine::EngineStatus;
+        use crate::design_workflow::DesignStatus;
 
         if flaw_id < 0 {
             return GString::from("");
@@ -2301,7 +2301,7 @@ impl GameManager {
 
             // Check if this flaw belongs to this engine design
             let mut found_flaw_name = None;
-            for flaw in design.active_flaws.iter_mut() {
+            for flaw in design.workflow.active_flaws.iter_mut() {
                 if flaw.id == flaw_id as u32 && !flaw.discovered {
                     flaw.discovered = true;
                     found_flaw_name = Some(flaw.name.clone());
@@ -2310,15 +2310,14 @@ impl GameManager {
             }
 
             if let Some(name) = found_flaw_name {
-                // Auto-submit to testing if still Untested
-                if matches!(design.status, EngineStatus::Untested) {
-                    design.submit_to_testing(flaw_gen, idx);
+                // Auto-submit to engineering if still in Specification
+                if matches!(design.workflow.status, DesignStatus::Specification) {
+                    design.submit_to_engineering(flaw_gen, idx);
                 }
                 // Transition to Fixing if currently Testing so teams work on the flaw
-                if matches!(design.status, EngineStatus::Testing { .. }) {
+                if matches!(design.workflow.status, DesignStatus::Testing { .. }) {
                     if let Some(flaw_index) = design.get_next_unfixed_flaw() {
-                        let flaw_name = design.active_flaws[flaw_index].name.clone();
-                        design.status.start_fixing(flaw_name, flaw_index);
+                        design.workflow.start_fixing_flaw(flaw_index);
                     }
                 }
                 self.base_mut().emit_signal("designs_changed", &[]);

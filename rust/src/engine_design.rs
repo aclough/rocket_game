@@ -1,5 +1,6 @@
 use crate::balance::{complexity_cost_multiplier, cycle_thrust_multiplier, cycle_ve_multiplier, cycle_mass_multiplier};
-use crate::engine::{costs, EngineStatus};
+use crate::design_workflow::DesignWorkflow;
+use crate::engine::costs;
 use crate::flaw::{Flaw, FlawCategory, FlawGenerator};
 
 pub const ENGINE_SCALE_MIN: f64 = 0.25;
@@ -246,13 +247,8 @@ pub struct EngineDesign {
     pub complexity: i32,
     /// Engine cycle (pump type) — determines complexity
     pub cycle: EngineCycle,
-    // Flaw system fields (same role as old EngineSpec)
-    pub active_flaws: Vec<Flaw>,
-    pub fixed_flaws: Vec<Flaw>,
-    pub flaws_generated: bool,
-    pub status: EngineStatus,
-    /// Cumulative work completed during Testing phase (for testing level estimation)
-    pub testing_work_completed: f64,
+    /// Unified workflow state (status, flaws, testing progress)
+    pub workflow: DesignWorkflow,
 }
 
 /// Lightweight stats cache stored on RocketStage.
@@ -277,9 +273,9 @@ pub struct EngineDesignSnapshot {
 }
 
 impl EngineDesign {
-    /// Whether this engine can be modified (only when Untested)
+    /// Whether this engine can be modified (only when in Specification)
     pub fn can_modify(&self) -> bool {
-        matches!(self.status, EngineStatus::Untested)
+        self.workflow.status.can_edit()
     }
 
     /// Get the fuel type from current components
@@ -420,12 +416,12 @@ impl EngineDesign {
     }
 
     // ==========================================
-    // Flaw Management (moved from EngineSpec)
+    // Flaw Management (delegates to workflow)
     // ==========================================
 
     /// Generate flaws for this engine if not already generated
     pub fn generate_flaws(&mut self, generator: &mut FlawGenerator, engine_design_id: usize) {
-        if self.flaws_generated {
+        if self.workflow.flaws_generated {
             return;
         }
 
@@ -435,99 +431,82 @@ impl EngineDesign {
             FlawCategory::LiquidEngine
         };
         let fuel_type = self.fuel_type();
-        self.active_flaws = generator.generate_engine_flaws_with_complexity(
+        self.workflow.active_flaws = generator.generate_engine_flaws_with_complexity(
             engine_design_id,
             category,
             fuel_type,
             self.scale,
             self.complexity,
         );
-        self.fixed_flaws.clear();
-        self.flaws_generated = true;
+        self.workflow.fixed_flaws.clear();
+        self.workflow.flaws_generated = true;
     }
 
     /// Get active (unfixed) flaws
     pub fn get_active_flaws(&self) -> &[Flaw] {
-        &self.active_flaws
+        &self.workflow.active_flaws
     }
 
     /// Get fixed flaws
     pub fn get_fixed_flaws(&self) -> &[Flaw] {
-        &self.fixed_flaws
+        &self.workflow.fixed_flaws
     }
 
     /// Get total flaw count (active + fixed)
     pub fn get_flaw_count(&self) -> usize {
-        self.active_flaws.len() + self.fixed_flaws.len()
+        self.workflow.active_flaws.len() + self.workflow.fixed_flaws.len()
     }
 
     /// Find a flaw by ID in active flaws
     pub fn get_flaw(&self, id: u32) -> Option<&Flaw> {
-        self.active_flaws.iter().find(|f| f.id == id)
+        self.workflow.active_flaws.iter().find(|f| f.id == id)
     }
 
     /// Find a flaw by ID (mutable) in active flaws
     pub fn get_flaw_mut(&mut self, id: u32) -> Option<&mut Flaw> {
-        self.active_flaws.iter_mut().find(|f| f.id == id)
+        self.workflow.active_flaws.iter_mut().find(|f| f.id == id)
     }
 
     /// Fix a flaw by ID - moves it from active_flaws to fixed_flaws
     pub fn fix_flaw(&mut self, id: u32) -> bool {
-        if let Some(index) = self.active_flaws.iter().position(|f| f.id == id && f.discovered) {
-            let mut flaw = self.active_flaws.remove(index);
+        if let Some(index) = self.workflow.active_flaws.iter().position(|f| f.id == id && f.discovered) {
+            let mut flaw = self.workflow.active_flaws.remove(index);
             flaw.fixed = true;
-            self.fixed_flaws.push(flaw);
+            self.workflow.fixed_flaws.push(flaw);
             return true;
         }
         false
     }
 
-    /// Fix a flaw by index - moves from active_flaws to fixed_flaws
-    pub fn fix_flaw_by_index(&mut self, index: usize) -> Option<String> {
-        if index < self.active_flaws.len() && self.active_flaws[index].discovered {
-            let mut flaw = self.active_flaws.remove(index);
-            let name = flaw.name.clone();
-            flaw.fixed = true;
-            self.fixed_flaws.push(flaw);
-            return Some(name);
-        }
-        None
-    }
-
     /// Get count of discovered (but not yet fixed) flaws
     pub fn get_discovered_unfixed_count(&self) -> usize {
-        self.active_flaws.iter().filter(|f| f.discovered).count()
+        self.workflow.get_discovered_unfixed_count()
     }
 
     /// Get the index of the first discovered but unfixed flaw
     pub fn get_next_unfixed_flaw(&self) -> Option<usize> {
-        self.active_flaws.iter().position(|f| f.discovered && !f.fixed)
+        self.workflow.get_next_unfixed_flaw()
     }
 
     /// Get names of discovered (but not fixed) flaws
     pub fn get_unfixed_flaw_names(&self) -> Vec<String> {
-        self.active_flaws
-            .iter()
-            .filter(|f| f.discovered)
-            .map(|f| f.name.clone())
-            .collect()
+        self.workflow.get_unfixed_flaw_names()
     }
 
     /// Get names of fixed flaws
     pub fn get_fixed_flaw_names(&self) -> Vec<String> {
-        self.fixed_flaws.iter().map(|f| f.name.clone()).collect()
+        self.workflow.get_fixed_flaw_names()
     }
 
-    /// Submit engine for testing (generates flaws if needed)
-    pub fn submit_to_testing(&mut self, generator: &mut FlawGenerator, engine_design_id: usize) -> bool {
-        if !matches!(self.status, EngineStatus::Untested) {
+    /// Submit engine to engineering (generates flaws and transitions to Engineering phase)
+    pub fn submit_to_engineering(&mut self, generator: &mut FlawGenerator, engine_design_id: usize) -> bool {
+        if !self.workflow.status.can_edit() {
             return false;
         }
-        if !self.flaws_generated {
+        if !self.workflow.flaws_generated {
             self.generate_flaws(generator, engine_design_id);
         }
-        self.status.start_testing();
-        true
+        self.workflow.submit_to_engineering()
     }
 }
 
@@ -545,11 +524,7 @@ pub fn create_engine(fuel: FuelType, scale: f64) -> EngineDesign {
         scale: scale.clamp(ENGINE_SCALE_MIN, ENGINE_SCALE_MAX),
         complexity,
         cycle,
-        active_flaws: Vec::new(),
-        fixed_flaws: Vec::new(),
-        flaws_generated: false,
-        status: EngineStatus::Untested,
-        testing_work_completed: 0.0,
+        workflow: DesignWorkflow::new(),
     }
 }
 
@@ -726,13 +701,13 @@ mod tests {
         let mut design = default_kerolox();
         let mut gen = FlawGenerator::new();
         design.generate_flaws(&mut gen, 1);
-        assert!(design.flaws_generated);
-        assert!(design.active_flaws.len() >= 3);
+        assert!(design.workflow.flaws_generated);
+        assert!(design.workflow.active_flaws.len() >= 3);
 
         // Calling again is a no-op
-        let count = design.active_flaws.len();
+        let count = design.workflow.active_flaws.len();
         design.generate_flaws(&mut gen, 1);
-        assert_eq!(design.active_flaws.len(), count);
+        assert_eq!(design.workflow.active_flaws.len(), count);
     }
 
     #[test]
@@ -742,25 +717,26 @@ mod tests {
         design.generate_flaws(&mut gen, 1);
 
         // Discover first flaw
-        design.active_flaws[0].discovered = true;
-        let id = design.active_flaws[0].id;
+        design.workflow.active_flaws[0].discovered = true;
+        let id = design.workflow.active_flaws[0].id;
 
         assert!(design.fix_flaw(id));
-        assert_eq!(design.fixed_flaws.len(), 1);
-        assert!(design.fixed_flaws[0].fixed);
+        assert_eq!(design.workflow.fixed_flaws.len(), 1);
+        assert!(design.workflow.fixed_flaws[0].fixed);
     }
 
     #[test]
-    fn test_submit_to_testing() {
+    fn test_submit_to_engineering() {
+        use crate::design_workflow::DesignStatus;
         let mut design = default_kerolox();
         let mut gen = FlawGenerator::new();
 
-        assert!(design.submit_to_testing(&mut gen, 1));
-        assert!(matches!(design.status, EngineStatus::Testing { .. }));
-        assert!(design.flaws_generated);
+        assert!(design.submit_to_engineering(&mut gen, 1));
+        assert!(matches!(design.workflow.status, DesignStatus::Engineering { .. }));
+        assert!(design.workflow.flaws_generated);
 
         // Can't submit again
-        assert!(!design.submit_to_testing(&mut gen, 1));
+        assert!(!design.submit_to_engineering(&mut gen, 1));
     }
 
     #[test]
@@ -807,7 +783,7 @@ mod tests {
     fn test_set_fuel_type_blocked_when_not_untested() {
         let mut design = default_kerolox();
         let mut gen = FlawGenerator::new();
-        design.submit_to_testing(&mut gen, 0);
+        design.submit_to_engineering(&mut gen, 0);
 
         assert!(!design.set_fuel_type(FuelType::Solid));
         // Should still be kerolox
@@ -820,7 +796,7 @@ mod tests {
         assert!(design.can_modify());
 
         let mut gen = FlawGenerator::new();
-        design.submit_to_testing(&mut gen, 0);
+        design.submit_to_engineering(&mut gen, 0);
         assert!(!design.can_modify());
     }
 
@@ -842,7 +818,7 @@ mod tests {
     fn test_set_scale_blocked_when_not_untested() {
         let mut design = default_kerolox();
         let mut gen = FlawGenerator::new();
-        design.submit_to_testing(&mut gen, 0);
+        design.submit_to_engineering(&mut gen, 0);
 
         assert!(!design.set_scale(2.0));
         assert_eq!(design.scale, 1.0);
@@ -943,7 +919,7 @@ mod tests {
     fn test_set_cycle_blocked_when_not_untested() {
         let mut design = default_kerolox();
         let mut gen = FlawGenerator::new();
-        design.submit_to_testing(&mut gen, 0);
+        design.submit_to_engineering(&mut gen, 0);
 
         assert!(!design.set_cycle(EngineCycle::StagedCombustion));
         assert_eq!(design.cycle, EngineCycle::GasGenerator);

@@ -110,12 +110,12 @@ pub enum TeamAssignment {
     /// Working on a rocket design
     RocketDesign {
         rocket_design_id: usize,
-        work_phase: DesignWorkPhase,
+        work_phase: WorkPhase,
     },
     /// Working on an engine design
     EngineDesign {
         engine_design_id: usize,
-        work_phase: EngineWorkPhase,
+        work_phase: WorkPhase,
     },
     /// Working on a manufacturing order
     Manufacturing {
@@ -123,11 +123,11 @@ pub enum TeamAssignment {
     },
 }
 
-/// Work phases for rocket designs
+/// Unified work phases for both rocket and engine designs
 #[derive(Debug, Clone, PartialEq)]
-pub enum DesignWorkPhase {
+pub enum WorkPhase {
     /// Detailed engineering work after specification
-    DetailedEngineering {
+    Engineering {
         progress: f64,
         total_work: f64,
     },
@@ -138,42 +138,25 @@ pub enum DesignWorkPhase {
     },
 }
 
-/// Work phases for engine types
-#[derive(Debug, Clone, PartialEq)]
-pub enum EngineWorkPhase {
-    /// Testing - looking for flaws
-    Testing {
-        progress: f64,
-        total_work: f64,
-    },
-}
-
 /// Events generated during work processing
 #[derive(Debug, Clone)]
 pub enum WorkEvent {
-    /// A design phase has completed
+    /// A design phase has completed (engineering or rocket/engine)
     DesignPhaseComplete {
-        rocket_design_id: usize,
+        design_kind: &'static str,
+        design_id: usize,
         phase_name: String,
     },
-    /// A design flaw was discovered during testing
-    DesignFlawDiscovered {
-        rocket_design_id: usize,
+    /// A flaw was discovered during testing
+    FlawDiscovered {
+        design_kind: &'static str,
+        design_id: usize,
         flaw_name: String,
     },
-    /// A design flaw was fixed
-    DesignFlawFixed {
-        rocket_design_id: usize,
-        flaw_name: String,
-    },
-    /// An engine flaw was discovered during testing
-    EngineFlawDiscovered {
-        engine_design_id: usize,
-        flaw_name: String,
-    },
-    /// An engine flaw was fixed during revamp
-    EngineFlawFixed {
-        engine_design_id: usize,
+    /// A flaw was fixed
+    FlawFixed {
+        design_kind: &'static str,
+        design_id: usize,
         flaw_name: String,
     },
     /// An engine was manufactured (one unit of an engine order completed)
@@ -266,7 +249,7 @@ mod tests {
         // Assignment triggers ramp-up
         team.assign(TeamAssignment::RocketDesign {
             rocket_design_id: 0,
-            work_phase: DesignWorkPhase::DetailedEngineering { progress: 0.0, total_work: 30.0 },
+            work_phase: WorkPhase::Engineering { progress: 0.0, total_work: 30.0 },
         });
         assert!(team.is_ramping_up());
         assert_eq!(team.productivity(), 0.0);
@@ -308,7 +291,7 @@ mod tests {
         // Assign to new work
         team.assign(TeamAssignment::RocketDesign {
             rocket_design_id: 0,
-            work_phase: DesignWorkPhase::DetailedEngineering {
+            work_phase: WorkPhase::Engineering {
                 progress: 0.0,
                 total_work: DETAILED_ENGINEERING_WORK,
             },

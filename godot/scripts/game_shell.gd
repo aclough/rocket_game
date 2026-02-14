@@ -726,10 +726,14 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 
 	# Style based on status
 	var style = StyleBoxFlat.new()
-	if base_status == "Untested":
-		# Gray style for Untested
+	if base_status == "Specification":
+		# Gray style for Specification
 		style.set_bg_color(Color(0.1, 0.1, 0.1))
 		style.set_border_color(Color(0.4, 0.4, 0.4, 0.5))
+	elif base_status == "Engineering":
+		# Cyan style for Engineering
+		style.set_bg_color(Color(0.08, 0.12, 0.18))
+		style.set_border_color(Color(0.3, 0.7, 0.9, 0.5))
 	elif base_status == "Testing":
 		# Blue style for Testing
 		style.set_bg_color(Color(0.08, 0.1, 0.18))
@@ -759,8 +763,8 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 	var header = HBoxContainer.new()
 	vbox.add_child(header)
 
-	# Make engine name clickable to expand/collapse (only if not Untested)
-	if base_status != "Untested":
+	# Make engine name clickable to expand/collapse (only if not Specification)
+	if base_status != "Specification":
 		var name_btn = Button.new()
 		name_btn.text = ("▼ " if is_expanded else "▶ ") + engine_name + " Engine"
 		name_btn.add_theme_font_size_override("font_size", 18)
@@ -779,8 +783,10 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 	var status_label = Label.new()
 	status_label.text = status
 	status_label.add_theme_font_size_override("font_size", 14)
-	if base_status == "Untested":
+	if base_status == "Specification":
 		status_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+	elif base_status == "Engineering":
+		status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 	elif base_status == "Testing":
 		status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
 	elif base_status == "Fixing":
@@ -797,8 +803,8 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 		testing_label.add_theme_color_override("font_color", _engine_testing_level_color(testing_level))
 		vbox.add_child(testing_label)
 
-	# Teams info (only if not Untested)
-	if base_status != "Untested":
+	# Teams info (only if not Specification)
+	if base_status != "Specification":
 		if teams_count > 0:
 			var teams_on = _get_teams_on_engine(index)
 			vbox.add_child(_create_team_icons_hbox(teams_on, _get_eng_team_icon()))
@@ -810,7 +816,18 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 			vbox.add_child(teams_label)
 
 	# Progress bar - different styles for different phases
-	if base_status == "Testing":
+	if base_status == "Engineering":
+		# Engineering: cyan progress bar
+		var progress_bar = ProgressBar.new()
+		progress_bar.value = progress * 100
+		progress_bar.custom_minimum_size = Vector2(0, 12)
+		progress_bar.show_percentage = true
+		var fill_style = StyleBoxFlat.new()
+		fill_style.set_bg_color(Color(0.3, 0.7, 0.9))
+		fill_style.set_corner_radius_all(3)
+		progress_bar.add_theme_stylebox_override("fill", fill_style)
+		vbox.add_child(progress_bar)
+	elif base_status == "Testing":
 		# Testing: blue progress bar showing actual progress
 		var progress_bar = ProgressBar.new()
 		progress_bar.value = progress * 100
@@ -833,8 +850,8 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 		progress_bar.add_theme_stylebox_override("fill", fill_style)
 		vbox.add_child(progress_bar)
 
-	# Expanded section: show flaws (only if not Untested)
-	if is_expanded and base_status != "Untested":
+	# Expanded section: show flaws (only if not Specification)
+	if is_expanded and base_status != "Specification":
 		var separator = HSeparator.new()
 		vbox.add_child(separator)
 
@@ -874,10 +891,10 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 	btn_hbox.add_theme_constant_override("separation", 10)
 	vbox.add_child(btn_hbox)
 
-	if base_status == "Untested":
-		# Submit to Testing button
+	if base_status == "Specification":
+		# Submit to Engineering button
 		var submit_btn = Button.new()
-		submit_btn.text = "Submit to Testing"
+		submit_btn.text = "Submit to Engineering"
 		submit_btn.add_theme_font_size_override("font_size", 12)
 		submit_btn.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 		submit_btn.pressed.connect(_on_submit_engine_pressed.bind(index))
@@ -922,7 +939,7 @@ func _get_teams_on_engine(engine_index: int) -> Array:
 	return result
 
 func _on_submit_engine_pressed(index: int):
-	game_manager.submit_engine_to_testing(index)
+	game_manager.submit_engine_to_engineering(index)
 	_update_research_ui()
 
 func _on_assign_engine_team_pressed(engine_index: int):

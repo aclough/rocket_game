@@ -2,7 +2,6 @@
 * UI
     * The "ADD STAGE" button on the bottom of the available engines isn't visible.
 * Refactoring
-    * Parts and vehicles should be treated symmetrically as much as possible in things like how they relate to flaws.
 * Hardware rich development
     * Diminsighing returns to development over time without sacrificing hardware.
     * Mission flights or test flight work for rockets.
