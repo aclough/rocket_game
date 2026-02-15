@@ -2,6 +2,7 @@ use crate::design_workflow::{DesignStatus, DesignWorkflow};
 use crate::engine::costs;
 use crate::engine_design::{default_snapshot, EngineDesignSnapshot, FuelType};
 use crate::flaw::{calculate_flaw_failure_rate, run_test, Flaw, FlawGenerator, FlawType};
+use crate::mission_plan::{simulate_mission, MissionPlan, MissionSimResult};
 use crate::resources::TankMaterial;
 use crate::stage::RocketStage;
 use std::collections::BTreeMap;
@@ -1808,6 +1809,147 @@ impl RocketDesign {
     }
 }
 
+/// Events for a single leg of a multi-leg mission
+#[derive(Debug, Clone)]
+pub struct MissionLegEvents {
+    pub leg_index: usize,
+    pub from: String,
+    pub to: String,
+    pub events: Vec<LaunchEvent>,
+}
+
+/// Find which stage is the primary active stage for a given leg
+/// by finding the stage that consumed the most propellant during that leg.
+/// Returns the last stage index as fallback if the leg is infeasible or has no sim data.
+fn active_stage_for_leg(leg_idx: usize, sim_result: &MissionSimResult, num_stages: usize) -> usize {
+    // Leg 0 is always the surface launch — active stage is stage 0
+    if leg_idx == 0 {
+        return 0;
+    }
+
+    // If we don't have sim data for this leg, use the last stage as fallback
+    let leg = match sim_result.leg_results.get(leg_idx) {
+        Some(l) => l,
+        None => return num_stages.saturating_sub(1),
+    };
+    let prev = match sim_result.leg_results.get(leg_idx - 1) {
+        Some(l) => &l.propellant_remaining,
+        None => return num_stages.saturating_sub(1),
+    };
+
+    let current_remaining = &leg.propellant_remaining;
+
+    let mut max_consumed = 0.0_f64;
+    let mut active_stage = num_stages.saturating_sub(1); // fallback to last stage
+
+    for (stage_idx, prev_kg) in prev {
+        let cur_kg = current_remaining
+            .iter()
+            .find(|(idx, _)| idx == stage_idx)
+            .map(|(_, kg)| *kg)
+            .unwrap_or(0.0);
+        let consumed = prev_kg - cur_kg;
+        if consumed > max_consumed {
+            max_consumed = consumed;
+            active_stage = *stage_idx;
+        }
+    }
+
+    active_stage
+}
+
+impl RocketDesign {
+    /// Generate mission events grouped by leg for a multi-leg mission plan.
+    ///
+    /// - Leg 0 (surface launch): Uses existing `generate_launch_events()`, but changes
+    ///   the final "Payload Release" to "Orbital Insertion" when there are more legs.
+    /// - Legs 1+ (orbital transfers): Generates "Transfer Burn Ignition", stage separations,
+    ///   and either "Transfer Complete" (non-final) or "Payload Deployment" (final leg).
+    pub fn generate_mission_events(&self, plan: &MissionPlan) -> Vec<MissionLegEvents> {
+        let mut result = Vec::new();
+        let is_multi_leg = plan.leg_count() > 1;
+
+        // Simulate to know which stages are active per leg
+        let sim_result = simulate_mission(self, plan);
+
+        // Leg 0: surface launch events
+        if let Some(first_leg) = plan.legs.first() {
+            let mut surface_events = self.generate_launch_events();
+
+            if is_multi_leg {
+                // Change the final "Payload Release" to "Orbital Insertion"
+                if let Some(last_event) = surface_events.last_mut() {
+                    if last_event.name == "Payload Release" {
+                        last_event.name = "Orbital Insertion".to_string();
+                        last_event.description = "Orbit achieved, preparing for transfer".to_string();
+                    }
+                }
+            }
+
+            result.push(MissionLegEvents {
+                leg_index: 0,
+                from: first_leg.from.to_string(),
+                to: first_leg.to.to_string(),
+                events: surface_events,
+            });
+        }
+
+        // Legs 1+: orbital transfer events
+        for leg_idx in 1..plan.legs.len() {
+            let leg = &plan.legs[leg_idx];
+            let is_final_leg = leg_idx == plan.legs.len() - 1;
+            let mut events = Vec::new();
+
+            let active_stage = active_stage_for_leg(leg_idx, &sim_result, self.stages.len());
+
+            // Transfer burn ignition
+            events.push(LaunchEvent {
+                name: format!("Transfer Burn Ignition"),
+                description: format!("Engine ignition for {} → {} transfer", leg.from, leg.to),
+                rocket_stage: active_stage,
+            });
+
+            // Stage separations for stages jettisoned this leg
+            let empty_jettisoned = Vec::new();
+            let jettisoned = sim_result.leg_results.get(leg_idx)
+                .map(|r| &r.stages_jettisoned)
+                .unwrap_or(&empty_jettisoned);
+            for &stage_idx in jettisoned {
+                let stage_num = stage_idx + 1;
+                events.push(LaunchEvent {
+                    name: format!("Stage {} Separation", stage_num),
+                    description: format!("Stage {} separates after transfer burn", stage_num),
+                    rocket_stage: stage_idx,
+                });
+            }
+
+            // Final event for this leg
+            if is_final_leg {
+                events.push(LaunchEvent {
+                    name: "Payload Deployment".to_string(),
+                    description: format!("Payload deployed at {}", leg.to),
+                    rocket_stage: active_stage,
+                });
+            } else {
+                events.push(LaunchEvent {
+                    name: "Transfer Complete".to_string(),
+                    description: format!("Transfer to {} complete", leg.to),
+                    rocket_stage: active_stage,
+                });
+            }
+
+            result.push(MissionLegEvents {
+                leg_index: leg_idx,
+                from: leg.from.to_string(),
+                to: leg.to.to_string(),
+                events,
+            });
+        }
+
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2971,5 +3113,76 @@ mod tests {
 
         assert!(record.last_propellant_loaded.is_some());
         assert!(record.last_propellant_remaining.is_none());
+    }
+
+    // ==========================================
+    // Mission Leg Events Tests
+    // ==========================================
+
+    #[test]
+    fn test_generate_mission_events_single_leg() {
+        let design = RocketDesign::default_design();
+        let plan = MissionPlan::from_shortest_path("earth_surface", "leo").unwrap();
+        let leg_events = design.generate_mission_events(&plan);
+
+        assert_eq!(leg_events.len(), 1, "Single-leg mission should have 1 leg");
+        assert_eq!(leg_events[0].leg_index, 0);
+        assert_eq!(leg_events[0].from, "earth_surface");
+        assert_eq!(leg_events[0].to, "leo");
+
+        // Events should match generate_launch_events() for single-leg
+        let flat_events = design.generate_launch_events();
+        assert_eq!(leg_events[0].events.len(), flat_events.len());
+        for (leg_ev, flat_ev) in leg_events[0].events.iter().zip(flat_events.iter()) {
+            assert_eq!(leg_ev.name, flat_ev.name);
+        }
+    }
+
+    #[test]
+    fn test_generate_mission_events_multi_leg() {
+        let design = RocketDesign::default_design();
+        let plan = MissionPlan::from_shortest_path("earth_surface", "geo").unwrap();
+        let leg_events = design.generate_mission_events(&plan);
+
+        assert_eq!(leg_events.len(), 3, "GEO mission should have 3 legs");
+
+        // Leg 0: surface launch, ends with "Orbital Insertion" instead of "Payload Release"
+        assert_eq!(leg_events[0].from, "earth_surface");
+        assert_eq!(leg_events[0].to, "leo");
+        let last_event = leg_events[0].events.last().unwrap();
+        assert_eq!(last_event.name, "Orbital Insertion",
+            "Multi-leg surface launch should end with Orbital Insertion, got: {}", last_event.name);
+
+        // Leg 1: orbital transfer, starts with "Transfer Burn Ignition"
+        assert_eq!(leg_events[1].from, "leo");
+        assert_eq!(leg_events[1].to, "gto");
+        assert_eq!(leg_events[1].events[0].name, "Transfer Burn Ignition");
+        // Non-final leg ends with "Transfer Complete"
+        let last_event_1 = leg_events[1].events.last().unwrap();
+        assert_eq!(last_event_1.name, "Transfer Complete");
+
+        // Leg 2: final orbital leg, ends with "Payload Deployment"
+        assert_eq!(leg_events[2].from, "gto");
+        assert_eq!(leg_events[2].to, "geo");
+        assert_eq!(leg_events[2].events[0].name, "Transfer Burn Ignition");
+        let last_event_2 = leg_events[2].events.last().unwrap();
+        assert_eq!(last_event_2.name, "Payload Deployment");
+    }
+
+    #[test]
+    fn test_orbital_event_flaw_triggers() {
+        use crate::flaw::FlawTrigger;
+
+        // "Transfer Burn Ignition" should match FlawTrigger::Ignition
+        assert!(FlawTrigger::Ignition.matches_event("Transfer Burn Ignition"));
+
+        // "Payload Deployment" should match FlawTrigger::PayloadRelease
+        assert!(FlawTrigger::PayloadRelease.matches_event("Payload Deployment"));
+
+        // "Orbital Insertion" should match FlawTrigger::PayloadRelease
+        assert!(FlawTrigger::PayloadRelease.matches_event("Orbital Insertion"));
+
+        // "Stage N Separation" should match FlawTrigger::Separation
+        assert!(FlawTrigger::Separation.matches_event("Stage 1 Separation"));
     }
 }

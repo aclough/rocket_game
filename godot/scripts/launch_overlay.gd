@@ -1,7 +1,7 @@
 extends CanvasLayer
 
 ## Launch overlay for showing launch animation
-## Displays launch sequence, handles success/failure
+## Displays launch sequence leg-by-leg, handles success/failure
 
 signal launch_completed(success: bool)
 
@@ -56,6 +56,11 @@ func show_launch(gm: GameManager, d: RocketDesigner):
 	# Copy design to launcher
 	launcher.copy_design_from(designer)
 
+	# Set mission plan for leg-based events
+	if game_manager.has_active_contract():
+		var location_id = game_manager.get_active_contract_location_id()
+		launcher.set_mission_plan(location_id)
+
 	# Update header
 	if game_manager.has_active_contract():
 		mission_label.text = "Mission: " + game_manager.get_active_contract_name()
@@ -85,15 +90,174 @@ func show_launch(gm: GameManager, d: RocketDesigner):
 	await run_launch_with_delays()
 
 func run_launch_with_delays():
+	var leg_count = launcher.get_leg_count()
+	var success = true
+	var failed_stage_name = ""
+	var discovered_flaw_name = ""
+	var failed_leg_index = -1
+	var last_location = ""
+
+	# Start rocket animation
+	rocket_sprite.start_launch()
+
+	# If no leg events are available, fall back to flat event API
+	if leg_count == 0:
+		await _run_flat_launch()
+		return
+
+	# Total events across all legs for altitude calculation (leg 0 only)
+	var leg0_event_count = launcher.get_leg_event_count(0)
+
+	# Iterate through legs, then events within each leg
+	for leg in range(leg_count):
+		var event_count = launcher.get_leg_event_count(leg)
+
+		# Show coasting label between legs
+		if leg > 0:
+			var leg_to = launcher.get_leg_to(leg)
+			var coast_label = Label.new()
+			coast_label.text = "--- Coasting to %s ---" % leg_to
+			coast_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
+			coast_label.add_theme_font_size_override("font_size", 14)
+			coast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			stages_list.add_child(coast_label)
+			await get_tree().create_timer(1.5).timeout
+
+		for ev in range(event_count):
+			var event_name = launcher.get_leg_event_name(leg, ev)
+			var failure_rate = launcher.get_leg_event_failure_rate(leg, ev)
+
+			# Show this event as in progress
+			var label = Label.new()
+			label.text = "> " + event_name + "..."
+			label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.3))
+			label.add_theme_font_size_override("font_size", 16)
+			stages_list.add_child(label)
+
+			# Advance rocket animation (only during surface leg)
+			if leg == 0:
+				rocket_sprite.advance_stage()
+				# Update sky/space transition based on leg 0 progress
+				var altitude_progress = float(ev + 1) / float(leg0_event_count)
+				_set_altitude(altitude_progress)
+
+			# Wait before checking result
+			await get_tree().create_timer(0.8).timeout
+
+			# Check if this event fails
+			var roll = randf()
+			if roll < failure_rate:
+				# Failed!
+				label.text = "X " + event_name + " - FAILED"
+				label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+				success = false
+				failed_stage_name = event_name
+				failed_leg_index = leg
+				last_location = launcher.get_leg_from(leg)
+
+				# Determine if a flaw caused this failure
+				if designer:
+					var flaw_rate = launcher.get_leg_event_flaw_failure_rate(leg, ev)
+
+					if flaw_rate > 0:
+						var flaw_probability = flaw_rate / failure_rate
+						var flaw_roll = randf()
+						if flaw_roll < flaw_probability:
+							var rocket_stage = launcher.get_leg_event_rocket_stage(leg, ev)
+							var stage_engine_type = -1
+							if rocket_stage >= 0:
+								stage_engine_type = designer.get_stage_engine_type(rocket_stage)
+							var flaw_id = designer.check_flaw_trigger(event_name, stage_engine_type)
+							if flaw_id >= 0:
+								discovered_flaw_name = designer.discover_flaw_by_id(flaw_id)
+								# Also discover in game state's engine registry so teams can fix it
+								if game_manager:
+									game_manager.discover_engine_flaw_by_id(flaw_id)
+
+				await get_tree().create_timer(0.2).timeout
+				break
+			else:
+				# Passed!
+				label.text = "* " + event_name + " - PASSED"
+				label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+				await get_tree().create_timer(0.2).timeout
+
+		if not success:
+			break
+
+		# Leg completed successfully - advance flight state
+		# (game_manager.advance_flight_leg will be called when flight tracking is active)
+
+	# Wait a moment for effect
+	await get_tree().create_timer(0.5).timeout
+
+	# Show result animation
+	if success:
+		rocket_sprite.show_success()
+		if screen_effects:
+			screen_effects.flash_success()
+		await get_tree().create_timer(1.0).timeout
+	else:
+		rocket_sprite.show_explosion()
+		if screen_effects:
+			screen_effects.flash_explosion()
+		await get_tree().create_timer(1.2).timeout
+
+	# Update state
+	last_launch_success = success
+
+	# Handle contract completion/failure
+	var reward = 0.0
+	var destination = ""
+	if game_manager and game_manager.has_active_contract():
+		destination = game_manager.get_active_contract_destination()
+		if success:
+			reward = game_manager.complete_contract()
+		else:
+			game_manager.fail_contract()
+		# Sync discovered flaw state from designer back to company's rocket_designs
+		if designer:
+			game_manager.sync_design_from(designer)
+		game_manager.update_current_rocket_design()
+
+	# Show result panel
+	result_panel.visible = true
+	title_label.text = "LAUNCH COMPLETE"
+
+	if success:
+		result_label.text = "SUCCESS!"
+		result_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+		if reward > 0:
+			message_label.text = "Rocket reached %s!\nReward: %s\nNew Balance: %s" % [
+				destination,
+				_format_money(reward),
+				game_manager.get_money_formatted()
+			]
+		else:
+			message_label.text = "Rocket reached orbit!"
+		continue_button.text = "CONTINUE"
+	else:
+		result_label.text = "FAILURE"
+		result_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+		if discovered_flaw_name != "":
+			if failed_leg_index > 0:
+				message_label.text = "Failure during %s.\nRocket stranded at %s.\nCause identified: %s\nThis issue has been added to your known problems." % [failed_stage_name, last_location, discovered_flaw_name]
+			else:
+				message_label.text = "Failure during %s.\nCause identified: %s\nThis issue has been added to your known problems." % [failed_stage_name, discovered_flaw_name]
+		else:
+			if failed_leg_index > 0:
+				message_label.text = "Failure during %s. Rocket stranded at %s." % [failed_stage_name, last_location]
+			else:
+				message_label.text = "Failure during %s. Rocket lost." % failed_stage_name
+		continue_button.text = "BACK TO TESTING"
+
+# Fallback: run launch using flat event API (when no leg events available)
+func _run_flat_launch():
 	var stage_count = launcher.get_stage_count()
 	var success = true
 	var failed_stage_name = ""
 	var discovered_flaw_name = ""
 
-	# Start rocket animation
-	rocket_sprite.start_launch()
-
-	# Go through each stage with delays
 	for i in range(stage_count):
 		var stage_name = launcher.get_stage_description(i)
 		var failure_rate = launcher.get_total_failure_rate(i)

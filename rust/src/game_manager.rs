@@ -3228,6 +3228,39 @@ impl GameManager {
         }
     }
 
+    /// Advance a flight to the next leg (after completing current leg successfully)
+    /// Returns the new location as a string
+    #[func]
+    pub fn advance_flight_leg(&mut self, flight_id: i32) -> GString {
+        if let Some(flight) = self.state.player_company.get_flight_mut(flight_id as u32) {
+            flight.advance_leg();
+            GString::from(flight.current_location.as_str())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Mark a flight as failed at a specific leg (stranded at previous location)
+    #[func]
+    pub fn fail_flight_at_leg(&mut self, flight_id: i32, leg_index: i32) {
+        if let Some(flight) = self.state.player_company.get_flight_mut(flight_id as u32) {
+            flight.fail_at_leg(leg_index as usize);
+        }
+    }
+
+    /// Get the active contract's destination as a location_id (for use with set_mission_plan)
+    #[func]
+    pub fn get_active_contract_location_id(&self) -> GString {
+        GString::from(
+            self.state
+                .player_company
+                .active_contract
+                .as_ref()
+                .map(|c| c.destination.location_id())
+                .unwrap_or("")
+        )
+    }
+
     // ==========================================
     // Mission Validation
     // ==========================================

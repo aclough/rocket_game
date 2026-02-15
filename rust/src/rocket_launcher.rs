@@ -1,7 +1,8 @@
 use godot::prelude::*;
 
 use crate::launcher::{LaunchResult, LaunchSimulator, LaunchStage};
-use crate::rocket_design::{LaunchEvent, RocketDesign};
+use crate::mission_plan::MissionPlan;
+use crate::rocket_design::{LaunchEvent, MissionLegEvents, RocketDesign};
 
 /// Godot-accessible rocket launcher node
 /// Can use either fixed stages (legacy) or dynamic stages from a rocket design
@@ -11,10 +12,24 @@ pub struct RocketLauncher {
     base: Base<Node>,
     /// Optional rocket design for dynamic staging
     design: Option<RocketDesign>,
-    /// Cached launch events from the design
-    cached_events: Vec<LaunchEvent>,
+    /// Cached launch events grouped by mission leg
+    cached_leg_events: Vec<MissionLegEvents>,
+    /// Flattened events for backward-compatible flat API
+    cached_flat_events: Vec<LaunchEvent>,
+    /// Mission plan for multi-leg missions
+    mission_plan: Option<MissionPlan>,
     /// Whether to use the design (true) or fixed stages (false)
     use_design: bool,
+}
+
+impl RocketLauncher {
+    /// Rebuild the flat event cache from leg events
+    fn rebuild_flat_cache(&mut self) {
+        self.cached_flat_events = self.cached_leg_events
+            .iter()
+            .flat_map(|leg| leg.events.iter().cloned())
+            .collect();
+    }
 }
 
 #[godot_api]
@@ -24,7 +39,9 @@ impl INode for RocketLauncher {
         Self {
             base,
             design: None,
-            cached_events: Vec::new(),
+            cached_leg_events: Vec::new(),
+            cached_flat_events: Vec::new(),
+            mission_plan: None,
             use_design: false,
         }
     }
@@ -52,21 +69,41 @@ impl RocketLauncher {
     #[func]
     pub fn clear_design(&mut self) {
         self.design = None;
-        self.cached_events.clear();
+        self.cached_leg_events.clear();
+        self.cached_flat_events.clear();
+        self.mission_plan = None;
         self.use_design = false;
     }
 
     /// Copies the design from a RocketDesigner node
     /// This is the preferred way to set the design
     /// Uses get_design_clone() which properly copies all stages, snapshots, and flaws
+    /// Note: Does not generate leg events until set_mission_plan() is called.
+    /// Falls back to flat launch events for backward compatibility.
     #[func]
     pub fn copy_design_from(&mut self, designer: Gd<crate::rocket_designer::RocketDesigner>) {
         let designer_ref = designer.bind();
         let design = designer_ref.get_design_clone();
 
-        self.cached_events = design.generate_launch_events();
+        // Generate flat events as fallback (used if set_mission_plan is never called)
+        self.cached_flat_events = design.generate_launch_events();
+        self.cached_leg_events.clear();
         self.design = Some(design);
         self.use_design = true;
+    }
+
+    /// Set the mission plan and generate leg-grouped events.
+    /// Must be called after copy_design_from() with the destination location_id.
+    #[func]
+    pub fn set_mission_plan(&mut self, destination: GString) {
+        let dest = destination.to_string();
+        if let Some(plan) = MissionPlan::from_shortest_path("earth_surface", &dest) {
+            if let Some(design) = &self.design {
+                self.cached_leg_events = design.generate_mission_events(&plan);
+                self.rebuild_flat_cache();
+            }
+            self.mission_plan = Some(plan);
+        }
     }
 
     /// Returns whether a design is loaded
@@ -85,15 +122,108 @@ impl RocketLauncher {
     }
 
     // ==========================================
-    // Stage Information (Dynamic or Fixed)
+    // Leg-Based Event API
+    // ==========================================
+
+    /// Returns the number of mission legs
+    #[func]
+    pub fn get_leg_count(&self) -> i32 {
+        self.cached_leg_events.len() as i32
+    }
+
+    /// Returns the origin location of a leg
+    #[func]
+    pub fn get_leg_from(&self, leg_index: i32) -> GString {
+        if leg_index >= 0 && (leg_index as usize) < self.cached_leg_events.len() {
+            GString::from(self.cached_leg_events[leg_index as usize].from.as_str())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Returns the destination location of a leg
+    #[func]
+    pub fn get_leg_to(&self, leg_index: i32) -> GString {
+        if leg_index >= 0 && (leg_index as usize) < self.cached_leg_events.len() {
+            GString::from(self.cached_leg_events[leg_index as usize].to.as_str())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Returns the number of events in a specific leg
+    #[func]
+    pub fn get_leg_event_count(&self, leg_index: i32) -> i32 {
+        if leg_index >= 0 && (leg_index as usize) < self.cached_leg_events.len() {
+            self.cached_leg_events[leg_index as usize].events.len() as i32
+        } else {
+            0
+        }
+    }
+
+    /// Returns the name of a specific event within a leg
+    #[func]
+    pub fn get_leg_event_name(&self, leg_index: i32, event_index: i32) -> GString {
+        self.get_leg_event(leg_index, event_index)
+            .map(|e| GString::from(e.name.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Returns the description of a specific event within a leg
+    #[func]
+    pub fn get_leg_event_description(&self, leg_index: i32, event_index: i32) -> GString {
+        self.get_leg_event(leg_index, event_index)
+            .map(|e| GString::from(e.description.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Returns the flaw failure rate for a specific event within a leg
+    #[func]
+    pub fn get_leg_event_failure_rate(&self, leg_index: i32, event_index: i32) -> f64 {
+        if let Some(event) = self.get_leg_event(leg_index, event_index) {
+            if let Some(design) = &self.design {
+                let stage_engine_design_id = design.stages
+                    .get(event.rocket_stage)
+                    .map(|s| s.engine_design_id);
+                let flaw_rate = design.get_flaw_failure_contribution(&event.name, stage_engine_design_id);
+                return flaw_rate.min(0.95);
+            }
+        }
+        0.0
+    }
+
+    /// Returns the flaw-only failure rate for a specific event within a leg
+    #[func]
+    pub fn get_leg_event_flaw_failure_rate(&self, leg_index: i32, event_index: i32) -> f64 {
+        if let Some(event) = self.get_leg_event(leg_index, event_index) {
+            if let Some(design) = &self.design {
+                let stage_engine_design_id = design.stages
+                    .get(event.rocket_stage)
+                    .map(|s| s.engine_design_id);
+                return design.get_flaw_failure_contribution(&event.name, stage_engine_design_id);
+            }
+        }
+        0.0
+    }
+
+    /// Returns which rocket stage (0-indexed) a leg event belongs to
+    #[func]
+    pub fn get_leg_event_rocket_stage(&self, leg_index: i32, event_index: i32) -> i32 {
+        self.get_leg_event(leg_index, event_index)
+            .map(|e| e.rocket_stage as i32)
+            .unwrap_or(-1)
+    }
+
+    // ==========================================
+    // Flat Event API (backward compatibility)
     // ==========================================
 
     /// Returns the number of launch stages/events
     /// Uses design events if use_design is true, otherwise fixed stages
     #[func]
     pub fn get_stage_count(&self) -> i32 {
-        if self.use_design && !self.cached_events.is_empty() {
-            self.cached_events.len() as i32
+        if self.use_design && !self.cached_flat_events.is_empty() {
+            self.cached_flat_events.len() as i32
         } else {
             LaunchStage::all_stages().len() as i32
         }
@@ -106,9 +236,9 @@ impl RocketLauncher {
             return GString::from("Invalid stage index");
         }
 
-        if self.use_design && !self.cached_events.is_empty() {
-            if (index as usize) < self.cached_events.len() {
-                GString::from(self.cached_events[index as usize].name.as_str())
+        if self.use_design && !self.cached_flat_events.is_empty() {
+            if (index as usize) < self.cached_flat_events.len() {
+                GString::from(self.cached_flat_events[index as usize].name.as_str())
             } else {
                 GString::from("Invalid stage index")
             }
@@ -134,8 +264,8 @@ impl RocketLauncher {
     #[func]
     pub fn get_total_failure_rate(&mut self, index: i32) -> f64 {
         let flaw_rate = self.get_flaw_failure_rate(index);
-        let event_name = if index >= 0 && (index as usize) < self.cached_events.len() {
-            self.cached_events[index as usize].name.clone()
+        let event_name = if index >= 0 && (index as usize) < self.cached_flat_events.len() {
+            self.cached_flat_events[index as usize].name.clone()
         } else {
             "unknown".to_string()
         };
@@ -149,8 +279,8 @@ impl RocketLauncher {
     #[func]
     pub fn get_flaw_failure_rate(&mut self, index: i32) -> f64 {
         if let Some(design) = &self.design {
-            if index >= 0 && (index as usize) < self.cached_events.len() {
-                let event = &self.cached_events[index as usize];
+            if index >= 0 && (index as usize) < self.cached_flat_events.len() {
+                let event = &self.cached_flat_events[index as usize];
                 let event_name = &event.name;
 
                 // Get the engine design ID for this stage
@@ -173,8 +303,8 @@ impl RocketLauncher {
             return GString::from("");
         }
 
-        if (index as usize) < self.cached_events.len() {
-            GString::from(self.cached_events[index as usize].description.as_str())
+        if (index as usize) < self.cached_flat_events.len() {
+            GString::from(self.cached_flat_events[index as usize].description.as_str())
         } else {
             GString::from("")
         }
@@ -187,8 +317,8 @@ impl RocketLauncher {
             return -1;
         }
 
-        if (index as usize) < self.cached_events.len() {
-            self.cached_events[index as usize].rocket_stage as i32
+        if (index as usize) < self.cached_flat_events.len() {
+            self.cached_flat_events[index as usize].rocket_stage as i32
         } else {
             -1
         }
@@ -283,4 +413,16 @@ impl RocketLauncher {
     /// Parameters: success (bool), message (String)
     #[signal]
     fn launch_completed(success: bool, message: GString);
+}
+
+impl RocketLauncher {
+    /// Helper to get a specific event from a leg
+    fn get_leg_event(&self, leg_index: i32, event_index: i32) -> Option<&LaunchEvent> {
+        if leg_index < 0 || event_index < 0 {
+            return None;
+        }
+        self.cached_leg_events
+            .get(leg_index as usize)
+            .and_then(|leg| leg.events.get(event_index as usize))
+    }
 }

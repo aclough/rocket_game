@@ -31,6 +31,7 @@ pub struct FlightState {
     pub payload_mass_kg: f64,
     pub status: FlightStatus,
     pub mission_plan: MissionPlan,
+    pub current_leg_index: usize,
 }
 
 impl FlightState {
@@ -65,6 +66,7 @@ impl FlightState {
             payload_mass_kg: design.payload_mass_kg,
             status: FlightStatus::InTransit,
             mission_plan,
+            current_leg_index: 0,
         }
     }
 
@@ -76,6 +78,24 @@ impl FlightState {
     /// Get a specific leg of the mission plan.
     pub fn leg(&self, index: usize) -> Option<&MissionLeg> {
         self.mission_plan.legs.get(index)
+    }
+
+    /// Advance to the next leg after completing the current one.
+    /// Updates current_location to the completed leg's destination.
+    pub fn advance_leg(&mut self) {
+        if let Some(leg) = self.mission_plan.legs.get(self.current_leg_index) {
+            self.current_location = leg.to.to_string();
+            self.current_leg_index += 1;
+        }
+    }
+
+    /// Mark flight as failed at a specific leg.
+    /// Location stays at the failed leg's origin (stranded at previous location).
+    pub fn fail_at_leg(&mut self, leg_index: usize) {
+        self.status = FlightStatus::Failed;
+        if let Some(leg) = self.mission_plan.legs.get(leg_index) {
+            self.current_location = leg.from.to_string();
+        }
     }
 
     /// Mark flight as completed. Updates location and propellant from design data.
@@ -193,6 +213,59 @@ mod tests {
         let total = flight.total_propellant_remaining_kg();
         let expected: f64 = design.stages.iter().map(|s| s.propellant_mass_kg).sum();
         assert!((total - expected).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_advance_leg() {
+        let design = RocketDesign::default_design();
+        let geo_plan = MissionPlan::from_shortest_path("earth_surface", "geo").unwrap();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "geo", geo_plan);
+
+        assert_eq!(flight.current_leg_index, 0);
+        assert_eq!(flight.current_location, "earth_surface");
+
+        // Advance through leg 0: earth_surface -> leo
+        flight.advance_leg();
+        assert_eq!(flight.current_leg_index, 1);
+        assert_eq!(flight.current_location, "leo");
+
+        // Advance through leg 1: leo -> gto
+        flight.advance_leg();
+        assert_eq!(flight.current_leg_index, 2);
+        assert_eq!(flight.current_location, "gto");
+
+        // Advance through leg 2: gto -> geo
+        flight.advance_leg();
+        assert_eq!(flight.current_leg_index, 3);
+        assert_eq!(flight.current_location, "geo");
+    }
+
+    #[test]
+    fn test_fail_at_leg() {
+        let design = RocketDesign::default_design();
+        let geo_plan = MissionPlan::from_shortest_path("earth_surface", "geo").unwrap();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "geo", geo_plan);
+
+        // Advance leg 0 successfully
+        flight.advance_leg();
+        assert_eq!(flight.current_location, "leo");
+
+        // Fail at leg 1 (leo -> gto): stranded at leo
+        flight.fail_at_leg(1);
+        assert_eq!(flight.status, FlightStatus::Failed);
+        assert_eq!(flight.current_location, "leo");
+    }
+
+    #[test]
+    fn test_fail_at_surface_leg() {
+        let design = RocketDesign::default_design();
+        let geo_plan = MissionPlan::from_shortest_path("earth_surface", "geo").unwrap();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "geo", geo_plan);
+
+        // Fail at leg 0 (earth_surface -> leo): stranded at earth_surface
+        flight.fail_at_leg(0);
+        assert_eq!(flight.status, FlightStatus::Failed);
+        assert_eq!(flight.current_location, "earth_surface");
     }
 
     #[test]

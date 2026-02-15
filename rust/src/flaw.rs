@@ -76,7 +76,9 @@ impl FlawTrigger {
             FlawTrigger::MaxQ => event_lower.contains("max-q") || event_lower.contains("max q"),
             FlawTrigger::Separation => event_lower.contains("separation"),
             FlawTrigger::PayloadRelease => {
-                event_lower.contains("payload release") || event_lower.contains("orbital insertion")
+                event_lower.contains("payload release")
+                    || event_lower.contains("payload deployment")
+                    || event_lower.contains("orbital insertion")
             }
         }
     }
