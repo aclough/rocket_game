@@ -661,33 +661,46 @@ impl GameManager {
             .unwrap_or(false)
     }
 
-    /// Get count of discovered flaws for a rocket design
+    /// Get count of discovered design flaws for a rocket design (excludes engine flaws)
     #[func]
     pub fn get_rocket_design_discovered_flaw_count(&self, index: i32) -> i32 {
         if index < 0 {
             return 0;
         }
-        self.state
-            .player_company
-            .get_rocket_design(index as usize)
-            .map(|d| d.get_discovered_flaw_count() as i32)
-            .unwrap_or(0)
+        if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
+            let active_discovered = design.workflow.active_flaws.iter()
+                .filter(|f| f.discovered && f.flaw_type == crate::flaw::FlawType::Design)
+                .count();
+            let fixed = design.workflow.fixed_flaws.iter()
+                .filter(|f| f.flaw_type == crate::flaw::FlawType::Design)
+                .count();
+            (active_discovered + fixed) as i32
+        } else {
+            0
+        }
     }
 
-    /// Get count of fixed flaws for a rocket design
+    /// Get count of fixed design flaws for a rocket design (excludes engine flaws)
     #[func]
     pub fn get_rocket_design_fixed_flaw_count(&self, index: i32) -> i32 {
         if index < 0 {
             return 0;
         }
-        self.state
-            .player_company
-            .get_rocket_design(index as usize)
-            .map(|d| d.get_fixed_flaw_count() as i32)
-            .unwrap_or(0)
+        if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
+            let from_fixed = design.workflow.fixed_flaws.iter()
+                .filter(|f| f.flaw_type == crate::flaw::FlawType::Design)
+                .count();
+            let from_active = design.workflow.active_flaws.iter()
+                .filter(|f| f.fixed && f.flaw_type == crate::flaw::FlawType::Design)
+                .count();
+            (from_fixed + from_active) as i32
+        } else {
+            0
+        }
     }
 
-    /// Get names of discovered (but not fixed) flaws for a rocket design
+    /// Get names of discovered (but not fixed) design flaws for a rocket design
+    /// Filters out engine flaws (which are shown under the engine card instead)
     #[func]
     pub fn get_rocket_design_unfixed_flaw_names(&self, index: i32) -> Array<GString> {
         let mut result = Array::new();
@@ -696,7 +709,7 @@ impl GameManager {
         }
         if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
             for flaw in &design.workflow.active_flaws {
-                if flaw.discovered && !flaw.fixed {
+                if flaw.discovered && !flaw.fixed && flaw.flaw_type == crate::flaw::FlawType::Design {
                     result.push(&GString::from(flaw.name.as_str()));
                 }
             }
@@ -704,7 +717,9 @@ impl GameManager {
         result
     }
 
-    /// Get names of fixed flaws for a rocket design
+    /// Get names of fixed design flaws for a rocket design
+    /// Checks both fixed_flaws list and active_flaws with fixed=true
+    /// Filters out engine flaws (which are shown under the engine card instead)
     #[func]
     pub fn get_rocket_design_fixed_flaw_names(&self, index: i32) -> Array<GString> {
         let mut result = Array::new();
@@ -712,8 +727,14 @@ impl GameManager {
             return result;
         }
         if let Some(design) = self.state.player_company.get_rocket_design(index as usize) {
+            for flaw in &design.workflow.fixed_flaws {
+                if flaw.flaw_type == crate::flaw::FlawType::Design {
+                    result.push(&GString::from(flaw.name.as_str()));
+                }
+            }
+            // Also check active_flaws for any with fixed=true (defensive)
             for flaw in &design.workflow.active_flaws {
-                if flaw.fixed {
+                if flaw.fixed && flaw.flaw_type == crate::flaw::FlawType::Design {
                     result.push(&GString::from(flaw.name.as_str()));
                 }
             }

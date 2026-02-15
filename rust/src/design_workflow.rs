@@ -208,9 +208,11 @@ impl DesignWorkflow {
             let flaw_name = flaw_name.clone();
             let flaw_index = *flaw_index;
 
-            // Mark flaw as fixed
+            // Move flaw from active to fixed (consistent with fix_flaw_by_index)
             if flaw_index < self.active_flaws.len() {
-                self.active_flaws[flaw_index].fixed = true;
+                let mut flaw = self.active_flaws.remove(flaw_index);
+                flaw.fixed = true;
+                self.fixed_flaws.push(flaw);
             }
 
             // Return to Testing with progress reset for new cycle
@@ -252,14 +254,14 @@ impl DesignWorkflow {
 
     /// Get count of discovered (but not yet fixed) flaws
     pub fn get_discovered_unfixed_count(&self) -> usize {
-        self.active_flaws.iter().filter(|f| f.discovered).count()
+        self.active_flaws.iter().filter(|f| f.discovered && !f.fixed).count()
     }
 
     /// Get names of discovered (but not fixed) flaws
     pub fn get_unfixed_flaw_names(&self) -> Vec<String> {
         self.active_flaws
             .iter()
-            .filter(|f| f.discovered)
+            .filter(|f| f.discovered && !f.fixed)
             .map(|f| f.name.clone())
             .collect()
     }
