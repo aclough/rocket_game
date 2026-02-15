@@ -401,6 +401,71 @@ impl RocketLauncher {
     }
 
     // ==========================================
+    // Mission Leg Planning
+    // ==========================================
+
+    /// Set which stages should burn on a specific leg
+    #[func]
+    pub fn set_leg_stages_to_burn(&mut self, leg_index: i32, stages: PackedInt32Array) {
+        if let Some(plan) = &mut self.mission_plan {
+            if leg_index >= 0 && (leg_index as usize) < plan.legs.len() {
+                let stage_indices: Vec<usize> = stages.as_slice()
+                    .iter()
+                    .map(|&s| s as usize)
+                    .collect();
+                plan.legs[leg_index as usize].stages_to_burn = Some(stage_indices);
+            }
+        }
+    }
+
+    /// Get the stages assigned to burn on a specific leg
+    /// Returns auto-assigned stages if no explicit assignment
+    #[func]
+    pub fn get_leg_stages_to_burn(&self, leg_index: i32) -> PackedInt32Array {
+        if let Some(plan) = &self.mission_plan {
+            if leg_index >= 0 && (leg_index as usize) < plan.legs.len() {
+                let leg = &plan.legs[leg_index as usize];
+                if let Some(stages) = &leg.stages_to_burn {
+                    return PackedInt32Array::from(
+                        stages.iter().map(|&s| s as i32).collect::<Vec<i32>>().as_slice()
+                    );
+                }
+                // Fall back to auto-assigned stages
+                if let Some(design) = &self.design {
+                    let auto = crate::mission_plan::auto_assign_stages(design, plan);
+                    if let Some(leg_stages) = auto.get(leg_index as usize) {
+                        return PackedInt32Array::from(
+                            leg_stages.iter().map(|&s| s as i32).collect::<Vec<i32>>().as_slice()
+                        );
+                    }
+                }
+            }
+        }
+        PackedInt32Array::new()
+    }
+
+    /// Set whether to refuel from a depot before a specific leg
+    #[func]
+    pub fn set_leg_refuel_before(&mut self, leg_index: i32, refuel: bool) {
+        if let Some(plan) = &mut self.mission_plan {
+            if leg_index >= 0 && (leg_index as usize) < plan.legs.len() {
+                plan.legs[leg_index as usize].refuel_before = refuel;
+            }
+        }
+    }
+
+    /// Get whether refueling is set before a specific leg
+    #[func]
+    pub fn get_leg_refuel_before(&self, leg_index: i32) -> bool {
+        if let Some(plan) = &self.mission_plan {
+            if leg_index >= 0 && (leg_index as usize) < plan.legs.len() {
+                return plan.legs[leg_index as usize].refuel_before;
+            }
+        }
+        false
+    }
+
+    // ==========================================
     // Signals
     // ==========================================
 
@@ -424,5 +489,22 @@ impl RocketLauncher {
         self.cached_leg_events
             .get(leg_index as usize)
             .and_then(|leg| leg.events.get(event_index as usize))
+    }
+
+    /// Simulate the mission with infrastructure (depots) for refueling support.
+    /// Returns whether the planned mission is feasible.
+    pub fn simulate_with_infrastructure(
+        &self,
+        infrastructure: &std::collections::HashMap<String, crate::fuel_depot::LocationInfrastructure>,
+    ) -> bool {
+        let plan = match &self.mission_plan {
+            Some(p) => p,
+            None => return false,
+        };
+        let design = match &self.design {
+            Some(d) => d,
+            None => return false,
+        };
+        crate::mission_plan::simulate_mission_with_plan(design, plan, infrastructure).feasible
     }
 }

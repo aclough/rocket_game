@@ -3294,4 +3294,100 @@ impl GameManager {
             .map(|p| p.leg_count() as i32)
             .unwrap_or(0)
     }
+
+    // ==========================================
+    // Fuel Depot / Infrastructure API
+    // ==========================================
+
+    /// Check if a depot exists at a location
+    #[func]
+    pub fn has_depot(&self, location: GString) -> bool {
+        let loc = location.to_string();
+        self.state.player_company.get_infrastructure(&loc)
+            .map(|infra| infra.has_depot())
+            .unwrap_or(false)
+    }
+
+    /// Get the total capacity of a depot at a location (0 if no depot)
+    #[func]
+    pub fn get_depot_capacity(&self, location: GString) -> f64 {
+        let loc = location.to_string();
+        self.state.player_company.get_infrastructure(&loc)
+            .and_then(|infra| infra.depot.as_ref())
+            .map(|depot| depot.capacity_kg)
+            .unwrap_or(0.0)
+    }
+
+    /// Get fuel stored at a depot for a specific fuel type
+    #[func]
+    pub fn get_depot_fuel_stored(&self, location: GString, fuel_type_index: i32) -> f64 {
+        use crate::engine_design::FuelType;
+        let loc = location.to_string();
+        let fuel_type = match FuelType::from_index(fuel_type_index as usize) {
+            Some(ft) => ft,
+            None => return 0.0,
+        };
+        self.state.player_company.get_depot_fuel(&loc, fuel_type)
+    }
+
+    /// Get total fuel stored at a depot across all types
+    #[func]
+    pub fn get_depot_total_stored(&self, location: GString) -> f64 {
+        let loc = location.to_string();
+        self.state.player_company.get_infrastructure(&loc)
+            .and_then(|infra| infra.depot.as_ref())
+            .map(|depot| depot.total_stored())
+            .unwrap_or(0.0)
+    }
+
+    /// Deploy a fuel depot at a location (for testing/debug; real deployment via missions in 8b)
+    #[func]
+    pub fn deploy_depot(&mut self, location: GString, capacity_kg: f64) {
+        let loc = location.to_string();
+        self.state.player_company.deploy_depot(&loc, capacity_kg);
+    }
+
+    /// Deposit fuel into a depot. Returns actual amount deposited.
+    #[func]
+    pub fn deposit_fuel(&mut self, location: GString, fuel_type_index: i32, kg: f64) -> f64 {
+        use crate::engine_design::FuelType;
+        let loc = location.to_string();
+        let fuel_type = match FuelType::from_index(fuel_type_index as usize) {
+            Some(ft) => ft,
+            None => return 0.0,
+        };
+        self.state.player_company.deposit_fuel(&loc, fuel_type, kg)
+    }
+
+    /// Withdraw fuel from a depot. Returns actual amount withdrawn.
+    #[func]
+    pub fn withdraw_fuel(&mut self, location: GString, fuel_type_index: i32, kg: f64) -> f64 {
+        use crate::engine_design::FuelType;
+        let loc = location.to_string();
+        let fuel_type = match FuelType::from_index(fuel_type_index as usize) {
+            Some(ft) => ft,
+            None => return 0.0,
+        };
+        self.state.player_company.withdraw_fuel(&loc, fuel_type, kg)
+    }
+
+    /// Simulate whether a planned mission is feasible considering infrastructure (depots)
+    /// Uses the active contract's destination and a specific design
+    #[func]
+    pub fn simulate_planned_mission(&self, design_index: i32, destination: GString) -> bool {
+        use crate::mission_plan::{MissionPlan, simulate_mission_with_plan};
+
+        let dest_str = destination.to_string();
+        let plan = match MissionPlan::from_shortest_path("earth_surface", &dest_str) {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let design = match self.state.player_company.rocket_designs.get(design_index as usize) {
+            Some(lineage) => lineage.head(),
+            None => return false,
+        };
+
+        simulate_mission_with_plan(design, &plan, &self.state.player_company.infrastructure).feasible
+    }
 }

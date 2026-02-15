@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::contract::{Contract, Destination};
 use crate::design_lineage::DesignLineage;
 use crate::engine::costs;
@@ -6,6 +8,7 @@ use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, 
     ENGINEERING_HIRE_COST, MANUFACTURING_HIRE_COST};
 use crate::flaw::FlawGenerator;
 use crate::flight_state::{FlightId, FlightState};
+use crate::fuel_depot::LocationInfrastructure;
 use crate::launch_site::LaunchSite;
 use crate::mission_plan::MissionPlan;
 use crate::manufacturing::{Manufacturing, ManufacturingOrderId, ManufacturingOrderType, manufacturing_team_efficiency};
@@ -62,6 +65,8 @@ pub struct Company {
     pub flights: Vec<FlightState>,
     /// Next flight ID to assign
     next_flight_id: FlightId,
+    /// Orbital infrastructure (depots, etc.) keyed by location ID
+    pub infrastructure: HashMap<String, LocationInfrastructure>,
 }
 
 impl Company {
@@ -89,6 +94,7 @@ impl Company {
             auto_assign_manufacturing: false,
             flights: Vec::new(),
             next_flight_id: 1,
+            infrastructure: HashMap::new(),
         };
 
         // Generate initial contracts
@@ -1038,6 +1044,55 @@ impl Company {
     }
 
     // ==========================================
+    // Infrastructure / Depot Management
+    // ==========================================
+
+    /// Get infrastructure at a location (if any)
+    pub fn get_infrastructure(&self, location: &str) -> Option<&LocationInfrastructure> {
+        self.infrastructure.get(location)
+    }
+
+    /// Get or create infrastructure at a location
+    pub fn get_infrastructure_mut(&mut self, location: &str) -> &mut LocationInfrastructure {
+        self.infrastructure.entry(location.to_string())
+            .or_insert_with(LocationInfrastructure::new)
+    }
+
+    /// Deploy a fuel depot at a location (creates or upgrades capacity)
+    pub fn deploy_depot(&mut self, location: &str, capacity_kg: f64) {
+        let infra = self.get_infrastructure_mut(location);
+        infra.get_or_create_depot(location, capacity_kg);
+    }
+
+    /// Deposit fuel into a depot. Returns actual amount deposited.
+    pub fn deposit_fuel(&mut self, location: &str, fuel_type: FuelType, kg: f64) -> f64 {
+        if let Some(infra) = self.infrastructure.get_mut(location) {
+            if let Some(depot) = &mut infra.depot {
+                return depot.deposit(fuel_type, kg);
+            }
+        }
+        0.0
+    }
+
+    /// Withdraw fuel from a depot. Returns actual amount withdrawn.
+    pub fn withdraw_fuel(&mut self, location: &str, fuel_type: FuelType, kg: f64) -> f64 {
+        if let Some(infra) = self.infrastructure.get_mut(location) {
+            if let Some(depot) = &mut infra.depot {
+                return depot.withdraw(fuel_type, kg);
+            }
+        }
+        0.0
+    }
+
+    /// Get fuel stored at a depot for a specific type. Returns 0 if no depot.
+    pub fn get_depot_fuel(&self, location: &str, fuel_type: FuelType) -> f64 {
+        self.infrastructure.get(location)
+            .and_then(|infra| infra.depot.as_ref())
+            .map(|depot| depot.stored(fuel_type))
+            .unwrap_or(0.0)
+    }
+
+    // ==========================================
     // Flight Management
     // ==========================================
 
@@ -1805,5 +1860,51 @@ mod tests {
         let result = company.increase_engine_order(order_id, 1);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Insufficient funds");
+    }
+
+    // ==========================================
+    // Infrastructure / Depot Tests
+    // ==========================================
+
+    #[test]
+    fn test_deploy_and_use_depot() {
+        let mut company = Company::new();
+
+        // Deploy depot at LEO
+        company.deploy_depot("leo", 50_000.0);
+        assert!(company.get_infrastructure("leo").unwrap().has_depot());
+
+        // Deposit fuel
+        let deposited = company.deposit_fuel("leo", FuelType::Kerolox, 10_000.0);
+        assert_eq!(deposited, 10_000.0);
+        assert_eq!(company.get_depot_fuel("leo", FuelType::Kerolox), 10_000.0);
+
+        // Withdraw fuel
+        let withdrawn = company.withdraw_fuel("leo", FuelType::Kerolox, 3_000.0);
+        assert_eq!(withdrawn, 3_000.0);
+        assert_eq!(company.get_depot_fuel("leo", FuelType::Kerolox), 7_000.0);
+    }
+
+    #[test]
+    fn test_no_depot_returns_zero() {
+        let company = Company::new();
+        assert_eq!(company.get_depot_fuel("leo", FuelType::Kerolox), 0.0);
+        assert!(company.get_infrastructure("leo").is_none());
+    }
+
+    #[test]
+    fn test_withdraw_from_no_depot_returns_zero() {
+        let mut company = Company::new();
+        let withdrawn = company.withdraw_fuel("leo", FuelType::Kerolox, 1000.0);
+        assert_eq!(withdrawn, 0.0);
+    }
+
+    #[test]
+    fn test_deploy_depot_upgrades_capacity() {
+        let mut company = Company::new();
+        company.deploy_depot("leo", 10_000.0);
+        company.deploy_depot("leo", 5_000.0);
+        let depot = company.get_infrastructure("leo").unwrap().depot.as_ref().unwrap();
+        assert_eq!(depot.capacity_kg, 15_000.0);
     }
 }
