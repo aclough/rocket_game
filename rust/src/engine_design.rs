@@ -237,6 +237,65 @@ pub enum EngineComponent {
     Hypergolic,
 }
 
+/// Per-engine policy for auto-consuming manufactured engines for hardware testing.
+/// When testing productivity drops below the threshold, an engine is consumed from
+/// inventory to reset hardware_boost to 1.0.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HardwareSacrificePolicy {
+    /// Never auto-consume (default)
+    Off,
+    /// Consume when hardware multiplier < 0.4
+    Conservative,
+    /// Consume when hardware multiplier < 0.6
+    Moderate,
+    /// Consume when hardware multiplier < 0.8
+    Aggressive,
+}
+
+impl HardwareSacrificePolicy {
+    /// The hardware multiplier threshold below which an engine is consumed
+    pub fn threshold(&self) -> f64 {
+        match self {
+            HardwareSacrificePolicy::Off => 0.0,
+            HardwareSacrificePolicy::Conservative => 0.4,
+            HardwareSacrificePolicy::Moderate => 0.6,
+            HardwareSacrificePolicy::Aggressive => 0.8,
+        }
+    }
+
+    pub fn from_index(i: i32) -> Option<HardwareSacrificePolicy> {
+        match i {
+            0 => Some(HardwareSacrificePolicy::Off),
+            1 => Some(HardwareSacrificePolicy::Conservative),
+            2 => Some(HardwareSacrificePolicy::Moderate),
+            3 => Some(HardwareSacrificePolicy::Aggressive),
+            _ => None,
+        }
+    }
+
+    pub fn index(&self) -> i32 {
+        match self {
+            HardwareSacrificePolicy::Off => 0,
+            HardwareSacrificePolicy::Conservative => 1,
+            HardwareSacrificePolicy::Moderate => 2,
+            HardwareSacrificePolicy::Aggressive => 3,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            HardwareSacrificePolicy::Off => "Off",
+            HardwareSacrificePolicy::Conservative => "Conservative",
+            HardwareSacrificePolicy::Moderate => "Moderate",
+            HardwareSacrificePolicy::Aggressive => "Aggressive",
+        }
+    }
+
+    pub fn count() -> i32 {
+        4
+    }
+}
+
 /// A designable engine: composed of components at a scale, with derived stats and hidden flaws.
 #[derive(Debug, Clone)]
 pub struct EngineDesign {
@@ -249,6 +308,8 @@ pub struct EngineDesign {
     pub cycle: EngineCycle,
     /// Unified workflow state (status, flaws, testing progress)
     pub workflow: DesignWorkflow,
+    /// Policy for auto-consuming manufactured engines during testing
+    pub hardware_sacrifice_policy: HardwareSacrificePolicy,
 }
 
 /// Lightweight stats cache stored on RocketStage.
@@ -525,6 +586,7 @@ pub fn create_engine(fuel: FuelType, scale: f64) -> EngineDesign {
         complexity,
         cycle,
         workflow: DesignWorkflow::new(),
+        hardware_sacrifice_policy: HardwareSacrificePolicy::Off,
     }
 }
 

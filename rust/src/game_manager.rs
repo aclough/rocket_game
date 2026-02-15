@@ -1589,6 +1589,14 @@ impl GameManager {
                 dict.set("type", "rocket_order_unblocked");
                 dict.set("order_id", *order_id as i32);
             }
+            WorkEvent::HardwareTestConsumed { engine_design_id } => {
+                dict.set("type", "hardware_test_consumed");
+                dict.set("engine_design_id", *engine_design_id as i32);
+                // Include the engine name for display
+                if let Some(lineage) = self.state.player_company.engine_designs.get(*engine_design_id) {
+                    dict.set("display_name", GString::from(lineage.name.as_str()));
+                }
+            }
         }
         dict
     }
@@ -1620,6 +1628,9 @@ impl GameManager {
             }
             crate::engineering_team::WorkEvent::RocketOrderUnblocked { .. } => {
                 "rocket_order_unblocked"
+            }
+            crate::engineering_team::WorkEvent::HardwareTestConsumed { .. } => {
+                "hardware_test_consumed"
             }
         };
         self.base_mut().emit_signal(
@@ -2268,6 +2279,79 @@ impl GameManager {
         } else {
             0.0
         }
+    }
+
+    // ==========================================
+    // Hardware Sacrifice Policy & Multiplier
+    // ==========================================
+
+    /// Get the hardware sacrifice policy for an engine design (as index)
+    #[func]
+    pub fn get_engine_hardware_sacrifice_policy(&self, index: i32) -> i32 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            self.state.player_company.engine_designs[index as usize]
+                .head()
+                .hardware_sacrifice_policy
+                .index()
+        } else {
+            0
+        }
+    }
+
+    /// Set the hardware sacrifice policy for an engine design (by index)
+    #[func]
+    pub fn set_engine_hardware_sacrifice_policy(&mut self, index: i32, policy: i32) -> bool {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            if let Some(p) = crate::engine_design::HardwareSacrificePolicy::from_index(policy) {
+                self.state.player_company.engine_designs[index as usize]
+                    .head_mut()
+                    .hardware_sacrifice_policy = p;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get the current hardware multiplier for an engine design
+    #[func]
+    pub fn get_engine_hardware_multiplier(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            self.state.player_company.engine_designs[index as usize]
+                .head()
+                .workflow
+                .hardware_multiplier()
+        } else {
+            1.0
+        }
+    }
+
+    /// Get the current hardware multiplier for a rocket design
+    #[func]
+    pub fn get_rocket_design_hardware_multiplier(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.rocket_designs.len() {
+            self.state.player_company.rocket_designs[index as usize]
+                .head()
+                .workflow
+                .hardware_multiplier()
+        } else {
+            1.0
+        }
+    }
+
+    /// Get the display name for a hardware sacrifice policy index
+    #[func]
+    pub fn get_hardware_sacrifice_policy_name(&self, policy: i32) -> GString {
+        if let Some(p) = crate::engine_design::HardwareSacrificePolicy::from_index(policy) {
+            GString::from(p.name())
+        } else {
+            GString::from("Unknown")
+        }
+    }
+
+    /// Get the number of hardware sacrifice policy options
+    #[func]
+    pub fn get_hardware_sacrifice_policy_count(&self) -> i32 {
+        crate::engine_design::HardwareSacrificePolicy::count()
     }
 
     // ==========================================

@@ -13,6 +13,9 @@ var current_tab: Tab = Tab.MAP
 # Time pause state for UI
 var _last_paused_state: bool = false
 
+# Prevents research UI rebuilds while a dropdown is open
+var _dropdown_open: bool = false
+
 # Status bar labels
 @onready var fame_label = $MainVBox/StatusBar/StatusMargin/StatusHBox/FameContainer/FameLabel
 @onready var money_label = $MainVBox/StatusBar/StatusMargin/StatusHBox/MoneyLabel
@@ -172,6 +175,7 @@ func _process(delta: float):
 	# Advance game time (handles pausing internally)
 	var _events = game_manager.advance_time(delta)
 	# Events will be handled via signals
+
 
 func _input(event: InputEvent):
 	# Spacebar toggles pause
@@ -584,6 +588,20 @@ func _create_design_work_card(index: int) -> PanelContainer:
 		testing_label.add_theme_color_override("font_color", _engine_testing_level_color(testing_level))
 		vbox.add_child(testing_label)
 
+	# Show hardware productivity % for Testing/Fixing phases
+	if base_status == "Testing" or base_status == "Fixing":
+		var hw_mult = game_manager.get_rocket_design_hardware_multiplier(index)
+		var productivity_label = Label.new()
+		productivity_label.text = "Hardware productivity: %d%%" % int(hw_mult * 100)
+		productivity_label.add_theme_font_size_override("font_size", 12)
+		if hw_mult < 0.5:
+			productivity_label.add_theme_color_override("font_color", Color(1.0, 0.4, 0.3))
+		elif hw_mult < 0.8:
+			productivity_label.add_theme_color_override("font_color", Color(1.0, 0.8, 0.3))
+		else:
+			productivity_label.add_theme_color_override("font_color", Color(0.5, 0.8, 0.5))
+		vbox.add_child(productivity_label)
+
 	if teams_count > 0:
 		var teams_on = _get_teams_on_design(index)
 		vbox.add_child(_create_team_icons_hbox(teams_on, _get_eng_team_icon()))
@@ -808,6 +826,41 @@ func _create_engine_work_card(index: int) -> PanelContainer:
 		testing_label.add_theme_color_override("font_color", _engine_testing_level_color(testing_level))
 		vbox.add_child(testing_label)
 
+	# Show hardware productivity % and sacrifice policy for Testing/Fixing phases
+	if base_status == "Testing" or base_status == "Fixing":
+		var hw_mult = game_manager.get_engine_hardware_multiplier(index)
+		var hw_hbox = HBoxContainer.new()
+		hw_hbox.add_theme_constant_override("separation", 10)
+		vbox.add_child(hw_hbox)
+
+		var productivity_label = Label.new()
+		productivity_label.text = "Hardware productivity: %d%%" % int(hw_mult * 100)
+		productivity_label.add_theme_font_size_override("font_size", 12)
+		if hw_mult < 0.5:
+			productivity_label.add_theme_color_override("font_color", Color(1.0, 0.4, 0.3))
+		elif hw_mult < 0.8:
+			productivity_label.add_theme_color_override("font_color", Color(1.0, 0.8, 0.3))
+		else:
+			productivity_label.add_theme_color_override("font_color", Color(0.5, 0.8, 0.5))
+		hw_hbox.add_child(productivity_label)
+
+		var policy_label = Label.new()
+		policy_label.text = "Auto-test:"
+		policy_label.add_theme_font_size_override("font_size", 12)
+		hw_hbox.add_child(policy_label)
+
+		var policy_option = OptionButton.new()
+		policy_option.add_theme_font_size_override("font_size", 12)
+		var policy_count = game_manager.get_hardware_sacrifice_policy_count()
+		for i in range(policy_count):
+			policy_option.add_item(game_manager.get_hardware_sacrifice_policy_name(i), i)
+		policy_option.selected = game_manager.get_engine_hardware_sacrifice_policy(index)
+		policy_option.item_selected.connect(_on_hardware_sacrifice_policy_changed.bind(index))
+		# Prevent UI rebuild from destroying the popup while it's open
+		policy_option.get_popup().about_to_popup.connect(_on_dropdown_opened)
+		policy_option.get_popup().popup_hide.connect(_on_dropdown_closed)
+		hw_hbox.add_child(policy_option)
+
 	# Teams info (only if not Specification)
 	if base_status != "Specification":
 		if teams_count > 0:
@@ -947,6 +1000,17 @@ func _on_submit_engine_pressed(index: int):
 	game_manager.submit_engine_to_engineering(index)
 	_update_research_ui()
 
+func _on_dropdown_opened():
+	_dropdown_open = true
+
+func _on_dropdown_closed():
+	_dropdown_open = false
+	# Refresh now that the dropdown is closed
+	_update_research_ui()
+
+func _on_hardware_sacrifice_policy_changed(policy_index: int, engine_index: int):
+	game_manager.set_engine_hardware_sacrifice_policy(engine_index, policy_index)
+
 func _on_assign_engine_team_pressed(engine_index: int):
 	# Find an available engineering team (unassigned, not ramping)
 	var team_ids = game_manager.get_engineering_team_ids()
@@ -988,7 +1052,8 @@ func _on_research_designs_changed():
 
 func _on_research_update_timer():
 	# Periodic update of research UI (for progress bars and counters)
-	if current_tab == Tab.RESEARCH:
+	# Skip if a dropdown is open to avoid destroying the popup
+	if current_tab == Tab.RESEARCH and not _dropdown_open:
 		_update_research_ui()
 	elif current_tab == Tab.PRODUCTION:
 		_update_production_ui()
@@ -2265,10 +2330,15 @@ func _on_work_event(event_type: String, data: Dictionary):
 		"rocket_order_unblocked":
 			message = "Engines arrived — rocket assembly can begin!"
 			refresh_production = true
+		"hardware_test_consumed":
+			var display_name = data.get("display_name", "Engine")
+			message = "Hardware test: consumed %s engine from inventory" % display_name
+			refresh_research = true
+			refresh_production = true
 		_:
 			return  # Don't show toast for unknown events
 
-	if refresh_research:
+	if refresh_research and not _dropdown_open:
 		_update_research_ui()
 	if refresh_production:
 		_update_production_ui()

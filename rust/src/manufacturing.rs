@@ -517,6 +517,21 @@ impl Manufacturing {
         }
     }
 
+    /// Consume one engine from inventory for hardware testing (oldest revision first).
+    /// Returns true if an engine was available and consumed.
+    pub fn consume_engine_for_testing(&mut self, engine_design_id: usize) -> bool {
+        if let Some(entry) = self.engine_inventory.iter_mut()
+            .find(|e| e.engine_design_id == engine_design_id && e.quantity > 0)
+        {
+            entry.quantity -= 1;
+            // Clean up empty entries
+            self.engine_inventory.retain(|e| e.quantity > 0);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Get available engines for a specific design ID
     pub fn get_engines_available(&self, engine_design_id: usize) -> u32 {
         self.engine_inventory.iter()
@@ -1364,5 +1379,45 @@ mod tests {
     fn test_increase_nonexistent_order_returns_none() {
         let mut mfg = Manufacturing::new();
         assert!(mfg.increase_engine_order_quantity(999, 2).is_none());
+    }
+
+    // ==========================================
+    // Consume Engine for Testing Tests
+    // ==========================================
+
+    #[test]
+    fn test_consume_engine_for_testing_success() {
+        let mut mfg = Manufacturing::new();
+        let snap = kerolox_snapshot();
+
+        mfg.add_engine_to_inventory(1, 1, snap.clone());
+        mfg.add_engine_to_inventory(1, 1, snap);
+        assert_eq!(mfg.get_engines_available(1), 2);
+
+        assert!(mfg.consume_engine_for_testing(1));
+        assert_eq!(mfg.get_engines_available(1), 1);
+
+        assert!(mfg.consume_engine_for_testing(1));
+        assert_eq!(mfg.get_engines_available(1), 0);
+    }
+
+    #[test]
+    fn test_consume_engine_for_testing_none_available() {
+        let mut mfg = Manufacturing::new();
+        assert!(!mfg.consume_engine_for_testing(1));
+    }
+
+    #[test]
+    fn test_consume_engine_for_testing_wrong_design() {
+        let mut mfg = Manufacturing::new();
+        let snap = kerolox_snapshot();
+
+        mfg.add_engine_to_inventory(1, 1, snap);
+        assert_eq!(mfg.get_engines_available(1), 1);
+
+        // Try to consume design 0 (hydrolox) - should fail
+        assert!(!mfg.consume_engine_for_testing(0));
+        // Kerolox still there
+        assert_eq!(mfg.get_engines_available(1), 1);
     }
 }

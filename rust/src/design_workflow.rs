@@ -7,6 +7,10 @@ use crate::flaw::Flaw;
 /// Work required to fix a discovered flaw (14 days with 1 team)
 pub const FLAW_FIX_WORK: f64 = 14.0;
 
+/// Daily decay rate for hardware boost (applied each day in Testing/Fixing)
+/// Pure exponential: multiplier = (1 - DECAY_RATE)^days, no floor.
+pub const HARDWARE_DECAY_RATE: f64 = 0.004;
+
 /// Unified status for both engine and rocket designs
 #[derive(Debug, Clone, PartialEq)]
 pub enum DesignStatus {
@@ -114,6 +118,8 @@ pub struct DesignWorkflow {
     pub flaws_generated: bool,
     /// Cumulative work completed during Testing phase (for testing level estimation)
     pub testing_work_completed: f64,
+    /// Hardware boost factor (1.0 = fresh hardware test, decays daily in Testing/Fixing)
+    pub hardware_boost: f64,
 }
 
 impl DesignWorkflow {
@@ -125,7 +131,29 @@ impl DesignWorkflow {
             fixed_flaws: Vec::new(),
             flaws_generated: false,
             testing_work_completed: 0.0,
+            hardware_boost: 1.0,
         }
+    }
+
+    /// Get the current hardware multiplier (pure exponential, no floor)
+    pub fn hardware_multiplier(&self) -> f64 {
+        self.hardware_boost
+    }
+
+    /// Apply daily hardware boost decay
+    pub fn decay_hardware_boost(&mut self) {
+        self.hardware_boost *= 1.0 - HARDWARE_DECAY_RATE;
+    }
+
+    /// Reset hardware boost to 1.0 (after hardware test or launch)
+    pub fn reset_hardware_boost(&mut self) {
+        self.hardware_boost = 1.0;
+    }
+
+    /// Add testing work from a launch and reset hardware boost
+    pub fn add_launch_testing_work(&mut self, work: f64) {
+        self.testing_work_completed += work;
+        self.reset_hardware_boost();
     }
 
     /// Transition from Specification to Engineering phase
@@ -296,6 +324,58 @@ mod tests {
         assert!(wf.fixed_flaws.is_empty());
         assert!(!wf.flaws_generated);
         assert_eq!(wf.testing_work_completed, 0.0);
+        assert_eq!(wf.hardware_boost, 1.0);
+    }
+
+    #[test]
+    fn test_hardware_boost_decays() {
+        let mut wf = DesignWorkflow::new();
+        for _ in 0..30 {
+            wf.decay_hardware_boost();
+        }
+        let expected = (1.0 - HARDWARE_DECAY_RATE).powi(30);
+        assert!((wf.hardware_boost - expected).abs() < 0.001,
+            "After 30 days: expected {:.4}, got {:.4}", expected, wf.hardware_boost);
+        // 0.996^30 ≈ 0.887
+        assert!(wf.hardware_boost > 0.88 && wf.hardware_boost < 0.90);
+    }
+
+    #[test]
+    fn test_hardware_multiplier_approaches_zero() {
+        let mut wf = DesignWorkflow::new();
+        // Pure exponential decay approaches zero, no floor
+        for _ in 0..2000 {
+            wf.decay_hardware_boost();
+        }
+        let mult = wf.hardware_multiplier();
+        assert!(mult < 0.01,
+            "Multiplier {:.6} should approach zero after heavy decay", mult);
+        assert!(mult > 0.0, "Multiplier should remain positive");
+    }
+
+    #[test]
+    fn test_hardware_boost_resets() {
+        let mut wf = DesignWorkflow::new();
+        for _ in 0..100 {
+            wf.decay_hardware_boost();
+        }
+        assert!(wf.hardware_boost < 0.7);
+        wf.reset_hardware_boost();
+        assert_eq!(wf.hardware_boost, 1.0);
+        assert_eq!(wf.hardware_multiplier(), 1.0);
+    }
+
+    #[test]
+    fn test_add_launch_testing_work() {
+        let mut wf = DesignWorkflow::new();
+        wf.testing_work_completed = 50.0;
+        for _ in 0..100 {
+            wf.decay_hardware_boost();
+        }
+        assert!(wf.hardware_boost < 1.0);
+        wf.add_launch_testing_work(30.0);
+        assert_eq!(wf.testing_work_completed, 80.0);
+        assert_eq!(wf.hardware_boost, 1.0);
     }
 
     #[test]

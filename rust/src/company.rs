@@ -198,6 +198,9 @@ impl Company {
         // Reset testing_spent so we don't double-charge if design is reused
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
 
+        // Launching IS hardware testing — reset boost and add testing work
+        self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(30.0);
+
         // Create and complete a flight record
         let destination = self.active_contract.as_ref()
             .map(|c| c.destination.location_id().to_string())
@@ -252,6 +255,9 @@ impl Company {
 
         // Reset testing_spent so we don't double-charge on retry
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
+
+        // Failed launches still provide hardware testing data (partial credit)
+        self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(20.0);
 
         // Create and fail a flight record
         let destination = self.active_contract.as_ref()
@@ -1218,8 +1224,16 @@ impl Company {
         let is_testing = matches!(workflow.status, DesignStatus::Testing { .. });
         let is_fixing = matches!(workflow.status, DesignStatus::Fixing { .. });
 
+        // Apply hardware boost decay and multiplier in Testing/Fixing phases
+        let effective_efficiency = if is_testing || is_fixing {
+            workflow.decay_hardware_boost();
+            efficiency * workflow.hardware_multiplier()
+        } else {
+            efficiency
+        };
+
         // Advance work
-        let phase_completed = workflow.advance_work(efficiency);
+        let phase_completed = workflow.advance_work(effective_efficiency);
 
         if phase_completed {
             if is_fixing {
@@ -1240,9 +1254,9 @@ impl Company {
             }
         }
 
-        // Track cumulative testing work every day
+        // Track cumulative testing work every day (uses effective efficiency)
         if is_testing {
-            workflow.testing_work_completed += efficiency;
+            workflow.testing_work_completed += effective_efficiency;
         }
 
         // Discover flaws only when a testing cycle completes
@@ -1315,6 +1329,8 @@ impl Company {
 
     /// Process work progress on all engine designs
     fn process_engine_work(&mut self) -> Vec<WorkEvent> {
+        use crate::design_workflow::DesignStatus;
+
         let mut events = Vec::new();
 
         let engine_efficiencies: Vec<(usize, f64)> = (0..self.engine_designs.len())
@@ -1325,6 +1341,38 @@ impl Company {
         for (design_id, efficiency) in engine_efficiencies {
             let workflow = &mut self.engine_designs[design_id].head_mut().workflow;
             events.extend(Self::process_workflow_tick(workflow, efficiency, "engine", design_id));
+        }
+
+        // Check hardware sacrifice policies for engines in Testing/Fixing
+        let sacrifice_checks: Vec<(usize, f64, usize)> = self.engine_designs.iter()
+            .enumerate()
+            .filter_map(|(idx, lineage)| {
+                let design = lineage.head();
+                let is_test_or_fix = matches!(
+                    design.workflow.status,
+                    DesignStatus::Testing { .. } | DesignStatus::Fixing { .. }
+                );
+                if !is_test_or_fix {
+                    return None;
+                }
+                let threshold = design.hardware_sacrifice_policy.threshold();
+                if threshold <= 0.0 {
+                    return None; // Off policy
+                }
+                let mult = design.workflow.hardware_multiplier();
+                if mult < threshold {
+                    Some((idx, mult, idx)) // engine_design_id == lineage index
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (design_id, _mult, engine_design_id) in sacrifice_checks {
+            if self.manufacturing.consume_engine_for_testing(engine_design_id) {
+                self.engine_designs[design_id].head_mut().workflow.reset_hardware_boost();
+                events.push(WorkEvent::HardwareTestConsumed { engine_design_id });
+            }
         }
 
         events
@@ -2033,5 +2081,197 @@ mod tests {
         company.deploy_depot("leo", 5_000.0);
         let depot = company.get_infrastructure("leo").unwrap().depot.as_ref().unwrap();
         assert_eq!(depot.capacity_kg, 15_000.0);
+    }
+
+    // ==========================================
+    // Hardware Boost Tests
+    // ==========================================
+
+    #[test]
+    fn test_hardware_multiplier_affects_testing_work() {
+        use crate::design_workflow::DesignStatus;
+        let mut company = Company::new();
+
+        // Put an engine in Testing with a team assigned
+        let engine_id = 0; // Hydrolox
+        company.engine_designs[engine_id].head_mut().workflow.status = DesignStatus::Testing {
+            progress: 0.0,
+            total: 30.0,
+        };
+        company.engine_designs[engine_id].head_mut().workflow.flaws_generated = true;
+
+        // Assign an engineering team
+        company.assign_team_to_engine(company.teams[0].id, engine_id);
+
+        // Process 100 days to let hardware boost decay
+        for _ in 0..100 {
+            company.process_day(false);
+        }
+
+        let work_after_100 = company.engine_designs[engine_id].head().workflow.testing_work_completed;
+
+        // Reset and do 100 days with hardware boost kept at 1.0 by resetting each day
+        let engine_id2 = 1; // Kerolox
+        company.engine_designs[engine_id2].head_mut().workflow.status = DesignStatus::Testing {
+            progress: 0.0,
+            total: 30.0,
+        };
+        company.engine_designs[engine_id2].head_mut().workflow.flaws_generated = true;
+
+        // We can't easily reset each day, but we can check that the decayed one accumulated less work
+        // The first engine should have accumulated less testing work than 100 days × 1.0 efficiency
+        // With 1 team, efficiency = 1.0, so max testing work = 100.0 (if no hardware decay)
+        // With decay, it should be significantly less
+        assert!(work_after_100 < 95.0,
+            "With hardware decay, testing work should be < 95 over 100 days, got {:.1}", work_after_100);
+        assert!(work_after_100 > 50.0,
+            "Testing work should still be > 50 over 100 days with decay, got {:.1}", work_after_100);
+    }
+
+    #[test]
+    fn test_auto_consume_engine_at_threshold() {
+        use crate::design_workflow::DesignStatus;
+        use crate::engine_design::HardwareSacrificePolicy;
+
+        let mut company = Company::new();
+        make_engines_manufacturable(&mut company);
+
+        let engine_id = 1; // Kerolox
+
+        // Set engine to Testing with Aggressive policy (threshold = 0.8)
+        company.engine_designs[engine_id].head_mut().workflow.status = DesignStatus::Testing {
+            progress: 0.0,
+            total: 30.0,
+        };
+        company.engine_designs[engine_id].head_mut().workflow.flaws_generated = true;
+        company.engine_designs[engine_id].head_mut().hardware_sacrifice_policy = HardwareSacrificePolicy::Aggressive;
+
+        // Assign a team
+        company.assign_team_to_engine(company.teams[0].id, engine_id);
+
+        // Add an engine to inventory
+        let snap = company.engine_designs[engine_id].head().snapshot(engine_id, "Kerolox");
+        company.manufacturing.add_engine_to_inventory(engine_id, 1, snap);
+        assert_eq!(company.manufacturing.get_engines_available(engine_id), 1);
+
+        // Decay hardware boost until it drops below 0.8 threshold
+        // With Aggressive threshold 0.8, mult = 0.2 + 0.8 * boost < 0.8 when boost < 0.75
+        // boost < 0.75 after about 58 days (0.995^58 ≈ 0.748)
+        for _ in 0..70 {
+            let events = company.process_day(false);
+            // Check if hardware test consumed event occurred
+            let consumed = events.iter().any(|e| matches!(e, WorkEvent::HardwareTestConsumed { .. }));
+            if consumed {
+                // Engine should have been consumed and boost reset
+                assert_eq!(company.manufacturing.get_engines_available(engine_id), 0);
+                assert_eq!(company.engine_designs[engine_id].head().workflow.hardware_boost, 1.0);
+                return;
+            }
+        }
+
+        panic!("Expected hardware test consumption to occur within 70 days with Aggressive policy");
+    }
+
+    #[test]
+    fn test_auto_consume_off_policy() {
+        use crate::design_workflow::DesignStatus;
+        use crate::engine_design::HardwareSacrificePolicy;
+
+        let mut company = Company::new();
+
+        let engine_id = 1; // Kerolox
+
+        // Set engine to Testing with Off policy
+        company.engine_designs[engine_id].head_mut().workflow.status = DesignStatus::Testing {
+            progress: 0.0,
+            total: 30.0,
+        };
+        company.engine_designs[engine_id].head_mut().workflow.flaws_generated = true;
+        company.engine_designs[engine_id].head_mut().hardware_sacrifice_policy = HardwareSacrificePolicy::Off;
+
+        // Assign a team
+        company.assign_team_to_engine(company.teams[0].id, engine_id);
+
+        // Add an engine to inventory
+        let snap = company.engine_designs[engine_id].head().snapshot(engine_id, "Kerolox");
+        company.manufacturing.add_engine_to_inventory(engine_id, 1, snap);
+
+        // Process many days — Off policy should never consume
+        for _ in 0..200 {
+            company.process_day(false);
+        }
+
+        // Engine should still be in inventory
+        assert_eq!(company.manufacturing.get_engines_available(engine_id), 1);
+    }
+
+    #[test]
+    fn test_launch_resets_rocket_hardware_boost() {
+        use crate::design_workflow::DesignStatus;
+        use crate::contract::Contract;
+
+        let mut company = Company::new();
+
+        let design_id = 0;
+        company.rocket_designs[design_id].head_mut().workflow.status = DesignStatus::Testing {
+            progress: 0.0,
+            total: 30.0,
+        };
+
+        // Decay the boost
+        for _ in 0..100 {
+            company.rocket_designs[design_id].head_mut().workflow.decay_hardware_boost();
+        }
+        assert!(company.rocket_designs[design_id].head().workflow.hardware_boost < 0.7);
+
+        // Set up a contract and complete it
+        let contracts = Contract::generate_batch(1, 1);
+        company.available_contracts = contracts;
+        company.select_contract(0);
+        company.money = 1_000_000_000.0;
+
+        let initial_testing_work = company.rocket_designs[design_id].head().workflow.testing_work_completed;
+        company.complete_contract(design_id);
+
+        // Hardware boost should be reset to 1.0
+        assert_eq!(company.rocket_designs[design_id].head().workflow.hardware_boost, 1.0);
+        // Testing work should have increased by 30.0
+        let new_testing_work = company.rocket_designs[design_id].head().workflow.testing_work_completed;
+        assert!((new_testing_work - initial_testing_work - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_failure_gives_partial_testing_credit() {
+        use crate::design_workflow::DesignStatus;
+        use crate::contract::Contract;
+
+        let mut company = Company::new();
+
+        let design_id = 0;
+        company.rocket_designs[design_id].head_mut().workflow.status = DesignStatus::Testing {
+            progress: 0.0,
+            total: 30.0,
+        };
+
+        // Decay the boost
+        for _ in 0..100 {
+            company.rocket_designs[design_id].head_mut().workflow.decay_hardware_boost();
+        }
+        assert!(company.rocket_designs[design_id].head().workflow.hardware_boost < 0.7);
+
+        // Set up a contract and fail it
+        let contracts = Contract::generate_batch(1, 1);
+        company.available_contracts = contracts;
+        company.select_contract(0);
+        company.money = 1_000_000_000.0;
+
+        let initial_testing_work = company.rocket_designs[design_id].head().workflow.testing_work_completed;
+        company.fail_contract(design_id);
+
+        // Hardware boost should be reset to 1.0
+        assert_eq!(company.rocket_designs[design_id].head().workflow.hardware_boost, 1.0);
+        // Testing work should have increased by 20.0 (failure partial credit)
+        let new_testing_work = company.rocket_designs[design_id].head().workflow.testing_work_completed;
+        assert!((new_testing_work - initial_testing_work - 20.0).abs() < 0.01);
     }
 }

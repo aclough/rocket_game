@@ -2,12 +2,6 @@
 * UI
     * [Done by human] Figure out UI for locations and refueling
 * Refactoring
-* Hardware rich development
-    * Diminsighing returns to development over time without sacrificing hardware.
-    * Mission flights or test flight work for rockets.
-    * For engines or other parts a test stand is good enough.
-        * By which I mean, if the productivity factor from a lack of tests is below some fraction and there is an engine
-          in storage, it is removed to restore research productivity.
 * Propellant endurance tracking (build on propellant remaining data).
     * Will be important later when we have multi-stage missions and propellant depots
 * Places, delta-v map

@@ -191,6 +191,10 @@ pub enum WorkEvent {
     RocketOrderUnblocked {
         order_id: crate::manufacturing::ManufacturingOrderId,
     },
+    /// An engine was consumed from inventory for hardware testing
+    HardwareTestConsumed {
+        engine_design_id: usize,
+    },
 }
 
 /// Calculate total efficiency for multiple teams working on the same thing

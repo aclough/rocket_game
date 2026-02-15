@@ -86,11 +86,11 @@ func _populate_rocket_select():
 	rocket_select.disabled = false
 	for i in range(inventory.size()):
 		var entry = inventory[i]
-		var name = entry.get("name", "Unknown")
+		var rocket_name = entry.get("name", "Unknown")
 		var serial = entry.get("serial_number", -1)
 		var mass_kg = entry.get("mass_kg", 0.0)
 		var mass_t = mass_kg / 1000.0
-		rocket_select.add_item("S/N %d: %s (%.0ft)" % [serial, name, mass_t])
+		rocket_select.add_item("S/N %d: %s (%.0ft)" % [serial, rocket_name, mass_t])
 		rocket_select.set_item_metadata(i, serial)
 
 	# Auto-select first rocket
