@@ -346,11 +346,20 @@ impl Company {
         self.rocket_designs.get(index).map(|l| l.head().clone())
     }
 
-    /// Update a rocket design's head with the given design
+    /// Update a rocket design's head with the given design.
+    /// Preserves the company-authoritative workflow fields (hardware_boost,
+    /// testing_work_completed, status) so that launch resets aren't overwritten
+    /// by stale designer copies.
     pub fn update_rocket_design(&mut self, index: usize, design: RocketDesign) -> bool {
         if let Some(lineage) = self.rocket_designs.get_mut(index) {
+            let preserved_hardware_boost = lineage.head().workflow.hardware_boost;
+            let preserved_testing_work = lineage.head().workflow.testing_work_completed;
+            let preserved_status = lineage.head().workflow.status.clone();
             let new_name = design.name.clone();
             *lineage.head_mut() = design;
+            lineage.head_mut().workflow.hardware_boost = preserved_hardware_boost;
+            lineage.head_mut().workflow.testing_work_completed = preserved_testing_work;
+            lineage.head_mut().workflow.status = preserved_status;
             lineage.name = new_name.clone();
             lineage.head_mut().name = new_name;
             true
@@ -2459,5 +2468,26 @@ mod tests {
 
         // No launches => 0
         assert_eq!(ct.average_cost_per_flight(0), 0.0);
+    }
+
+    #[test]
+    fn test_update_rocket_design_preserves_workflow() {
+        let mut company = Company::new();
+        let design_id = 0;
+
+        // Set hardware_boost and testing_work on the company's head
+        company.rocket_designs[design_id].head_mut().workflow.hardware_boost = 1.0;
+        company.rocket_designs[design_id].head_mut().workflow.testing_work_completed = 50.0;
+
+        // Simulate what sync_design_from does: get a stale copy with different workflow
+        let mut stale_design = company.rocket_designs[design_id].head().clone();
+        stale_design.workflow.hardware_boost = 0.3; // stale decayed value
+        stale_design.workflow.testing_work_completed = 10.0; // stale value
+
+        // Update should preserve the company's workflow fields
+        company.update_rocket_design(design_id, stale_design);
+
+        assert_eq!(company.rocket_designs[design_id].head().workflow.hardware_boost, 1.0);
+        assert_eq!(company.rocket_designs[design_id].head().workflow.testing_work_completed, 50.0);
     }
 }

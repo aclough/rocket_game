@@ -1,4 +1,3 @@
-* Fixes
 * UI
     * [Done by human] Figure out UI for locations and refueling
 * Refactoring
