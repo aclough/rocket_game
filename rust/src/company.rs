@@ -7,6 +7,7 @@ use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, 
 use crate::flaw::FlawGenerator;
 use crate::flight_state::{FlightId, FlightState};
 use crate::launch_site::LaunchSite;
+use crate::mission_plan::MissionPlan;
 use crate::manufacturing::{Manufacturing, ManufacturingOrderId, ManufacturingOrderType, manufacturing_team_efficiency};
 
 use crate::rocket_design::RocketDesign;
@@ -1042,7 +1043,10 @@ impl Company {
 
     /// Create a flight from a rocket design lineage.
     /// Cuts a revision on the lineage, creates a FlightState from the frozen design.
+    /// Returns None if no path exists to the destination.
     pub fn create_flight(&mut self, design_lineage_index: usize, destination: &str) -> Option<FlightId> {
+        let plan = MissionPlan::from_shortest_path("earth_surface", destination)?;
+
         let lineage = self.rocket_designs.get_mut(design_lineage_index)?;
         let rev = lineage.cut_revision("launch");
         let design = lineage.get_revision(rev).unwrap().snapshot.clone();
@@ -1050,7 +1054,7 @@ impl Company {
         let id = self.next_flight_id;
         self.next_flight_id += 1;
 
-        let flight = FlightState::from_design(id, design_lineage_index, rev, &design, destination);
+        let flight = FlightState::from_design(id, design_lineage_index, rev, &design, destination, plan);
         self.flights.push(flight);
         Some(id)
     }

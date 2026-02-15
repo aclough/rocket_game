@@ -3181,4 +3181,84 @@ impl GameManager {
             None => false,
         }
     }
+
+    // ==========================================
+    // Flight Legs (Mission Plan)
+    // ==========================================
+
+    /// Get the number of legs in a flight's mission plan
+    #[func]
+    pub fn get_flight_leg_count(&self, flight_id: i32) -> i32 {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.leg_count() as i32,
+            None => 0,
+        }
+    }
+
+    /// Get the 'from' location of a flight leg
+    #[func]
+    pub fn get_flight_leg_from(&self, flight_id: i32, leg_index: i32) -> GString {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.leg(leg_index as usize)
+                .map(|leg| GString::from(leg.from))
+                .unwrap_or_default(),
+            None => GString::default(),
+        }
+    }
+
+    /// Get the 'to' location of a flight leg
+    #[func]
+    pub fn get_flight_leg_to(&self, flight_id: i32, leg_index: i32) -> GString {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.leg(leg_index as usize)
+                .map(|leg| GString::from(leg.to))
+                .unwrap_or_default(),
+            None => GString::default(),
+        }
+    }
+
+    /// Get the delta-v required for a flight leg
+    #[func]
+    pub fn get_flight_leg_delta_v(&self, flight_id: i32, leg_index: i32) -> f64 {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.leg(leg_index as usize)
+                .map(|leg| leg.delta_v_required)
+                .unwrap_or(0.0),
+            None => 0.0,
+        }
+    }
+
+    // ==========================================
+    // Mission Validation
+    // ==========================================
+
+    /// Check if a rocket design can feasibly reach a destination
+    #[func]
+    pub fn get_mission_feasible(&self, design_index: i32, destination: GString) -> bool {
+        use crate::mission_plan::{MissionPlan, simulate_mission};
+
+        let dest_str = destination.to_string();
+        let plan = match MissionPlan::from_shortest_path("earth_surface", &dest_str) {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let design = match self.state.player_company.rocket_designs.get(design_index as usize) {
+            Some(lineage) => lineage.head(),
+            None => return false,
+        };
+
+        simulate_mission(design, &plan).feasible
+    }
+
+    /// Get how many legs are in the shortest path to a destination
+    #[func]
+    pub fn get_mission_leg_count(&self, destination: GString) -> i32 {
+        use crate::mission_plan::MissionPlan;
+
+        let dest_str = destination.to_string();
+        MissionPlan::from_shortest_path("earth_surface", &dest_str)
+            .map(|p| p.leg_count() as i32)
+            .unwrap_or(0)
+    }
 }

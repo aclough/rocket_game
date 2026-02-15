@@ -1,4 +1,5 @@
 use crate::engine_design::FuelType;
+use crate::mission_plan::{MissionLeg, MissionPlan};
 use crate::rocket_design::RocketDesign;
 use std::collections::BTreeMap;
 
@@ -29,6 +30,7 @@ pub struct FlightState {
     pub stages: Vec<StageFlightState>,
     pub payload_mass_kg: f64,
     pub status: FlightStatus,
+    pub mission_plan: MissionPlan,
 }
 
 impl FlightState {
@@ -40,6 +42,7 @@ impl FlightState {
         revision_number: u32,
         design: &RocketDesign,
         destination: &str,
+        mission_plan: MissionPlan,
     ) -> Self {
         let stages = design
             .stages
@@ -61,7 +64,18 @@ impl FlightState {
             stages,
             payload_mass_kg: design.payload_mass_kg,
             status: FlightStatus::InTransit,
+            mission_plan,
         }
+    }
+
+    /// Number of legs in the mission plan.
+    pub fn leg_count(&self) -> usize {
+        self.mission_plan.leg_count()
+    }
+
+    /// Get a specific leg of the mission plan.
+    pub fn leg(&self, index: usize) -> Option<&MissionLeg> {
+        self.mission_plan.legs.get(index)
     }
 
     /// Mark flight as completed. Updates location and propellant from design data.
@@ -123,10 +137,14 @@ mod tests {
     use super::*;
     use crate::rocket_design::RocketDesign;
 
+    fn leo_plan() -> MissionPlan {
+        MissionPlan::from_shortest_path("earth_surface", "leo").unwrap()
+    }
+
     #[test]
     fn test_flight_from_design() {
         let design = RocketDesign::default_design();
-        let flight = FlightState::from_design(1, 0, 1, &design, "leo");
+        let flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
 
         assert_eq!(flight.id, 1);
         assert_eq!(flight.design_lineage_index, 0);
@@ -149,7 +167,7 @@ mod tests {
         let design = RocketDesign::default_design();
         assert!(design.is_sufficient(), "Default design should be sufficient");
 
-        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo");
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
         flight.complete(&design);
 
         assert_eq!(flight.status, FlightStatus::Completed);
@@ -159,7 +177,7 @@ mod tests {
     #[test]
     fn test_flight_fail() {
         let design = RocketDesign::default_design();
-        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo");
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
         flight.fail();
 
         assert_eq!(flight.status, FlightStatus::Failed);
@@ -170,7 +188,7 @@ mod tests {
     #[test]
     fn test_total_propellant_remaining() {
         let design = RocketDesign::default_design();
-        let flight = FlightState::from_design(1, 0, 1, &design, "leo");
+        let flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
 
         let total = flight.total_propellant_remaining_kg();
         let expected: f64 = design.stages.iter().map(|s| s.propellant_mass_kg).sum();
@@ -181,7 +199,7 @@ mod tests {
     fn test_is_active() {
         let design = RocketDesign::default_design();
 
-        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo");
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
         assert!(flight.is_active()); // InTransit
 
         flight.status = FlightStatus::AtLocation;

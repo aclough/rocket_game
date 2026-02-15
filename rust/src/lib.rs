@@ -14,6 +14,7 @@ pub mod game_state;
 pub mod launch_site;
 pub mod location;
 pub mod manufacturing;
+pub mod mission_plan;
 pub mod launcher;
 pub mod resources;
 pub mod rocket_design;
