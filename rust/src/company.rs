@@ -5,6 +5,7 @@ use crate::engine_design::{default_engine_lineages, create_engine, EngineDesign,
 use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, TeamType, WorkEvent,
     ENGINEERING_HIRE_COST, MANUFACTURING_HIRE_COST};
 use crate::flaw::FlawGenerator;
+use crate::flight_state::{FlightId, FlightState};
 use crate::launch_site::LaunchSite;
 use crate::manufacturing::{Manufacturing, ManufacturingOrderId, ManufacturingOrderType, manufacturing_team_efficiency};
 
@@ -56,6 +57,10 @@ pub struct Company {
     pub manufacturing: Manufacturing,
     /// Whether to auto-assign idle manufacturing teams each day
     pub auto_assign_manufacturing: bool,
+    /// Active and completed flights
+    pub flights: Vec<FlightState>,
+    /// Next flight ID to assign
+    next_flight_id: FlightId,
 }
 
 impl Company {
@@ -81,6 +86,8 @@ impl Company {
             flaw_generator: FlawGenerator::new(),
             manufacturing: Manufacturing::new(),
             auto_assign_manufacturing: false,
+            flights: Vec::new(),
+            next_flight_id: 1,
         };
 
         // Generate initial contracts
@@ -184,6 +191,17 @@ impl Company {
         // Reset testing_spent so we don't double-charge if design is reused
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
 
+        // Create and complete a flight record
+        let destination = self.active_contract.as_ref()
+            .map(|c| c.destination.location_id().to_string())
+            .unwrap_or_else(|| "leo".to_string());
+        if let Some(flight_id) = self.create_flight(rocket_design_id, &destination) {
+            let design = self.rocket_designs[rocket_design_id].head().clone();
+            if let Some(flight) = self.get_flight_mut(flight_id) {
+                flight.complete(&design);
+            }
+        }
+
         if let Some(contract) = self.active_contract.take() {
             let reward = contract.reward;
             self.money += reward;
@@ -227,6 +245,16 @@ impl Company {
 
         // Reset testing_spent so we don't double-charge on retry
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
+
+        // Create and fail a flight record
+        let destination = self.active_contract.as_ref()
+            .map(|c| c.destination.location_id().to_string())
+            .unwrap_or_else(|| "leo".to_string());
+        if let Some(flight_id) = self.create_flight(rocket_design_id, &destination) {
+            if let Some(flight) = self.get_flight_mut(flight_id) {
+                flight.fail();
+            }
+        }
 
         // Don't remove the active contract - player can retry
     }
@@ -1006,6 +1034,45 @@ impl Company {
         }
 
         assigned_count
+    }
+
+    // ==========================================
+    // Flight Management
+    // ==========================================
+
+    /// Create a flight from a rocket design lineage.
+    /// Cuts a revision on the lineage, creates a FlightState from the frozen design.
+    pub fn create_flight(&mut self, design_lineage_index: usize, destination: &str) -> Option<FlightId> {
+        let lineage = self.rocket_designs.get_mut(design_lineage_index)?;
+        let rev = lineage.cut_revision("launch");
+        let design = lineage.get_revision(rev).unwrap().snapshot.clone();
+
+        let id = self.next_flight_id;
+        self.next_flight_id += 1;
+
+        let flight = FlightState::from_design(id, design_lineage_index, rev, &design, destination);
+        self.flights.push(flight);
+        Some(id)
+    }
+
+    /// Get a flight by ID.
+    pub fn get_flight(&self, id: FlightId) -> Option<&FlightState> {
+        self.flights.iter().find(|f| f.id == id)
+    }
+
+    /// Get a mutable flight by ID.
+    pub fn get_flight_mut(&mut self, id: FlightId) -> Option<&mut FlightState> {
+        self.flights.iter_mut().find(|f| f.id == id)
+    }
+
+    /// Get all active flights (InTransit or AtLocation).
+    pub fn active_flights(&self) -> Vec<&FlightState> {
+        self.flights.iter().filter(|f| f.is_active()).collect()
+    }
+
+    /// Get total number of flights.
+    pub fn flight_count(&self) -> usize {
+        self.flights.len()
     }
 
     // ==========================================

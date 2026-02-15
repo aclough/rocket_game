@@ -9,6 +9,7 @@ pub mod engine;
 pub mod engine_design;
 pub mod engineering_team;
 pub mod flaw;
+pub mod flight_state;
 pub mod game_state;
 pub mod launch_site;
 pub mod location;

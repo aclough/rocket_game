@@ -3082,4 +3082,103 @@ impl GameManager {
         );
         GString::from(summary.as_str())
     }
+
+    // ==========================================
+    // Flight Tracking
+    // ==========================================
+
+    /// Get the number of flights
+    #[func]
+    pub fn get_flight_count(&self) -> i32 {
+        self.state.player_company.flight_count() as i32
+    }
+
+    /// Get the flight ID at the given index
+    #[func]
+    pub fn get_flight_id(&self, index: i32) -> i32 {
+        self.state.player_company.flights
+            .get(index as usize)
+            .map(|f| f.id as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Get flight status as a string
+    #[func]
+    pub fn get_flight_status(&self, flight_id: i32) -> GString {
+        use crate::flight_state::FlightStatus;
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => GString::from(match &f.status {
+                FlightStatus::InTransit => "InTransit",
+                FlightStatus::AtLocation => "AtLocation",
+                FlightStatus::Completed => "Completed",
+                FlightStatus::Failed => "Failed",
+            }),
+            None => GString::from("Unknown"),
+        }
+    }
+
+    /// Get flight's current location
+    #[func]
+    pub fn get_flight_location(&self, flight_id: i32) -> GString {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => GString::from(f.current_location.as_str()),
+            None => GString::from(""),
+        }
+    }
+
+    /// Get flight's destination
+    #[func]
+    pub fn get_flight_destination(&self, flight_id: i32) -> GString {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => GString::from(f.destination.as_str()),
+            None => GString::from(""),
+        }
+    }
+
+    /// Get the design lineage name for a flight
+    #[func]
+    pub fn get_flight_design_name(&self, flight_id: i32) -> GString {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => {
+                self.state.player_company.rocket_designs
+                    .get(f.design_lineage_index)
+                    .map(|l| GString::from(l.name.as_str()))
+                    .unwrap_or_else(|| GString::from("Unknown"))
+            }
+            None => GString::from("Unknown"),
+        }
+    }
+
+    /// Get the number of stages in a flight
+    #[func]
+    pub fn get_flight_stage_count(&self, flight_id: i32) -> i32 {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.stages.len() as i32,
+            None => 0,
+        }
+    }
+
+    /// Get propellant remaining for a specific stage of a flight
+    #[func]
+    pub fn get_flight_stage_propellant(&self, flight_id: i32, stage: i32) -> f64 {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.stages
+                .get(stage as usize)
+                .map(|s| s.propellant_remaining_kg)
+                .unwrap_or(0.0),
+            None => 0.0,
+        }
+    }
+
+    /// Get whether a specific stage is still attached
+    #[func]
+    pub fn get_flight_stage_attached(&self, flight_id: i32, stage: i32) -> bool {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.stages
+                .get(stage as usize)
+                .map(|s| s.attached)
+                .unwrap_or(false),
+            None => false,
+        }
+    }
 }
