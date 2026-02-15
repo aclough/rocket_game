@@ -7,6 +7,7 @@ extends Control
 
 signal testing_requested
 signal back_requested
+signal engineering_submitted
 
 enum View { SELECT, EDITOR, ENGINE_EDITOR }
 
@@ -22,6 +23,7 @@ func _ready():
 	select_view.design_selected.connect(_on_design_selected)
 	select_view.back_requested.connect(_on_select_back_requested)
 	select_view.engine_edit_requested.connect(_on_engine_edit_requested)
+	select_view.engineering_submitted.connect(func(): engineering_submitted.emit())
 
 	# Connect design editor signals
 	editor_view.back_requested.connect(_on_editor_back_requested)
@@ -100,8 +102,7 @@ func _on_editor_submit_to_engineering():
 		game_manager.sync_design_from(designer)
 		game_manager.ensure_design_saved(designer)
 		game_manager.submit_current_to_engineering()
-	# Go back to select view to show updated status
-	show_select_view()
+	engineering_submitted.emit()
 
 # Engine editor signals
 func _on_engine_editor_back_requested():

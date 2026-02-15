@@ -198,6 +198,7 @@ func _setup_design_content():
 	design.set_game_manager(game_manager)
 	design.testing_requested.connect(_on_testing_requested)
 	design.back_requested.connect(_on_design_back_requested)
+	design.engineering_submitted.connect(_on_engineering_submitted)
 
 func _setup_launch_site_content():
 	var launch_site = content_areas[Tab.LAUNCH_SITE]
@@ -618,11 +619,15 @@ func _create_design_work_card(index: int) -> PanelContainer:
 		progress_bar.add_theme_stylebox_override("fill", fill_style)
 		vbox.add_child(progress_bar)
 	elif base_status == "Engineering" and progress > 0:
-		# Engineering: normal progress bar
+		# Engineering: cyan progress bar (same as engine engineering)
 		var progress_bar = ProgressBar.new()
 		progress_bar.value = progress * 100
 		progress_bar.custom_minimum_size = Vector2(0, 12)
 		progress_bar.show_percentage = true
+		var fill_style = StyleBoxFlat.new()
+		fill_style.set_bg_color(Color(0.3, 0.7, 0.9))
+		fill_style.set_corner_radius_all(3)
+		progress_bar.add_theme_stylebox_override("fill", fill_style)
 		vbox.add_child(progress_bar)
 	elif base_status == "Engineering":
 		var hint_label = Label.new()
@@ -2365,6 +2370,9 @@ func _on_design_requested():
 
 func _on_design_back_requested():
 	_show_tab(Tab.MISSIONS)
+
+func _on_engineering_submitted():
+	_show_tab(Tab.RESEARCH)
 
 # Design content signal handlers
 func _on_testing_requested():

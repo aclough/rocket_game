@@ -3,6 +3,7 @@ extends Control
 signal design_selected(design_index: int)  # -1 for new design
 signal back_requested
 signal engine_edit_requested(engine_index: int)
+signal engineering_submitted
 
 # Game manager reference (set by parent)
 var game_manager: GameManager = null
@@ -375,7 +376,7 @@ func _on_team_assigned_to_design(design_index: int, team_id: int):
 func _on_submit_to_engineering_pressed(index: int):
 	if game_manager:
 		game_manager.submit_design_to_engineering(index)
-		_update_ui()
+	engineering_submitted.emit()
 
 func _on_select_design_pressed(index: int):
 	if game_manager:

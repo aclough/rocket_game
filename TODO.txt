@@ -1,7 +1,5 @@
 * Fixes
 * UI
-    * The Color of the progress bar for Rockets should be the same blue as for engines.
-    * Pressing "Submit to engineering on a design should move us to the Research tab
     * [Done by human] Figure out UI for locations and refueling
 * Refactoring
 * Hardware rich development
