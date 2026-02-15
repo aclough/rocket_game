@@ -748,6 +748,39 @@ impl Company {
         self.teams.iter().map(|t| t.monthly_salary).sum()
     }
 
+    /// Attribute engineering team salary costs to the designs they are working on.
+    /// Called once per salary payment. Only engineering teams are attributed (not manufacturing).
+    fn attribute_salary_to_designs(&mut self) {
+        use crate::engineering_team::TeamAssignment;
+
+        // Collect (design_kind, design_id, salary) tuples first to avoid borrow issues
+        let attributions: Vec<(bool, usize, f64)> = self.teams.iter()
+            .filter_map(|team| {
+                match &team.assignment {
+                    Some(TeamAssignment::RocketDesign { rocket_design_id, .. }) => {
+                        Some((true, *rocket_design_id, team.monthly_salary))
+                    }
+                    Some(TeamAssignment::EngineDesign { engine_design_id, .. }) => {
+                        Some((false, *engine_design_id, team.monthly_salary))
+                    }
+                    _ => None, // Manufacturing teams not attributed
+                }
+            })
+            .collect();
+
+        for (is_rocket, design_id, salary) in attributions {
+            if is_rocket {
+                if let Some(lineage) = self.rocket_designs.get_mut(design_id) {
+                    lineage.cost_tracker.add_salary(salary);
+                }
+            } else {
+                if let Some(lineage) = self.engine_designs.get_mut(design_id) {
+                    lineage.cost_tracker.add_salary(salary);
+                }
+            }
+        }
+    }
+
     // ==========================================
     // Manufacturing Management
     // ==========================================
@@ -1176,6 +1209,8 @@ impl Company {
                     amount: salary_total,
                 });
             }
+            // Attribute engineering salary to the designs teams are working on
+            self.attribute_salary_to_designs();
         }
 
         // Process work on designs
@@ -1370,6 +1405,11 @@ impl Company {
 
         for (design_id, _mult, engine_design_id) in sacrifice_checks {
             if self.manufacturing.consume_engine_for_testing(engine_design_id) {
+                // Attribute the material cost of the consumed engine to NRE
+                let snap = self.engine_designs[design_id].head().snapshot(design_id, &self.engine_designs[design_id].name);
+                let material_cost = crate::manufacturing::engine_material_cost(&snap);
+                self.engine_designs[design_id].cost_tracker.add_hardware_test_cost(material_cost);
+
                 self.engine_designs[design_id].head_mut().workflow.reset_hardware_boost();
                 events.push(WorkEvent::HardwareTestConsumed { engine_design_id });
             }
@@ -1406,6 +1446,7 @@ impl Company {
             order.progress += efficiency;
 
             if order.is_unit_complete() {
+                let unit_cost = order.material_cost_per_unit;
                 match &mut order.order_type {
                     ManufacturingOrderType::Engine {
                         engine_design_id,
@@ -1421,6 +1462,11 @@ impl Company {
                         let comp = *completed;
                         let qty = *quantity;
                         let oid = order_id;
+
+                        // Track production cost on the engine lineage
+                        if let Some(lineage) = self.engine_designs.get_mut(eid) {
+                            lineage.cost_tracker.add_production_cost(unit_cost, 1);
+                        }
 
                         // Add completed engine to inventory
                         self.manufacturing.add_engine_to_inventory(eid, rev, snap);
@@ -1450,6 +1496,11 @@ impl Company {
                         let rev = *revision_number;
                         let snap = design_snapshot.clone();
                         let oid = order_id;
+
+                        // Track production cost on the rocket lineage
+                        if let Some(lineage) = self.rocket_designs.get_mut(rid) {
+                            lineage.cost_tracker.add_production_cost(unit_cost, 1);
+                        }
 
                         // Add completed rocket to inventory
                         self.manufacturing.add_rocket_to_inventory(rid, rev, snap);
@@ -2273,5 +2324,140 @@ mod tests {
         // Testing work should have increased by 20.0 (failure partial credit)
         let new_testing_work = company.rocket_designs[design_id].head().workflow.testing_work_completed;
         assert!((new_testing_work - initial_testing_work - 20.0).abs() < 0.01);
+    }
+
+    // ==========================================
+    // Cost Tracker Integration Tests
+    // ==========================================
+
+    #[test]
+    fn test_salary_attribution_to_engine() {
+        let mut company = Company::new();
+        company.money = 10_000_000.0;
+
+        // Hire an engineering team
+        company.hire_engineering_team();
+        let team_id = company.teams.last().unwrap().id;
+        // Skip ramp-up
+        for team in &mut company.teams {
+            team.ramp_up_days_remaining = 0;
+        }
+
+        // Assign team to engine design 0
+        let engine_id = 0;
+        company.assign_team_to_engine(team_id, engine_id);
+
+        // Process a salary day
+        let initial_nre = company.engine_designs[engine_id].cost_tracker.nre();
+        assert_eq!(initial_nre, 0.0);
+
+        company.process_day(true);
+
+        let salary = company.teams.iter()
+            .find(|t| t.id == team_id)
+            .unwrap()
+            .monthly_salary;
+
+        let nre_after = company.engine_designs[engine_id].cost_tracker.nre();
+        assert!((nre_after - salary).abs() < 0.01,
+            "NRE should equal one month's salary: got {} expected {}", nre_after, salary);
+    }
+
+    #[test]
+    fn test_salary_attribution_to_rocket() {
+        let mut company = Company::new();
+        company.money = 10_000_000.0;
+
+        // Hire an engineering team
+        company.hire_engineering_team();
+        let team_id = company.teams.last().unwrap().id;
+        for team in &mut company.teams {
+            team.ramp_up_days_remaining = 0;
+        }
+
+        // Assign team to rocket design 0
+        let rocket_id = 0;
+        company.assign_team_to_design(team_id, rocket_id);
+
+        company.process_day(true);
+
+        let salary = company.teams.iter()
+            .find(|t| t.id == team_id)
+            .unwrap()
+            .monthly_salary;
+
+        let nre = company.rocket_designs[rocket_id].cost_tracker.nre();
+        assert!((nre - salary).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_no_salary_attribution_on_non_salary_day() {
+        let mut company = Company::new();
+        company.money = 10_000_000.0;
+
+        company.hire_engineering_team();
+        let team_id = company.teams.last().unwrap().id;
+        for team in &mut company.teams {
+            team.ramp_up_days_remaining = 0;
+        }
+
+        company.assign_team_to_engine(team_id, 0);
+        company.process_day(false); // Not a salary day
+
+        assert_eq!(company.engine_designs[0].cost_tracker.nre(), 0.0);
+    }
+
+    #[test]
+    fn test_production_cost_attribution_engine() {
+        let mut company = Company::new();
+        company.money = 100_000_000.0;
+        make_engines_manufacturable(&mut company);
+
+        let engine_id = 0;
+        let lineage = &company.engine_designs[engine_id];
+        let snap = lineage.head().snapshot(engine_id, &lineage.name);
+
+        // Cut a revision so we can manufacture
+        company.engine_designs[engine_id].cut_revision("v1");
+
+        // Start an engine order
+        let result = company.manufacturing.start_engine_order(engine_id, 1, snap.clone(), 1);
+        assert!(result.is_some());
+        let (order_id, _cost) = result.unwrap();
+
+        // Hire a manufacturing team and assign it
+        company.hire_manufacturing_team();
+        let mfg_team_id = company.teams.last().unwrap().id;
+        company.assign_team_to_manufacturing(mfg_team_id, order_id);
+        // Skip ramp-up AFTER assignment (assign resets ramp-up)
+        for team in &mut company.teams {
+            team.ramp_up_days_remaining = 0;
+        }
+
+        // Fast-forward: set progress near completion
+        let order = company.manufacturing.get_order_mut(order_id).unwrap();
+        order.progress = order.total_work - 0.01;
+
+        company.process_day(false);
+
+        // Check that production cost was attributed
+        let tracker = &company.engine_designs[engine_id].cost_tracker;
+        assert_eq!(tracker.units_produced, 1);
+        assert!(tracker.total_production_material_cost > 0.0);
+    }
+
+    #[test]
+    fn test_average_cost_per_flight() {
+        use crate::cost_tracker::CostTracker;
+
+        let mut ct = CostTracker::new();
+        ct.add_salary(2_000_000.0); // NRE
+        ct.add_production_cost(500_000.0, 5); // 5 units at $100K each
+
+        // Total cost = $2.5M, 10 launches => $250K each
+        assert!((ct.average_cost_per_flight(10) - 250_000.0).abs() < 0.01);
+
+        // No launches => 0
+        assert_eq!(ct.average_cost_per_flight(0), 0.0);
     }
 }

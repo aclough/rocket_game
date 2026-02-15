@@ -831,6 +831,88 @@ impl GameManager {
     }
 
     // ==========================================
+    // Per-Design Cost Tracking
+    // ==========================================
+
+    /// Get NRE (non-recurring engineering) cost for an engine design lineage
+    #[func]
+    pub fn get_engine_nre(&self, index: i32) -> f64 {
+        if index < 0 { return 0.0; }
+        self.state.player_company.engine_designs.get(index as usize)
+            .map(|l| l.cost_tracker.nre())
+            .unwrap_or(0.0)
+    }
+
+    /// Get marginal (per-unit material) cost for an engine design
+    #[func]
+    pub fn get_engine_marginal_cost(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.engine_designs.len() {
+            let lineage = &self.state.player_company.engine_designs[index as usize];
+            let snap = lineage.head().snapshot(index as usize, &lineage.name);
+            crate::manufacturing::engine_material_cost(&snap)
+        } else {
+            0.0
+        }
+    }
+
+    /// Get number of engine units produced for a lineage
+    #[func]
+    pub fn get_engine_units_produced(&self, index: i32) -> i32 {
+        if index < 0 { return 0; }
+        self.state.player_company.engine_designs.get(index as usize)
+            .map(|l| l.cost_tracker.units_produced as i32)
+            .unwrap_or(0)
+    }
+
+    /// Get average cost per unit for an engine lineage (NRE + production / units_produced)
+    #[func]
+    pub fn get_engine_avg_cost_per_unit(&self, index: i32) -> f64 {
+        if index < 0 { return 0.0; }
+        self.state.player_company.engine_designs.get(index as usize)
+            .map(|l| {
+                if l.cost_tracker.units_produced == 0 { return 0.0; }
+                l.cost_tracker.total_cost() / l.cost_tracker.units_produced as f64
+            })
+            .unwrap_or(0.0)
+    }
+
+    /// Get NRE for a rocket design lineage
+    #[func]
+    pub fn get_rocket_design_nre(&self, index: i32) -> f64 {
+        if index < 0 { return 0.0; }
+        self.state.player_company.rocket_designs.get(index as usize)
+            .map(|l| l.cost_tracker.nre())
+            .unwrap_or(0.0)
+    }
+
+    /// Get marginal (per-unit material) cost for a rocket design
+    #[func]
+    pub fn get_rocket_design_marginal_cost(&self, index: i32) -> f64 {
+        if index < 0 { return 0.0; }
+        self.state.player_company.get_rocket_design(index as usize)
+            .map(|d| crate::manufacturing::rocket_material_cost(d))
+            .unwrap_or(0.0)
+    }
+
+    /// Get number of rocket units produced for a lineage
+    #[func]
+    pub fn get_rocket_design_units_produced(&self, index: i32) -> i32 {
+        if index < 0 { return 0; }
+        self.state.player_company.rocket_designs.get(index as usize)
+            .map(|l| l.cost_tracker.units_produced as i32)
+            .unwrap_or(0)
+    }
+
+    /// Get average cost per flight for a rocket lineage
+    #[func]
+    pub fn get_rocket_design_avg_cost_per_flight(&self, index: i32) -> f64 {
+        if index < 0 { return 0.0; }
+        self.state.player_company.rocket_designs.get(index as usize)
+            .map(|l| l.cost_tracker.average_cost_per_flight(l.launch_record.total_launches))
+            .unwrap_or(0.0)
+    }
+
+    // ==========================================
     // Last Launch Propellant Data
     // ==========================================
 

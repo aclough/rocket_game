@@ -3,6 +3,7 @@ use godot::prelude::*;
 pub mod balance;
 pub mod company;
 pub mod contract;
+pub mod cost_tracker;
 pub mod design_lineage;
 pub mod design_workflow;
 pub mod engine;

@@ -24,10 +24,6 @@
     * Making changes to a design (engines, tank size) when cutting a new version should introduce flaws depending on how large the change is.
     * Flaws fixed on the "head" should not affect existing parts from older versions.
     * Changes to the design of parts can introduce flaws.
-* Prices
-    * Keep track of the number of parts and rockets built.
-    * Keep track of the amount of engineering that goes into parts and engines.
-    * Use these to calculate the marginal and average cost of rockts and parts.
 * Prestige system
     * A bunch of modifiers with natural decays.
     * Types with no decay

@@ -78,6 +78,7 @@ var _finance_mfg_header_label: Label
 var _finance_eng_teams_container: VBoxContainer
 var _finance_mfg_teams_container: VBoxContainer
 var _finance_prices_container: VBoxContainer
+var _finance_design_costs_container: VBoxContainer
 
 # Speed control buttons
 var _speed_buttons: Array = []
@@ -1233,6 +1234,32 @@ func _setup_finance_content():
 	_finance_prices_container.add_theme_constant_override("separation", 6)
 	prices_vbox.add_child(_finance_prices_container)
 
+	# === Section 4: Design Costs ===
+	var design_costs_panel = PanelContainer.new()
+	design_costs_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_vbox.add_child(design_costs_panel)
+
+	var design_costs_margin = MarginContainer.new()
+	design_costs_margin.add_theme_constant_override("margin_left", 15)
+	design_costs_margin.add_theme_constant_override("margin_top", 15)
+	design_costs_margin.add_theme_constant_override("margin_right", 15)
+	design_costs_margin.add_theme_constant_override("margin_bottom", 15)
+	design_costs_panel.add_child(design_costs_margin)
+
+	var design_costs_vbox = VBoxContainer.new()
+	design_costs_vbox.add_theme_constant_override("separation", 10)
+	design_costs_margin.add_child(design_costs_vbox)
+
+	var design_costs_title = Label.new()
+	design_costs_title.text = "Design Costs"
+	design_costs_title.add_theme_font_size_override("font_size", 20)
+	design_costs_vbox.add_child(design_costs_title)
+
+	_finance_design_costs_container = VBoxContainer.new()
+	_finance_design_costs_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_finance_design_costs_container.add_theme_constant_override("separation", 8)
+	design_costs_vbox.add_child(_finance_design_costs_container)
+
 	# Connect teams_changed to refresh finance when visible
 	game_manager.teams_changed.connect(_on_finance_teams_changed)
 
@@ -1273,6 +1300,9 @@ func _update_finance_ui():
 
 	# === Reference Prices ===
 	_update_finance_prices()
+
+	# === Design Costs ===
+	_update_finance_design_costs()
 
 func _update_finance_payroll():
 	var eng_salary_str = _format_money_value(game_manager.get_engineering_team_salary())
@@ -1386,6 +1416,85 @@ func _format_money_value(value: float) -> String:
 		return "$%.0fK" % (value / 1_000.0)
 	else:
 		return "$%.0f" % value
+
+func _update_finance_design_costs():
+	if not _finance_design_costs_container:
+		return
+	for child in _finance_design_costs_container.get_children():
+		child.queue_free()
+
+	var has_any = false
+
+	# Engine designs
+	var engine_count = game_manager.get_engine_type_count()
+	for i in range(engine_count):
+		var name = game_manager.get_engine_type_name(i)
+		var nre = game_manager.get_engine_nre(i)
+		var marginal = game_manager.get_engine_marginal_cost(i)
+		var units = game_manager.get_engine_units_produced(i)
+		var avg = game_manager.get_engine_avg_cost_per_unit(i)
+
+		has_any = true
+		var header = Label.new()
+		header.text = "%s (Engine)" % name
+		header.add_theme_font_size_override("font_size", 15)
+		header.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+		_finance_design_costs_container.add_child(header)
+
+		_add_design_cost_row("  Marginal cost", _format_money_value(marginal))
+		_add_design_cost_row("  NRE", _format_money_value(nre))
+		_add_design_cost_row("  Units built", "%d" % units)
+		if units > 0:
+			_add_design_cost_row("  Avg cost/unit", _format_money_value(avg))
+
+	# Rocket designs
+	var rocket_count = game_manager.get_rocket_design_count()
+	for i in range(rocket_count):
+		var name = game_manager.get_rocket_design_name(i)
+		var nre = game_manager.get_rocket_design_nre(i)
+		var marginal = game_manager.get_rocket_design_marginal_cost(i)
+		var units = game_manager.get_rocket_design_units_produced(i)
+		var launches = game_manager.get_rocket_lineage_total_launches(i)
+		var avg_flight = game_manager.get_rocket_design_avg_cost_per_flight(i)
+
+		has_any = true
+		var header = Label.new()
+		header.text = "%s (Rocket)" % name
+		header.add_theme_font_size_override("font_size", 15)
+		header.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+		_finance_design_costs_container.add_child(header)
+
+		_add_design_cost_row("  Marginal cost", _format_money_value(marginal))
+		_add_design_cost_row("  NRE", _format_money_value(nre))
+		_add_design_cost_row("  Units built", "%d" % units)
+		_add_design_cost_row("  Flights", "%d" % launches)
+		if launches > 0:
+			_add_design_cost_row("  Avg cost/flight", _format_money_value(avg_flight))
+
+	if not has_any:
+		var none_label = Label.new()
+		none_label.text = "No designs yet"
+		none_label.add_theme_font_size_override("font_size", 13)
+		none_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		_finance_design_costs_container.add_child(none_label)
+
+func _add_design_cost_row(item_name: String, value_str: String):
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 10)
+
+	var name_label = Label.new()
+	name_label.text = item_name
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_label.add_theme_font_size_override("font_size", 13)
+	hbox.add_child(name_label)
+
+	var value_label = Label.new()
+	value_label.text = value_str
+	value_label.add_theme_font_size_override("font_size", 13)
+	value_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	hbox.add_child(value_label)
+
+	_finance_design_costs_container.add_child(hbox)
 
 # ==========================================
 # Production Tab

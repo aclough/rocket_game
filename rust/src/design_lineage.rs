@@ -1,6 +1,7 @@
 /// Generic design lineage: a mutable head design plus frozen revisions.
 /// Used for engines now; will be reused for rockets, spacecraft, etc.
 
+use crate::cost_tracker::CostTracker;
 use crate::rocket_design::LaunchRecord;
 
 /// A frozen snapshot of a design at a point in time.
@@ -21,6 +22,8 @@ pub struct DesignLineage<T: Clone> {
     next_revision: u32,
     /// Launch outcome tracking across all versions of this lineage
     pub launch_record: LaunchRecord,
+    /// Cost tracking across all versions of this lineage
+    pub cost_tracker: CostTracker,
 }
 
 impl<T: Clone> DesignLineage<T> {
@@ -32,6 +35,7 @@ impl<T: Clone> DesignLineage<T> {
             revisions: Vec::new(),
             next_revision: 1,
             launch_record: LaunchRecord::default(),
+            cost_tracker: CostTracker::new(),
         }
     }
 
