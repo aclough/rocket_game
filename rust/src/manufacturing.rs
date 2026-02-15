@@ -553,6 +553,23 @@ impl Manufacturing {
             .sum()
     }
 
+    /// Sum engines needed across all waiting-for-engines rocket orders for a given engine design ID.
+    /// Used to calculate the total commitment so auto-ordering doesn't under-order.
+    pub fn engines_committed_to_waiting_rockets(&self, engine_design_id: usize) -> u32 {
+        self.active_orders.iter()
+            .filter(|o| o.waiting_for_engines)
+            .filter_map(|o| match &o.order_type {
+                ManufacturingOrderType::Rocket { design_snapshot, .. } => {
+                    Some(engines_required(design_snapshot))
+                }
+                _ => None,
+            })
+            .flat_map(|reqs| reqs.into_iter())
+            .filter(|(eid, _)| *eid == engine_design_id)
+            .map(|(_, count)| count)
+            .sum()
+    }
+
     /// Try to unblock rocket orders that are waiting for engines.
     /// Iterates in FIFO order. For each blocked order, checks if engines are
     /// available; if so, consumes them and sets `waiting_for_engines = false`.
@@ -1202,6 +1219,32 @@ mod tests {
         assert_eq!(unblocked, vec![order1]);
         assert!(!mfg.get_order(order1).unwrap().waiting_for_engines);
         assert!(mfg.get_order(order2).unwrap().waiting_for_engines);
+    }
+
+    // ==========================================
+    // Engines Committed to Waiting Rockets Tests
+    // ==========================================
+
+    #[test]
+    fn test_engines_committed_to_waiting_rockets() {
+        let mut mfg = Manufacturing::new();
+        mfg.floor_space_total = 50; // Plenty of space
+        let design = RocketDesign::default_design();
+
+        // No waiting orders → 0 committed
+        assert_eq!(mfg.engines_committed_to_waiting_rockets(1), 0);
+
+        // Create two waiting rocket orders (each needs 5 kerolox + 1 hydrolox)
+        mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
+        mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
+
+        // Should sum engines across both waiting orders
+        assert_eq!(mfg.engines_committed_to_waiting_rockets(1), 10); // 5+5 kerolox
+        assert_eq!(mfg.engines_committed_to_waiting_rockets(0), 2);  // 1+1 hydrolox
+
+        // Non-waiting order shouldn't count
+        mfg.start_rocket_order(0, 1, design.clone(), false).unwrap();
+        assert_eq!(mfg.engines_committed_to_waiting_rockets(1), 10); // Still 10
     }
 
     // ==========================================

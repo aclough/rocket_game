@@ -2449,6 +2449,29 @@ impl GameManager {
         result
     }
 
+    /// Check if an engine design's engineering is complete enough for manufacturing
+    #[func]
+    pub fn can_manufacture_engine(&self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        self.state.player_company.engine_designs
+            .get(index as usize)
+            .map(|l| l.head().workflow.status.can_launch())
+            .unwrap_or(false)
+    }
+
+    /// Check if a rocket design's engineering is complete enough for manufacturing
+    #[func]
+    pub fn can_manufacture_rocket(&self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        self.state.player_company.get_rocket_design(index as usize)
+            .map(|d| d.workflow.status.can_launch())
+            .unwrap_or(false)
+    }
+
     /// Start an engine manufacturing order.
     /// Returns order_id (>0) on success, -1 on failure.
     /// On failure, call get_last_order_error() for the reason.
@@ -2895,6 +2918,48 @@ impl GameManager {
         self.state.player_company.manufacturing.rocket_inventory
             .iter()
             .any(|entry| entry.rocket_design_id == design_id)
+    }
+
+    /// Check if there is any manufactured rocket in inventory
+    #[func]
+    pub fn has_any_rocket_in_inventory(&self) -> bool {
+        !self.state.player_company.manufacturing.rocket_inventory.is_empty()
+    }
+
+    /// Check if a rocket (by serial number) can be launched at the current pad
+    #[func]
+    pub fn can_launch_rocket_by_serial(&self, serial: i32) -> bool {
+        if serial < 0 {
+            return false;
+        }
+        self.state.player_company.manufacturing.rocket_inventory
+            .iter()
+            .find(|entry| entry.serial_number == serial as u32)
+            .map(|entry| {
+                self.state.player_company.launch_site.can_launch_rocket(
+                    entry.design_snapshot.total_wet_mass_kg()
+                )
+            })
+            .unwrap_or(false)
+    }
+
+    /// Select a rocket for launch by serial number.
+    /// Sets current_rocket_design_id from the inventory entry so existing
+    /// contract/design logic works.
+    #[func]
+    pub fn select_rocket_for_launch(&mut self, serial: i32) -> bool {
+        if serial < 0 {
+            return false;
+        }
+        if let Some(entry) = self.state.player_company.manufacturing.rocket_inventory
+            .iter()
+            .find(|entry| entry.serial_number == serial as u32)
+        {
+            self.current_rocket_design_id = Some(entry.rocket_design_id);
+            true
+        } else {
+            false
+        }
     }
 
     /// Consume a manufactured rocket matching the current design for launch

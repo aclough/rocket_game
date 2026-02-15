@@ -801,6 +801,9 @@ impl Company {
     ) -> Result<(ManufacturingOrderId, f64), &'static str> {
         let lineage = self.engine_designs.get(engine_design_id)
             .ok_or("Invalid engine design")?;
+        if !lineage.head().workflow.status.can_launch() {
+            return Err("Design engineering not complete");
+        }
         let revision = lineage.get_revision(revision_number)
             .ok_or("Invalid revision")?;
         let snapshot = revision.snapshot.snapshot(engine_design_id, &lineage.name);
@@ -841,6 +844,9 @@ impl Company {
     ) -> Result<(ManufacturingOrderId, f64, bool), &'static str> {
         let lineage = self.rocket_designs.get(rocket_design_id)
             .ok_or("Invalid design")?;
+        if !lineage.head().workflow.status.can_launch() {
+            return Err("Design engineering not complete");
+        }
         let revision = lineage.get_revision(revision_number)
             .ok_or("Invalid revision")?;
         let design_snapshot = revision.snapshot.clone();
@@ -893,10 +899,12 @@ impl Company {
 
         let mut total_ordered: u32 = 0;
 
-        for (engine_design_id, needed) in design.engines_required() {
+        for (engine_design_id, _needed) in design.engines_required() {
+            // Use committed count across ALL waiting rockets (includes current one)
+            let committed = self.manufacturing.engines_committed_to_waiting_rockets(engine_design_id);
             let available = self.manufacturing.get_engines_available(engine_design_id);
             let pending = self.manufacturing.engines_pending_for_design(engine_design_id);
-            let deficit = (needed as i32) - (available as i32) - (pending as i32);
+            let deficit = (committed as i32) - (available as i32) - (pending as i32);
             if deficit <= 0 {
                 continue;
             }
@@ -1449,6 +1457,26 @@ mod tests {
     use crate::engine_design::FuelType;
     use crate::engineering_team::TeamType;
 
+    /// Helper: set all engine designs to Testing status so manufacturing is allowed
+    fn make_engines_manufacturable(company: &mut Company) {
+        for lineage in &mut company.engine_designs {
+            lineage.head_mut().workflow.status = crate::design_workflow::DesignStatus::Testing {
+                progress: 0.0,
+                total: 30.0,
+            };
+        }
+    }
+
+    /// Helper: set all rocket designs to Testing status so manufacturing is allowed
+    fn make_rockets_manufacturable(company: &mut Company) {
+        for lineage in &mut company.rocket_designs {
+            lineage.head_mut().workflow.status = crate::design_workflow::DesignStatus::Testing {
+                progress: 0.0,
+                total: 30.0,
+            };
+        }
+    }
+
     #[test]
     fn test_create_engine_design() {
         let mut company = Company::new();
@@ -1548,6 +1576,7 @@ mod tests {
     #[test]
     fn test_engineering_team_cannot_do_manufacturing() {
         let mut company = Company::new();
+        make_engines_manufacturable(&mut company);
         // Starting team is engineering
         let eng_team_id = company.teams[0].id;
 
@@ -1672,6 +1701,7 @@ mod tests {
     #[test]
     fn test_auto_assign_one_order_two_teams() {
         let mut company = Company::new();
+        make_engines_manufacturable(&mut company);
         company.hire_manufacturing_team();
         company.hire_manufacturing_team();
 
@@ -1694,6 +1724,7 @@ mod tests {
     #[test]
     fn test_auto_assign_two_orders_distributed() {
         let mut company = Company::new();
+        make_engines_manufacturable(&mut company);
         company.hire_manufacturing_team();
         company.hire_manufacturing_team();
 
@@ -1722,8 +1753,11 @@ mod tests {
     // ==========================================
 
     /// Helper: set up a company with a frozen rocket revision and engine revisions
+    /// All designs are set to Testing status so manufacturing is allowed.
     fn company_with_rocket_revision() -> (Company, usize, u32) {
         let mut company = Company::new();
+        make_engines_manufacturable(&mut company);
+        make_rockets_manufacturable(&mut company);
         // Cut revisions for the default engine designs so we can order them
         for i in 0..company.engine_designs.len() {
             company.engine_designs[i].cut_revision("v1");
@@ -1835,6 +1869,7 @@ mod tests {
     #[test]
     fn test_increase_engine_order_deducts_cost() {
         let mut company = Company::new();
+        make_engines_manufacturable(&mut company);
         // Start an engine order
         let rev = company.engine_designs[1].cut_revision("mfg");
         let (order_id, initial_cost) = company.start_engine_order(1, rev, 1).unwrap();
@@ -1851,6 +1886,7 @@ mod tests {
     #[test]
     fn test_increase_engine_order_insufficient_funds() {
         let mut company = Company::new();
+        make_engines_manufacturable(&mut company);
         let rev = company.engine_designs[1].cut_revision("mfg");
         let (order_id, _) = company.start_engine_order(1, rev, 1).unwrap();
 
@@ -1865,6 +1901,97 @@ mod tests {
     // ==========================================
     // Infrastructure / Depot Tests
     // ==========================================
+
+    // ==========================================
+    // Engine Count for Queued Rockets Tests
+    // ==========================================
+
+    #[test]
+    fn test_auto_order_engines_accounts_for_queued_rockets() {
+        let (mut company, design_id, rev) = company_with_rocket_revision();
+        company.manufacturing.floor_space_total = 100; // Plenty of space
+
+        // First rocket order — no engines in stock, creates waiting order
+        let (_, _, engines_consumed) = company.start_rocket_order(design_id, rev).unwrap();
+        assert!(!engines_consumed);
+
+        // Auto-order engines for the first rocket
+        let ordered_1 = company.auto_order_engines_for_rocket(design_id).unwrap();
+        // Default rocket needs 5 kerolox + 1 hydrolox = 6 engines
+        assert_eq!(ordered_1, 6, "First rocket should order 6 engines");
+
+        // Second rocket order — same design, also waiting
+        let (_, _, engines_consumed) = company.start_rocket_order(design_id, rev).unwrap();
+        assert!(!engines_consumed);
+
+        // Auto-order engines for the second rocket
+        // Should order 6 MORE (committed=10+2 across both rockets, available=0, pending=6 from first)
+        let ordered_2 = company.auto_order_engines_for_rocket(design_id).unwrap();
+        assert_eq!(ordered_2, 6, "Second rocket should order 6 more engines, got {}", ordered_2);
+
+        // Total pending should now be 12
+        assert_eq!(company.manufacturing.engines_pending_for_design(1), 10); // 5+5 kerolox
+        assert_eq!(company.manufacturing.engines_pending_for_design(0), 2);  // 1+1 hydrolox
+    }
+
+    // ==========================================
+    // Engineering Gate Tests
+    // ==========================================
+
+    #[test]
+    fn test_start_engine_order_blocked_in_specification() {
+        let mut company = Company::new();
+        // Default engines start in Specification
+        let idx = company.engine_designs.len() - 1;
+        assert!(company.engine_designs[idx].head().workflow.status.can_edit());
+        company.engine_designs[idx].cut_revision("v1");
+        let rev = company.engine_designs[idx].revisions.len() as u32;
+        let result = company.start_engine_order(idx, rev, 1);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Design engineering not complete");
+    }
+
+    #[test]
+    fn test_start_engine_order_allowed_in_testing() {
+        let mut company = Company::new();
+        let idx = company.engine_designs.len() - 1;
+        // Advance to Testing status
+        let head = company.engine_designs[idx].head_mut();
+        head.workflow.status = crate::design_workflow::DesignStatus::Testing {
+            progress: 0.0,
+            total: 30.0,
+        };
+        company.engine_designs[idx].cut_revision("v1");
+        let rev = company.engine_designs[idx].revisions.len() as u32;
+        let result = company.start_engine_order(idx, rev, 1);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+    }
+
+    #[test]
+    fn test_start_rocket_order_blocked_in_specification() {
+        let mut company = Company::new();
+        // Default rocket starts in Specification
+        assert!(company.rocket_designs[0].head().workflow.status.can_edit());
+        company.rocket_designs[0].cut_revision("v1");
+        let rev = company.rocket_designs[0].revisions.len() as u32;
+        let result = company.start_rocket_order(0, rev);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Design engineering not complete");
+    }
+
+    #[test]
+    fn test_start_rocket_order_allowed_in_testing() {
+        let (mut company, design_id, _) = company_with_rocket_revision();
+        // Advance to Testing
+        company.rocket_designs[design_id].head_mut().workflow.status = crate::design_workflow::DesignStatus::Testing {
+            progress: 0.0,
+            total: 30.0,
+        };
+        company.rocket_designs[design_id].cut_revision("v2");
+        let rev = company.rocket_designs[design_id].revisions.len() as u32;
+        let result = company.start_rocket_order(design_id, rev);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+    }
 
     #[test]
     fn test_deploy_and_use_depot() {

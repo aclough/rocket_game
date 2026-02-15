@@ -1935,11 +1935,16 @@ func _on_prod_build_engines_pressed():
 		var engine_name = game_manager.get_engine_type_name(i)
 		var material_cost = game_manager.get_engine_material_cost(i)
 		var build_days = game_manager.get_engine_build_days(i)
+		var can_manufacture = game_manager.can_manufacture_engine(i)
 
 		var btn = Button.new()
-		btn.text = "%s - $%sM material, ~%.0f team-days" % [engine_name, _format_money_short(material_cost / 1_000_000.0), build_days]
+		if can_manufacture:
+			btn.text = "%s - $%sM material, ~%.0f team-days" % [engine_name, _format_money_short(material_cost / 1_000_000.0), build_days]
+			btn.pressed.connect(_on_prod_engine_selected.bind(i, dialog))
+		else:
+			btn.text = "%s (Engineering incomplete)" % engine_name
+			btn.disabled = true
 		btn.add_theme_font_size_override("font_size", 13)
-		btn.pressed.connect(_on_prod_engine_selected.bind(i, dialog))
 		dialog_vbox.add_child(btn)
 
 	add_child(dialog)
@@ -2011,6 +2016,17 @@ func _on_prod_assemble_rocket_pressed():
 
 	for i in range(design_count):
 		var design_name = game_manager.get_rocket_design_name(i)
+		var can_manufacture = game_manager.can_manufacture_rocket(i)
+
+		var btn = Button.new()
+		btn.add_theme_font_size_override("font_size", 13)
+
+		if not can_manufacture:
+			btn.text = "%s (Engineering incomplete)" % design_name
+			btn.disabled = true
+			dialog_vbox.add_child(btn)
+			continue
+
 		var material_cost = game_manager.get_rocket_material_cost(i)
 		var assembly_days = game_manager.get_rocket_assembly_days(i)
 		var engines_req = game_manager.get_engines_required_for_rocket(i)
@@ -2027,9 +2043,7 @@ func _on_prod_assemble_rocket_pressed():
 		if not has_engines:
 			btn_text += " [+%d engine%s queued]" % [total_deficit, "s" if total_deficit != 1 else ""]
 
-		var btn = Button.new()
 		btn.text = btn_text
-		btn.add_theme_font_size_override("font_size", 13)
 		btn.pressed.connect(_on_prod_rocket_selected.bind(i, dialog))
 		dialog_vbox.add_child(btn)
 
@@ -2367,18 +2381,22 @@ func _on_testing_requested():
 	_show_tab(Tab.LAUNCH_SITE)
 
 # Launch site content signal handlers
-func _on_launch_requested():
+func _on_launch_requested(serial_number: int):
 	# Get the designer from design content
 	var design = content_areas[Tab.DESIGN]
 	var designer = design.get_designer()
 
-	# Ensure design is saved before launch
-	if designer:
-		game_manager.sync_design_from(designer)
-		game_manager.ensure_design_saved(designer)
+	# Select the rocket for launch (sets current_rocket_design_id)
+	if not game_manager.select_rocket_for_launch(serial_number):
+		_show_toast("Invalid rocket selection")
+		return
 
-	# Consume a manufactured rocket from inventory
-	if not game_manager.consume_rocket_for_current_design():
+	# Sync the design for this rocket to the designer
+	if designer:
+		game_manager.sync_design_to(designer)
+
+	# Consume the selected rocket from inventory
+	if not game_manager.consume_rocket_for_launch(serial_number):
 		_show_toast("No manufactured rocket available for launch")
 		return
 
