@@ -2,6 +2,7 @@
     * Double the size of manufacturing teams.  That is, they're twice as expensive but everything now takes half as long.
     * Sometimes a rocket is marked as selectable under Design after choosing a mission in available contracts, but marked as insufficient delta v at the launch site.
     * When deciding on the nubmer of engines to add when adding a rocket in manufacturing, factor in the existing rockets queued up.
+    * Without a mission I see no manufactured rockets available on the launch site.
 * UI
     * The color of flaws seems off, and all the engine flaws appear under the rocket
     * Pressing "Submit to engineering on a design should ove us to the Research tab
