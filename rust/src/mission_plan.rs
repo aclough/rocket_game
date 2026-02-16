@@ -16,6 +16,8 @@ pub struct MissionLeg {
     pub stages_to_burn: Option<Vec<usize>>,
     /// Whether to refuel from a depot at `from` before this leg.
     pub refuel_before: bool,
+    /// Transit time in game-days for this leg
+    pub transit_days: u32,
 }
 
 /// A complete mission plan decomposed into sequential transfer legs
@@ -43,6 +45,7 @@ impl MissionPlan {
                 can_aerobrake: transfer.can_aerobrake,
                 stages_to_burn: None,
                 refuel_before: false,
+                transit_days: transfer.transit_days,
             });
         }
 
@@ -51,6 +54,11 @@ impl MissionPlan {
 
     pub fn leg_count(&self) -> usize {
         self.legs.len()
+    }
+
+    /// Total transit time across all legs in game-days
+    pub fn total_transit_days(&self) -> u32 {
+        self.legs.iter().map(|l| l.transit_days).sum()
     }
 }
 
@@ -394,6 +402,19 @@ mod tests {
         assert_eq!(plan.total_delta_v, 8100.0);
         assert!(plan.legs[0].stages_to_burn.is_none());
         assert!(!plan.legs[0].refuel_before);
+        assert_eq!(plan.legs[0].transit_days, 0);
+        assert_eq!(plan.total_transit_days(), 0);
+    }
+
+    #[test]
+    fn test_total_transit_days_multi_leg() {
+        // earth_surface(0) -> leo(1) -> gto(0) -> geo = 1 day
+        let plan = MissionPlan::from_shortest_path("earth_surface", "geo").unwrap();
+        assert_eq!(plan.total_transit_days(), 1); // leo->gto = 1 day
+
+        // earth_surface(0) -> leo(4) -> lunar_orbit(0) -> lunar_surface = 4 days
+        let lunar_plan = MissionPlan::from_shortest_path("earth_surface", "lunar_surface").unwrap();
+        assert_eq!(lunar_plan.total_transit_days(), 4); // leo->lunar_orbit = 4 days
     }
 
     #[test]

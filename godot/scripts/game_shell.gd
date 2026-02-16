@@ -67,6 +67,7 @@ var _prod_orders_container: VBoxContainer
 var _prod_no_orders_label: Label
 var _prod_engine_inv_container: VBoxContainer
 var _prod_rocket_inv_container: VBoxContainer
+var _prod_depot_inv_container: VBoxContainer
 
 # Finance tab UI elements (built dynamically)
 var _finance_balance_label: Label
@@ -152,7 +153,11 @@ func _ready():
 	game_manager.manufacturing_changed.connect(_on_manufacturing_changed)
 	game_manager.inventory_changed.connect(_on_inventory_changed)
 
+	# Connect flight arrival signal
+	game_manager.flight_arrived.connect(_on_flight_arrived)
+
 	# Initialize content areas with game manager
+	_setup_map_content()
 	_setup_missions_content()
 	_setup_design_content()
 	_setup_launch_site_content()
@@ -201,10 +206,16 @@ func _input(event: InputEvent):
 			game_manager.set_time_speed(game_manager.get_speed_preset_value(index))
 			get_viewport().set_input_as_handled()
 
+func _setup_map_content():
+	var map = content_areas[Tab.MAP]
+	if map.has_method("set_game_manager"):
+		map.set_game_manager(game_manager)
+
 func _setup_missions_content():
 	var missions = content_areas[Tab.MISSIONS]
 	missions.set_game_manager(game_manager)
 	missions.contract_selected.connect(_on_contract_selected)
+	missions.depot_mission_selected.connect(_on_depot_mission_selected)
 	missions.design_requested.connect(_on_design_requested)
 
 func _setup_design_content():
@@ -1664,6 +1675,12 @@ func _setup_production_content():
 	assemble_rocket_btn.pressed.connect(_on_prod_assemble_rocket_pressed)
 	order_btns_hbox.add_child(assemble_rocket_btn)
 
+	var build_depot_btn = Button.new()
+	build_depot_btn.text = "Build Depot..."
+	build_depot_btn.add_theme_font_size_override("font_size", 14)
+	build_depot_btn.pressed.connect(_on_prod_build_depot_pressed)
+	order_btns_hbox.add_child(build_depot_btn)
+
 	var auto_assign_btn = CheckButton.new()
 	auto_assign_btn.text = "Auto-Assign Teams"
 	auto_assign_btn.add_theme_font_size_override("font_size", 14)
@@ -1762,6 +1779,32 @@ func _setup_production_content():
 	_prod_rocket_inv_container.add_theme_constant_override("separation", 4)
 	rocket_inv_vbox.add_child(_prod_rocket_inv_container)
 
+	# Depot Inventory
+	var depot_inv_panel = PanelContainer.new()
+	depot_inv_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inv_hbox.add_child(depot_inv_panel)
+
+	var depot_inv_margin = MarginContainer.new()
+	depot_inv_margin.add_theme_constant_override("margin_left", 15)
+	depot_inv_margin.add_theme_constant_override("margin_top", 15)
+	depot_inv_margin.add_theme_constant_override("margin_right", 15)
+	depot_inv_margin.add_theme_constant_override("margin_bottom", 15)
+	depot_inv_panel.add_child(depot_inv_margin)
+
+	var depot_inv_vbox = VBoxContainer.new()
+	depot_inv_vbox.add_theme_constant_override("separation", 8)
+	depot_inv_margin.add_child(depot_inv_vbox)
+
+	var depot_inv_title = Label.new()
+	depot_inv_title.text = "Depot Inventory"
+	depot_inv_title.add_theme_font_size_override("font_size", 18)
+	depot_inv_vbox.add_child(depot_inv_title)
+
+	_prod_depot_inv_container = VBoxContainer.new()
+	_prod_depot_inv_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prod_depot_inv_container.add_theme_constant_override("separation", 4)
+	depot_inv_vbox.add_child(_prod_depot_inv_container)
+
 	# Initial update
 	_update_production_ui()
 
@@ -1829,6 +1872,7 @@ func _create_order_card(order_id: int) -> PanelContainer:
 	var panel = PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
+	var is_depot = info.has("depot_design_index")
 	var style = StyleBoxFlat.new()
 	if waiting_for_engines:
 		# Amber style for blocked orders waiting for engines
@@ -1837,6 +1881,9 @@ func _create_order_card(order_id: int) -> PanelContainer:
 	elif is_engine:
 		style.set_bg_color(Color(0.1, 0.08, 0.15))
 		style.set_border_color(Color(0.6, 0.4, 0.9, 0.5))
+	elif is_depot:
+		style.set_bg_color(Color(0.14, 0.10, 0.06))
+		style.set_border_color(Color(0.9, 0.7, 0.3, 0.5))
 	else:
 		style.set_bg_color(Color(0.08, 0.12, 0.15))
 		style.set_border_color(Color(0.3, 0.7, 0.9, 0.5))
@@ -2019,6 +2066,29 @@ func _update_production_inventory():
 			entry_label.add_theme_font_size_override("font_size", 13)
 			entry_label.add_theme_color_override("font_color", Color(0.5, 0.9, 0.7))
 			_prod_rocket_inv_container.add_child(entry_label)
+
+	# Depot inventory
+	if _prod_depot_inv_container:
+		for child in _prod_depot_inv_container.get_children():
+			child.queue_free()
+
+		var depot_count = game_manager.get_depot_inventory_count()
+		if depot_count == 0:
+			var empty_label = Label.new()
+			empty_label.text = "No depots in stock"
+			empty_label.add_theme_font_size_override("font_size", 13)
+			empty_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+			_prod_depot_inv_container.add_child(empty_label)
+		else:
+			for i in range(depot_count):
+				var depot_name = game_manager.get_depot_inventory_name(i)
+				var serial = game_manager.get_depot_inventory_serial(i)
+				var capacity = game_manager.get_depot_inventory_capacity(i)
+				var entry_label = Label.new()
+				entry_label.text = "%s (S/N %d) - %.0f kg capacity" % [depot_name, serial, capacity]
+				entry_label.add_theme_font_size_override("font_size", 13)
+				entry_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.4))
+				_prod_depot_inv_container.add_child(entry_label)
 
 # Production tab action handlers
 
@@ -2302,6 +2372,118 @@ func _on_prod_auto_assign_toggled(enabled: bool):
 		_show_toast("Auto-assign teams disabled")
 	_update_production_ui()
 
+func _on_prod_build_depot_pressed():
+	var depot_count = game_manager.get_depot_design_count()
+	if depot_count == 0:
+		_show_toast("No depot designs. Create one first.")
+		# Offer to create a depot design inline
+		_show_create_depot_dialog()
+		return
+
+	var dialog = AcceptDialog.new()
+	dialog.title = "Build Depot"
+	dialog.size = Vector2(500, 350)
+
+	var dialog_vbox = VBoxContainer.new()
+	dialog_vbox.add_theme_constant_override("separation", 10)
+	dialog.add_child(dialog_vbox)
+
+	var instructions = Label.new()
+	instructions.text = "Select a depot design to build:"
+	instructions.add_theme_font_size_override("font_size", 14)
+	dialog_vbox.add_child(instructions)
+
+	for i in range(depot_count):
+		var depot_name = game_manager.get_depot_design_name(i)
+		var cost = game_manager.get_depot_design_cost(i)
+		var work = game_manager.get_depot_design_build_work(i)
+		var space = game_manager.get_depot_design_floor_space(i)
+		var btn = Button.new()
+		btn.text = "%s - $%s material, ~%.0f team-days, %d floor space" % [
+			depot_name,
+			_format_money_value(cost),
+			work,
+			space
+		]
+		btn.add_theme_font_size_override("font_size", 13)
+		btn.pressed.connect(func():
+			var result = game_manager.start_depot_order(i)
+			if result >= 0:
+				_show_toast("Depot order started!")
+				_update_production_ui()
+			else:
+				_show_toast("Cannot start depot order (check funds/floor space)")
+			dialog.queue_free()
+		)
+		dialog_vbox.add_child(btn)
+
+	# Also offer to create a new design
+	var new_btn = Button.new()
+	new_btn.text = "+ Create New Depot Design..."
+	new_btn.add_theme_font_size_override("font_size", 13)
+	new_btn.add_theme_color_override("font_color", Color(0.4, 0.9, 0.4))
+	new_btn.pressed.connect(func():
+		dialog.queue_free()
+		_show_create_depot_dialog()
+	)
+	dialog_vbox.add_child(new_btn)
+
+	add_child(dialog)
+	dialog.popup_centered()
+
+func _show_create_depot_dialog():
+	var dialog = AcceptDialog.new()
+	dialog.title = "Create Depot Design"
+	dialog.size = Vector2(400, 300)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	dialog.add_child(vbox)
+
+	var name_label = Label.new()
+	name_label.text = "Depot Name:"
+	name_label.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(name_label)
+
+	var name_edit = LineEdit.new()
+	name_edit.text = "Fuel Depot"
+	name_edit.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(name_edit)
+
+	var cap_label = Label.new()
+	cap_label.text = "Capacity (kg):"
+	cap_label.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(cap_label)
+
+	var cap_spin = SpinBox.new()
+	cap_spin.min_value = 1000
+	cap_spin.max_value = 200000
+	cap_spin.value = 10000
+	cap_spin.step = 1000
+	vbox.add_child(cap_spin)
+
+	var insulated_check = CheckButton.new()
+	insulated_check.text = "Insulated (for cryogenic fuels, +20% mass, +30% cost)"
+	insulated_check.add_theme_font_size_override("font_size", 12)
+	vbox.add_child(insulated_check)
+
+	add_child(dialog)
+	dialog.popup_centered()
+
+	dialog.confirmed.connect(func():
+		var idx = game_manager.create_depot_design(
+			name_edit.text,
+			cap_spin.value,
+			insulated_check.button_pressed
+		)
+		if idx >= 0:
+			_show_toast("Depot design '%s' created!" % name_edit.text)
+		else:
+			_show_toast("Failed to create depot design")
+		dialog.queue_free()
+	)
+	dialog.canceled.connect(func(): dialog.queue_free())
+
 func _on_manufacturing_changed():
 	if current_tab == Tab.PRODUCTION:
 		_update_production_ui()
@@ -2361,6 +2543,7 @@ func _on_money_changed(_new_amount: float):
 func _on_date_changed(_new_day: int):
 	date_label.text = game_manager.get_date_formatted()
 	_check_hardware_warnings()
+	_check_flight_notifications()
 	# Note: Don't rebuild research UI on every date tick - it destroys buttons too fast
 	# Updates happen via work_event signals instead
 
@@ -2638,6 +2821,38 @@ func _check_hardware_warnings():
 
 	_update_notification_badge()
 
+func _on_flight_arrived(_flight_id: int, destination: String, reward: float):
+	if reward > 0:
+		_show_toast("Flight arrived at %s! Reward: %s" % [destination, _format_money_value(reward)])
+	else:
+		_show_toast("Flight arrived at %s!" % destination)
+	# Remove the flight notification
+	_remove_notification("flight_%d" % _flight_id)
+	_update_notification_badge()
+
+func _check_flight_notifications():
+	var flight_count = game_manager.get_active_flight_count()
+	var seen_ids: Dictionary = {}
+	for i in range(flight_count):
+		var dest = game_manager.get_active_flight_destination(i)
+		var days = game_manager.get_active_flight_days_remaining(i)
+		var id = "flight_%d" % i
+		if days > 0:
+			var msg = "Flight to %s: %dd remaining" % [dest, days]
+			_set_notification(id, msg)
+		else:
+			var msg = "Flight to %s: arriving..." % dest
+			_set_notification(id, msg)
+		seen_ids[id] = true
+
+	# Clean up old flight notifications
+	var to_remove: Array = []
+	for key in _active_notifications:
+		if key.begins_with("flight_") and not seen_ids.has(key):
+			to_remove.append(key)
+	for key in to_remove:
+		_remove_notification(key)
+
 func _set_notification(id: String, message: String):
 	if _active_notifications.has(id):
 		# Update existing
@@ -2693,6 +2908,9 @@ func _on_date_label_gui_input(event: InputEvent):
 # Tab button handlers
 func _on_map_tab_pressed():
 	_show_tab(Tab.MAP)
+	var map = content_areas[Tab.MAP]
+	if map.has_method("refresh"):
+		map.refresh()
 
 func _on_missions_tab_pressed():
 	_show_tab(Tab.MISSIONS)
@@ -2737,6 +2955,12 @@ func switch_to_tab(tab: Tab):
 # Missions content signal handlers
 func _on_contract_selected(_contract_id: int):
 	# When a contract is selected, switch to design tab and show design selection
+	var design = content_areas[Tab.DESIGN]
+	design.show_select_view()
+	_show_tab(Tab.DESIGN)
+
+func _on_depot_mission_selected():
+	# When a depot mission is selected, switch to design tab and show design selection
 	var design = content_areas[Tab.DESIGN]
 	design.show_select_view()
 	_show_tab(Tab.DESIGN)

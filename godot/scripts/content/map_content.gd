@@ -3,6 +3,8 @@ extends Control
 ## Map content showing Earth and orbital destinations
 ## Draws a schematic diagram of reachable orbits
 
+var game_manager: GameManager = null
+
 @onready var orbit_diagram = $CenterContainer/OrbitDiagram
 
 # Orbit colors
@@ -29,6 +31,30 @@ func _ready():
 	orbit_diagram.draw.connect(_on_orbit_diagram_draw)
 	orbit_diagram.queue_redraw()
 
+const DEPOT_COLOR = Color(0.9, 0.7, 0.3, 1.0)  # Amber/gold
+
+# Map location IDs to orbit radii
+var _orbit_radii: Dictionary = {
+	"leo": LEO_RADIUS,
+	"meo": MEO_RADIUS,
+	"geo": GEO_RADIUS,
+	"lunar_orbit": LUNAR_RADIUS,
+}
+
+# Map location IDs to orbit angles for depot placement
+var _orbit_angles: Dictionary = {
+	"leo": PI/4,
+	"meo": PI/3,
+	"geo": PI/2.5,
+	"lunar_orbit": PI/6,
+}
+
+func set_game_manager(gm: GameManager):
+	game_manager = gm
+
+func refresh():
+	orbit_diagram.queue_redraw()
+
 func _on_orbit_diagram_draw():
 	var center = orbit_diagram.size / 2
 
@@ -50,6 +76,15 @@ func _on_orbit_diagram_draw():
 	_draw_orbit_label(center, MEO_RADIUS, "MEO", MEO_COLOR, -PI/3)
 	_draw_orbit_label(center, GEO_RADIUS, "GEO", GEO_COLOR, -PI/2.5)
 	_draw_orbit_label(center, LUNAR_RADIUS, "LUNAR", LUNAR_COLOR, -PI/6)
+
+	# Draw deployed depots
+	if game_manager:
+		var depot_locations = game_manager.get_depot_locations()
+		for loc in depot_locations:
+			_draw_depot_indicator(center, loc)
+
+	# Draw legend
+	_draw_legend()
 
 func _draw_orbit(center: Vector2, radius: float, color: Color, width: float):
 	# Draw dashed orbit circle
@@ -99,6 +134,79 @@ func _draw_moon(pos: Vector2):
 	# Add some crater-like darker spots
 	orbit_diagram.draw_circle(pos + Vector2(-4, -3), 3, Color(0.5, 0.5, 0.5, 1.0))
 	orbit_diagram.draw_circle(pos + Vector2(3, 2), 2, Color(0.5, 0.5, 0.5, 1.0))
+
+func _draw_depot_indicator(center: Vector2, location_id: String):
+	var radius = _orbit_radii.get(location_id, 0.0) as float
+	var angle = _orbit_angles.get(location_id, 0.0) as float
+	if radius == 0:
+		return
+
+	var pos = center + Vector2(radius, 0).rotated(angle)
+
+	var capacity = game_manager.get_depot_capacity(location_id)
+	var stored = game_manager.get_depot_total_stored(location_id)
+	var fill_ratio = stored / capacity if capacity > 0 else 0.0
+
+	# Color-code by fill level: green (empty) -> yellow (half) -> orange (full)
+	var fill_color: Color
+	if fill_ratio < 0.5:
+		fill_color = Color(0.3, 0.9, 0.3).lerp(Color(1.0, 1.0, 0.3), fill_ratio * 2.0)
+	else:
+		fill_color = Color(1.0, 1.0, 0.3).lerp(Color(1.0, 0.5, 0.2), (fill_ratio - 0.5) * 2.0)
+
+	# Draw depot icon — larger rectangle with border
+	var icon_size = Vector2(12, 10)
+	var icon_rect = Rect2(pos - icon_size / 2, icon_size)
+	orbit_diagram.draw_rect(icon_rect, fill_color)
+	orbit_diagram.draw_rect(icon_rect, DEPOT_COLOR, false, 1.5)
+
+	# Draw a small diamond on top of the rectangle
+	var diamond_size = 4.0
+	var diamond_top = pos + Vector2(0, -icon_size.y / 2 - diamond_size)
+	var diamond_points = PackedVector2Array([
+		diamond_top,
+		pos + Vector2(diamond_size, -icon_size.y / 2),
+		pos + Vector2(0, -icon_size.y / 2 + 1),
+		pos + Vector2(-diamond_size, -icon_size.y / 2),
+	])
+	orbit_diagram.draw_colored_polygon(diamond_points, DEPOT_COLOR)
+
+	# Info text: location name + fuel stored / capacity
+	var font = ThemeDB.fallback_font
+	var loc_name = _get_location_display_name(location_id)
+	var info_text = "%s\n%s / %s kg" % [loc_name, _format_mass(stored), _format_mass(capacity)]
+	var line1 = loc_name
+	var line2 = "%s / %s kg" % [_format_mass(stored), _format_mass(capacity)]
+
+	var text_x = pos.x + icon_size.x / 2 + 6
+	orbit_diagram.draw_string(font, Vector2(text_x, pos.y - 2), line1, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, DEPOT_COLOR)
+	orbit_diagram.draw_string(font, Vector2(text_x, pos.y + 10), line2, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, fill_color)
+
+func _get_location_display_name(location_id: String) -> String:
+	match location_id:
+		"leo": return "Low Earth Orbit"
+		"meo": return "Medium Earth Orbit"
+		"geo": return "Geostationary Orbit"
+		"lunar_orbit": return "Lunar Orbit"
+		_: return location_id
+
+func _format_mass(kg: float) -> String:
+	if kg >= 1000:
+		return "%.1fK" % (kg / 1000.0)
+	return "%.0f" % kg
+
+func _draw_legend():
+	var font = ThemeDB.fallback_font
+	var x = 15.0
+	var y = orbit_diagram.size.y - 20.0
+
+	# Only show depot legend if there are deployed depots
+	if game_manager and game_manager.get_depot_locations().size() > 0:
+		# Draw small depot icon
+		var icon_rect = Rect2(x, y - 7, 10, 8)
+		orbit_diagram.draw_rect(icon_rect, DEPOT_COLOR)
+		orbit_diagram.draw_rect(icon_rect, DEPOT_COLOR, false, 1.0)
+		orbit_diagram.draw_string(font, Vector2(x + 14, y + 2), "Deployed Depot", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, DEPOT_COLOR)
 
 func _draw_orbit_label(center: Vector2, radius: float, text: String, color: Color, angle: float):
 	var pos = center + Vector2(radius + 15, 0).rotated(angle)

@@ -88,6 +88,9 @@ impl GameManager {
     #[signal]
     fn inventory_changed();
 
+    #[signal]
+    fn flight_arrived(flight_id: i32, destination: GString, reward: f64);
+
     // ==========================================
     // Money and Budget
     // ==========================================
@@ -402,7 +405,9 @@ impl GameManager {
     // Mission Completion
     // ==========================================
 
-    /// Complete the current contract (call after successful launch)
+    /// Complete the current contract (call after successful launch).
+    /// Returns the expected reward, but payment is deferred until flight arrives.
+    /// The flight is now in-transit; contract_completed signal fires on arrival.
     #[func]
     pub fn complete_contract(&mut self) -> f64 {
         self.sync_money_to_state();
@@ -411,27 +416,20 @@ impl GameManager {
         if reward > 0.0 {
             self.state.turn += 1;
             self.sync_money_from_state();
-            // Launch takes 30 days
-            self.advance_time_days(30);
-            // Successful launch increases fame (more fame for harder missions)
-            let fame_gain = 10.0 + (reward / 10_000_000.0); // Base 10 + scaled by reward
-            self.adjust_fame(fame_gain);
-            self.base_mut()
-                .emit_signal("contract_completed", &[Variant::from(reward)]);
+            // No advance_time_days — time flows normally, flight arrives via process_flights
             self.base_mut().emit_signal("contracts_changed", &[]);
         }
         reward
     }
 
-    /// Record a failed launch
+    /// Record a failed launch. Failures are immediate — no transit time.
     #[func]
     pub fn fail_contract(&mut self) {
         self.sync_money_to_state();
         let design_id = self.current_rocket_design_id.unwrap_or(0);
         self.state.player_company.fail_contract(design_id);
         self.sync_money_from_state();
-        // Launch takes 30 days even on failure
-        self.advance_time_days(30);
+        // No advance_time_days — time flows normally
         // Failed launch decreases fame
         self.adjust_fame(-15.0);
         self.base_mut().emit_signal("contract_failed", &[]);
@@ -493,6 +491,17 @@ impl GameManager {
             .get(index as usize)
             .map(|d| d.required_delta_v())
             .unwrap_or(0.0)
+    }
+
+    /// Get destination location_id string at index (for use with transit/launch functions)
+    #[func]
+    pub fn get_destination_location_id(&self, index: i32) -> GString {
+        GString::from(
+            Destination::all()
+                .get(index as usize)
+                .map(|d| d.location_id())
+                .unwrap_or("")
+        )
     }
 
     // ==========================================
@@ -1219,8 +1228,8 @@ impl GameManager {
         let mut design = design.unwrap_or_else(|| self.state.player_company.rocket_designs[0].head().clone());
         design.budget = self.finance.bind().get_money();
 
-        // Set targets from active contract so the designer shows correct mission requirements
-        if self.state.player_company.active_contract.is_some() {
+        // Set targets from active mission so the designer shows correct mission requirements
+        if self.state.player_company.has_active_mission() {
             design.target_delta_v = self.state.player_company.get_target_delta_v();
             design.payload_mass_kg = self.state.player_company.get_payload_mass();
         }
@@ -1415,12 +1424,377 @@ impl GameManager {
         self.state.get_current_year() as i32
     }
 
-    /// Advance game time by a number of days and emit signal (legacy API)
-    fn advance_time_days(&mut self, days: u32) {
-        self.state.advance_days(days);
-        let new_day = self.state.current_day as i32;
-        self.base_mut()
-            .emit_signal("date_changed", &[Variant::from(new_day)]);
+    // ==========================================
+    // Depot Design Management
+    // ==========================================
+
+    /// Create a new depot design
+    #[func]
+    pub fn create_depot_design(&mut self, name: GString, capacity_kg: f64, insulated: bool) -> i32 {
+        let idx = self.state.player_company.create_depot_design(
+            name.to_string(),
+            capacity_kg,
+            insulated,
+        );
+        idx as i32
+    }
+
+    /// Get the number of depot designs
+    #[func]
+    pub fn get_depot_design_count(&self) -> i32 {
+        self.state.player_company.depot_design_count() as i32
+    }
+
+    /// Get depot design name
+    #[func]
+    pub fn get_depot_design_name(&self, index: i32) -> GString {
+        self.state.player_company.get_depot_design(index as usize)
+            .map(|d| GString::from(d.name.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Get depot design capacity in kg
+    #[func]
+    pub fn get_depot_design_capacity(&self, index: i32) -> f64 {
+        self.state.player_company.get_depot_design(index as usize)
+            .map(|d| d.capacity_kg)
+            .unwrap_or(0.0)
+    }
+
+    /// Get whether depot design is insulated
+    #[func]
+    pub fn get_depot_design_insulated(&self, index: i32) -> bool {
+        self.state.player_company.get_depot_design(index as usize)
+            .map(|d| d.insulated)
+            .unwrap_or(false)
+    }
+
+    /// Get depot design dry mass
+    #[func]
+    pub fn get_depot_design_mass(&self, index: i32) -> f64 {
+        self.state.player_company.get_depot_design(index as usize)
+            .map(|d| d.dry_mass_kg())
+            .unwrap_or(0.0)
+    }
+
+    /// Get depot design material cost
+    #[func]
+    pub fn get_depot_design_cost(&self, index: i32) -> f64 {
+        self.state.player_company.get_depot_design(index as usize)
+            .map(|d| d.material_cost())
+            .unwrap_or(0.0)
+    }
+
+    /// Get depot design build work (team-days)
+    #[func]
+    pub fn get_depot_design_build_work(&self, index: i32) -> f64 {
+        self.state.player_company.get_depot_design(index as usize)
+            .map(|d| d.build_work())
+            .unwrap_or(0.0)
+    }
+
+    /// Get depot design floor space needed
+    #[func]
+    pub fn get_depot_design_floor_space(&self, index: i32) -> i32 {
+        self.state.player_company.get_depot_design(index as usize)
+            .map(|d| d.floor_space() as i32)
+            .unwrap_or(0)
+    }
+
+    // ==========================================
+    // Depot Manufacturing & Inventory
+    // ==========================================
+
+    /// Start a depot manufacturing order
+    #[func]
+    pub fn start_depot_order(&mut self, depot_design_index: i32) -> i32 {
+        if depot_design_index < 0 {
+            return -1;
+        }
+        let idx = depot_design_index as usize;
+        let depot_design = match self.state.player_company.get_depot_design(idx) {
+            Some(d) => d.clone(),
+            None => return -1,
+        };
+
+        let material_cost = depot_design.material_cost();
+
+        // Check if player can afford it
+        self.sync_money_to_state();
+        if self.state.player_company.money < material_cost {
+            return -1;
+        }
+
+        match self.state.player_company.manufacturing.start_depot_order(idx, depot_design) {
+            Some((order_id, cost)) => {
+                self.state.player_company.money -= cost;
+                self.sync_money_from_state();
+                self.base_mut().emit_signal("manufacturing_changed", &[]);
+                self.base_mut().emit_signal("money_changed", &[]);
+                order_id as i32
+            }
+            None => -1,
+        }
+    }
+
+    /// Get number of depots in inventory
+    #[func]
+    pub fn get_depot_inventory_count(&self) -> i32 {
+        self.state.player_company.manufacturing.depot_inventory.len() as i32
+    }
+
+    /// Get depot inventory entry name by index
+    #[func]
+    pub fn get_depot_inventory_name(&self, index: i32) -> GString {
+        self.state.player_company.manufacturing.depot_inventory
+            .get(index as usize)
+            .map(|d| GString::from(d.depot_design.name.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Get depot inventory serial number by index
+    #[func]
+    pub fn get_depot_inventory_serial(&self, index: i32) -> i32 {
+        self.state.player_company.manufacturing.depot_inventory
+            .get(index as usize)
+            .map(|d| d.serial_number as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Get depot inventory capacity by index
+    #[func]
+    pub fn get_depot_inventory_capacity(&self, index: i32) -> f64 {
+        self.state.player_company.manufacturing.depot_inventory
+            .get(index as usize)
+            .map(|d| d.depot_design.capacity_kg)
+            .unwrap_or(0.0)
+    }
+
+    /// Get depot inventory dry mass by index
+    #[func]
+    pub fn get_depot_inventory_mass(&self, index: i32) -> f64 {
+        self.state.player_company.manufacturing.depot_inventory
+            .get(index as usize)
+            .map(|d| d.depot_design.dry_mass_kg())
+            .unwrap_or(0.0)
+    }
+
+    // ==========================================
+    // Active Flights
+    // ==========================================
+
+    /// Get number of active (in-transit) flights
+    #[func]
+    pub fn get_active_flight_count(&self) -> i32 {
+        self.state.player_company.active_flights().len() as i32
+    }
+
+    /// Get the destination of an active flight by index
+    #[func]
+    pub fn get_active_flight_destination(&self, index: i32) -> GString {
+        let flights = self.state.player_company.active_flights();
+        flights.get(index as usize)
+            .map(|f| GString::from(f.destination.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Get total days remaining for an active flight by index
+    #[func]
+    pub fn get_active_flight_days_remaining(&self, index: i32) -> i32 {
+        let flights = self.state.player_company.active_flights();
+        flights.get(index as usize)
+            .map(|f| f.total_transit_days_remaining() as i32)
+            .unwrap_or(0)
+    }
+
+    /// Get the current location of an active flight by index
+    #[func]
+    pub fn get_active_flight_current_location(&self, index: i32) -> GString {
+        let flights = self.state.player_company.active_flights();
+        flights.get(index as usize)
+            .map(|f| GString::from(f.current_location.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Get the transit time for a mission to a destination (total days)
+    #[func]
+    pub fn get_mission_transit_days(&self, destination: GString) -> i32 {
+        use crate::mission_plan::MissionPlan;
+        let dest_str = destination.to_string();
+        MissionPlan::from_shortest_path("earth_surface", &dest_str)
+            .map(|p| p.total_transit_days() as i32)
+            .unwrap_or(0)
+    }
+
+    // ==========================================
+    // Depot Missions
+    // ==========================================
+
+    /// Check if there's any active mission (contract or depot)
+    #[func]
+    pub fn has_active_mission(&self) -> bool {
+        self.state.player_company.has_active_mission()
+    }
+
+    /// Check if there's an active depot mission
+    #[func]
+    pub fn has_active_depot_mission(&self) -> bool {
+        self.state.player_company.active_depot_mission.is_some()
+    }
+
+    /// Select a depot mission by serial number and destination location_id
+    #[func]
+    pub fn select_depot_mission(&mut self, depot_serial: i32, destination: GString) -> bool {
+        let dest = destination.to_string();
+        match self.state.player_company.select_depot_mission(depot_serial as u32, &dest) {
+            Ok(()) => {
+                self.base_mut().emit_signal("contracts_changed", &[]);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Cancel the current depot mission
+    #[func]
+    pub fn cancel_depot_mission(&mut self) {
+        self.state.player_company.cancel_depot_mission();
+        self.base_mut().emit_signal("contracts_changed", &[]);
+    }
+
+    /// Get active depot mission name
+    #[func]
+    pub fn get_active_depot_mission_name(&self) -> GString {
+        GString::from(
+            self.state.player_company.active_depot_mission.as_ref()
+                .map(|dm| dm.depot_name.as_str())
+                .unwrap_or("")
+        )
+    }
+
+    /// Get active depot mission destination display name
+    #[func]
+    pub fn get_active_depot_mission_destination(&self) -> GString {
+        GString::from(
+            self.state.player_company.active_depot_mission.as_ref()
+                .map(|dm| dm.destination_display.as_str())
+                .unwrap_or("")
+        )
+    }
+
+    /// Get active depot mission delta-v
+    #[func]
+    pub fn get_active_depot_mission_delta_v(&self) -> f64 {
+        self.state.player_company.get_target_delta_v()
+    }
+
+    /// Get active depot mission payload (depot mass)
+    #[func]
+    pub fn get_active_depot_mission_payload(&self) -> f64 {
+        self.state.player_company.active_depot_mission.as_ref()
+            .map(|dm| dm.depot_mass_kg)
+            .unwrap_or(0.0)
+    }
+
+    /// Complete the current depot mission (call after successful launch).
+    /// Returns flight_id on success, -1 on failure.
+    #[func]
+    pub fn complete_depot_mission(&mut self) -> i32 {
+        self.sync_money_to_state();
+        let design_id = self.current_rocket_design_id.unwrap_or(0);
+        match self.state.player_company.complete_depot_mission(design_id) {
+            Ok(flight_id) => {
+                self.sync_money_from_state();
+                self.base_mut().emit_signal("contracts_changed", &[]);
+                self.base_mut().emit_signal("inventory_changed", &[]);
+                flight_id as i32
+            }
+            Err(_) => -1,
+        }
+    }
+
+    /// Record a failed depot mission launch
+    #[func]
+    pub fn fail_depot_mission(&mut self) {
+        self.sync_money_to_state();
+        let design_id = self.current_rocket_design_id.unwrap_or(0);
+        self.state.player_company.fail_depot_mission(design_id);
+        self.sync_money_from_state();
+        self.adjust_fame(-15.0);
+    }
+
+    /// Get the active mission's location_id (works for both contract and depot missions)
+    #[func]
+    pub fn get_active_mission_location_id(&self) -> GString {
+        if let Some(c) = &self.state.player_company.active_contract {
+            GString::from(c.destination.location_id())
+        } else if let Some(dm) = &self.state.player_company.active_depot_mission {
+            GString::from(dm.destination.as_str())
+        } else {
+            GString::from("")
+        }
+    }
+
+    // ==========================================
+    // Orbital Locations (for depot destination selection)
+    // ==========================================
+
+    /// Get number of orbital/non-surface locations available for depot missions
+    #[func]
+    pub fn get_orbital_location_count(&self) -> i32 {
+        use crate::location::DELTA_V_MAP;
+        DELTA_V_MAP.locations().iter()
+            .filter(|l| !matches!(l.location_type, crate::location::LocationType::Surface(_)))
+            .count() as i32
+    }
+
+    /// Get orbital location display name at index
+    #[func]
+    pub fn get_orbital_location_name(&self, index: i32) -> GString {
+        use crate::location::DELTA_V_MAP;
+        let locs: Vec<_> = DELTA_V_MAP.locations().iter()
+            .filter(|l| !matches!(l.location_type, crate::location::LocationType::Surface(_)))
+            .collect();
+        locs.get(index as usize)
+            .map(|l| GString::from(l.display_name))
+            .unwrap_or_default()
+    }
+
+    /// Get orbital location id at index
+    #[func]
+    pub fn get_orbital_location_id(&self, index: i32) -> GString {
+        use crate::location::DELTA_V_MAP;
+        let locs: Vec<_> = DELTA_V_MAP.locations().iter()
+            .filter(|l| !matches!(l.location_type, crate::location::LocationType::Surface(_)))
+            .collect();
+        locs.get(index as usize)
+            .map(|l| GString::from(l.id))
+            .unwrap_or_default()
+    }
+
+    /// Get delta-v from earth_surface to orbital location at index
+    #[func]
+    pub fn get_orbital_location_delta_v(&self, index: i32) -> f64 {
+        use crate::location::DELTA_V_MAP;
+        let locs: Vec<_> = DELTA_V_MAP.locations().iter()
+            .filter(|l| !matches!(l.location_type, crate::location::LocationType::Surface(_)))
+            .collect();
+        locs.get(index as usize)
+            .and_then(|l| DELTA_V_MAP.shortest_path("earth_surface", l.id))
+            .map(|(_path, cost)| cost)
+            .unwrap_or(0.0)
+    }
+
+    /// Get payload info for an active flight by index
+    #[func]
+    pub fn get_active_flight_payload_type(&self, index: i32) -> GString {
+        let flights = self.state.player_company.active_flights();
+        flights.get(index as usize)
+            .map(|f| match &f.payload {
+                crate::flight_state::FlightPayload::ContractSatellite { .. } => GString::from("contract"),
+                crate::flight_state::FlightPayload::Depot { .. } => GString::from("depot"),
+            })
+            .unwrap_or_default()
     }
 
     // ==========================================
@@ -1446,6 +1820,39 @@ impl GameManager {
             .iter()
             .any(|e| matches!(e, crate::engineering_team::WorkEvent::SalaryDeducted { .. }));
         if had_salary_event {
+            self.emit_money_changed();
+        }
+
+        // Process flight arrivals: pay rewards, emit signals
+        let flight_arrived_events: Vec<_> = events.iter().filter_map(|e| {
+            if let crate::engineering_team::WorkEvent::FlightArrived { flight_id, destination, is_contract } = e {
+                Some((*flight_id, destination.clone(), *is_contract))
+            } else {
+                None
+            }
+        }).collect();
+
+        for (flight_id, destination, is_contract) in &flight_arrived_events {
+            self.sync_money_to_state();
+            let reward = self.state.player_company.complete_flight_arrival(*flight_id).unwrap_or(0.0);
+            self.sync_money_from_state();
+
+            if *is_contract && reward > 0.0 {
+                // Fame gain on arrival (same formula as before)
+                let fame_gain = 10.0 + (reward / 10_000_000.0);
+                self.adjust_fame(fame_gain);
+                self.base_mut()
+                    .emit_signal("contract_completed", &[Variant::from(reward)]);
+            }
+
+            self.base_mut().emit_signal(
+                "flight_arrived",
+                &[
+                    Variant::from(*flight_id as i32),
+                    Variant::from(GString::from(destination.as_str())),
+                    Variant::from(reward),
+                ],
+            );
             self.emit_money_changed();
         }
 
@@ -1679,6 +2086,17 @@ impl GameManager {
                     dict.set("display_name", GString::from(lineage.name.as_str()));
                 }
             }
+            WorkEvent::FlightArrived { flight_id, destination, is_contract } => {
+                dict.set("type", "flight_arrived");
+                dict.set("flight_id", *flight_id as i32);
+                dict.set("destination", GString::from(destination.as_str()));
+                dict.set("is_contract", *is_contract);
+            }
+            WorkEvent::DepotManufactured { depot_design_index, serial_number } => {
+                dict.set("type", "depot_manufactured");
+                dict.set("depot_design_index", *depot_design_index as i32);
+                dict.set("serial_number", *serial_number as i32);
+            }
         }
         dict
     }
@@ -1713,6 +2131,12 @@ impl GameManager {
             }
             crate::engineering_team::WorkEvent::HardwareTestConsumed { .. } => {
                 "hardware_test_consumed"
+            }
+            crate::engineering_team::WorkEvent::FlightArrived { .. } => {
+                "flight_arrived"
+            }
+            crate::engineering_team::WorkEvent::DepotManufactured { .. } => {
+                "depot_manufactured"
             }
         };
         self.base_mut().emit_signal(
@@ -2821,6 +3245,9 @@ impl GameManager {
                 crate::manufacturing::ManufacturingOrderType::Rocket { rocket_design_id, .. } => {
                     dict.set("rocket_design_id", *rocket_design_id as i32);
                 }
+                crate::manufacturing::ManufacturingOrderType::Depot { depot_design_index, .. } => {
+                    dict.set("depot_design_index", *depot_design_index as i32);
+                }
             }
         }
         dict
@@ -3569,6 +3996,18 @@ impl GameManager {
         self.state.player_company.get_infrastructure(&loc)
             .map(|infra| infra.has_depot())
             .unwrap_or(false)
+    }
+
+    /// Get list of location IDs that have deployed depots
+    #[func]
+    pub fn get_depot_locations(&self) -> Array<GString> {
+        let mut result = Array::new();
+        for (loc, infra) in &self.state.player_company.infrastructure {
+            if infra.depot.is_some() {
+                result.push(&GString::from(loc.as_str()));
+            }
+        }
+        result
     }
 
     /// Get the total capacity of a depot at a location (0 if no depot)

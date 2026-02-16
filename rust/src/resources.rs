@@ -393,6 +393,28 @@ pub fn rocket_integration_cost() -> f64 {
 }
 
 // ==========================================
+// Depot Bill of Materials
+// ==========================================
+
+/// Bill of materials for a fuel depot: aluminium-heavy with plumbing and wiring
+pub fn depot_bom() -> BillOfMaterials {
+    BillOfMaterials {
+        entries: vec![
+            (Resource::Aluminium, 0.60),
+            (Resource::Plumbing, 0.20),
+            (Resource::Wiring, 0.08),
+            (Resource::Electronics, 0.02),
+            (Resource::Composites, 0.10),
+        ],
+    }
+}
+
+/// Material cost for a fuel depot given its dry mass
+pub fn depot_resource_cost(dry_mass_kg: f64) -> f64 {
+    depot_bom().material_cost(dry_mass_kg)
+}
+
+// ==========================================
 // Build Time Constants
 // ==========================================
 

@@ -1,22 +1,20 @@
 * UI
+    * List mission on launch site
 * Fixes
     * Auto-Assign Teams should be on to start
+    * Only leading edge hardware tests can reset the hardware counter
 * Refactoring
-* Launch a fuel depot
+* Depot improvements
+    * Fuel delivery missions — send a tanker rocket to deposit propellant into a deployed depot
     * Depots, rockets, and space stations should eventually have some base interface that allows certain interactions
       between them and for them to have locations.
-    * We should enable fuel depot launches on our own initialive without a mission we get pair for.
+    * Multiple payloads per rocket, some of which might be for missions, some things like fuel depots
 * Add mission time
     * Add lunar orbit mission type with small observation satellite
-    * Add a notion of mission time, that some Kalman transfers take time after a burn is complete.
-    * We will want the abilty to have a large number of rockets active at the same time, eventually.
-    * Notifications when they arrive at their goals.
-    * Multiple missions at the same time.
-    * Multiple payloads per rocket, some of which might be for missions, some things like fuel depots
 * Propellant endurance tracking (build on propellant remaining data).
     * Will be important later when we have multi-stage missions and propellant depots
 * Places, delta-v map
-    * Update map page to show these.
+    * Enhance map page with more orbit info.
     * Get delta-v map at https://en.wikipedia.org/wiki/File:Deltavs.svg
 * Add endurance to rockets
     * A big difference between GTO and GEO capable rockets
@@ -52,4 +50,4 @@
     * Mission gating with capability.
     * Demand curve for missions
 * Define world fact questions to query against the WorldSeed (moon water, tech difficulty, event selection, etc.)
-* Events
+* Compare SpaceX timeline to what we can get in the game for balance.

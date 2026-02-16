@@ -129,7 +129,7 @@ func _update_launch_readiness():
 		return
 
 	# Check mission requirements if designer is available and has a contract
-	if designer and designer.is_design_valid() and game_manager.has_active_contract():
+	if designer and designer.is_design_valid() and game_manager.has_active_mission():
 		var is_launchable = designer.is_launchable()
 		if not is_launchable:
 			var is_sufficient = designer.is_design_sufficient()

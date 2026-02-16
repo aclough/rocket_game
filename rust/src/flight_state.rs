@@ -5,6 +5,15 @@ use std::collections::BTreeMap;
 
 pub type FlightId = u32;
 
+/// What the flight is carrying
+#[derive(Debug, Clone)]
+pub enum FlightPayload {
+    /// Contract mission: delivering a customer's satellite
+    ContractSatellite { payload_type: String, payload_mass_kg: f64 },
+    /// Company mission: deploying a fuel depot
+    Depot { depot_design_index: usize, capacity_kg: f64, serial_number: u32 },
+}
+
 #[derive(Debug, Clone)]
 pub struct StageFlightState {
     pub stage_index: usize,
@@ -32,6 +41,14 @@ pub struct FlightState {
     pub status: FlightStatus,
     pub mission_plan: MissionPlan,
     pub current_leg_index: usize,
+    /// Days remaining in transit for the current leg
+    pub transit_days_remaining: u32,
+    /// Contract ID that pays out on arrival (None for company missions)
+    pub contract_id: Option<u32>,
+    /// Reward to pay on arrival (0.0 for company missions)
+    pub reward: f64,
+    /// What the flight is carrying
+    pub payload: FlightPayload,
 }
 
 impl FlightState {
@@ -56,6 +73,11 @@ impl FlightState {
             })
             .collect();
 
+        // Initialize transit timer from first leg
+        let transit_days_remaining = mission_plan.legs.first()
+            .map(|l| l.transit_days)
+            .unwrap_or(0);
+
         Self {
             id,
             design_lineage_index: lineage_index,
@@ -67,6 +89,13 @@ impl FlightState {
             status: FlightStatus::InTransit,
             mission_plan,
             current_leg_index: 0,
+            transit_days_remaining,
+            contract_id: None,
+            reward: 0.0,
+            payload: FlightPayload::ContractSatellite {
+                payload_type: String::new(),
+                payload_mass_kg: design.payload_mass_kg,
+            },
         }
     }
 
@@ -82,11 +111,43 @@ impl FlightState {
 
     /// Advance to the next leg after completing the current one.
     /// Updates current_location to the completed leg's destination.
+    /// Sets transit timer for the next leg.
     pub fn advance_leg(&mut self) {
         if let Some(leg) = self.mission_plan.legs.get(self.current_leg_index) {
             self.current_location = leg.to.to_string();
             self.current_leg_index += 1;
+            self.start_current_leg_transit();
         }
+    }
+
+    /// Set the transit timer from the current leg's transit_days
+    pub fn start_current_leg_transit(&mut self) {
+        self.transit_days_remaining = self.mission_plan.legs
+            .get(self.current_leg_index)
+            .map(|l| l.transit_days)
+            .unwrap_or(0);
+    }
+
+    /// Tick one day of transit. Returns true when the current leg's transit is complete.
+    pub fn tick_transit_day(&mut self) -> bool {
+        if self.transit_days_remaining > 0 {
+            self.transit_days_remaining -= 1;
+        }
+        self.transit_days_remaining == 0
+    }
+
+    /// Check if all legs are completed
+    pub fn all_legs_completed(&self) -> bool {
+        self.current_leg_index >= self.mission_plan.legs.len()
+    }
+
+    /// Total transit days remaining across current and future legs
+    pub fn total_transit_days_remaining(&self) -> u32 {
+        let mut total = self.transit_days_remaining;
+        for leg in self.mission_plan.legs.iter().skip(self.current_leg_index + 1) {
+            total += leg.transit_days;
+        }
+        total
     }
 
     /// Mark flight as failed at a specific leg.
@@ -283,5 +344,110 @@ mod tests {
 
         flight.status = FlightStatus::Failed;
         assert!(!flight.is_active());
+    }
+
+    #[test]
+    fn test_tick_transit_day_zero_transit() {
+        let design = RocketDesign::default_design();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
+
+        // LEO has 0 transit days — first tick should complete immediately
+        assert_eq!(flight.transit_days_remaining, 0);
+        assert!(flight.tick_transit_day());
+    }
+
+    #[test]
+    fn test_tick_transit_day_multi_day() {
+        let design = RocketDesign::default_design();
+        // GEO: earth_surface(0) -> leo(1) -> gto(0) -> geo
+        let geo_plan = MissionPlan::from_shortest_path("earth_surface", "geo").unwrap();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "geo", geo_plan);
+
+        // First leg: earth_surface -> leo, 0 transit days
+        assert_eq!(flight.transit_days_remaining, 0);
+        assert!(flight.tick_transit_day()); // completes immediately
+        flight.advance_leg();
+        assert_eq!(flight.current_location, "leo");
+
+        // Second leg: leo -> gto, 1 transit day
+        assert_eq!(flight.transit_days_remaining, 1);
+        // tick: 1 -> 0, returns true (transit complete for this leg)
+        assert!(flight.tick_transit_day());
+        flight.advance_leg();
+        assert_eq!(flight.current_location, "gto");
+
+        // Third leg: gto -> geo, 0 transit days
+        assert_eq!(flight.transit_days_remaining, 0);
+        assert!(flight.tick_transit_day());
+        flight.advance_leg();
+        assert_eq!(flight.current_location, "geo");
+        assert!(flight.all_legs_completed());
+    }
+
+    #[test]
+    fn test_tick_transit_multi_leg_with_transit() {
+        let design = RocketDesign::default_design();
+        // lunar_surface: earth_surface(0) -> leo(4) -> lunar_orbit(0) -> lunar_surface
+        let plan = MissionPlan::from_shortest_path("earth_surface", "lunar_surface").unwrap();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "lunar_surface", plan);
+
+        // Leg 0: earth_surface -> leo, 0 transit
+        assert_eq!(flight.transit_days_remaining, 0);
+        assert!(flight.tick_transit_day());
+        flight.advance_leg();
+        assert_eq!(flight.current_location, "leo");
+
+        // Leg 1: leo -> lunar_orbit, 4 transit days
+        assert_eq!(flight.transit_days_remaining, 4);
+        for day in 0..3 {
+            assert!(!flight.tick_transit_day(), "Day {} should not complete", day);
+        }
+        assert!(flight.tick_transit_day()); // Day 4 completes
+        flight.advance_leg();
+        assert_eq!(flight.current_location, "lunar_orbit");
+
+        // Leg 2: lunar_orbit -> lunar_surface, 0 transit
+        assert_eq!(flight.transit_days_remaining, 0);
+        assert!(flight.tick_transit_day());
+        flight.advance_leg();
+        assert_eq!(flight.current_location, "lunar_surface");
+        assert!(flight.all_legs_completed());
+    }
+
+    #[test]
+    fn test_total_transit_days_remaining() {
+        let design = RocketDesign::default_design();
+        let plan = MissionPlan::from_shortest_path("earth_surface", "lunar_surface").unwrap();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "lunar_surface", plan);
+
+        // At start: 0 (leg 0) + 4 (leg 1) + 0 (leg 2) = 4
+        assert_eq!(flight.total_transit_days_remaining(), 4);
+
+        // After completing leg 0
+        flight.tick_transit_day();
+        flight.advance_leg();
+        // Now at leg 1: 4 remaining + 0 (leg 2) = 4
+        assert_eq!(flight.total_transit_days_remaining(), 4);
+
+        // After 2 ticks of leg 1
+        flight.tick_transit_day();
+        flight.tick_transit_day();
+        assert_eq!(flight.total_transit_days_remaining(), 2);
+    }
+
+    #[test]
+    fn test_flight_contract_fields() {
+        let design = RocketDesign::default_design();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
+
+        // Default: no contract
+        assert!(flight.contract_id.is_none());
+        assert_eq!(flight.reward, 0.0);
+
+        // Set contract info
+        flight.contract_id = Some(42);
+        flight.reward = 5_000_000.0;
+        assert_eq!(flight.contract_id, Some(42));
+        assert_eq!(flight.reward, 5_000_000.0);
     }
 }

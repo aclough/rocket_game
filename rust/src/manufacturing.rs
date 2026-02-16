@@ -2,6 +2,7 @@
 /// Manufacturing is a phase between "design complete" and "ready to launch" where teams
 /// spend time and materials to produce physical hardware.
 
+use crate::depot_design::DepotDesign;
 use crate::engine_design::EngineDesignSnapshot;
 use crate::rocket_design::RocketDesign;
 use crate::stage::RocketStage;
@@ -75,6 +76,11 @@ pub enum ManufacturingOrderType {
         /// Snapshot of the rocket design at time of order
         design_snapshot: RocketDesign,
     },
+    /// Building a fuel depot
+    Depot {
+        depot_design_index: usize,
+        depot_design: DepotDesign,
+    },
 }
 
 /// A manufacturing order that teams work on
@@ -109,6 +115,9 @@ impl ManufacturingOrder {
             ManufacturingOrderType::Rocket { design_snapshot, .. } => {
                 format!("Assemble {}", design_snapshot.name)
             }
+            ManufacturingOrderType::Depot { depot_design, .. } => {
+                format!("Build Depot: {}", depot_design.name)
+            }
         }
     }
 
@@ -132,7 +141,7 @@ impl ManufacturingOrder {
             ManufacturingOrderType::Engine { quantity, completed, .. } => {
                 *completed >= *quantity
             }
-            ManufacturingOrderType::Rocket { .. } => {
+            ManufacturingOrderType::Rocket { .. } | ManufacturingOrderType::Depot { .. } => {
                 self.is_unit_complete()
             }
         }
@@ -156,8 +165,13 @@ impl ManufacturingOrder {
                 let remaining_units = (*quantity as f64) - (*completed as f64) - 1.0;
                 current_unit_remaining + remaining_units.max(0.0) * self.total_work
             }
-            ManufacturingOrderType::Rocket { .. } => current_unit_remaining,
+            ManufacturingOrderType::Rocket { .. } | ManufacturingOrderType::Depot { .. } => current_unit_remaining,
         }
+    }
+
+    /// Whether this is a depot order
+    pub fn is_depot_order(&self) -> bool {
+        matches!(self.order_type, ManufacturingOrderType::Depot { .. })
     }
 }
 
@@ -176,6 +190,17 @@ pub struct EngineInventoryEntry {
     pub snapshot: EngineDesignSnapshot,
     /// Number of this engine type available
     pub quantity: u32,
+}
+
+/// An entry in the depot inventory (each depot is unique)
+#[derive(Debug, Clone)]
+pub struct DepotInventoryEntry {
+    /// Which depot design this came from
+    pub depot_design_index: usize,
+    /// Snapshot of the design at time of manufacture
+    pub depot_design: DepotDesign,
+    /// Unique serial number for this depot
+    pub serial_number: u32,
 }
 
 /// An entry in the rocket inventory (each rocket is unique)
@@ -224,6 +249,8 @@ pub struct Manufacturing {
     pub engine_inventory: Vec<EngineInventoryEntry>,
     /// Assembled rockets ready for launch
     pub rocket_inventory: Vec<RocketInventoryEntry>,
+    /// Manufactured depots ready for deployment
+    pub depot_inventory: Vec<DepotInventoryEntry>,
     /// Next order ID
     next_order_id: ManufacturingOrderId,
     /// Next rocket serial number
@@ -242,6 +269,7 @@ impl Manufacturing {
             active_orders: Vec::new(),
             engine_inventory: Vec::new(),
             rocket_inventory: Vec::new(),
+            depot_inventory: Vec::new(),
             next_order_id: 1,
             next_serial_number: 1,
             engine_production_history: Vec::new(),
@@ -407,7 +435,7 @@ impl Manufacturing {
                 *quantity += quantity_to_add;
                 Some(order.material_cost_per_unit * quantity_to_add as f64)
             }
-            ManufacturingOrderType::Rocket { .. } => None,
+            ManufacturingOrderType::Rocket { .. } | ManufacturingOrderType::Depot { .. } => None,
         }
     }
 
@@ -472,6 +500,65 @@ impl Manufacturing {
             entry.1 += 1;
         } else {
             self.rocket_production_history.push((rocket_design_id, 1));
+        }
+    }
+
+    /// Start a depot manufacturing order
+    pub fn start_depot_order(
+        &mut self,
+        depot_design_index: usize,
+        depot_design: DepotDesign,
+    ) -> Option<(ManufacturingOrderId, f64)> {
+        let space_needed = depot_design.floor_space();
+        if self.floor_space_available() < space_needed {
+            return None;
+        }
+
+        let material_cost = depot_design.material_cost();
+        let build_work = depot_design.build_work();
+
+        let order_id = self.next_order_id;
+        self.next_order_id += 1;
+
+        self.active_orders.push(ManufacturingOrder {
+            id: order_id,
+            order_type: ManufacturingOrderType::Depot {
+                depot_design_index,
+                depot_design,
+            },
+            progress: 0.0,
+            total_work: build_work,
+            base_total_work: build_work,
+            material_cost_per_unit: material_cost,
+            floor_space_used: space_needed,
+            waiting_for_engines: false,
+        });
+
+        Some((order_id, material_cost))
+    }
+
+    /// Add a completed depot to inventory
+    pub fn add_depot_to_inventory(
+        &mut self,
+        depot_design_index: usize,
+        depot_design: DepotDesign,
+    ) {
+        let serial = self.next_serial_number;
+        self.next_serial_number += 1;
+
+        self.depot_inventory.push(DepotInventoryEntry {
+            depot_design_index,
+            depot_design,
+            serial_number: serial,
+        });
+    }
+
+    /// Remove a depot from inventory by serial number
+    pub fn consume_depot(&mut self, serial_number: u32) -> Option<DepotInventoryEntry> {
+        if let Some(idx) = self.depot_inventory.iter().position(|d| d.serial_number == serial_number) {
+            Some(self.depot_inventory.remove(idx))
+        } else {
+            None
         }
     }
 
@@ -1419,5 +1506,75 @@ mod tests {
         assert!(!mfg.consume_engine_for_testing(0));
         // Kerolox still there
         assert_eq!(mfg.get_engines_available(1), 1);
+    }
+
+    // ==========================================
+    // Depot Manufacturing Tests
+    // ==========================================
+
+    fn test_depot_design() -> crate::depot_design::DepotDesign {
+        crate::depot_design::DepotDesign::new("Test Depot".to_string(), 10_000.0, false)
+    }
+
+    #[test]
+    fn test_start_depot_order() {
+        let mut mfg = Manufacturing::new();
+        let depot = test_depot_design();
+        let expected_cost = depot.material_cost();
+        let expected_work = depot.build_work();
+
+        let result = mfg.start_depot_order(0, depot);
+        assert!(result.is_some());
+
+        let (order_id, cost) = result.unwrap();
+        assert_eq!(cost, expected_cost);
+        assert_eq!(mfg.active_orders.len(), 1);
+        assert_eq!(mfg.active_orders[0].id, order_id);
+        assert_eq!(mfg.active_orders[0].total_work, expected_work);
+        assert!(!mfg.active_orders[0].waiting_for_engines);
+    }
+
+    #[test]
+    fn test_depot_order_floor_space() {
+        let mut mfg = Manufacturing::new();
+        let depot = test_depot_design();
+        let floor_space = depot.floor_space();
+
+        let available_before = mfg.floor_space_available();
+        mfg.start_depot_order(0, depot);
+        assert_eq!(mfg.floor_space_available(), available_before - floor_space);
+    }
+
+    #[test]
+    fn test_depot_inventory() {
+        let mut mfg = Manufacturing::new();
+        let depot = test_depot_design();
+
+        assert_eq!(mfg.depot_inventory.len(), 0);
+
+        mfg.add_depot_to_inventory(0, depot.clone());
+        assert_eq!(mfg.depot_inventory.len(), 1);
+        assert_eq!(mfg.depot_inventory[0].depot_design.name, "Test Depot");
+        assert_eq!(mfg.depot_inventory[0].depot_design_index, 0);
+
+        let serial = mfg.depot_inventory[0].serial_number;
+
+        // Add another
+        mfg.add_depot_to_inventory(0, depot);
+        assert_eq!(mfg.depot_inventory.len(), 2);
+        // Serial numbers should be unique
+        assert_ne!(mfg.depot_inventory[0].serial_number, mfg.depot_inventory[1].serial_number);
+
+        // Consume by serial
+        let consumed = mfg.consume_depot(serial);
+        assert!(consumed.is_some());
+        assert_eq!(consumed.unwrap().serial_number, serial);
+        assert_eq!(mfg.depot_inventory.len(), 1);
+    }
+
+    #[test]
+    fn test_consume_depot_not_found() {
+        let mut mfg = Manufacturing::new();
+        assert!(mfg.consume_depot(999).is_none());
     }
 }

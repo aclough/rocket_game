@@ -52,6 +52,8 @@ pub struct Transfer {
     pub aero_drag_loss: f64,
     pub animation: Option<TransferAnimation>,
     pub can_aerobrake: bool,
+    /// Transit time in game-days for this transfer leg
+    pub transit_days: u32,
 }
 
 impl Transfer {
@@ -196,6 +198,7 @@ impl DeltaVMap {
                 aero_drag_loss: 0.0,
                 animation: Some(TransferAnimation::Launch),
                 can_aerobrake: false,
+                transit_days: 0, // ballistic arc
             },
             Transfer {
                 from: "earth_surface",
@@ -204,6 +207,7 @@ impl DeltaVMap {
                 aero_drag_loss: 300.0,
                 animation: Some(TransferAnimation::Launch),
                 can_aerobrake: false,
+                transit_days: 0, // same-day insertion
             },
             Transfer {
                 from: "leo",
@@ -212,6 +216,7 @@ impl DeltaVMap {
                 aero_drag_loss: 0.0,
                 animation: None,
                 can_aerobrake: false,
+                transit_days: 0, // direct from LEO
             },
             Transfer {
                 from: "leo",
@@ -220,6 +225,7 @@ impl DeltaVMap {
                 aero_drag_loss: 0.0,
                 animation: None,
                 can_aerobrake: false,
+                transit_days: 0, // direct from LEO
             },
             Transfer {
                 from: "leo",
@@ -228,6 +234,7 @@ impl DeltaVMap {
                 aero_drag_loss: 0.0,
                 animation: None,
                 can_aerobrake: false,
+                transit_days: 1, // direct burn
             },
             Transfer {
                 from: "gto",
@@ -236,6 +243,7 @@ impl DeltaVMap {
                 aero_drag_loss: 0.0,
                 animation: None,
                 can_aerobrake: false,
+                transit_days: 0, // circularization burn
             },
             Transfer {
                 from: "leo",
@@ -244,6 +252,7 @@ impl DeltaVMap {
                 aero_drag_loss: 0.0,
                 animation: None,
                 can_aerobrake: false,
+                transit_days: 5, // 3-body trajectory
             },
             Transfer {
                 from: "l1",
@@ -252,6 +261,7 @@ impl DeltaVMap {
                 aero_drag_loss: 0.0,
                 animation: None,
                 can_aerobrake: false,
+                transit_days: 2,
             },
             Transfer {
                 from: "leo",
@@ -260,6 +270,7 @@ impl DeltaVMap {
                 aero_drag_loss: 0.0,
                 animation: None,
                 can_aerobrake: false,
+                transit_days: 4, // direct
             },
             Transfer {
                 from: "lunar_orbit",
@@ -268,6 +279,7 @@ impl DeltaVMap {
                 aero_drag_loss: 0.0,
                 animation: Some(TransferAnimation::Landing),
                 can_aerobrake: false,
+                transit_days: 0, // powered descent
             },
             Transfer {
                 from: "lunar_surface",
@@ -276,6 +288,7 @@ impl DeltaVMap {
                 aero_drag_loss: 0.0,
                 animation: Some(TransferAnimation::Launch),
                 can_aerobrake: false,
+                transit_days: 0, // ascent
             },
         ];
 
@@ -556,5 +569,25 @@ mod tests {
         let map = DeltaVMap::earth_moon();
         assert!(map.surface_properties("leo").is_none());
         assert!(map.surface_properties("l1").is_none());
+    }
+
+    #[test]
+    fn test_transfer_transit_days() {
+        let map = DeltaVMap::earth_moon();
+
+        // Instant transfers
+        assert_eq!(map.transfer("earth_surface", "suborbital").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("earth_surface", "leo").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("leo", "sso").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("leo", "meo").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("gto", "geo").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("lunar_orbit", "lunar_surface").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("lunar_surface", "lunar_orbit").unwrap().transit_days, 0);
+
+        // Multi-day transfers
+        assert_eq!(map.transfer("leo", "gto").unwrap().transit_days, 1);
+        assert_eq!(map.transfer("leo", "l1").unwrap().transit_days, 5);
+        assert_eq!(map.transfer("l1", "lunar_orbit").unwrap().transit_days, 2);
+        assert_eq!(map.transfer("leo", "lunar_orbit").unwrap().transit_days, 4);
     }
 }

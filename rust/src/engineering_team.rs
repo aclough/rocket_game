@@ -195,6 +195,17 @@ pub enum WorkEvent {
     HardwareTestConsumed {
         engine_design_id: usize,
     },
+    /// A flight arrived at its destination
+    FlightArrived {
+        flight_id: crate::flight_state::FlightId,
+        destination: String,
+        is_contract: bool,
+    },
+    /// A fuel depot was manufactured
+    DepotManufactured {
+        depot_design_index: usize,
+        serial_number: u32,
+    },
 }
 
 /// Calculate total efficiency for multiple teams working on the same thing

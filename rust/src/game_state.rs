@@ -128,6 +128,7 @@ mod tests {
     use super::*;
     use crate::contract::Destination;
     use crate::engine::costs;
+    use crate::engineering_team::WorkEvent;
 
     #[test]
     fn test_new_game_state() {
@@ -169,9 +170,28 @@ mod tests {
         let earned = state.player_company.complete_contract(0);
 
         assert_eq!(earned, reward);
-        // Money = initial - rocket_cost + reward
-        assert_eq!(state.player_company.money, initial_money - rocket_cost + reward);
+        // Money = initial - rocket_cost (reward is deferred until flight arrives)
+        assert_eq!(state.player_company.money, initial_money - rocket_cost);
         assert!(state.player_company.active_contract.is_none());
+        // Contract not yet completed — awaiting flight arrival
+        assert_eq!(state.player_company.completed_contracts.len(), 0);
+
+        // Flight should be in-transit
+        let active = state.player_company.active_flights();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].reward, reward);
+
+        // Process days until flight arrives
+        // For LEO (0 transit days), one tick should complete it
+        let events = state.player_company.process_day(false);
+        let arrived = events.iter().any(|e| matches!(e, WorkEvent::FlightArrived { .. }));
+        assert!(arrived, "Flight to LEO (0 transit) should arrive on first process_day");
+
+        // Now complete the arrival
+        let flight_id = state.player_company.flights.last().unwrap().id;
+        let paid = state.player_company.complete_flight_arrival(flight_id).unwrap();
+        assert_eq!(paid, reward);
+        assert_eq!(state.player_company.money, initial_money - rocket_cost + reward);
         assert_eq!(state.player_company.completed_contracts.len(), 1);
     }
 
