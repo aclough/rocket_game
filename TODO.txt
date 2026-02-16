@@ -1,7 +1,6 @@
 * UI
     * List mission on launch site
 * Fixes
-    * Auto-Assign Teams should be on to start
     * Only leading edge hardware tests can reset the hardware counter
 * Refactoring
 * Depot improvements

@@ -110,7 +110,7 @@ impl Company {
             next_team_id: 1,
             flaw_generator: FlawGenerator::new(),
             manufacturing: Manufacturing::new(),
-            auto_assign_manufacturing: false,
+            auto_assign_manufacturing: true,
             flights: Vec::new(),
             next_flight_id: 1,
             infrastructure: HashMap::new(),
