@@ -1,6 +1,18 @@
 * UI
-    * [Done by human] Figure out UI for locations and refueling
 * Refactoring
+* Notifications
+    * When the research speed due to hardware gets too low we need some form of notification to alert the player.
+* Launch a fuel depot
+    * Depots, rockets, and space stations should eventually have some base interface that allows certain interactions
+      between them and for them to have locations.
+    * We should enable fuel depot launches on our own initialive without a mission we get pair for.
+* Add mission time
+    * Add lunar orbit mission type with small observation satellite
+    * Add a notion of mission time, that some Kalman transfers take time after a burn is complete.
+    * We will want the abilty to have a large number of rockets active at the same time, eventually.
+    * Notifications when they arrive at their goals.
+    * Multiple missions at the same time.
+    * Multiple payloads per rocket, some of which might be for missions, some things like fuel depots
 * Propellant endurance tracking (build on propellant remaining data).
     * Will be important later when we have multi-stage missions and propellant depots
 * Places, delta-v map
