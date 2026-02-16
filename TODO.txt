@@ -1,7 +1,7 @@
 * UI
+* Fixes
+    * Auto-Assign Teams should be on to start
 * Refactoring
-* Notifications
-    * When the research speed due to hardware gets too low we need some form of notification to alert the player.
 * Launch a fuel depot
     * Depots, rockets, and space stations should eventually have some base interface that allows certain interactions
       between them and for them to have locations.

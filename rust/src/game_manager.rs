@@ -2407,6 +2407,17 @@ impl GameManager {
         }
     }
 
+    /// Get the base status of a rocket design (without flaw name)
+    #[func]
+    pub fn get_rocket_design_status_base(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.rocket_designs.len() {
+            let design = self.state.player_company.rocket_designs[index as usize].head();
+            GString::from(design.workflow.status.name())
+        } else {
+            GString::from("")
+        }
+    }
+
     /// Get the current hardware multiplier for a rocket design
     #[func]
     pub fn get_rocket_design_hardware_multiplier(&self, index: i32) -> f64 {

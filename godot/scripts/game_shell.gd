@@ -86,6 +86,13 @@ var _speed_buttons: Array = []
 # Toast notification stacking
 var _active_toasts: Array = []
 
+# Notification panel
+var _notification_panel: PanelContainer
+var _notification_list: VBoxContainer
+var _notification_bell: Button
+var _hardware_warning_threshold: float = 0.5
+var _active_notifications: Dictionary = {}  # keyed by ID e.g. "hw_engine_0"
+
 # Cached team person icons
 var _eng_team_icon: ImageTexture = null
 var _mfg_team_icon: ImageTexture = null
@@ -153,6 +160,8 @@ func _ready():
 	_setup_research_content()
 	_setup_production_content()
 	_setup_finance_content()
+
+	_setup_notification_panel()
 
 	# Connect speed changed signal
 	game_manager.speed_changed.connect(_on_speed_changed)
@@ -323,6 +332,25 @@ func _setup_research_content():
 	work_title.text = "Work In Progress"
 	work_title.add_theme_font_size_override("font_size", 20)
 	work_vbox.add_child(work_title)
+
+	# Hardware alert threshold setting
+	var alert_hbox = HBoxContainer.new()
+	alert_hbox.add_theme_constant_override("separation", 6)
+	var alert_label = Label.new()
+	alert_label.text = "Hardware alert below:"
+	alert_label.add_theme_font_size_override("font_size", 13)
+	alert_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	alert_hbox.add_child(alert_label)
+	var threshold_spin = SpinBox.new()
+	threshold_spin.min_value = 10
+	threshold_spin.max_value = 90
+	threshold_spin.step = 10
+	threshold_spin.value = 50
+	threshold_spin.suffix = "%"
+	threshold_spin.add_theme_font_size_override("font_size", 13)
+	threshold_spin.value_changed.connect(_on_threshold_changed)
+	alert_hbox.add_child(threshold_spin)
+	work_vbox.add_child(alert_hbox)
 
 	var designs_section = VBoxContainer.new()
 	designs_section.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2332,6 +2360,7 @@ func _on_money_changed(_new_amount: float):
 
 func _on_date_changed(_new_day: int):
 	date_label.text = game_manager.get_date_formatted()
+	_check_hardware_warnings()
 	# Note: Don't rebuild research UI on every date tick - it destroys buttons too fast
 	# Updates happen via work_event signals instead
 
@@ -2486,6 +2515,175 @@ func _remove_toast(toast: Label):
 	# Reposition remaining toasts
 	for i in range(_active_toasts.size()):
 		_active_toasts[i].position.y = 60 + i * 35
+
+# ==========================================
+# Notification Panel
+# ==========================================
+
+func _setup_notification_panel():
+	# Bell button in StatusBar
+	var status_hbox = $MainVBox/StatusBar/StatusMargin/StatusHBox
+	var spacer = status_hbox.get_node("Spacer")
+	_notification_bell = Button.new()
+	_notification_bell.text = "[!]"
+	_notification_bell.toggle_mode = true
+	_notification_bell.add_theme_font_size_override("font_size", 14)
+	_notification_bell.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	_notification_bell.toggled.connect(_on_notification_bell_toggled)
+	status_hbox.add_child(_notification_bell)
+	status_hbox.move_child(_notification_bell, spacer.get_index())
+
+	# Panel as second child of ContentHBox
+	var content_hbox = $MainVBox/ContentHBox
+	_notification_panel = PanelContainer.new()
+	_notification_panel.custom_minimum_size = Vector2(280, 0)
+	_notification_panel.visible = false
+	_notification_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	var panel_style = StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.15, 0.15, 0.18)
+	panel_style.border_color = Color(0.3, 0.3, 0.35)
+	panel_style.border_width_left = 2
+	_notification_panel.add_theme_stylebox_override("panel", panel_style)
+
+	var panel_margin = MarginContainer.new()
+	panel_margin.add_theme_constant_override("margin_left", 10)
+	panel_margin.add_theme_constant_override("margin_top", 10)
+	panel_margin.add_theme_constant_override("margin_right", 10)
+	panel_margin.add_theme_constant_override("margin_bottom", 10)
+	_notification_panel.add_child(panel_margin)
+
+	var panel_vbox = VBoxContainer.new()
+	panel_vbox.add_theme_constant_override("separation", 6)
+	panel_margin.add_child(panel_vbox)
+
+	# Header
+	var header_hbox = HBoxContainer.new()
+	var header_label = Label.new()
+	header_label.text = "Notifications"
+	header_label.add_theme_font_size_override("font_size", 16)
+	header_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header_hbox.add_child(header_label)
+	var close_btn = Button.new()
+	close_btn.text = "X"
+	close_btn.add_theme_font_size_override("font_size", 12)
+	close_btn.pressed.connect(_on_notification_close_pressed)
+	header_hbox.add_child(close_btn)
+	panel_vbox.add_child(header_hbox)
+
+	panel_vbox.add_child(HSeparator.new())
+
+	# Scrollable notification list
+	var scroll = ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_notification_list = VBoxContainer.new()
+	_notification_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_notification_list.add_theme_constant_override("separation", 4)
+	scroll.add_child(_notification_list)
+	panel_vbox.add_child(scroll)
+
+	content_hbox.add_child(_notification_panel)
+
+func _on_notification_bell_toggled(pressed: bool):
+	_notification_panel.visible = pressed
+
+func _on_notification_close_pressed():
+	_notification_panel.visible = false
+	_notification_bell.button_pressed = false
+
+func _on_threshold_changed(value: float):
+	_hardware_warning_threshold = value / 100.0
+	_check_hardware_warnings()
+
+func _check_hardware_warnings():
+	var threshold = _hardware_warning_threshold
+	var seen_ids: Dictionary = {}
+
+	# Check engine designs
+	var engine_count = game_manager.get_engine_type_count()
+	for i in range(engine_count):
+		var id = "hw_engine_%d" % i
+		var status = game_manager.get_engine_status_base(i)
+		if status == "Testing" or status == "Fixing":
+			var mult = game_manager.get_engine_hardware_multiplier(i)
+			if mult < threshold:
+				var name = game_manager.get_engine_type_name(i)
+				var pct = int(mult * 100)
+				var msg = "Engine '%s' hardware at %d%%" % [name, pct]
+				_set_notification(id, msg)
+				seen_ids[id] = true
+			else:
+				_remove_notification(id)
+		else:
+			_remove_notification(id)
+
+	# Check rocket designs
+	var rocket_count = game_manager.get_rocket_design_count()
+	for i in range(rocket_count):
+		var id = "hw_rocket_%d" % i
+		var status = game_manager.get_rocket_design_status_base(i)
+		if status == "Testing" or status == "Fixing":
+			var mult = game_manager.get_rocket_design_hardware_multiplier(i)
+			if mult < threshold:
+				var name = game_manager.get_rocket_design_name(i)
+				var pct = int(mult * 100)
+				var msg = "Rocket '%s' hardware at %d%%" % [name, pct]
+				_set_notification(id, msg)
+				seen_ids[id] = true
+			else:
+				_remove_notification(id)
+		else:
+			_remove_notification(id)
+
+	_update_notification_badge()
+
+func _set_notification(id: String, message: String):
+	if _active_notifications.has(id):
+		# Update existing
+		var row = _active_notifications[id] as HBoxContainer
+		var label = row.get_child(0) as Label
+		label.text = "! " + message
+	else:
+		# Create new row
+		var row = HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+
+		var label = Label.new()
+		label.text = "! " + message
+		label.add_theme_font_size_override("font_size", 13)
+		label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.2))
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD
+		row.add_child(label)
+
+		var dismiss_btn = Button.new()
+		dismiss_btn.text = "x"
+		dismiss_btn.add_theme_font_size_override("font_size", 11)
+		dismiss_btn.pressed.connect(_dismiss_notification.bind(id))
+		row.add_child(dismiss_btn)
+
+		_notification_list.add_child(row)
+		_active_notifications[id] = row
+
+func _remove_notification(id: String):
+	if _active_notifications.has(id):
+		var row = _active_notifications[id] as HBoxContainer
+		row.queue_free()
+		_active_notifications.erase(id)
+
+func _dismiss_notification(id: String):
+	_remove_notification(id)
+	_update_notification_badge()
+
+func _update_notification_badge():
+	var count = _active_notifications.size()
+	if count > 0:
+		_notification_bell.text = "[! %d]" % count
+		_notification_bell.add_theme_color_override("font_color", Color(1.0, 0.7, 0.2))
+	else:
+		_notification_bell.text = "[!]"
+		_notification_bell.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 
 func _on_date_label_gui_input(event: InputEvent):
 	# Click on date label to toggle pause
