@@ -1790,9 +1790,14 @@ impl GameManager {
     pub fn get_active_flight_payload_type(&self, index: i32) -> GString {
         let flights = self.state.player_company.active_flights();
         flights.get(index as usize)
-            .map(|f| match &f.payload {
-                crate::flight_state::FlightPayload::ContractSatellite { .. } => GString::from("contract"),
-                crate::flight_state::FlightPayload::Depot { .. } => GString::from("depot"),
+            .map(|f| {
+                if f.has_contract_payload() {
+                    GString::from("contract")
+                } else if f.has_depot_payload() {
+                    GString::from("depot")
+                } else {
+                    GString::from("unknown")
+                }
             })
             .unwrap_or_default()
     }

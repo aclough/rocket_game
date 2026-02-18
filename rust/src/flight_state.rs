@@ -1,18 +1,10 @@
 use crate::engine_design::FuelType;
 use crate::mission_plan::{MissionLeg, MissionPlan};
+use crate::payload::Payload;
 use crate::rocket_design::RocketDesign;
 use std::collections::BTreeMap;
 
 pub type FlightId = u32;
-
-/// What the flight is carrying
-#[derive(Debug, Clone)]
-pub enum FlightPayload {
-    /// Contract mission: delivering a customer's satellite
-    ContractSatellite { payload_type: String, payload_mass_kg: f64 },
-    /// Company mission: deploying a fuel depot
-    Depot { depot_design_index: usize, capacity_kg: f64, serial_number: u32 },
-}
 
 #[derive(Debug, Clone)]
 pub struct StageFlightState {
@@ -43,12 +35,8 @@ pub struct FlightState {
     pub current_leg_index: usize,
     /// Days remaining in transit for the current leg
     pub transit_days_remaining: u32,
-    /// Contract ID that pays out on arrival (None for company missions)
-    pub contract_id: Option<u32>,
-    /// Reward to pay on arrival (0.0 for company missions)
-    pub reward: f64,
-    /// What the flight is carrying
-    pub payload: FlightPayload,
+    /// Payloads carried by this flight
+    pub payloads: Vec<Payload>,
 }
 
 impl FlightState {
@@ -90,12 +78,7 @@ impl FlightState {
             mission_plan,
             current_leg_index: 0,
             transit_days_remaining,
-            contract_id: None,
-            reward: 0.0,
-            payload: FlightPayload::ContractSatellite {
-                payload_type: String::new(),
-                payload_mass_kg: design.payload_mass_kg,
-            },
+            payloads: Vec::new(),
         }
     }
 
@@ -210,6 +193,26 @@ impl FlightState {
     /// Whether the flight is still active (InTransit or AtLocation).
     pub fn is_active(&self) -> bool {
         matches!(self.status, FlightStatus::InTransit | FlightStatus::AtLocation)
+    }
+
+    /// Total reward across all payloads.
+    pub fn total_reward(&self) -> f64 {
+        self.payloads.iter().map(|p| p.reward()).sum()
+    }
+
+    /// All contract IDs from payloads.
+    pub fn contract_ids(&self) -> Vec<u32> {
+        self.payloads.iter().filter_map(|p| p.contract_id()).collect()
+    }
+
+    /// Whether any payload is a contract satellite.
+    pub fn has_contract_payload(&self) -> bool {
+        self.payloads.iter().any(|p| p.is_contract())
+    }
+
+    /// Whether any payload is a fuel depot.
+    pub fn has_depot_payload(&self) -> bool {
+        self.payloads.iter().any(|p| p.is_depot())
     }
 }
 
@@ -436,18 +439,25 @@ mod tests {
     }
 
     #[test]
-    fn test_flight_contract_fields() {
+    fn test_flight_payload_helpers() {
+        use crate::payload::Payload;
+
         let design = RocketDesign::default_design();
         let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
 
-        // Default: no contract
-        assert!(flight.contract_id.is_none());
-        assert_eq!(flight.reward, 0.0);
+        // Default: no payloads
+        assert!(!flight.has_contract_payload());
+        assert!(!flight.has_depot_payload());
+        assert_eq!(flight.total_reward(), 0.0);
+        assert!(flight.contract_ids().is_empty());
 
-        // Set contract info
-        flight.contract_id = Some(42);
-        flight.reward = 5_000_000.0;
-        assert_eq!(flight.contract_id, Some(42));
-        assert_eq!(flight.reward, 5_000_000.0);
+        // Add a contract payload
+        flight.payloads.push(Payload::contract_satellite(
+            1, 42, "Comms".to_string(), 500.0, 5_000_000.0,
+        ));
+        assert!(flight.has_contract_payload());
+        assert!(!flight.has_depot_payload());
+        assert_eq!(flight.total_reward(), 5_000_000.0);
+        assert_eq!(flight.contract_ids(), vec![42]);
     }
 }

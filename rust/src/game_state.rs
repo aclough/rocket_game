@@ -179,7 +179,7 @@ mod tests {
         // Flight should be in-transit
         let active = state.player_company.active_flights();
         assert_eq!(active.len(), 1);
-        assert_eq!(active[0].reward, reward);
+        assert_eq!(active[0].total_reward(), reward);
 
         // Process days until flight arrives
         // For LEO (0 transit days), one tick should complete it

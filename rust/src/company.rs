@@ -8,7 +8,8 @@ use crate::engine_design::{default_engine_lineages, create_engine, EngineDesign,
 use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, TeamType, WorkEvent,
     ENGINEERING_HIRE_COST, MANUFACTURING_HIRE_COST};
 use crate::flaw::FlawGenerator;
-use crate::flight_state::{FlightId, FlightPayload, FlightState, FlightStatus};
+use crate::flight_state::{FlightId, FlightState, FlightStatus};
+use crate::payload::{Payload, PayloadKind};
 use crate::fuel_depot::LocationInfrastructure;
 use crate::launch_site::LaunchSite;
 use crate::mission_plan::MissionPlan;
@@ -85,6 +86,8 @@ pub struct Company {
     pub infrastructure: HashMap<String, LocationInfrastructure>,
     /// Fuel depot designs
     pub depot_designs: Vec<DepotDesign>,
+    /// Next payload ID to assign
+    next_payload_id: u32,
 }
 
 impl Company {
@@ -115,6 +118,7 @@ impl Company {
             next_flight_id: 1,
             infrastructure: HashMap::new(),
             depot_designs: Vec::new(),
+            next_payload_id: 1,
         };
 
         // Generate initial contracts
@@ -245,13 +249,15 @@ impl Company {
         };
 
         if let Some(flight_id) = self.create_flight(rocket_design_id, &destination) {
+            let payload_id = self.allocate_payload_id();
             if let Some(flight) = self.get_flight_mut(flight_id) {
-                flight.contract_id = contract_id;
-                flight.reward = reward;
-                flight.payload = FlightPayload::ContractSatellite {
+                flight.payloads.push(Payload::contract_satellite(
+                    payload_id,
+                    contract_id.unwrap_or(0),
                     payload_type,
-                    payload_mass_kg: payload_mass,
-                };
+                    payload_mass,
+                    reward,
+                ));
                 // For 0-transit flights, complete() is called during process_flights()
                 // DON'T call flight.complete() here — let process_flights handle it
             }
@@ -409,12 +415,17 @@ impl Company {
 
         // Create flight record
         if let Some(flight_id) = self.create_flight(rocket_design_id, &destination) {
+            let payload_id = self.allocate_payload_id();
             if let Some(flight) = self.get_flight_mut(flight_id) {
-                flight.payload = FlightPayload::Depot {
+                flight.payloads.push(Payload::depot(
+                    payload_id,
                     depot_design_index,
-                    capacity_kg: depot.depot_design.capacity_kg,
-                    serial_number: depot.serial_number,
-                };
+                    depot.serial_number,
+                    depot.depot_design.name.clone(),
+                    depot.depot_design.capacity_kg,
+                    depot.depot_design.dry_mass_kg(),
+                    depot.depot_design.insulated,
+                ));
             }
 
             // Clear the mission
@@ -1356,8 +1367,15 @@ impl Company {
     }
 
     // ==========================================
-    // Flight Management
+    // Payload & Flight Management
     // ==========================================
+
+    /// Allocate a unique payload ID.
+    pub fn allocate_payload_id(&mut self) -> u32 {
+        let id = self.next_payload_id;
+        self.next_payload_id += 1;
+        id
+    }
 
     /// Create a flight from a rocket design lineage.
     /// Cuts a revision on the lineage, creates a FlightState from the frozen design.
@@ -1435,7 +1453,7 @@ impl Company {
         for flight_id in arrived_ids {
             if let Some(flight) = self.flights.iter().find(|f| f.id == flight_id) {
                 let destination = flight.destination.clone();
-                let is_contract = flight.contract_id.is_some();
+                let is_contract = flight.has_contract_payload();
                 events.push(WorkEvent::FlightArrived {
                     flight_id,
                     destination,
@@ -1456,27 +1474,26 @@ impl Company {
         flight.status = FlightStatus::Completed;
         flight.current_location = flight.destination.clone();
 
-        let contract_id = flight.contract_id;
-        let reward = flight.reward;
         let destination = flight.destination.clone();
-        let payload = flight.payload.clone();
+        let payloads = flight.payloads.clone();
 
-        // Pay contract reward
-        if reward > 0.0 {
-            self.money += reward;
+        // Process all payloads
+        let mut total_reward = 0.0;
+        for payload in &payloads {
+            total_reward += payload.reward();
+            if let Some(cid) = payload.contract_id() {
+                self.completed_contracts.push(cid);
+            }
+            if let PayloadKind::Depot { capacity_kg, .. } = &payload.kind {
+                self.deploy_depot(&destination, *capacity_kg);
+            }
         }
 
-        // Record contract completion
-        if let Some(cid) = contract_id {
-            self.completed_contracts.push(cid);
+        if total_reward > 0.0 {
+            self.money += total_reward;
         }
 
-        // Handle depot payload — deploy at destination
-        if let FlightPayload::Depot { capacity_kg, .. } = &payload {
-            self.deploy_depot(&destination, *capacity_kg);
-        }
-
-        Some(reward)
+        Some(total_reward)
     }
 
     // ==========================================
@@ -2976,11 +2993,12 @@ mod tests {
         let flight_id = result.unwrap();
         let flight = company.get_flight(flight_id).unwrap();
         assert_eq!(flight.destination, "leo");
-        match &flight.payload {
-            crate::flight_state::FlightPayload::Depot { capacity_kg, .. } => {
-                assert_eq!(capacity_kg, &5000.0);
-            }
-            _ => panic!("Expected Depot payload"),
+        assert_eq!(flight.payloads.len(), 1);
+        assert!(flight.payloads[0].is_depot());
+        if let PayloadKind::Depot { capacity_kg, .. } = &flight.payloads[0].kind {
+            assert_eq!(*capacity_kg, 5000.0);
+        } else {
+            panic!("Expected Depot payload");
         }
 
         // Depot consumed, mission cleared
