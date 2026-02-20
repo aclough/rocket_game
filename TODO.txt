@@ -1,15 +1,7 @@
 * UI
-    * List mission on launch site
 * Fixes
-    * Only leading edge hardware tests can reset the hardware counter
 * Refactoring
-* Depot improvements
-    * Fuel delivery missions — send a tanker rocket to deposit propellant into a deployed depot
-    * Depots, rockets, and space stations should eventually have some base interface that allows certain interactions
-      between them and for them to have locations.
-    * Multiple payloads per rocket, some of which might be for missions, some things like fuel depots
 * Add mission time
-    * Add lunar orbit mission type with small observation satellite
 * Propellant endurance tracking (build on propellant remaining data).
     * Will be important later when we have multi-stage missions and propellant depots
 * Places, delta-v map

@@ -156,6 +156,11 @@ impl DesignWorkflow {
         self.reset_hardware_boost();
     }
 
+    /// Add testing work without resetting hardware boost (for old-revision launches)
+    pub fn add_testing_work_no_boost(&mut self, work: f64) {
+        self.testing_work_completed += work;
+    }
+
     /// Transition from Specification to Engineering phase
     pub fn submit_to_engineering(&mut self) -> bool {
         if !matches!(self.status, DesignStatus::Specification) {

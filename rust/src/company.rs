@@ -258,7 +258,7 @@ impl Company {
     /// Unified successful launch using the manifest.
     /// Deducts rocket cost + testing costs, creates flight with manifest payloads.
     /// Returns the total reward (deferred until flight arrival).
-    pub fn complete_manifest_launch(&mut self, rocket_design_id: usize) -> f64 {
+    pub fn complete_manifest_launch(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) -> f64 {
         self.total_launches += 1;
         self.successful_launches += 1;
 
@@ -282,8 +282,16 @@ impl Company {
         // Reset testing_spent
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
 
-        // Launching IS hardware testing
-        self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(30.0);
+        // Launching IS hardware testing — but only reset boost for latest revision
+        let is_latest = launched_revision.map_or(true, |rev| {
+            self.rocket_designs[rocket_design_id].latest_revision()
+                .map_or(true, |latest| latest.revision_number == rev)
+        });
+        if is_latest {
+            self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(30.0);
+        } else {
+            self.rocket_designs[rocket_design_id].head_mut().workflow.add_testing_work_no_boost(30.0);
+        }
 
         // Build mission plan from manifest
         let farthest_dest = self.manifest.unique_destinations_sorted_by_delta_v()
@@ -363,7 +371,7 @@ impl Company {
 
     /// Unified failed launch using the manifest.
     /// Deducts costs, records failure. Keeps manifest intact for retry.
-    pub fn fail_manifest_launch(&mut self, rocket_design_id: usize) {
+    pub fn fail_manifest_launch(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) {
         self.total_launches += 1;
 
         // Deduct rocket cost and testing costs
@@ -385,8 +393,16 @@ impl Company {
         // Reset testing_spent
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
 
-        // Failed launches still provide partial testing data
-        self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(20.0);
+        // Failed launches still provide partial testing data — only reset boost for latest revision
+        let is_latest = launched_revision.map_or(true, |rev| {
+            self.rocket_designs[rocket_design_id].latest_revision()
+                .map_or(true, |latest| latest.revision_number == rev)
+        });
+        if is_latest {
+            self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(20.0);
+        } else {
+            self.rocket_designs[rocket_design_id].head_mut().workflow.add_testing_work_no_boost(20.0);
+        }
 
         // Create and immediately fail a flight record
         let farthest_dest = self.manifest.unique_destinations_sorted_by_delta_v()
@@ -2849,7 +2865,7 @@ mod tests {
         let initial_money = company.money;
 
         company.add_contract_to_manifest(c1);
-        let earned = company.complete_manifest_launch(0);
+        let earned = company.complete_manifest_launch(0, None);
 
         assert!((earned - reward).abs() < 0.01);
         assert!(company.manifest.is_empty());
@@ -2866,7 +2882,7 @@ mod tests {
         let c1 = company.available_contracts[0].id;
 
         company.add_contract_to_manifest(c1);
-        company.fail_manifest_launch(0);
+        company.fail_manifest_launch(0, None);
 
         // Manifest should still have the entry for retry
         assert_eq!(company.manifest.len(), 1);
@@ -2885,12 +2901,60 @@ mod tests {
 
         company.add_contract_to_manifest(c1);
         company.add_contract_to_manifest(c2);
-        let total = company.complete_manifest_launch(0);
+        let total = company.complete_manifest_launch(0, None);
 
         assert!((total - (reward1 + reward2)).abs() < 0.01);
         assert!(company.manifest.is_empty());
         // Flight should have both payloads
         let flight = company.flights.last().unwrap();
         assert_eq!(flight.payloads.len(), 2);
+    }
+
+    #[test]
+    fn test_launch_latest_revision_resets_hardware_boost() {
+        let mut company = Company::new();
+        make_rockets_manufacturable(&mut company);
+
+        // Decay hardware boost so it's less than 1.0
+        for _ in 0..100 {
+            company.rocket_designs[0].head_mut().workflow.decay_hardware_boost();
+        }
+        assert!(company.rocket_designs[0].head().workflow.hardware_boost < 0.7);
+
+        // Cut a revision (this is the latest)
+        let rev = company.rocket_designs[0].cut_revision("Rev 1");
+
+        let c1 = company.available_contracts[0].id;
+        company.add_contract_to_manifest(c1);
+
+        // Launch with the latest revision — boost should reset
+        company.complete_manifest_launch(0, Some(rev));
+        assert_eq!(company.rocket_designs[0].head().workflow.hardware_boost, 1.0);
+    }
+
+    #[test]
+    fn test_launch_old_revision_does_not_reset_hardware_boost() {
+        let mut company = Company::new();
+        make_rockets_manufacturable(&mut company);
+
+        // Cut two revisions
+        let rev1 = company.rocket_designs[0].cut_revision("Rev 1");
+        let _rev2 = company.rocket_designs[0].cut_revision("Rev 2");
+
+        // Decay hardware boost
+        for _ in 0..100 {
+            company.rocket_designs[0].head_mut().workflow.decay_hardware_boost();
+        }
+        let boost_before = company.rocket_designs[0].head().workflow.hardware_boost;
+        assert!(boost_before < 0.7);
+
+        let c1 = company.available_contracts[0].id;
+        company.add_contract_to_manifest(c1);
+
+        // Launch with old revision — boost should NOT reset
+        company.complete_manifest_launch(0, Some(rev1));
+        assert_eq!(company.rocket_designs[0].head().workflow.hardware_boost, boost_before);
+        // But testing work should still be added
+        assert!(company.rocket_designs[0].head().workflow.testing_work_completed > 0.0);
     }
 }

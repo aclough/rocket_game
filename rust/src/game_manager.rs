@@ -17,6 +17,8 @@ pub struct GameManager {
     finance: Gd<PlayerFinance>,
     /// Error message from the last failed manufacturing order
     last_order_error: String,
+    /// Revision number of the rocket selected for launch
+    launched_revision_number: Option<u32>,
 }
 
 #[godot_api]
@@ -28,6 +30,7 @@ impl INode for GameManager {
             current_rocket_design_id: None,
             finance: Gd::from_init_fn(PlayerFinance::init),
             last_order_error: String::new(),
+            launched_revision_number: None,
         }
     }
 
@@ -1664,7 +1667,8 @@ impl GameManager {
     pub fn complete_launch(&mut self) -> f64 {
         self.sync_money_to_state();
         let design_id = self.current_rocket_design_id.unwrap_or(0);
-        let reward = self.state.player_company.complete_manifest_launch(design_id);
+        let revision = self.launched_revision_number;
+        let reward = self.state.player_company.complete_manifest_launch(design_id, revision);
         if reward > 0.0 || !self.state.player_company.manifest.is_empty() {
             self.state.turn += 1;
         }
@@ -1681,7 +1685,8 @@ impl GameManager {
     pub fn fail_launch(&mut self) {
         self.sync_money_to_state();
         let design_id = self.current_rocket_design_id.unwrap_or(0);
-        self.state.player_company.fail_manifest_launch(design_id);
+        let revision = self.launched_revision_number;
+        self.state.player_company.fail_manifest_launch(design_id, revision);
         self.sync_money_from_state();
         self.adjust_fame(-15.0);
         self.base_mut().emit_signal("contract_failed", &[]);
@@ -3539,6 +3544,7 @@ impl GameManager {
             .find(|entry| entry.serial_number == serial as u32)
         {
             self.current_rocket_design_id = Some(entry.rocket_design_id);
+            self.launched_revision_number = Some(entry.revision_number);
             true
         } else {
             false

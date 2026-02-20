@@ -11,6 +11,7 @@ pub enum Destination {
     MEO,
     GTO,
     GEO,
+    LunarOrbit,
 }
 
 impl Destination {
@@ -23,6 +24,7 @@ impl Destination {
             Destination::MEO => "meo",
             Destination::GTO => "gto",
             Destination::GEO => "geo",
+            Destination::LunarOrbit => "lunar_orbit",
         }
     }
 
@@ -60,6 +62,7 @@ impl Destination {
             Destination::MEO,
             Destination::GTO,
             Destination::GEO,
+            Destination::LunarOrbit,
         ]
     }
 }
@@ -206,6 +209,29 @@ pub const PAYLOAD_TYPES: &[PayloadType] = &[
         reward_per_kg: 65_000.0,
         base_reward: 60_000_000.0,
     },
+
+    // Lunar Orbit
+    PayloadType {
+        name: "Lunar observation satellite",
+        destination: Destination::LunarOrbit,
+        mass_range: (150.0, 400.0),
+        reward_per_kg: 80_000.0,
+        base_reward: 20_000_000.0,
+    },
+    PayloadType {
+        name: "Lunar communication relay",
+        destination: Destination::LunarOrbit,
+        mass_range: (200.0, 500.0),
+        reward_per_kg: 75_000.0,
+        base_reward: 25_000_000.0,
+    },
+    PayloadType {
+        name: "Lunar science orbiter",
+        destination: Destination::LunarOrbit,
+        mass_range: (400.0, 800.0),
+        reward_per_kg: 60_000.0,
+        base_reward: 30_000_000.0,
+    },
 ];
 
 /// Company names for contract generation
@@ -285,18 +311,22 @@ impl Contract {
 
     /// Generate contracts with at least one from each difficulty tier
     pub fn generate_diverse_batch(count: usize, starting_id: u32) -> Vec<Contract> {
+        use rand::seq::SliceRandom;
         let mut rng = rand::thread_rng();
         let mut contracts = Vec::with_capacity(count);
 
         // Get payload types grouped by destination
         let destinations = Destination::all();
 
-        // Try to include at least one contract per destination tier (if count allows)
+        // Shuffle destination indices so all tiers get a fair chance when count < destinations
+        let mut dest_indices: Vec<usize> = (0..destinations.len()).collect();
+        dest_indices.shuffle(&mut rng);
         let tiers_to_include = count.min(destinations.len());
         let mut used_destinations = Vec::new();
 
         // First, add one contract per tier (up to count)
-        for (i, dest) in destinations.iter().take(tiers_to_include).enumerate() {
+        for (i, &dest_idx) in dest_indices.iter().take(tiers_to_include).enumerate() {
+            let dest = &destinations[dest_idx];
             // Find payload types for this destination
             let matching_types: Vec<&PayloadType> = PAYLOAD_TYPES
                 .iter()
@@ -378,6 +408,8 @@ mod tests {
         assert_eq!(Destination::MEO.required_delta_v(), 10200.0);
         assert_eq!(Destination::GTO.required_delta_v(), 10540.0);
         assert_eq!(Destination::GEO.required_delta_v(), 12040.0);
+        // LEO (8100) + direct lunar transfer (3850) = 11950
+        assert_eq!(Destination::LunarOrbit.required_delta_v(), 11950.0);
     }
 
     #[test]
@@ -408,13 +440,45 @@ mod tests {
 
     #[test]
     fn test_diverse_batch() {
-        let contracts = Contract::generate_diverse_batch(6, 1);
-        assert_eq!(contracts.len(), 6);
+        let contracts = Contract::generate_diverse_batch(7, 1);
+        assert_eq!(contracts.len(), 7);
 
         // Should have contracts for multiple destinations
         let destinations: Vec<_> = contracts.iter().map(|c| c.destination.clone()).collect();
         let unique: std::collections::HashSet<_> = destinations.into_iter().collect();
         assert!(unique.len() >= 3, "Should have diverse destinations");
+    }
+
+    #[test]
+    fn test_diverse_batch_includes_lunar_orbit() {
+        // Over many batches, LunarOrbit should appear at least once
+        let mut found_lunar = false;
+        for i in 0..50 {
+            let contracts = Contract::generate_diverse_batch(5, i * 10);
+            if contracts.iter().any(|c| c.destination == Destination::LunarOrbit) {
+                found_lunar = true;
+                break;
+            }
+        }
+        assert!(found_lunar, "LunarOrbit should appear in diverse batches");
+    }
+
+    #[test]
+    fn test_diverse_batch_not_always_sorted() {
+        // Over many batches, first contract should NOT always be Suborbital
+        let mut first_is_suborbital_count = 0;
+        let trials = 50;
+        for i in 0..trials {
+            let contracts = Contract::generate_diverse_batch(5, i * 10);
+            if contracts[0].destination == Destination::Suborbital {
+                first_is_suborbital_count += 1;
+            }
+        }
+        // With 7 destinations shuffled, probability of Suborbital first = ~1/7 ≈ 14%
+        // Getting it >80% of the time would indicate no shuffle
+        assert!(first_is_suborbital_count < 40,
+            "Contracts appear to always be sorted: Suborbital was first {}/{} times",
+            first_is_suborbital_count, trials);
     }
 
     #[test]

@@ -16,9 +16,13 @@ var _selected_serial: int = -1
 @onready var max_mass_label = $MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/PadSection/MaxMassLabel
 @onready var upgrade_button = $MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/PadSection/UpgradeButton
 @onready var storage_label = $MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/PropellantSection/StorageLabel
+@onready var infra_vbox = $MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox
 @onready var rocket_select = $MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/LaunchReadiness/RocketSelect
 @onready var status_label = $MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/LaunchReadiness/StatusLabel
 @onready var launch_button = $MarginContainer/HBox/InfrastructurePanel/InfraMargin/InfraVBox/LaunchReadiness/LaunchButton
+
+# Mission info section (built dynamically)
+var _mission_section: VBoxContainer = null
 
 # Testing view
 @onready var testing_view = $MarginContainer/HBox/TestingView
@@ -31,6 +35,7 @@ func set_game_manager(gm: GameManager):
 	if game_manager:
 		game_manager.money_changed.connect(_on_money_changed)
 		game_manager.inventory_changed.connect(_on_inventory_changed)
+		game_manager.manifest_changed.connect(_on_manifest_changed)
 		rocket_select.item_selected.connect(_on_rocket_selected)
 		call_deferred("_update_infrastructure")
 
@@ -66,6 +71,7 @@ func _update_infrastructure():
 	var storage = game_manager.get_propellant_storage()
 	storage_label.text = "Capacity: %s kg" % _format_number(storage)
 
+	_update_mission_info()
 	_populate_rocket_select()
 	_update_launch_readiness()
 
@@ -164,6 +170,95 @@ func _on_money_changed(_amount: float):
 func _on_inventory_changed():
 	_populate_rocket_select()
 	_update_launch_readiness()
+
+func _on_manifest_changed():
+	_update_mission_info()
+	_update_launch_readiness()
+
+func _ensure_mission_section():
+	if _mission_section != null:
+		return
+	# Create the mission section and insert it between PropellantSection and Spacer
+	_mission_section = VBoxContainer.new()
+	_mission_section.name = "MissionSection"
+	_mission_section.add_theme_constant_override("separation", 6)
+	# Find the Spacer node index to insert before it
+	var spacer = infra_vbox.get_node("Spacer")
+	var spacer_idx = spacer.get_index()
+	# Add separator before mission section
+	var sep = HSeparator.new()
+	sep.name = "MissionSeparator"
+	infra_vbox.add_child(sep)
+	infra_vbox.move_child(sep, spacer_idx)
+	infra_vbox.add_child(_mission_section)
+	infra_vbox.move_child(_mission_section, spacer_idx + 1)
+
+func _update_mission_info():
+	if not game_manager or not infra_vbox:
+		return
+	_ensure_mission_section()
+	# Clear previous content
+	for child in _mission_section.get_children():
+		child.queue_free()
+
+	if not game_manager.has_manifest():
+		var no_mission = Label.new()
+		no_mission.text = "No mission selected"
+		no_mission.add_theme_font_size_override("font_size", 14)
+		no_mission.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		_mission_section.add_child(no_mission)
+		return
+
+	# Header
+	var header = Label.new()
+	header.text = "Current Mission"
+	header.add_theme_font_size_override("font_size", 16)
+	_mission_section.add_child(header)
+
+	# Route
+	var route = Label.new()
+	route.text = game_manager.get_manifest_route_summary()
+	route.add_theme_font_size_override("font_size", 14)
+	route.add_theme_color_override("font_color", Color(0.7, 0.8, 1.0))
+	_mission_section.add_child(route)
+
+	# List each manifest entry
+	var entry_count = game_manager.get_manifest_entry_count()
+	for i in range(entry_count):
+		var entry_name = game_manager.get_manifest_entry_name(i)
+		var entry_dest = game_manager.get_manifest_entry_destination(i)
+		var entry_mass = game_manager.get_manifest_entry_mass(i)
+		var entry_label = Label.new()
+		entry_label.text = "• %s → %s (%.0f kg)" % [entry_name, entry_dest, entry_mass]
+		entry_label.add_theme_font_size_override("font_size", 12)
+		entry_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		entry_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_mission_section.add_child(entry_label)
+
+	# Totals
+	var total_mass = game_manager.get_manifest_total_mass()
+	var total_reward = game_manager.get_manifest_total_reward()
+	var target_dv = game_manager.get_manifest_target_delta_v()
+
+	var totals = Label.new()
+	totals.text = "Payload: %s kg | Δv: %s m/s\nReward: %s" % [
+		_format_number(total_mass),
+		_format_number(target_dv),
+		_format_money(total_reward)
+	]
+	totals.add_theme_font_size_override("font_size", 13)
+	totals.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	_mission_section.add_child(totals)
+
+func _format_money(amount: float) -> String:
+	if amount >= 1_000_000_000.0:
+		return "$%.1fB" % (amount / 1_000_000_000.0)
+	elif amount >= 1_000_000.0:
+		return "$%.0fM" % (amount / 1_000_000.0)
+	elif amount >= 1_000.0:
+		return "$%.0fK" % (amount / 1_000.0)
+	else:
+		return "$%.0f" % amount
 
 func _on_upgrade_pressed():
 	if game_manager and game_manager.upgrade_pad():
