@@ -1,7 +1,6 @@
 * UI
 * Fixes
 * Refactoring
-* Add mission time
 * Propellant endurance tracking (build on propellant remaining data).
     * Will be important later when we have multi-stage missions and propellant depots
 * Places, delta-v map

@@ -1890,6 +1890,11 @@ impl GameManager {
             )
         });
 
+        // Check for production idle event before converting
+        let has_production_idle = events.iter().any(|e| {
+            matches!(e, crate::engineering_team::WorkEvent::AllProductionIdle)
+        });
+
         // Convert events to Godot dictionaries
         let mut result = Array::new();
         for event in events {
@@ -1910,6 +1915,11 @@ impl GameManager {
                 .emit_signal("inventory_changed", &[]);
             // Inventory changes also affect money (material costs already deducted at order start)
             self.emit_money_changed();
+        }
+
+        // Auto-pause when all production finishes
+        if has_production_idle {
+            self.set_time_paused(true);
         }
 
         result
@@ -2111,6 +2121,9 @@ impl GameManager {
                 dict.set("depot_design_index", *depot_design_index as i32);
                 dict.set("serial_number", *serial_number as i32);
             }
+            WorkEvent::AllProductionIdle => {
+                dict.set("type", "all_production_idle");
+            }
         }
         dict
     }
@@ -2151,6 +2164,9 @@ impl GameManager {
             }
             crate::engineering_team::WorkEvent::DepotManufactured { .. } => {
                 "depot_manufactured"
+            }
+            crate::engineering_team::WorkEvent::AllProductionIdle => {
+                "all_production_idle"
             }
         };
         self.base_mut().emit_signal(

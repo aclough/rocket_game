@@ -206,6 +206,8 @@ pub enum WorkEvent {
         depot_design_index: usize,
         serial_number: u32,
     },
+    /// All production work has finished — no active manufacturing or design work remains
+    AllProductionIdle,
 }
 
 /// Calculate total efficiency for multiple teams working on the same thing

@@ -2661,6 +2661,10 @@ func _on_work_event(event_type: String, data: Dictionary):
 			message = "Hardware test: consumed %s engine from inventory" % display_name
 			refresh_research = true
 			refresh_production = true
+		"all_production_idle":
+			message = "All production complete — time paused"
+			refresh_production = true
+			refresh_research = true
 		_:
 			return  # Don't show toast for unknown events
 

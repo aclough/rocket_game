@@ -1540,7 +1540,40 @@ impl Company {
             self.auto_assign_manufacturing_teams();
         }
 
+        // Check if all production just became idle
+        // Only emit if something completed this tick (so we don't spam on every idle tick)
+        let had_completion = events.iter().any(|e| matches!(e,
+            WorkEvent::ManufacturingOrderComplete { .. }
+            | WorkEvent::DesignPhaseComplete { .. }
+            | WorkEvent::FlawFixed { .. }
+        ));
+        if had_completion && !self.has_active_production() {
+            events.push(WorkEvent::AllProductionIdle);
+        }
+
         events
+    }
+
+    /// Check if any finite production work is actively in progress.
+    /// Manufacturing orders, design engineering, and flaw fixing count.
+    /// Testing does NOT count — it loops indefinitely and shouldn't block the pause.
+    fn has_active_production(&self) -> bool {
+        use crate::design_workflow::DesignStatus;
+
+        // Active manufacturing orders
+        let has_manufacturing = self.manufacturing.active_orders.iter()
+            .any(|o| !o.is_order_complete());
+
+        // Any design in Engineering or Fixing (finite work phases)
+        let has_finite_design_work = self.rocket_designs.iter()
+            .any(|l| matches!(l.head().workflow.status,
+                DesignStatus::Engineering { .. } | DesignStatus::Fixing { .. }));
+
+        let has_finite_engine_work = self.engine_designs.iter()
+            .any(|l| matches!(l.head().workflow.status,
+                DesignStatus::Engineering { .. } | DesignStatus::Fixing { .. }));
+
+        has_manufacturing || has_finite_design_work || has_finite_engine_work
     }
 
     /// Shared workflow tick: advance work, discover flaws, auto-start flaw fixing.
@@ -1728,8 +1761,53 @@ impl Company {
 
         // Try to unblock rocket orders waiting for engines
         let unblocked_ids = self.manufacturing.try_unblock_rocket_orders();
-        for order_id in unblocked_ids {
-            events.push(WorkEvent::RocketOrderUnblocked { order_id });
+        for order_id in &unblocked_ids {
+            events.push(WorkEvent::RocketOrderUnblocked { order_id: *order_id });
+        }
+
+        // Auto-reassign half the teams from engine orders that fed each unblocked rocket
+        for order_id in &unblocked_ids {
+            // Find which engine design IDs this rocket uses
+            let engine_design_ids: Vec<usize> = self.manufacturing.active_orders.iter()
+                .find(|o| o.id == *order_id)
+                .and_then(|o| match &o.order_type {
+                    ManufacturingOrderType::Rocket { design_snapshot, .. } => {
+                        Some(design_snapshot.get_unique_engine_design_ids())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            // Find engine order IDs for those engine designs
+            let engine_order_ids: Vec<ManufacturingOrderId> = self.manufacturing.active_orders.iter()
+                .filter(|o| match &o.order_type {
+                    ManufacturingOrderType::Engine { engine_design_id, .. } => {
+                        engine_design_ids.contains(engine_design_id)
+                    }
+                    _ => false,
+                })
+                .map(|o| o.id)
+                .collect();
+
+            // Find teams assigned to those engine orders
+            let teams_on_engine_orders: Vec<u32> = self.teams.iter()
+                .filter(|t| {
+                    matches!(&t.assignment,
+                        Some(TeamAssignment::Manufacturing { order_id })
+                        if engine_order_ids.contains(order_id))
+                })
+                .map(|t| t.id)
+                .collect();
+
+            // Reassign half (rounded up) to the rocket order
+            let teams_to_reassign = (teams_on_engine_orders.len() + 1) / 2;
+            for team_id in teams_on_engine_orders.into_iter().take(teams_to_reassign) {
+                // Unassign from engine order first, then assign to rocket
+                if let Some(team) = self.teams.iter_mut().find(|t| t.id == team_id) {
+                    team.unassign();
+                }
+                self.assign_team_to_manufacturing(team_id, *order_id);
+            }
         }
 
         // Calculate efficiency for each active order (skip blocked ones)
