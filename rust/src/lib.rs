@@ -16,6 +16,7 @@ pub mod fuel_depot;
 pub mod game_state;
 pub mod launch_site;
 pub mod location;
+pub mod manifest;
 pub mod manufacturing;
 pub mod mission_plan;
 pub mod payload;

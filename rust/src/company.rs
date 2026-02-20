@@ -9,6 +9,7 @@ use crate::engineering_team::{team_efficiency, EngineeringTeam, TeamAssignment, 
     ENGINEERING_HIRE_COST, MANUFACTURING_HIRE_COST};
 use crate::flaw::FlawGenerator;
 use crate::flight_state::{FlightId, FlightState, FlightStatus};
+use crate::manifest::Manifest;
 use crate::payload::{Payload, PayloadKind};
 use crate::fuel_depot::LocationInfrastructure;
 use crate::launch_site::LaunchSite;
@@ -17,18 +18,6 @@ use crate::manufacturing::{Manufacturing, ManufacturingOrderId, ManufacturingOrd
 
 use crate::location::DELTA_V_MAP;
 use crate::rocket_design::RocketDesign;
-
-/// A depot deployment mission (mirrors contract flow).
-#[derive(Debug, Clone)]
-pub struct DepotMission {
-    pub depot_design_index: usize,
-    pub depot_serial: u32,
-    pub depot_name: String,
-    pub depot_mass_kg: f64,
-    pub depot_capacity_kg: f64,
-    pub destination: String,         // location_id
-    pub destination_display: String, // display name
-}
 
 /// Cost to refresh the contract list
 pub const CONTRACT_REFRESH_COST: f64 = 10_000_000.0; // $10M
@@ -50,10 +39,8 @@ pub struct Company {
     next_contract_id: u32,
     /// Available contracts to choose from
     pub available_contracts: Vec<Contract>,
-    /// Currently selected contract (if any)
-    pub active_contract: Option<Contract>,
-    /// Currently selected depot mission (if any)
-    pub active_depot_mission: Option<DepotMission>,
+    /// Launch manifest: multiple payloads (contracts/depots) for next launch
+    pub manifest: Manifest,
     /// IDs of completed contracts
     pub completed_contracts: Vec<u32>,
     /// IDs of failed contracts
@@ -100,8 +87,7 @@ impl Company {
             launch_site: LaunchSite::new(),
             next_contract_id: 1,
             available_contracts: Vec::new(),
-            active_contract: None,
-            active_depot_mission: None,
+            manifest: Manifest::new(),
             completed_contracts: Vec::new(),
             failed_contracts: Vec::new(),
             rocket_designs: vec![DesignLineage::new("Default Rocket", default_design)],
@@ -159,230 +145,120 @@ impl Company {
         self.money >= CONTRACT_REFRESH_COST
     }
 
-    /// Select a contract by ID (clears any active depot mission)
-    pub fn select_contract(&mut self, contract_id: u32) -> bool {
-        if let Some(idx) = self
-            .available_contracts
-            .iter()
-            .position(|c| c.id == contract_id)
-        {
-            self.active_depot_mission = None;
-            self.active_contract = Some(self.available_contracts.remove(idx));
+    // ==========================================
+    // Manifest Management
+    // ==========================================
+
+    /// Add a contract to the manifest by contract_id.
+    /// Moves contract from available_contracts to manifest.
+    /// Returns the manifest entry_id, or None if contract not found.
+    pub fn add_contract_to_manifest(&mut self, contract_id: u32) -> Option<u32> {
+        let idx = self.available_contracts.iter().position(|c| c.id == contract_id)?;
+        let contract = self.available_contracts.remove(idx);
+        let dest_id = contract.destination.location_id().to_string();
+        let dest_display = contract.destination.display_name().to_string();
+        let entry_id = self.manifest.add_contract(
+            contract.id,
+            contract.name.clone(),
+            contract.payload_type.clone(),
+            contract.reward,
+            dest_id,
+            dest_display,
+            contract.payload_mass_kg,
+        );
+        Some(entry_id)
+    }
+
+    /// Add a depot to the manifest by serial number and destination.
+    /// Validates depot exists in inventory and destination is valid.
+    /// Returns the manifest entry_id on success.
+    pub fn add_depot_to_manifest(&mut self, depot_serial: u32, destination: &str) -> Result<u32, String> {
+        let depot = self.manufacturing.depot_inventory.iter()
+            .find(|d| d.serial_number == depot_serial)
+            .ok_or_else(|| "Depot not found in inventory".to_string())?;
+
+        let loc = DELTA_V_MAP.location(destination)
+            .ok_or_else(|| format!("Unknown destination: {}", destination))?;
+
+        let entry_id = self.manifest.add_depot(
+            depot.depot_design_index,
+            depot_serial,
+            depot.depot_design.name.clone(),
+            depot.depot_design.capacity_kg,
+            depot.depot_design.insulated,
+            destination.to_string(),
+            loc.display_name.to_string(),
+            depot.depot_design.dry_mass_kg(),
+        );
+
+        Ok(entry_id)
+    }
+
+    /// Remove an entry from the manifest.
+    /// If it was a contract, returns it to available_contracts.
+    /// Returns true if the entry was found and removed.
+    pub fn remove_from_manifest(&mut self, entry_id: u32) -> bool {
+        if let Some(entry) = self.manifest.remove_entry(entry_id) {
+            // If contract, return to available pool
+            if let crate::manifest::ManifestEntryKind::Contract { contract_id, name, payload_type, reward } = entry.kind {
+                // Reconstruct the Contract
+                let dest = Destination::all().iter()
+                    .find(|d| d.location_id() == entry.destination)
+                    .cloned()
+                    .unwrap_or(Destination::LEO);
+                self.available_contracts.push(Contract {
+                    id: contract_id,
+                    name: name.clone(),
+                    description: format!("Launch {:.0} kg {} to {}", entry.mass_kg, payload_type.to_lowercase(), entry.destination_display),
+                    destination: dest,
+                    payload_type,
+                    payload_mass_kg: entry.mass_kg,
+                    reward,
+                });
+            }
             true
         } else {
             false
         }
     }
 
-    /// Get the currently active contract
-    pub fn get_active_contract(&self) -> Option<&Contract> {
-        self.active_contract.as_ref()
-    }
-
-    /// Get the target delta-v for the current mission
-    /// Returns LEO target if no contract or depot mission is active
-    pub fn get_target_delta_v(&self) -> f64 {
-        if let Some(c) = &self.active_contract {
-            c.destination.required_delta_v()
-        } else if let Some(dm) = &self.active_depot_mission {
-            DELTA_V_MAP.shortest_path("earth_surface", &dm.destination)
-                .map(|(_path, cost)| cost)
-                .unwrap_or(Destination::LEO.required_delta_v())
-        } else {
-            Destination::LEO.required_delta_v()
+    /// Clear all entries from the manifest.
+    /// Returns contracts to available_contracts.
+    pub fn clear_manifest(&mut self) {
+        // Collect entry IDs first to avoid borrow issues
+        let entry_ids: Vec<u32> = self.manifest.entries.iter().map(|e| e.entry_id).collect();
+        for id in entry_ids {
+            self.remove_from_manifest(id);
         }
     }
 
-    /// Get the payload mass for the current mission
-    pub fn get_payload_mass(&self) -> f64 {
-        if let Some(c) = &self.active_contract {
-            c.payload_mass_kg
-        } else if let Some(dm) = &self.active_depot_mission {
-            dm.depot_mass_kg
-        } else {
-            self.rocket_designs[0].head().payload_mass_kg
+    /// Get the target delta-v from the manifest (farthest destination).
+    /// Falls back to LEO if manifest is empty.
+    pub fn get_manifest_target_delta_v(&self) -> f64 {
+        if self.manifest.is_empty() {
+            return Destination::LEO.required_delta_v();
         }
+        self.manifest.max_delta_v()
     }
 
-    /// Called after a successful launch.
-    /// Deducts rocket cost and testing costs, creates an in-transit flight.
-    /// Reward is deferred until the flight arrives at its destination.
-    /// Returns the reward amount (for UI display) but does NOT add it to money yet.
-    pub fn complete_contract(&mut self, rocket_design_id: usize) -> f64 {
-        self.total_launches += 1;
-        self.successful_launches += 1;
-
-        // Deduct the rocket cost and testing costs
-        let design = self.rocket_designs[rocket_design_id].head();
-        let rocket_cost = design.total_cost();
-        let testing_cost = design.get_testing_spent();
-        self.money -= rocket_cost + testing_cost;
-
-        // Store propellant data before recording (needs immutable borrow first)
-        let propellant_loaded = design.propellant_by_fuel_type();
-        let propellant_remaining = design.propellant_remaining_by_fuel_type();
-
-        // Record success on both the design version and the lineage
-        let head = self.rocket_designs[rocket_design_id].head_mut();
-        head.launch_record.record_success();
-        head.launch_record.last_propellant_loaded = Some(propellant_loaded);
-        head.launch_record.last_propellant_remaining = Some(propellant_remaining);
-        self.rocket_designs[rocket_design_id].launch_record.record_success();
-
-        // Reset testing_spent so we don't double-charge if design is reused
-        self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
-
-        // Launching IS hardware testing — reset boost and add testing work
-        self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(30.0);
-
-        // Create flight record — remains InTransit until transit completes
-        let (destination, contract_id, reward, payload_type, payload_mass) = if let Some(contract) = &self.active_contract {
-            (
-                contract.destination.location_id().to_string(),
-                Some(contract.id),
-                contract.reward,
-                contract.payload_type.clone(),
-                contract.payload_mass_kg,
-            )
-        } else {
-            ("leo".to_string(), None, 0.0, String::new(), 0.0)
-        };
-
-        if let Some(flight_id) = self.create_flight(rocket_design_id, &destination) {
-            let payload_id = self.allocate_payload_id();
-            if let Some(flight) = self.get_flight_mut(flight_id) {
-                flight.payloads.push(Payload::contract_satellite(
-                    payload_id,
-                    contract_id.unwrap_or(0),
-                    payload_type,
-                    payload_mass,
-                    reward,
-                ));
-                // For 0-transit flights, complete() is called during process_flights()
-                // DON'T call flight.complete() here — let process_flights handle it
-            }
+    /// Get the total payload mass from the manifest.
+    /// Falls back to default design payload if manifest is empty.
+    pub fn get_manifest_payload_mass(&self) -> f64 {
+        if self.manifest.is_empty() {
+            return self.rocket_designs[0].head().payload_mass_kg;
         }
-
-        // Take the contract and generate replacements
-        if let Some(contract) = self.active_contract.take() {
-            let reward = contract.reward;
-
-            // Generate new contracts to replace the completed one
-            if self.available_contracts.len() < CONTRACTS_TO_SHOW {
-                let needed = CONTRACTS_TO_SHOW - self.available_contracts.len();
-                let new_contracts =
-                    Contract::generate_batch(needed, self.next_contract_id);
-                self.next_contract_id += needed as u32;
-                self.available_contracts.extend(new_contracts);
-            }
-
-            reward
-        } else {
-            0.0
-        }
+        self.manifest.total_mass_kg()
     }
 
-    /// Called after a failed launch
-    /// Deducts the rocket cost and testing costs, records the failure.
-    /// Failures are immediate — no transit time.
-    pub fn fail_contract(&mut self, rocket_design_id: usize) {
-        self.total_launches += 1;
-
-        // Deduct the rocket cost and testing costs - failed launches still cost money
-        let design = self.rocket_designs[rocket_design_id].head();
-        let rocket_cost = design.total_cost();
-        let testing_cost = design.get_testing_spent();
-        self.money -= rocket_cost + testing_cost;
-
-        // Store propellant data (loaded only; remaining is None on failure)
-        let propellant_loaded = design.propellant_by_fuel_type();
-
-        // Record failure on both the design version and the lineage
-        let head = self.rocket_designs[rocket_design_id].head_mut();
-        head.launch_record.record_failure();
-        head.launch_record.last_propellant_loaded = Some(propellant_loaded);
-        head.launch_record.last_propellant_remaining = None;
-        self.rocket_designs[rocket_design_id].launch_record.record_failure();
-
-        // Reset testing_spent so we don't double-charge on retry
-        self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
-
-        // Failed launches still provide hardware testing data (partial credit)
-        self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(20.0);
-
-        // Create and immediately fail a flight record
-        let destination = self.active_contract.as_ref()
-            .map(|c| c.destination.location_id().to_string())
-            .unwrap_or_else(|| "leo".to_string());
-        if let Some(flight_id) = self.create_flight(rocket_design_id, &destination) {
-            if let Some(flight) = self.get_flight_mut(flight_id) {
-                flight.fail();
-            }
-        }
-
-        // Don't remove the active contract - player can retry
+    /// Build a mission plan from the current manifest.
+    pub fn get_manifest_mission_plan(&self) -> Option<MissionPlan> {
+        MissionPlan::from_manifest(&self.manifest)
     }
 
-    /// Abandon the current contract without launching
-    /// Returns the contract to the pool
-    pub fn abandon_contract(&mut self) {
-        if let Some(contract) = self.active_contract.take() {
-            self.available_contracts.push(contract);
-        }
-    }
-
-    // ==========================================
-    // Depot Missions
-    // ==========================================
-
-    /// Check if there is any active mission (contract or depot)
-    pub fn has_active_mission(&self) -> bool {
-        self.active_contract.is_some() || self.active_depot_mission.is_some()
-    }
-
-    /// Select a depot mission by serial number and destination location_id.
-    /// Clears any active contract. Does NOT consume the depot yet.
-    pub fn select_depot_mission(&mut self, depot_serial: u32, destination: &str) -> Result<(), String> {
-        // Validate depot exists in inventory
-        let depot = self.manufacturing.depot_inventory.iter()
-            .find(|d| d.serial_number == depot_serial)
-            .ok_or_else(|| "Depot not found in inventory".to_string())?;
-
-        // Validate destination exists in the delta-v map
-        let loc = DELTA_V_MAP.location(destination)
-            .ok_or_else(|| format!("Unknown destination: {}", destination))?;
-
-        let mission = DepotMission {
-            depot_design_index: depot.depot_design_index,
-            depot_serial,
-            depot_name: depot.depot_design.name.clone(),
-            depot_mass_kg: depot.depot_design.dry_mass_kg(),
-            depot_capacity_kg: depot.depot_design.capacity_kg,
-            destination: destination.to_string(),
-            destination_display: loc.display_name.to_string(),
-        };
-
-        self.active_contract = None;
-        self.active_depot_mission = Some(mission);
-        Ok(())
-    }
-
-    /// Cancel the current depot mission (depot stays in inventory)
-    pub fn cancel_depot_mission(&mut self) {
-        self.active_depot_mission = None;
-    }
-
-    /// Complete a depot mission after successful launch.
-    /// Consumes depot from inventory, creates flight, clears mission.
-    pub fn complete_depot_mission(&mut self, rocket_design_id: usize) -> Result<FlightId, String> {
-        let dm = self.active_depot_mission.as_ref()
-            .ok_or_else(|| "No active depot mission".to_string())?;
-
-        let depot_serial = dm.depot_serial;
-        let depot_design_index = dm.depot_design_index;
-        let destination = dm.destination.clone();
-
-        // Increment launch stats
+    /// Unified successful launch using the manifest.
+    /// Deducts rocket cost + testing costs, creates flight with manifest payloads.
+    /// Returns the total reward (deferred until flight arrival).
+    pub fn complete_manifest_launch(&mut self, rocket_design_id: usize) -> f64 {
         self.total_launches += 1;
         self.successful_launches += 1;
 
@@ -406,40 +282,88 @@ impl Company {
         // Reset testing_spent
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
 
-        // Add launch testing work
+        // Launching IS hardware testing
         self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(30.0);
 
-        // Consume depot from inventory
-        let depot = self.manufacturing.consume_depot(depot_serial)
-            .ok_or_else(|| "Depot no longer in inventory".to_string())?;
+        // Build mission plan from manifest
+        let farthest_dest = self.manifest.unique_destinations_sorted_by_delta_v()
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "leo".to_string());
 
-        // Create flight record
-        if let Some(flight_id) = self.create_flight(rocket_design_id, &destination) {
-            let payload_id = self.allocate_payload_id();
-            if let Some(flight) = self.get_flight_mut(flight_id) {
-                flight.payloads.push(Payload::depot(
-                    payload_id,
-                    depot_design_index,
-                    depot.serial_number,
-                    depot.depot_design.name.clone(),
-                    depot.depot_design.capacity_kg,
-                    depot.depot_design.dry_mass_kg(),
-                    depot.depot_design.insulated,
-                ));
+        let total_reward = self.manifest.total_reward();
+
+        // Snapshot manifest entries before creating flight (avoids borrow issues)
+        let manifest_entries = self.manifest.entries.clone();
+
+        // Create flight with manifest-based plan
+        if let Some(flight_id) = self.create_flight_for_manifest(rocket_design_id, &farthest_dest) {
+            // Create payloads for each manifest entry
+            let mut payloads = Vec::new();
+            for entry in &manifest_entries {
+                let payload_id = self.allocate_payload_id();
+
+                match &entry.kind {
+                    crate::manifest::ManifestEntryKind::Contract { contract_id, payload_type, reward, .. } => {
+                        payloads.push(Payload::contract_satellite(
+                            payload_id,
+                            *contract_id,
+                            payload_type.clone(),
+                            entry.mass_kg,
+                            *reward,
+                            entry.destination.clone(),
+                        ));
+                    }
+                    crate::manifest::ManifestEntryKind::Depot { depot_design_index, depot_serial, depot_name, capacity_kg, insulated } => {
+                        payloads.push(Payload::depot(
+                            payload_id,
+                            *depot_design_index,
+                            *depot_serial,
+                            depot_name.clone(),
+                            *capacity_kg,
+                            entry.mass_kg,
+                            *insulated,
+                            entry.destination.clone(),
+                        ));
+                    }
+                }
             }
-
-            // Clear the mission
-            self.active_depot_mission = None;
-
-            Ok(flight_id)
-        } else {
-            Err("Failed to create flight".to_string())
+            if let Some(flight) = self.get_flight_mut(flight_id) {
+                flight.payloads = payloads;
+            }
         }
+
+        // Consume depots from inventory
+        let depot_serials: Vec<u32> = self.manifest.entries.iter()
+            .filter_map(|e| match &e.kind {
+                crate::manifest::ManifestEntryKind::Depot { depot_serial, .. } => Some(*depot_serial),
+                _ => None,
+            })
+            .collect();
+        for serial in depot_serials {
+            self.manufacturing.consume_depot(serial);
+        }
+
+        // Generate replacement contracts
+        let contracts_used = self.manifest.entries.iter()
+            .filter(|e| e.is_contract())
+            .count();
+        if contracts_used > 0 && self.available_contracts.len() < CONTRACTS_TO_SHOW {
+            let needed = CONTRACTS_TO_SHOW - self.available_contracts.len();
+            let new_contracts = Contract::generate_batch(needed, self.next_contract_id);
+            self.next_contract_id += needed as u32;
+            self.available_contracts.extend(new_contracts);
+        }
+
+        // Clear manifest
+        self.manifest.clear();
+
+        total_reward
     }
 
-    /// Record a failed depot mission launch.
-    /// Does NOT consume depot. Does NOT clear the mission (player can retry).
-    pub fn fail_depot_mission(&mut self, rocket_design_id: usize) {
+    /// Unified failed launch using the manifest.
+    /// Deducts costs, records failure. Keeps manifest intact for retry.
+    pub fn fail_manifest_launch(&mut self, rocket_design_id: usize) {
         self.total_launches += 1;
 
         // Deduct rocket cost and testing costs
@@ -465,16 +389,35 @@ impl Company {
         self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(20.0);
 
         // Create and immediately fail a flight record
-        if let Some(flight_id) = self.create_flight(rocket_design_id, &self.active_depot_mission.as_ref()
-            .map(|dm| dm.destination.clone())
-            .unwrap_or_else(|| "leo".to_string()))
-        {
+        let farthest_dest = self.manifest.unique_destinations_sorted_by_delta_v()
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "leo".to_string());
+        if let Some(flight_id) = self.create_flight(rocket_design_id, &farthest_dest) {
             if let Some(flight) = self.get_flight_mut(flight_id) {
                 flight.fail();
             }
         }
 
-        // Don't clear active_depot_mission - player can retry
+        // DON'T clear manifest — player can retry
+    }
+
+    /// Create a flight using a manifest-derived mission plan.
+    /// Uses MissionPlan::from_manifest if possible, falls back to shortest path.
+    fn create_flight_for_manifest(&mut self, design_lineage_index: usize, destination: &str) -> Option<FlightId> {
+        let plan = MissionPlan::from_manifest(&self.manifest)
+            .or_else(|| MissionPlan::from_shortest_path("earth_surface", destination))?;
+
+        let lineage = self.rocket_designs.get_mut(design_lineage_index)?;
+        let rev = lineage.cut_revision("launch");
+        let design = lineage.get_revision(rev).unwrap().snapshot.clone();
+
+        let id = self.next_flight_id;
+        self.next_flight_id += 1;
+
+        let flight = FlightState::from_design(id, design_lineage_index, rev, &design, destination, plan);
+        self.flights.push(flight);
+        Some(id)
     }
 
     // ==========================================
@@ -1416,11 +1359,14 @@ impl Company {
     }
 
     /// Process all in-transit flights: tick transit days, advance legs, detect arrivals.
+    /// Delivers payloads at intermediate stops.
     /// Returns events for flights that completed all legs.
     /// 0-transit legs are advanced immediately in the same tick.
     pub fn process_flights(&mut self) -> Vec<WorkEvent> {
         let mut events = Vec::new();
         let mut arrived_ids = Vec::new();
+        // Collect intermediate deliveries: (flight_id, location, delivered_payloads)
+        let mut intermediate_deliveries: Vec<(FlightId, String, Vec<Payload>)> = Vec::new();
 
         for flight in &mut self.flights {
             if flight.status != FlightStatus::InTransit {
@@ -1441,6 +1387,13 @@ impl Company {
                     break;
                 }
 
+                // Deliver payloads at this intermediate location
+                let current_loc = flight.current_location.clone();
+                let delivered = flight.deliver_payloads_at(&current_loc);
+                if !delivered.is_empty() {
+                    intermediate_deliveries.push((flight.id, current_loc, delivered));
+                }
+
                 // If next leg has non-zero transit, stop (wait for next day)
                 if flight.transit_days_remaining > 0 {
                     break;
@@ -1449,7 +1402,23 @@ impl Company {
             }
         }
 
-        // Process arrivals
+        // Process intermediate deliveries (pay rewards, deploy depots, record completions)
+        for (_flight_id, destination, payloads) in intermediate_deliveries {
+            for payload in &payloads {
+                let reward = payload.reward();
+                if reward > 0.0 {
+                    self.money += reward;
+                }
+                if let Some(cid) = payload.contract_id() {
+                    self.completed_contracts.push(cid);
+                }
+                if let PayloadKind::Depot { capacity_kg, .. } = &payload.kind {
+                    self.deploy_depot(&destination, *capacity_kg);
+                }
+            }
+        }
+
+        // Process final arrivals
         for flight_id in arrived_ids {
             if let Some(flight) = self.flights.iter().find(|f| f.id == flight_id) {
                 let destination = flight.destination.clone();
@@ -2598,75 +2567,6 @@ mod tests {
         assert_eq!(company.manufacturing.get_engines_available(engine_id), 1);
     }
 
-    #[test]
-    fn test_launch_resets_rocket_hardware_boost() {
-        use crate::design_workflow::DesignStatus;
-        use crate::contract::Contract;
-
-        let mut company = Company::new();
-
-        let design_id = 0;
-        company.rocket_designs[design_id].head_mut().workflow.status = DesignStatus::Testing {
-            progress: 0.0,
-            total: 30.0,
-        };
-
-        // Decay the boost
-        for _ in 0..100 {
-            company.rocket_designs[design_id].head_mut().workflow.decay_hardware_boost();
-        }
-        assert!(company.rocket_designs[design_id].head().workflow.hardware_boost < 0.7);
-
-        // Set up a contract and complete it
-        let contracts = Contract::generate_batch(1, 1);
-        company.available_contracts = contracts;
-        company.select_contract(0);
-        company.money = 1_000_000_000.0;
-
-        let initial_testing_work = company.rocket_designs[design_id].head().workflow.testing_work_completed;
-        company.complete_contract(design_id);
-
-        // Hardware boost should be reset to 1.0
-        assert_eq!(company.rocket_designs[design_id].head().workflow.hardware_boost, 1.0);
-        // Testing work should have increased by 30.0
-        let new_testing_work = company.rocket_designs[design_id].head().workflow.testing_work_completed;
-        assert!((new_testing_work - initial_testing_work - 30.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_failure_gives_partial_testing_credit() {
-        use crate::design_workflow::DesignStatus;
-        use crate::contract::Contract;
-
-        let mut company = Company::new();
-
-        let design_id = 0;
-        company.rocket_designs[design_id].head_mut().workflow.status = DesignStatus::Testing {
-            progress: 0.0,
-            total: 30.0,
-        };
-
-        // Decay the boost
-        for _ in 0..100 {
-            company.rocket_designs[design_id].head_mut().workflow.decay_hardware_boost();
-        }
-        assert!(company.rocket_designs[design_id].head().workflow.hardware_boost < 0.7);
-
-        // Set up a contract and fail it
-        let contracts = Contract::generate_batch(1, 1);
-        company.available_contracts = contracts;
-        company.select_contract(0);
-        company.money = 1_000_000_000.0;
-
-        let initial_testing_work = company.rocket_designs[design_id].head().workflow.testing_work_completed;
-        company.fail_contract(design_id);
-
-        // Hardware boost should be reset to 1.0
-        assert_eq!(company.rocket_designs[design_id].head().workflow.hardware_boost, 1.0);
-        // Testing work should have increased by 20.0 (failure partial credit)
-        let new_testing_work = company.rocket_designs[design_id].head().workflow.testing_work_completed;
-        assert!((new_testing_work - initial_testing_work - 20.0).abs() < 0.01);
-    }
 
     // ==========================================
     // Cost Tracker Integration Tests
@@ -2824,276 +2724,173 @@ mod tests {
         assert_eq!(company.rocket_designs[design_id].head().workflow.testing_work_completed, 50.0);
     }
 
+    // ==========================================
+    // Manifest Tests
+    // ==========================================
+
     #[test]
-    fn test_deferred_reward_leo_arrives_immediately() {
+    fn test_add_contract_to_manifest() {
         let mut company = Company::new();
-        company.money = 1_000_000_000.0;
         let contract_id = company.available_contracts[0].id;
-        company.select_contract(contract_id);
-        let reward = company.active_contract.as_ref().unwrap().reward;
+        let initial_available = company.available_contracts.len();
 
-        let money_before = company.money;
-        let earned = company.complete_contract(0);
-        assert_eq!(earned, reward);
-
-        // Reward NOT yet paid
-        assert!(company.money < money_before, "Should have deducted rocket cost");
-        assert_eq!(company.completed_contracts.len(), 0, "Contract not yet completed");
-
-        // Flight should be in transit
-        assert_eq!(company.active_flights().len(), 1);
-
-        // Process one day — LEO has 0 transit, should arrive
-        let events = company.process_day(false);
-        let arrived = events.iter().any(|e| matches!(e, WorkEvent::FlightArrived { .. }));
-        assert!(arrived);
-
-        // Complete arrival
-        let flight_id = company.flights.last().unwrap().id;
-        let paid = company.complete_flight_arrival(flight_id).unwrap();
-        assert_eq!(paid, reward);
-        assert_eq!(company.completed_contracts.len(), 1);
+        let entry_id = company.add_contract_to_manifest(contract_id);
+        assert!(entry_id.is_some());
+        assert_eq!(company.manifest.len(), 1);
+        assert_eq!(company.available_contracts.len(), initial_available - 1);
     }
 
     #[test]
-    fn test_deferred_reward_geo_takes_days() {
-        use crate::contract::Destination;
-
+    fn test_add_contract_to_manifest_not_found() {
         let mut company = Company::new();
-        company.money = 1_000_000_000.0;
-
-        // Generate a GEO contract
-        company.available_contracts.clear();
-        company.available_contracts.push(crate::contract::Contract {
-            id: 100,
-            name: "Test GEO".to_string(),
-            description: "Test".to_string(),
-            destination: Destination::GEO,
-            payload_type: "Satellite".to_string(),
-            payload_mass_kg: 500.0,
-            reward: 50_000_000.0,
-        });
-        company.select_contract(100);
-
-        let earned = company.complete_contract(0);
-        assert_eq!(earned, 50_000_000.0);
-
-        // GEO route: earth_surface(0)->leo(1)->gto(0)->geo = 1 transit day
-        // Day 0: leg 0 (earth->leo, 0 transit) completes, advance to leg 1 (leo->gto, 1 day)
-        let events0 = company.process_day(false);
-        let arrived0 = events0.iter().any(|e| matches!(e, WorkEvent::FlightArrived { .. }));
-        assert!(!arrived0, "GEO flight shouldn't arrive on first day");
-
-        // Day 1: leg 1 transit completes (1->0), advance to leg 2 (gto->geo, 0 transit), completes too
-        let events1 = company.process_day(false);
-        let arrived1 = events1.iter().any(|e| matches!(e, WorkEvent::FlightArrived { .. }));
-        assert!(arrived1, "GEO flight should arrive on second day");
+        assert!(company.add_contract_to_manifest(99999).is_none());
+        assert!(company.manifest.is_empty());
     }
 
     #[test]
-    fn test_multiple_concurrent_flights() {
+    fn test_add_depot_to_manifest() {
         let mut company = Company::new();
-        company.money = 10_000_000_000.0;
+        let depot_idx = company.create_depot_design("Depot".to_string(), 5000.0, false);
+        let depot_design = company.get_depot_design(depot_idx).unwrap().clone();
+        company.manufacturing.add_depot_to_inventory(depot_idx, depot_design);
+        let depot_serial = company.manufacturing.depot_inventory[0].serial_number;
 
-        // Launch two flights
+        let result = company.add_depot_to_manifest(depot_serial, "leo");
+        assert!(result.is_ok());
+        assert_eq!(company.manifest.len(), 1);
+    }
+
+    #[test]
+    fn test_add_depot_to_manifest_invalid_destination() {
+        let mut company = Company::new();
+        let depot_idx = company.create_depot_design("Depot".to_string(), 5000.0, false);
+        let depot_design = company.get_depot_design(depot_idx).unwrap().clone();
+        company.manufacturing.add_depot_to_inventory(depot_idx, depot_design);
+        let depot_serial = company.manufacturing.depot_inventory[0].serial_number;
+
+        let result = company.add_depot_to_manifest(depot_serial, "mars");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_remove_from_manifest_returns_contract() {
+        let mut company = Company::new();
+        let contract_id = company.available_contracts[0].id;
+        let initial_available = company.available_contracts.len();
+
+        let entry_id = company.add_contract_to_manifest(contract_id).unwrap();
+        assert_eq!(company.available_contracts.len(), initial_available - 1);
+
+        assert!(company.remove_from_manifest(entry_id));
+        // Contract should be back in available
+        assert_eq!(company.available_contracts.len(), initial_available);
+        assert!(company.manifest.is_empty());
+    }
+
+    #[test]
+    fn test_clear_manifest_returns_all_contracts() {
+        let mut company = Company::new();
         let c1 = company.available_contracts[0].id;
-        company.select_contract(c1);
-        company.complete_contract(0);
+        let c2 = company.available_contracts[1].id;
+        let initial = company.available_contracts.len();
 
-        // Select and launch another
-        company.generate_contracts(5);
-        let c2 = company.available_contracts[0].id;
-        company.select_contract(c2);
-        company.complete_contract(0);
+        company.add_contract_to_manifest(c1);
+        company.add_contract_to_manifest(c2);
+        assert_eq!(company.available_contracts.len(), initial - 2);
+        assert_eq!(company.manifest.len(), 2);
 
-        // Should have 2 active flights
-        assert_eq!(company.active_flights().len(), 2);
+        company.clear_manifest();
+        assert!(company.manifest.is_empty());
+        assert_eq!(company.available_contracts.len(), initial);
     }
 
     #[test]
-    fn test_select_depot_mission() {
+    fn test_manifest_target_delta_v() {
         let mut company = Company::new();
-        company.money = 10_000_000_000.0;
+        // Empty manifest → LEO
+        assert_eq!(company.get_manifest_target_delta_v(), Destination::LEO.required_delta_v());
 
-        // Create a depot design and add to inventory
-        let depot_idx = company.create_depot_design("Test Depot".to_string(), 5000.0, false);
-        let depot_design = company.get_depot_design(depot_idx).unwrap().clone();
-        company.manufacturing.add_depot_to_inventory(depot_idx, depot_design);
-        let depot_serial = company.manufacturing.depot_inventory[0].serial_number;
-
-        // Select a depot mission
-        let result = company.select_depot_mission(depot_serial, "leo");
-        assert!(result.is_ok());
-        assert!(company.active_depot_mission.is_some());
-        assert!(company.active_contract.is_none());
-
-        let dm = company.active_depot_mission.as_ref().unwrap();
-        assert_eq!(dm.depot_serial, depot_serial);
-        assert_eq!(dm.destination, "leo");
-        assert_eq!(dm.destination_display, "Low Earth Orbit");
-    }
-
-    #[test]
-    fn test_select_depot_mission_clears_contract() {
-        let mut company = Company::new();
-        company.money = 10_000_000_000.0;
-
-        // Select a contract first
-        let contract_id = company.available_contracts[0].id;
-        company.select_contract(contract_id);
-        assert!(company.active_contract.is_some());
-
-        // Create depot and select depot mission
-        let depot_idx = company.create_depot_design("Depot".to_string(), 5000.0, false);
-        let depot_design = company.get_depot_design(depot_idx).unwrap().clone();
-        company.manufacturing.add_depot_to_inventory(depot_idx, depot_design);
-        let depot_serial = company.manufacturing.depot_inventory[0].serial_number;
-
-        company.select_depot_mission(depot_serial, "leo").unwrap();
-        assert!(company.active_contract.is_none());
-        assert!(company.active_depot_mission.is_some());
-    }
-
-    #[test]
-    fn test_select_contract_clears_depot_mission() {
-        let mut company = Company::new();
-        company.money = 10_000_000_000.0;
-
-        // Select a depot mission first
-        let depot_idx = company.create_depot_design("Depot".to_string(), 5000.0, false);
-        let depot_design = company.get_depot_design(depot_idx).unwrap().clone();
-        company.manufacturing.add_depot_to_inventory(depot_idx, depot_design);
-        let depot_serial = company.manufacturing.depot_inventory[0].serial_number;
-        company.select_depot_mission(depot_serial, "leo").unwrap();
-        assert!(company.active_depot_mission.is_some());
-
-        // Select a contract
-        let contract_id = company.available_contracts[0].id;
-        company.select_contract(contract_id);
-        assert!(company.active_depot_mission.is_none());
-        assert!(company.active_contract.is_some());
-    }
-
-    #[test]
-    fn test_complete_depot_mission() {
-        let mut company = Company::new();
-        company.money = 10_000_000_000.0;
-
-        // Create depot and select mission
-        let depot_idx = company.create_depot_design("Test Depot".to_string(), 5000.0, false);
-        let depot_design = company.get_depot_design(depot_idx).unwrap().clone();
-        company.manufacturing.add_depot_to_inventory(depot_idx, depot_design);
-        let depot_serial = company.manufacturing.depot_inventory[0].serial_number;
-        company.select_depot_mission(depot_serial, "leo").unwrap();
-
-        // Complete the mission
-        let result = company.complete_depot_mission(0);
-        assert!(result.is_ok());
-
-        let flight_id = result.unwrap();
-        let flight = company.get_flight(flight_id).unwrap();
-        assert_eq!(flight.destination, "leo");
-        assert_eq!(flight.payloads.len(), 1);
-        assert!(flight.payloads[0].is_depot());
-        if let PayloadKind::Depot { capacity_kg, .. } = &flight.payloads[0].kind {
-            assert_eq!(*capacity_kg, 5000.0);
-        } else {
-            panic!("Expected Depot payload");
+        // Add LEO contract
+        let c1 = company.available_contracts.iter()
+            .find(|c| c.destination == Destination::LEO)
+            .map(|c| c.id);
+        if let Some(id) = c1 {
+            company.add_contract_to_manifest(id);
+            assert_eq!(company.get_manifest_target_delta_v(), Destination::LEO.required_delta_v());
         }
-
-        // Depot consumed, mission cleared
-        assert_eq!(company.manufacturing.depot_inventory.len(), 0);
-        assert!(company.active_depot_mission.is_none());
     }
 
     #[test]
-    fn test_fail_depot_mission_keeps_depot_and_mission() {
+    fn test_manifest_payload_mass() {
         let mut company = Company::new();
-        company.money = 10_000_000_000.0;
+        let c1 = company.available_contracts[0].id;
+        let mass1 = company.available_contracts[0].payload_mass_kg;
 
-        let depot_idx = company.create_depot_design("Depot".to_string(), 5000.0, false);
-        let depot_design = company.get_depot_design(depot_idx).unwrap().clone();
-        company.manufacturing.add_depot_to_inventory(depot_idx, depot_design);
-        let depot_serial = company.manufacturing.depot_inventory[0].serial_number;
-        company.select_depot_mission(depot_serial, "leo").unwrap();
+        company.add_contract_to_manifest(c1);
+        assert!((company.get_manifest_payload_mass() - mass1).abs() < 0.01);
+    }
 
-        // Fail the mission
-        company.fail_depot_mission(0);
+    #[test]
+    fn test_manifest_mission_plan() {
+        let mut company = Company::new();
+        assert!(company.get_manifest_mission_plan().is_none());
 
-        // Depot still in inventory, mission still active
-        assert_eq!(company.manufacturing.depot_inventory.len(), 1);
-        assert!(company.active_depot_mission.is_some());
+        let c1 = company.available_contracts[0].id;
+        company.add_contract_to_manifest(c1);
+        assert!(company.get_manifest_mission_plan().is_some());
+    }
+
+    #[test]
+    fn test_complete_manifest_launch() {
+        let mut company = Company::new();
+        make_rockets_manufacturable(&mut company);
+        let c1 = company.available_contracts[0].id;
+        let reward = company.available_contracts[0].reward;
+        let initial_money = company.money;
+
+        company.add_contract_to_manifest(c1);
+        let earned = company.complete_manifest_launch(0);
+
+        assert!((earned - reward).abs() < 0.01);
+        assert!(company.manifest.is_empty());
+        assert_eq!(company.total_launches, 1);
+        assert_eq!(company.successful_launches, 1);
+        assert!(company.money < initial_money); // cost deducted
+        assert!(!company.flights.is_empty());
+    }
+
+    #[test]
+    fn test_fail_manifest_launch_keeps_manifest() {
+        let mut company = Company::new();
+        make_rockets_manufacturable(&mut company);
+        let c1 = company.available_contracts[0].id;
+
+        company.add_contract_to_manifest(c1);
+        company.fail_manifest_launch(0);
+
+        // Manifest should still have the entry for retry
+        assert_eq!(company.manifest.len(), 1);
         assert_eq!(company.total_launches, 1);
         assert_eq!(company.successful_launches, 0);
     }
 
     #[test]
-    fn test_depot_deployed_on_arrival() {
+    fn test_multi_payload_manifest_launch() {
         let mut company = Company::new();
-        company.money = 10_000_000_000.0;
+        make_rockets_manufacturable(&mut company);
+        let c1 = company.available_contracts[0].id;
+        let c2 = company.available_contracts[1].id;
+        let reward1 = company.available_contracts[0].reward;
+        let reward2 = company.available_contracts[1].reward;
 
-        // Create depot design and select mission
-        let depot_idx = company.create_depot_design("LEO Depot".to_string(), 5000.0, false);
-        let depot_design = company.get_depot_design(depot_idx).unwrap().clone();
-        company.manufacturing.add_depot_to_inventory(depot_idx, depot_design);
-        let depot_serial = company.manufacturing.depot_inventory[0].serial_number;
-        company.select_depot_mission(depot_serial, "leo").unwrap();
+        company.add_contract_to_manifest(c1);
+        company.add_contract_to_manifest(c2);
+        let total = company.complete_manifest_launch(0);
 
-        // Complete the mission
-        let result = company.complete_depot_mission(0);
-        assert!(result.is_ok());
-        let flight_id = result.unwrap();
-
-        // Process flights — LEO should arrive immediately
-        let events = company.process_flights();
-        let arrived = events.iter().any(|e| matches!(e, WorkEvent::FlightArrived { .. }));
-        assert!(arrived, "Flight should arrive immediately for LEO");
-
-        // Complete arrival
-        company.complete_flight_arrival(flight_id);
-
-        // Depot should now exist at LEO
-        let infra = company.infrastructure.get("leo");
-        assert!(infra.is_some(), "Should have infrastructure at LEO");
-        assert!(infra.unwrap().depot.is_some(), "Should have depot at LEO");
-    }
-
-    #[test]
-    fn test_select_depot_mission_invalid_destination() {
-        let mut company = Company::new();
-        let depot_idx = company.create_depot_design("Depot".to_string(), 5000.0, false);
-        let depot_design = company.get_depot_design(depot_idx).unwrap().clone();
-        company.manufacturing.add_depot_to_inventory(depot_idx, depot_design);
-        let depot_serial = company.manufacturing.depot_inventory[0].serial_number;
-
-        let result = company.select_depot_mission(depot_serial, "mars");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Unknown destination"));
-    }
-
-    #[test]
-    fn test_has_active_mission() {
-        let mut company = Company::new();
-        company.money = 10_000_000_000.0;
-        assert!(!company.has_active_mission());
-
-        // Contract makes it active
-        let contract_id = company.available_contracts[0].id;
-        company.select_contract(contract_id);
-        assert!(company.has_active_mission());
-
-        company.abandon_contract();
-        assert!(!company.has_active_mission());
-
-        // Depot mission makes it active
-        let depot_idx = company.create_depot_design("Depot".to_string(), 5000.0, false);
-        let depot_design = company.get_depot_design(depot_idx).unwrap().clone();
-        company.manufacturing.add_depot_to_inventory(depot_idx, depot_design);
-        let depot_serial = company.manufacturing.depot_inventory[0].serial_number;
-        company.select_depot_mission(depot_serial, "leo").unwrap();
-        assert!(company.has_active_mission());
-
-        company.cancel_depot_mission();
-        assert!(!company.has_active_mission());
+        assert!((total - (reward1 + reward2)).abs() < 0.01);
+        assert!(company.manifest.is_empty());
+        // Flight should have both payloads
+        let flight = company.flights.last().unwrap();
+        assert_eq!(flight.payloads.len(), 2);
     }
 }

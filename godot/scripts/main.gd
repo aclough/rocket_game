@@ -127,12 +127,12 @@ func show_design_screen():
 	if game_manager and designer:
 		game_manager.sync_design_to(designer)
 
-	# Update design screen with contract info if we have an active contract
-	if game_manager and game_manager.has_active_contract():
+	# Update design screen with manifest info if we have an active manifest
+	if game_manager and game_manager.has_manifest():
 		if designer:
-			# Set target delta-v and payload from contract
-			var target_dv = game_manager.get_active_contract_delta_v()
-			var payload = game_manager.get_active_contract_payload()
+			# Set target delta-v and payload from manifest
+			var target_dv = game_manager.get_manifest_target_delta_v()
+			var payload = game_manager.get_manifest_total_mass()
 			designer.set_target_delta_v(target_dv)
 			designer.set_payload_mass(payload)
 
@@ -448,15 +448,16 @@ func run_launch_with_delays():
 	if success:
 		success_count += 1
 
-	# Handle contract completion/failure
+	# Handle manifest launch completion/failure
 	var reward = 0.0
-	var destination = ""
-	if game_manager and game_manager.has_active_contract() and not free_launch_mode:
-		destination = game_manager.get_active_contract_destination()
+	var route_summary = ""
+	var has_mission = game_manager and game_manager.has_manifest() and not free_launch_mode
+	if has_mission:
+		route_summary = game_manager.get_manifest_route_summary()
 		if success:
-			reward = game_manager.complete_contract()
+			reward = game_manager.complete_launch()
 		else:
-			game_manager.fail_contract()
+			game_manager.fail_launch()
 		# Sync discovered flaw state from designer back to company's rocket_designs
 		if designer:
 			game_manager.sync_design_from(designer)
@@ -470,12 +471,14 @@ func run_launch_with_delays():
 	if success:
 		result_label.text = "SUCCESS!"
 		result_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-		if reward > 0:
-			message_label.text = "Rocket reached %s!\nReward: %s\nNew Balance: %s" % [
-				destination,
+		if has_mission and reward > 0:
+			message_label.text = "Launch successful!\nRoute: %s\nReward: %s\nNew Balance: %s" % [
+				route_summary,
 				_format_money(reward),
 				game_manager.get_money_formatted()
 			]
+		elif has_mission:
+			message_label.text = "Launch successful!\nRoute: %s" % route_summary
 		else:
 			message_label.text = "Rocket reached orbit!"
 

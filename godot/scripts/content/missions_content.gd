@@ -47,6 +47,8 @@ func set_game_manager(gm: GameManager):
 			game_manager.flight_arrived.connect(_on_flight_arrived_update)
 		if game_manager.has_signal("inventory_changed"):
 			game_manager.inventory_changed.connect(_on_inventory_changed)
+		if game_manager.has_signal("manifest_changed"):
+			game_manager.manifest_changed.connect(_on_manifest_changed)
 		_setup_dynamic_sections()
 		call_deferred("_update_ui")
 
@@ -145,7 +147,7 @@ func _setup_dynamic_sections():
 
 	# Select mission button
 	_depot_select_btn = Button.new()
-	_depot_select_btn.text = "SELECT DEPOT MISSION"
+	_depot_select_btn.text = "ADD DEPOT TO MANIFEST"
 	_depot_select_btn.add_theme_font_size_override("font_size", 14)
 	_depot_select_btn.pressed.connect(_on_select_depot_mission_pressed)
 	_company_missions_container.add_child(_depot_select_btn)
@@ -247,7 +249,7 @@ func _create_contract_card(index: int) -> PanelContainer:
 
 	# Select button
 	var select_btn = Button.new()
-	select_btn.text = "SELECT"
+	select_btn.text = "ADD"
 	select_btn.custom_minimum_size = Vector2(100, 35)
 	select_btn.add_theme_font_size_override("font_size", 14)
 	select_btn.pressed.connect(_on_contract_select_pressed.bind(contract_id))
@@ -280,20 +282,18 @@ func _update_refresh_button():
 	refresh_button.disabled = not game_manager.can_refresh_contracts()
 
 func _update_active_contract():
-	if game_manager.has_active_contract():
+	if game_manager.has_manifest():
 		active_contract_panel.visible = true
-		active_name.text = game_manager.get_active_contract_name()
-		var dest = game_manager.get_active_contract_destination()
-		var dv = game_manager.get_active_contract_delta_v()
-		var reward = game_manager.get_active_contract_reward_formatted()
-		active_details.text = "%s - %.0f m/s - %s" % [dest, dv, reward]
-	elif game_manager.has_active_depot_mission():
-		active_contract_panel.visible = true
-		active_name.text = "DEPOT: " + game_manager.get_active_depot_mission_name()
-		var dest = game_manager.get_active_depot_mission_destination()
-		var dv = game_manager.get_active_depot_mission_delta_v()
-		var payload = game_manager.get_active_depot_mission_payload()
-		active_details.text = "%s - %.0f m/s - %.0f kg" % [dest, dv, payload]
+		var entry_count = game_manager.get_manifest_entry_count()
+		active_name.text = "MANIFEST (%d payload%s)" % [entry_count, "s" if entry_count != 1 else ""]
+		var route = game_manager.get_manifest_route_summary()
+		var dv = game_manager.get_manifest_target_delta_v()
+		var total_mass = game_manager.get_manifest_total_mass()
+		var total_reward = game_manager.get_manifest_total_reward()
+		if total_reward > 0:
+			active_details.text = "%s | %.0f m/s | %.0f kg | %s" % [route, dv, total_mass, _format_money(total_reward)]
+		else:
+			active_details.text = "%s | %.0f m/s | %.0f kg" % [route, dv, total_mass]
 	else:
 		active_contract_panel.visible = false
 
@@ -363,12 +363,15 @@ func _on_select_depot_mission_pressed():
 	var depot_serial = game_manager.get_depot_inventory_serial(depot_idx)
 	var location_id = game_manager.get_orbital_location_id(dest_idx)
 
-	if game_manager.select_depot_mission(depot_serial, location_id):
+	if game_manager.add_depot_to_manifest(depot_serial, location_id) >= 0:
 		depot_mission_selected.emit()
 	else:
-		_show_toast("Failed to select depot mission")
+		_show_toast("Failed to add depot to manifest")
 
 func _on_contracts_changed():
+	_update_ui()
+
+func _on_manifest_changed():
 	_update_ui()
 
 func _on_money_changed(_new_amount: float):
@@ -378,7 +381,7 @@ func _on_inventory_changed():
 	_update_depot_selectors()
 
 func _on_contract_select_pressed(contract_id: int):
-	game_manager.select_contract(contract_id)
+	game_manager.add_contract_to_manifest(contract_id)
 	contract_selected.emit(contract_id)
 
 func _on_refresh_button_pressed():
@@ -388,10 +391,7 @@ func _on_design_button_pressed():
 	design_requested.emit()
 
 func _on_abandon_button_pressed():
-	if game_manager.has_active_depot_mission():
-		game_manager.cancel_depot_mission()
-	else:
-		game_manager.abandon_contract()
+	game_manager.clear_manifest()
 
 func _update_active_flights():
 	if not _flights_container:
@@ -440,6 +440,16 @@ func _update_active_flights():
 
 func _on_flight_arrived_update(_flight_id: int, _destination: String, _reward: float):
 	_update_active_flights()
+
+func _format_money(value: float) -> String:
+	if value >= 1_000_000_000:
+		return "$%.1fB" % (value / 1_000_000_000)
+	elif value >= 1_000_000:
+		return "$%.0fM" % (value / 1_000_000)
+	elif value >= 1_000:
+		return "$%.0fK" % (value / 1_000)
+	else:
+		return "$%.0f" % value
 
 func _show_toast(message: String):
 	# Propagate toast to parent (game_shell handles toasts)

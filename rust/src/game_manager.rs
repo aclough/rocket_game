@@ -278,20 +278,6 @@ impl GameManager {
         GString::from(reward_str.as_str())
     }
 
-    /// Select a contract by ID
-    #[func]
-    pub fn select_contract(&mut self, contract_id: i32) -> bool {
-        if self.state.player_company.select_contract(contract_id as u32) {
-            self.base_mut()
-                .emit_signal("contract_selected", &[Variant::from(contract_id)]);
-            self.base_mut()
-                .emit_signal("contracts_changed", &[]);
-            true
-        } else {
-            false
-        }
-    }
-
     /// Check if we can afford to refresh contracts
     #[func]
     pub fn can_refresh_contracts(&self) -> bool {
@@ -321,118 +307,6 @@ impl GameManager {
         } else {
             false
         }
-    }
-
-    // ==========================================
-    // Active Contract
-    // ==========================================
-
-    /// Check if there's an active contract
-    #[func]
-    pub fn has_active_contract(&self) -> bool {
-        self.state.player_company.active_contract.is_some()
-    }
-
-    /// Get active contract name
-    #[func]
-    pub fn get_active_contract_name(&self) -> GString {
-        GString::from(
-            self.state
-                .player_company
-                .active_contract
-                .as_ref()
-                .map(|c| c.name.as_str())
-                .unwrap_or("")
-        )
-    }
-
-    /// Get active contract destination
-    #[func]
-    pub fn get_active_contract_destination(&self) -> GString {
-        GString::from(
-            self.state
-                .player_company
-                .active_contract
-                .as_ref()
-                .map(|c| c.destination.display_name())
-                .unwrap_or("")
-        )
-    }
-
-    /// Get active contract required delta-v
-    #[func]
-    pub fn get_active_contract_delta_v(&self) -> f64 {
-        self.state.player_company.get_target_delta_v()
-    }
-
-    /// Get active contract payload mass
-    #[func]
-    pub fn get_active_contract_payload(&self) -> f64 {
-        self.state.player_company.get_payload_mass()
-    }
-
-    /// Get active contract reward
-    #[func]
-    pub fn get_active_contract_reward(&self) -> f64 {
-        self.state
-            .player_company
-            .active_contract
-            .as_ref()
-            .map(|c| c.reward)
-            .unwrap_or(0.0)
-    }
-
-    /// Get active contract reward formatted
-    #[func]
-    pub fn get_active_contract_reward_formatted(&self) -> GString {
-        let reward_str = self.state
-            .player_company
-            .active_contract
-            .as_ref()
-            .map(|c| format_money(c.reward))
-            .unwrap_or_default();
-        GString::from(reward_str.as_str())
-    }
-
-    /// Abandon the current contract
-    #[func]
-    pub fn abandon_contract(&mut self) {
-        self.state.player_company.abandon_contract();
-        self.base_mut().emit_signal("contracts_changed", &[]);
-    }
-
-    // ==========================================
-    // Mission Completion
-    // ==========================================
-
-    /// Complete the current contract (call after successful launch).
-    /// Returns the expected reward, but payment is deferred until flight arrives.
-    /// The flight is now in-transit; contract_completed signal fires on arrival.
-    #[func]
-    pub fn complete_contract(&mut self) -> f64 {
-        self.sync_money_to_state();
-        let design_id = self.current_rocket_design_id.unwrap_or(0);
-        let reward = self.state.player_company.complete_contract(design_id);
-        if reward > 0.0 {
-            self.state.turn += 1;
-            self.sync_money_from_state();
-            // No advance_time_days — time flows normally, flight arrives via process_flights
-            self.base_mut().emit_signal("contracts_changed", &[]);
-        }
-        reward
-    }
-
-    /// Record a failed launch. Failures are immediate — no transit time.
-    #[func]
-    pub fn fail_contract(&mut self) {
-        self.sync_money_to_state();
-        let design_id = self.current_rocket_design_id.unwrap_or(0);
-        self.state.player_company.fail_contract(design_id);
-        self.sync_money_from_state();
-        // No advance_time_days — time flows normally
-        // Failed launch decreases fame
-        self.adjust_fame(-15.0);
-        self.base_mut().emit_signal("contract_failed", &[]);
     }
 
     /// Pay for the rocket (deduct cost from money)
@@ -1228,10 +1102,10 @@ impl GameManager {
         let mut design = design.unwrap_or_else(|| self.state.player_company.rocket_designs[0].head().clone());
         design.budget = self.finance.bind().get_money();
 
-        // Set targets from active mission so the designer shows correct mission requirements
-        if self.state.player_company.has_active_mission() {
-            design.target_delta_v = self.state.player_company.get_target_delta_v();
-            design.payload_mass_kg = self.state.player_company.get_payload_mass();
+        // Set targets from manifest so the designer shows correct mission requirements
+        if !self.state.player_company.manifest.is_empty() {
+            design.target_delta_v = self.state.player_company.get_manifest_target_delta_v();
+            design.payload_mass_kg = self.state.player_company.get_manifest_payload_mass();
         }
 
         // Sync engine data from Company to Designer
@@ -1626,115 +1500,194 @@ impl GameManager {
             .unwrap_or(0)
     }
 
-    // ==========================================
-    // Depot Missions
-    // ==========================================
-
-    /// Check if there's any active mission (contract or depot)
+    /// Get the active mission's location_id from the manifest (farthest destination)
     #[func]
-    pub fn has_active_mission(&self) -> bool {
-        self.state.player_company.has_active_mission()
+    pub fn get_active_mission_location_id(&self) -> GString {
+        let dests = self.state.player_company.manifest.unique_destinations_sorted_by_delta_v();
+        GString::from(dests.last().map(|s| s.as_str()).unwrap_or(""))
     }
 
-    /// Check if there's an active depot mission
-    #[func]
-    pub fn has_active_depot_mission(&self) -> bool {
-        self.state.player_company.active_depot_mission.is_some()
-    }
+    // ==========================================
+    // Manifest Management
+    // ==========================================
 
-    /// Select a depot mission by serial number and destination location_id
+    #[signal]
+    fn manifest_changed();
+
+    /// Add a contract to the launch manifest by contract_id.
+    /// Returns the manifest entry_id, or -1 if contract not found.
     #[func]
-    pub fn select_depot_mission(&mut self, depot_serial: i32, destination: GString) -> bool {
-        let dest = destination.to_string();
-        match self.state.player_company.select_depot_mission(depot_serial as u32, &dest) {
-            Ok(()) => {
+    pub fn add_contract_to_manifest(&mut self, contract_id: i32) -> i32 {
+        match self.state.player_company.add_contract_to_manifest(contract_id as u32) {
+            Some(entry_id) => {
+                self.base_mut().emit_signal("manifest_changed", &[]);
                 self.base_mut().emit_signal("contracts_changed", &[]);
-                true
+                entry_id as i32
             }
-            Err(_) => false,
+            None => -1,
         }
     }
 
-    /// Cancel the current depot mission
+    /// Add a depot to the launch manifest by serial number and destination.
+    /// Returns the manifest entry_id, or -1 on failure.
     #[func]
-    pub fn cancel_depot_mission(&mut self) {
-        self.state.player_company.cancel_depot_mission();
-        self.base_mut().emit_signal("contracts_changed", &[]);
-    }
-
-    /// Get active depot mission name
-    #[func]
-    pub fn get_active_depot_mission_name(&self) -> GString {
-        GString::from(
-            self.state.player_company.active_depot_mission.as_ref()
-                .map(|dm| dm.depot_name.as_str())
-                .unwrap_or("")
-        )
-    }
-
-    /// Get active depot mission destination display name
-    #[func]
-    pub fn get_active_depot_mission_destination(&self) -> GString {
-        GString::from(
-            self.state.player_company.active_depot_mission.as_ref()
-                .map(|dm| dm.destination_display.as_str())
-                .unwrap_or("")
-        )
-    }
-
-    /// Get active depot mission delta-v
-    #[func]
-    pub fn get_active_depot_mission_delta_v(&self) -> f64 {
-        self.state.player_company.get_target_delta_v()
-    }
-
-    /// Get active depot mission payload (depot mass)
-    #[func]
-    pub fn get_active_depot_mission_payload(&self) -> f64 {
-        self.state.player_company.active_depot_mission.as_ref()
-            .map(|dm| dm.depot_mass_kg)
-            .unwrap_or(0.0)
-    }
-
-    /// Complete the current depot mission (call after successful launch).
-    /// Returns flight_id on success, -1 on failure.
-    #[func]
-    pub fn complete_depot_mission(&mut self) -> i32 {
-        self.sync_money_to_state();
-        let design_id = self.current_rocket_design_id.unwrap_or(0);
-        match self.state.player_company.complete_depot_mission(design_id) {
-            Ok(flight_id) => {
-                self.sync_money_from_state();
-                self.base_mut().emit_signal("contracts_changed", &[]);
-                self.base_mut().emit_signal("inventory_changed", &[]);
-                flight_id as i32
+    pub fn add_depot_to_manifest(&mut self, depot_serial: i32, destination: GString) -> i32 {
+        let dest = destination.to_string();
+        match self.state.player_company.add_depot_to_manifest(depot_serial as u32, &dest) {
+            Ok(entry_id) => {
+                self.base_mut().emit_signal("manifest_changed", &[]);
+                entry_id as i32
             }
             Err(_) => -1,
         }
     }
 
-    /// Record a failed depot mission launch
+    /// Remove an entry from the manifest by entry_id.
+    /// Returns true if removed. Contracts are returned to available pool.
     #[func]
-    pub fn fail_depot_mission(&mut self) {
-        self.sync_money_to_state();
-        let design_id = self.current_rocket_design_id.unwrap_or(0);
-        self.state.player_company.fail_depot_mission(design_id);
-        self.sync_money_from_state();
-        self.adjust_fame(-15.0);
-    }
-
-    /// Get the active mission's location_id (works for both contract and depot missions)
-    #[func]
-    pub fn get_active_mission_location_id(&self) -> GString {
-        if let Some(c) = &self.state.player_company.active_contract {
-            GString::from(c.destination.location_id())
-        } else if let Some(dm) = &self.state.player_company.active_depot_mission {
-            GString::from(dm.destination.as_str())
+    pub fn remove_from_manifest(&mut self, entry_id: i32) -> bool {
+        if self.state.player_company.remove_from_manifest(entry_id as u32) {
+            self.base_mut().emit_signal("manifest_changed", &[]);
+            self.base_mut().emit_signal("contracts_changed", &[]);
+            true
         } else {
-            GString::from("")
+            false
         }
     }
 
+    /// Clear all entries from the manifest.
+    #[func]
+    pub fn clear_manifest(&mut self) {
+        self.state.player_company.clear_manifest();
+        self.base_mut().emit_signal("manifest_changed", &[]);
+        self.base_mut().emit_signal("contracts_changed", &[]);
+    }
+
+    /// Number of entries in the manifest.
+    #[func]
+    pub fn get_manifest_entry_count(&self) -> i32 {
+        self.state.player_company.manifest.len() as i32
+    }
+
+    /// Get manifest entry display name by index.
+    #[func]
+    pub fn get_manifest_entry_name(&self, index: i32) -> GString {
+        self.state.player_company.manifest.get(index as usize)
+            .map(|e| GString::from(e.display_name()))
+            .unwrap_or_default()
+    }
+
+    /// Get manifest entry destination display name by index.
+    #[func]
+    pub fn get_manifest_entry_destination(&self, index: i32) -> GString {
+        self.state.player_company.manifest.get(index as usize)
+            .map(|e| GString::from(e.destination_display.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Get manifest entry mass by index.
+    #[func]
+    pub fn get_manifest_entry_mass(&self, index: i32) -> f64 {
+        self.state.player_company.manifest.get(index as usize)
+            .map(|e| e.mass_kg)
+            .unwrap_or(0.0)
+    }
+
+    /// Get manifest entry type ("Contract" or "Depot") by index.
+    #[func]
+    pub fn get_manifest_entry_type(&self, index: i32) -> GString {
+        self.state.player_company.manifest.get(index as usize)
+            .map(|e| GString::from(e.entry_type()))
+            .unwrap_or_default()
+    }
+
+    /// Get manifest entry ID by index.
+    #[func]
+    pub fn get_manifest_entry_id(&self, index: i32) -> i32 {
+        self.state.player_company.manifest.get(index as usize)
+            .map(|e| e.entry_id as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Get manifest entry reward by index (0.0 for depots).
+    #[func]
+    pub fn get_manifest_entry_reward(&self, index: i32) -> f64 {
+        self.state.player_company.manifest.get(index as usize)
+            .map(|e| e.reward())
+            .unwrap_or(0.0)
+    }
+
+    /// Total payload mass across all manifest entries.
+    #[func]
+    pub fn get_manifest_total_mass(&self) -> f64 {
+        self.state.player_company.manifest.total_mass_kg()
+    }
+
+    /// Total reward across all manifest contract entries.
+    #[func]
+    pub fn get_manifest_total_reward(&self) -> f64 {
+        self.state.player_company.manifest.total_reward()
+    }
+
+    /// Target delta-v for the manifest (farthest destination).
+    #[func]
+    pub fn get_manifest_target_delta_v(&self) -> f64 {
+        self.state.player_company.get_manifest_target_delta_v()
+    }
+
+    /// Whether the manifest has any entries.
+    #[func]
+    pub fn has_manifest(&self) -> bool {
+        !self.state.player_company.manifest.is_empty()
+    }
+
+    /// Get a route summary string like "Earth → LEO → GEO"
+    #[func]
+    pub fn get_manifest_route_summary(&self) -> GString {
+        use crate::location::DELTA_V_MAP;
+        if self.state.player_company.manifest.is_empty() {
+            return GString::from("");
+        }
+        let dests = self.state.player_company.manifest.unique_destinations_sorted_by_delta_v();
+        let mut parts = vec!["Earth".to_string()];
+        for dest in &dests {
+            if let Some(loc) = DELTA_V_MAP.location(dest) {
+                parts.push(loc.short_name.to_string());
+            }
+        }
+        GString::from(parts.join(" → ").as_str())
+    }
+
+    /// Unified successful launch using the manifest.
+    /// Returns the total reward (deferred until flight arrives).
+    #[func]
+    pub fn complete_launch(&mut self) -> f64 {
+        self.sync_money_to_state();
+        let design_id = self.current_rocket_design_id.unwrap_or(0);
+        let reward = self.state.player_company.complete_manifest_launch(design_id);
+        if reward > 0.0 || !self.state.player_company.manifest.is_empty() {
+            self.state.turn += 1;
+        }
+        self.sync_money_from_state();
+        self.base_mut().emit_signal("manifest_changed", &[]);
+        self.base_mut().emit_signal("contracts_changed", &[]);
+        self.base_mut().emit_signal("inventory_changed", &[]);
+        reward
+    }
+
+    /// Unified failed launch using the manifest.
+    /// Manifest is kept intact for retry.
+    #[func]
+    pub fn fail_launch(&mut self) {
+        self.sync_money_to_state();
+        let design_id = self.current_rocket_design_id.unwrap_or(0);
+        self.state.player_company.fail_manifest_launch(design_id);
+        self.sync_money_from_state();
+        self.adjust_fame(-15.0);
+        self.base_mut().emit_signal("contract_failed", &[]);
+    }
+
+    // ==========================================
     // ==========================================
     // Orbital Locations (for depot destination selection)
     // ==========================================
@@ -3941,19 +3894,6 @@ impl GameManager {
         if let Some(flight) = self.state.player_company.get_flight_mut(flight_id as u32) {
             flight.fail_at_leg(leg_index as usize);
         }
-    }
-
-    /// Get the active contract's destination as a location_id (for use with set_mission_plan)
-    #[func]
-    pub fn get_active_contract_location_id(&self) -> GString {
-        GString::from(
-            self.state
-                .player_company
-                .active_contract
-                .as_ref()
-                .map(|c| c.destination.location_id())
-                .unwrap_or("")
-        )
     }
 
     // ==========================================

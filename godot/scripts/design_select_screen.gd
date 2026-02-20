@@ -99,15 +99,12 @@ func _update_ui():
 		return
 
 	# Update header with mission info
-	if game_manager.has_active_contract():
-		mission_label.text = "Mission: " + game_manager.get_active_contract_name()
-		var delta_v = game_manager.get_active_contract_delta_v()
-		var payload = game_manager.get_active_contract_payload()
-		requirements_label.text = "Requirements: %.0f m/s | %.0f kg payload" % [delta_v, payload]
-	elif game_manager.has_active_depot_mission():
-		mission_label.text = "Depot: " + game_manager.get_active_depot_mission_name()
-		var delta_v = game_manager.get_active_depot_mission_delta_v()
-		var payload = game_manager.get_active_depot_mission_payload()
+	if game_manager.has_manifest():
+		var entry_count = game_manager.get_manifest_entry_count()
+		var route = game_manager.get_manifest_route_summary()
+		mission_label.text = "%d payload%s → %s" % [entry_count, "s" if entry_count != 1 else "", route]
+		var delta_v = game_manager.get_manifest_target_delta_v()
+		var payload = game_manager.get_manifest_total_mass()
 		requirements_label.text = "Requirements: %.0f m/s | %.0f kg payload" % [delta_v, payload]
 	else:
 		mission_label.text = "Free Launch Mode"
@@ -143,8 +140,8 @@ func _rebuild_designs_list():
 	else:
 		# Get mission requirements for comparison
 		var required_dv = 0.0
-		if game_manager.has_active_mission():
-			required_dv = game_manager.get_active_contract_delta_v()
+		if game_manager.has_manifest():
+			required_dv = game_manager.get_manifest_target_delta_v()
 
 		for i in range(design_count):
 			var card = _create_design_card(i, required_dv)

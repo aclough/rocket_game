@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use crate::engine_design::FuelType;
 use crate::fuel_depot::LocationInfrastructure;
 use crate::location::{TransferAnimation, DELTA_V_MAP};
+use crate::manifest::Manifest;
 use crate::rocket_design::RocketDesign;
 
 /// A single leg of a multi-leg mission
@@ -18,6 +19,8 @@ pub struct MissionLeg {
     pub refuel_before: bool,
     /// Transit time in game-days for this leg
     pub transit_days: u32,
+    /// Mass of payloads to drop off at this leg's destination (0.0 = none).
+    pub payload_drop_kg: f64,
 }
 
 /// A complete mission plan decomposed into sequential transfer legs
@@ -46,6 +49,7 @@ impl MissionPlan {
                 stages_to_burn: None,
                 refuel_before: false,
                 transit_days: transfer.transit_days,
+                payload_drop_kg: 0.0,
             });
         }
 
@@ -59,6 +63,70 @@ impl MissionPlan {
     /// Total transit time across all legs in game-days
     pub fn total_transit_days(&self) -> u32 {
         self.legs.iter().map(|l| l.transit_days).sum()
+    }
+
+    /// Build a multi-stop mission plan from a manifest.
+    ///
+    /// 1. Collects unique delivery locations from manifest
+    /// 2. Sorts by delta-v from earth_surface (ascending) — outward ordering
+    /// 3. Chains shortest_path(prev_stop, next_stop) for consecutive pairs
+    /// 4. Deduplicates shared waypoints at boundaries
+    /// 5. Sets payload_drop_kg on legs whose `to` matches a delivery destination
+    ///
+    /// Returns None if the manifest is empty or any path segment is unreachable.
+    pub fn from_manifest(manifest: &Manifest) -> Option<Self> {
+        if manifest.is_empty() {
+            return None;
+        }
+
+        let destinations = manifest.unique_destinations_sorted_by_delta_v();
+        if destinations.is_empty() {
+            return None;
+        }
+
+        // Build a chain: earth_surface -> dest1 -> dest2 -> ...
+        let mut stops = vec!["earth_surface"];
+        for dest in &destinations {
+            stops.push(dest.as_str());
+        }
+
+        let mut all_legs: Vec<MissionLeg> = Vec::new();
+        let mut total_delta_v = 0.0;
+
+        for pair in stops.windows(2) {
+            let from = pair[0];
+            let to = pair[1];
+
+            let (path, segment_dv) = DELTA_V_MAP.shortest_path(from, to)?;
+            total_delta_v += segment_dv;
+
+            // Build legs for this segment, skipping the first node if it duplicates
+            // the last leg's destination (dedup at boundary)
+            for path_pair in path.windows(2) {
+                let transfer = DELTA_V_MAP.transfer(path_pair[0], path_pair[1])
+                    .expect("shortest_path returned consecutive nodes without a direct transfer");
+
+                // Calculate payload drop mass for this leg's destination
+                let drop_mass: f64 = manifest.entries_for_destination(path_pair[1])
+                    .iter()
+                    .map(|e| e.mass_kg)
+                    .sum();
+
+                all_legs.push(MissionLeg {
+                    from: path_pair[0],
+                    to: path_pair[1],
+                    delta_v_required: transfer.total_delta_v(),
+                    animation: transfer.animation.clone(),
+                    can_aerobrake: transfer.can_aerobrake,
+                    stages_to_burn: None,
+                    refuel_before: false,
+                    transit_days: transfer.transit_days,
+                    payload_drop_kg: drop_mass,
+                });
+            }
+        }
+
+        Some(MissionPlan { legs: all_legs, total_delta_v })
     }
 }
 
@@ -379,6 +447,104 @@ fn refuel_stages_from_depot(
     }
 }
 
+/// Simulate a mission with payload drops at intermediate destinations.
+///
+/// Like `simulate_mission()` but reduces the design's `payload_mass_kg` at each leg
+/// with nonzero `payload_drop_kg`. This gives accurate delta-v accounting since
+/// later legs benefit from reduced mass.
+///
+/// Design-time `is_sufficient()` still uses total mass (conservative).
+/// This drop simulation is for display and flight-time accuracy.
+pub fn simulate_mission_with_drops(design: &RocketDesign, plan: &MissionPlan) -> MissionSimResult {
+    // Check if any leg has drops
+    let has_drops = plan.legs.iter().any(|l| l.payload_drop_kg > 0.0);
+    if !has_drops {
+        return simulate_mission(design, plan);
+    }
+
+    let initial_propellant: Vec<(usize, f64)> = design
+        .stages
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i, s.propellant_mass_kg))
+        .collect();
+
+    let total_initial: f64 = initial_propellant.iter().map(|(_, kg)| *kg).sum();
+
+    let mut sim_design = design.clone();
+    let mut cumulative_dv = 0.0;
+    let mut leg_results = Vec::new();
+    let mut prev_remaining = initial_propellant.clone();
+
+    for (leg_idx, leg) in plan.legs.iter().enumerate() {
+        cumulative_dv += leg.delta_v_required;
+        sim_design.set_target_delta_v(cumulative_dv);
+
+        let current_remaining = sim_design.propellant_remaining_kg();
+
+        if current_remaining.is_empty() {
+            leg_results.push(LegSimResult {
+                leg_index: leg_idx,
+                feasible: false,
+                propellant_consumed_kg: 0.0,
+                stages_jettisoned: Vec::new(),
+                propellant_remaining: Vec::new(),
+            });
+
+            let consumed_so_far: f64 = leg_results.iter().map(|r| r.propellant_consumed_kg).sum();
+            return MissionSimResult {
+                feasible: false,
+                leg_results,
+                final_propellant_remaining: Vec::new(),
+                total_propellant_consumed_kg: consumed_so_far,
+            };
+        }
+
+        // Diff propellant
+        let mut leg_consumed = 0.0;
+        let mut stages_jettisoned = Vec::new();
+
+        for (stage_idx, prev_kg) in &prev_remaining {
+            let cur_kg = current_remaining
+                .iter()
+                .find(|(idx, _)| idx == stage_idx)
+                .map(|(_, kg)| *kg)
+                .unwrap_or(0.0);
+            leg_consumed += prev_kg - cur_kg;
+
+            let in_current = current_remaining.iter().any(|(idx, _)| idx == stage_idx);
+            if *prev_kg > 0.0 && (!in_current || cur_kg == 0.0) {
+                stages_jettisoned.push(*stage_idx);
+            }
+        }
+
+        leg_results.push(LegSimResult {
+            leg_index: leg_idx,
+            feasible: true,
+            propellant_consumed_kg: leg_consumed.max(0.0),
+            stages_jettisoned,
+            propellant_remaining: current_remaining.clone(),
+        });
+
+        prev_remaining = current_remaining;
+
+        // Drop payload at this leg's destination — reduces mass for subsequent legs
+        if leg.payload_drop_kg > 0.0 {
+            sim_design.payload_mass_kg = (sim_design.payload_mass_kg - leg.payload_drop_kg).max(0.0);
+        }
+    }
+
+    let final_total: f64 = prev_remaining.iter().map(|(_, kg)| *kg).sum();
+    let total_consumed = total_initial - final_total;
+
+    MissionSimResult {
+        feasible: true,
+        leg_results,
+        final_propellant_remaining: prev_remaining,
+        total_propellant_consumed_kg: total_consumed.max(0.0),
+    }
+}
+
 /// Check if a leg departs from a surface location (has gravity losses)
 pub fn is_surface_departure(from: &str) -> bool {
     DELTA_V_MAP.surface_properties(from).is_some()
@@ -594,5 +760,143 @@ mod tests {
         assert!(is_surface_departure("lunar_surface"));
         assert!(!is_surface_departure("leo"));
         assert!(!is_surface_departure("gto"));
+    }
+
+    // ==========================================
+    // Manifest-based route tests
+    // ==========================================
+
+    #[test]
+    fn test_from_manifest_empty() {
+        let m = Manifest::new();
+        assert!(MissionPlan::from_manifest(&m).is_none());
+    }
+
+    #[test]
+    fn test_from_manifest_single_destination() {
+        let mut m = Manifest::new();
+        m.add_contract(1, "C1".into(), "T1".into(), 1e6, "leo".into(), "LEO".into(), 500.0);
+
+        let plan = MissionPlan::from_manifest(&m).unwrap();
+        // earth_surface -> leo (single leg)
+        assert_eq!(plan.leg_count(), 1);
+        assert_eq!(plan.legs[0].from, "earth_surface");
+        assert_eq!(plan.legs[0].to, "leo");
+        assert_eq!(plan.total_delta_v, 8100.0);
+        // Payload drop at LEO = 500 kg
+        assert!((plan.legs[0].payload_drop_kg - 500.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_from_manifest_single_backward_compat() {
+        // Single-destination manifest should produce same route as from_shortest_path
+        let mut m = Manifest::new();
+        m.add_contract(1, "C1".into(), "T1".into(), 1e6, "geo".into(), "GEO".into(), 500.0);
+
+        let manifest_plan = MissionPlan::from_manifest(&m).unwrap();
+        let direct_plan = MissionPlan::from_shortest_path("earth_surface", "geo").unwrap();
+
+        assert_eq!(manifest_plan.leg_count(), direct_plan.leg_count());
+        assert_eq!(manifest_plan.total_delta_v, direct_plan.total_delta_v);
+        for (ml, dl) in manifest_plan.legs.iter().zip(direct_plan.legs.iter()) {
+            assert_eq!(ml.from, dl.from);
+            assert_eq!(ml.to, dl.to);
+            assert_eq!(ml.delta_v_required, dl.delta_v_required);
+        }
+    }
+
+    #[test]
+    fn test_from_manifest_two_destinations_leo_geo() {
+        let mut m = Manifest::new();
+        m.add_contract(1, "C1".into(), "T1".into(), 1e6, "leo".into(), "LEO".into(), 500.0);
+        m.add_contract(2, "C2".into(), "T2".into(), 2e6, "geo".into(), "GEO".into(), 1000.0);
+
+        let plan = MissionPlan::from_manifest(&m).unwrap();
+        // earth_surface -> leo -> gto -> geo
+        assert_eq!(plan.leg_count(), 3);
+        assert_eq!(plan.legs[0].from, "earth_surface");
+        assert_eq!(plan.legs[0].to, "leo");
+        assert_eq!(plan.legs[1].from, "leo");
+        assert_eq!(plan.legs[1].to, "gto");
+        assert_eq!(plan.legs[2].from, "gto");
+        assert_eq!(plan.legs[2].to, "geo");
+
+        // Drop at LEO = 500 kg, at GEO = 1000 kg, GTO = 0
+        assert!((plan.legs[0].payload_drop_kg - 500.0).abs() < 0.01);
+        assert_eq!(plan.legs[1].payload_drop_kg, 0.0);
+        assert!((plan.legs[2].payload_drop_kg - 1000.0).abs() < 0.01);
+
+        // Total delta-v = earth->geo = 12040 (same as single-destination)
+        assert_eq!(plan.total_delta_v, 12040.0);
+    }
+
+    #[test]
+    fn test_from_manifest_multiple_payloads_same_destination() {
+        let mut m = Manifest::new();
+        m.add_contract(1, "C1".into(), "T1".into(), 1e6, "leo".into(), "LEO".into(), 500.0);
+        m.add_contract(2, "C2".into(), "T2".into(), 2e6, "leo".into(), "LEO".into(), 300.0);
+        m.add_depot(0, 1, "D1".into(), 5000.0, false, "leo".into(), "LEO".into(), 200.0);
+
+        let plan = MissionPlan::from_manifest(&m).unwrap();
+        assert_eq!(plan.leg_count(), 1);
+        // Total drop at LEO = 500 + 300 + 200 = 1000 kg
+        assert!((plan.legs[0].payload_drop_kg - 1000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_from_manifest_three_destinations() {
+        // Use destinations along a valid chain: LEO -> GTO -> GEO
+        let mut m = Manifest::new();
+        m.add_contract(1, "C1".into(), "T1".into(), 1e6, "leo".into(), "LEO".into(), 500.0);
+        m.add_contract(2, "C2".into(), "T2".into(), 2e6, "gto".into(), "GTO".into(), 300.0);
+        m.add_contract(3, "C3".into(), "T3".into(), 3e6, "geo".into(), "GEO".into(), 1000.0);
+
+        let plan = MissionPlan::from_manifest(&m).unwrap();
+        // Route: earth_surface -> leo (drop 500) -> gto (drop 300) -> geo (drop 1000)
+        assert_eq!(plan.leg_count(), 3);
+        assert_eq!(plan.legs[0].to, "leo");
+        assert_eq!(plan.legs[1].to, "gto");
+        assert_eq!(plan.legs[2].to, "geo");
+        assert!((plan.legs[0].payload_drop_kg - 500.0).abs() < 0.01);
+        assert!((plan.legs[1].payload_drop_kg - 300.0).abs() < 0.01);
+        assert!((plan.legs[2].payload_drop_kg - 1000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_simulate_with_drops_no_drops_matches_baseline() {
+        let design = RocketDesign::default_design();
+        let plan = MissionPlan::from_shortest_path("earth_surface", "leo").unwrap();
+
+        let baseline = simulate_mission(&design, &plan);
+        let with_drops = simulate_mission_with_drops(&design, &plan);
+
+        assert_eq!(baseline.feasible, with_drops.feasible);
+        assert!(
+            (baseline.total_propellant_consumed_kg - with_drops.total_propellant_consumed_kg).abs() < 1.0,
+        );
+    }
+
+    #[test]
+    fn test_simulate_with_drops_reduces_mass() {
+        let design = RocketDesign::default_design();
+
+        // Build a plan to GEO with a drop at LEO
+        let mut plan = MissionPlan::from_shortest_path("earth_surface", "geo").unwrap();
+        let half_payload = design.payload_mass_kg / 2.0;
+        plan.legs[0].payload_drop_kg = half_payload; // Drop half at LEO
+
+        let no_drop_result = simulate_mission(&design, &plan);
+        let drop_result = simulate_mission_with_drops(&design, &plan);
+
+        // With drops, later legs should consume less propellant (lighter rocket)
+        // If baseline is infeasible but drops make it feasible, that's also valid
+        if no_drop_result.feasible && drop_result.feasible {
+            // Drop version should use less total propellant (lighter after LEO)
+            assert!(
+                drop_result.total_propellant_consumed_kg <= no_drop_result.total_propellant_consumed_kg + 1.0,
+                "Drop sim ({:.0}) should use <= no-drop ({:.0}) propellant",
+                drop_result.total_propellant_consumed_kg, no_drop_result.total_propellant_consumed_kg
+            );
+        }
     }
 }

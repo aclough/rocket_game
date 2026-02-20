@@ -126,9 +126,7 @@ impl Default for GameState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::Destination;
     use crate::engine::costs;
-    use crate::engineering_team::WorkEvent;
 
     #[test]
     fn test_new_game_state() {
@@ -136,63 +134,6 @@ mod tests {
         assert_eq!(state.player_company.money, costs::STARTING_BUDGET);
         assert_eq!(state.turn, 1);
         assert_eq!(state.player_company.available_contracts.len(), CONTRACTS_TO_SHOW);
-        assert!(state.player_company.active_contract.is_none());
-    }
-
-    #[test]
-    fn test_select_contract() {
-        let mut state = GameState::new();
-        let contract_id = state.player_company.available_contracts[0].id;
-
-        assert!(state.player_company.select_contract(contract_id));
-        assert!(state.player_company.active_contract.is_some());
-        assert_eq!(state.player_company.active_contract.as_ref().unwrap().id, contract_id);
-        assert_eq!(state.player_company.available_contracts.len(), CONTRACTS_TO_SHOW - 1);
-    }
-
-    #[test]
-    fn test_select_invalid_contract() {
-        let mut state = GameState::new();
-        assert!(!state.player_company.select_contract(99999));
-        assert!(state.player_company.active_contract.is_none());
-    }
-
-    #[test]
-    fn test_complete_contract() {
-        let mut state = GameState::new();
-        let contract_id = state.player_company.available_contracts[0].id;
-        state.player_company.select_contract(contract_id);
-
-        let initial_money = state.player_company.money;
-        let rocket_cost = state.player_company.rocket_designs[0].head().total_cost();
-        let reward = state.player_company.active_contract.as_ref().unwrap().reward;
-
-        let earned = state.player_company.complete_contract(0);
-
-        assert_eq!(earned, reward);
-        // Money = initial - rocket_cost (reward is deferred until flight arrives)
-        assert_eq!(state.player_company.money, initial_money - rocket_cost);
-        assert!(state.player_company.active_contract.is_none());
-        // Contract not yet completed — awaiting flight arrival
-        assert_eq!(state.player_company.completed_contracts.len(), 0);
-
-        // Flight should be in-transit
-        let active = state.player_company.active_flights();
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].total_reward(), reward);
-
-        // Process days until flight arrives
-        // For LEO (0 transit days), one tick should complete it
-        let events = state.player_company.process_day(false);
-        let arrived = events.iter().any(|e| matches!(e, WorkEvent::FlightArrived { .. }));
-        assert!(arrived, "Flight to LEO (0 transit) should arrive on first process_day");
-
-        // Now complete the arrival
-        let flight_id = state.player_company.flights.last().unwrap().id;
-        let paid = state.player_company.complete_flight_arrival(flight_id).unwrap();
-        assert_eq!(paid, reward);
-        assert_eq!(state.player_company.money, initial_money - rocket_cost + reward);
-        assert_eq!(state.player_company.completed_contracts.len(), 1);
     }
 
     #[test]
@@ -205,41 +146,6 @@ mod tests {
         let new_ids: Vec<u32> = state.player_company.available_contracts.iter().map(|c| c.id).collect();
         assert_ne!(old_ids, new_ids);
         assert!(state.player_company.money < costs::STARTING_BUDGET);
-    }
-
-    #[test]
-    fn test_target_delta_v() {
-        let mut state = GameState::new();
-
-        // Default target is LEO
-        assert_eq!(state.player_company.get_target_delta_v(), Destination::LEO.required_delta_v());
-
-        // Find a GTO contract and select it
-        state.player_company.generate_contracts(20); // Generate more to ensure we get variety
-        if let Some(gto_contract) = state
-            .player_company
-            .available_contracts
-            .iter()
-            .find(|c| c.destination == Destination::GTO)
-        {
-            let id = gto_contract.id;
-            state.player_company.select_contract(id);
-            assert_eq!(state.player_company.get_target_delta_v(), Destination::GTO.required_delta_v());
-        }
-    }
-
-    #[test]
-    fn test_abandon_contract() {
-        let mut state = GameState::new();
-        let initial_count = state.player_company.available_contracts.len();
-        let contract_id = state.player_company.available_contracts[0].id;
-
-        state.player_company.select_contract(contract_id);
-        assert_eq!(state.player_company.available_contracts.len(), initial_count - 1);
-
-        state.player_company.abandon_contract();
-        assert!(state.player_company.active_contract.is_none());
-        assert_eq!(state.player_company.available_contracts.len(), initial_count);
     }
 
     #[test]

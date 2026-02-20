@@ -48,6 +48,8 @@ pub struct Payload {
     pub name: String,
     pub kind: PayloadKind,
     pub mass_kg: f64,
+    /// Location ID where this payload should be delivered
+    pub destination: String,
     /// Power generation (solar, RTG) in watts
     pub power_watts: f64,
     /// Power consumption in watts
@@ -66,6 +68,7 @@ impl Payload {
         payload_type: String,
         mass_kg: f64,
         reward: f64,
+        destination: String,
     ) -> Self {
         Self {
             id,
@@ -76,6 +79,7 @@ impl Payload {
                 reward,
             },
             mass_kg,
+            destination,
             power_watts: 0.0,
             power_draw_watts: 0.0,
             insulated: false,
@@ -93,6 +97,7 @@ impl Payload {
         capacity_kg: f64,
         dry_mass_kg: f64,
         insulated: bool,
+        destination: String,
     ) -> Self {
         Self {
             id,
@@ -104,6 +109,7 @@ impl Payload {
                 insulated,
             },
             mass_kg: dry_mass_kg,
+            destination,
             power_watts: 0.0,
             power_draw_watts: 50.0,
             insulated,
@@ -154,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_contract_satellite_creation() {
-        let p = Payload::contract_satellite(1, 42, "Communications".to_string(), 500.0, 5_000_000.0);
+        let p = Payload::contract_satellite(1, 42, "Communications".to_string(), 500.0, 5_000_000.0, "leo".to_string());
         assert_eq!(p.id, 1);
         assert_eq!(p.mass_kg, 500.0);
         assert!(p.is_contract());
@@ -162,11 +168,12 @@ mod tests {
         assert_eq!(p.reward(), 5_000_000.0);
         assert_eq!(p.contract_id(), Some(42));
         assert_eq!(p.name, "Communications Satellite");
+        assert_eq!(p.destination, "leo");
     }
 
     #[test]
     fn test_depot_creation() {
-        let p = Payload::depot(2, 0, 1, "Depot Alpha".to_string(), 5000.0, 300.0, true);
+        let p = Payload::depot(2, 0, 1, "Depot Alpha".to_string(), 5000.0, 300.0, true, "lunar_orbit".to_string());
         assert_eq!(p.id, 2);
         assert_eq!(p.mass_kg, 300.0);
         assert!(!p.is_contract());
@@ -177,13 +184,14 @@ mod tests {
         assert_eq!(p.power_draw_watts, 50.0);
         assert_eq!(p.hazard_susceptibility.radiation_sensitivity, 0.2);
         assert_eq!(p.hazard_susceptibility.debris_sensitivity, 0.7);
+        assert_eq!(p.destination, "lunar_orbit");
     }
 
     #[test]
     fn test_total_mass() {
         let payloads = vec![
-            Payload::contract_satellite(1, 1, "Comms".to_string(), 500.0, 1_000_000.0),
-            Payload::depot(2, 0, 1, "Depot".to_string(), 5000.0, 300.0, false),
+            Payload::contract_satellite(1, 1, "Comms".to_string(), 500.0, 1_000_000.0, "leo".to_string()),
+            Payload::depot(2, 0, 1, "Depot".to_string(), 5000.0, 300.0, false, "leo".to_string()),
         ];
         assert!((total_mass(&payloads) - 800.0).abs() < 0.01);
     }

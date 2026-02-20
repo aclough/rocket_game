@@ -164,7 +164,7 @@ func _on_contracts_changed():
 	_update_contracts_list()
 
 func _on_contract_select_pressed(contract_id: int):
-	game_manager.select_contract(contract_id)
+	game_manager.add_contract_to_manifest(contract_id)
 	contract_selected.emit(contract_id)
 
 func _on_refresh_button_pressed():

@@ -190,6 +190,23 @@ impl FlightState {
         by_type.into_iter().collect()
     }
 
+    /// Remove and return all payloads whose destination matches the given location_id.
+    /// Also reduces payload_mass_kg by the delivered mass.
+    pub fn deliver_payloads_at(&mut self, location_id: &str) -> Vec<Payload> {
+        let mut delivered = Vec::new();
+        let mut i = 0;
+        while i < self.payloads.len() {
+            if self.payloads[i].destination == location_id {
+                let p = self.payloads.remove(i);
+                self.payload_mass_kg = (self.payload_mass_kg - p.mass_kg).max(0.0);
+                delivered.push(p);
+            } else {
+                i += 1;
+            }
+        }
+        delivered
+    }
+
     /// Whether the flight is still active (InTransit or AtLocation).
     pub fn is_active(&self) -> bool {
         matches!(self.status, FlightStatus::InTransit | FlightStatus::AtLocation)
@@ -453,7 +470,7 @@ mod tests {
 
         // Add a contract payload
         flight.payloads.push(Payload::contract_satellite(
-            1, 42, "Comms".to_string(), 500.0, 5_000_000.0,
+            1, 42, "Comms".to_string(), 500.0, 5_000_000.0, "leo".to_string(),
         ));
         assert!(flight.has_contract_payload());
         assert!(!flight.has_depot_payload());

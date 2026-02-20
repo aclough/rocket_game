@@ -57,18 +57,15 @@ func show_launch(gm: GameManager, d: RocketDesigner):
 	launcher.copy_design_from(designer)
 
 	# Set mission plan for leg-based events
-	if game_manager.has_active_contract():
-		var location_id = game_manager.get_active_contract_location_id()
-		launcher.set_mission_plan(location_id)
-	elif game_manager.has_active_depot_mission():
+	if game_manager.has_manifest():
 		var location_id = game_manager.get_active_mission_location_id()
 		launcher.set_mission_plan(location_id)
 
 	# Update header
-	if game_manager.has_active_contract():
-		mission_label.text = "Mission: " + game_manager.get_active_contract_name()
-	elif game_manager.has_active_depot_mission():
-		mission_label.text = "Depot: " + game_manager.get_active_depot_mission_name()
+	if game_manager.has_manifest():
+		var entry_count = game_manager.get_manifest_entry_count()
+		var route = game_manager.get_manifest_route_summary()
+		mission_label.text = "%d payload%s → %s" % [entry_count, "s" if entry_count != 1 else "", route]
 	else:
 		mission_label.text = "Free Launch"
 
@@ -211,31 +208,17 @@ func run_launch_with_delays():
 	# Update state
 	last_launch_success = success
 
-	# Handle contract/depot mission completion/failure
+	# Handle manifest launch completion/failure
 	var reward = 0.0
-	var destination = ""
-	var transit_days = 0
-	var is_depot_mission = game_manager and game_manager.has_active_depot_mission()
-	if game_manager and game_manager.has_active_contract():
-		destination = game_manager.get_active_contract_destination()
-		var location_id = game_manager.get_active_contract_location_id()
-		transit_days = game_manager.get_mission_transit_days(location_id)
+	var route_summary = ""
+	var has_mission = game_manager and game_manager.has_manifest()
+	if has_mission:
+		route_summary = game_manager.get_manifest_route_summary()
 		if success:
-			reward = game_manager.complete_contract()
+			reward = game_manager.complete_launch()
 		else:
-			game_manager.fail_contract()
+			game_manager.fail_launch()
 		# Sync discovered flaw state from designer back to company's rocket_designs
-		if designer:
-			game_manager.sync_design_from(designer)
-		game_manager.update_current_rocket_design()
-	elif is_depot_mission:
-		destination = game_manager.get_active_depot_mission_destination()
-		var location_id = game_manager.get_active_mission_location_id()
-		transit_days = game_manager.get_mission_transit_days(location_id)
-		if success:
-			game_manager.complete_depot_mission()
-		else:
-			game_manager.fail_depot_mission()
 		if designer:
 			game_manager.sync_design_from(designer)
 		game_manager.update_current_rocket_design()
@@ -247,23 +230,14 @@ func run_launch_with_delays():
 	if success:
 		result_label.text = "SUCCESS!"
 		result_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-		if is_depot_mission:
-			if transit_days > 0:
-				message_label.text = "Depot launched! In transit to %s.\nETA: %d days." % [destination, transit_days]
-			else:
-				message_label.text = "Depot deployed at %s!" % destination
-		elif transit_days > 0:
-			message_label.text = "Launch successful! In transit to %s.\nETA: %d days.\nReward on arrival: %s" % [
-				destination,
-				transit_days,
-				_format_money(reward)
-			]
-		elif reward > 0:
-			message_label.text = "Rocket arrived at %s!\nReward: %s\nNew Balance: %s" % [
-				destination,
+		if has_mission and reward > 0:
+			message_label.text = "Launch successful!\nRoute: %s\nReward: %s\nNew Balance: %s" % [
+				route_summary,
 				_format_money(reward),
 				game_manager.get_money_formatted()
 			]
+		elif has_mission:
+			message_label.text = "Launch successful!\nRoute: %s" % route_summary
 		else:
 			message_label.text = "Rocket reached orbit!"
 		continue_button.text = "CONTINUE"
@@ -365,31 +339,17 @@ func _run_flat_launch():
 	# Update state
 	last_launch_success = success
 
-	# Handle contract/depot mission completion/failure
+	# Handle manifest launch completion/failure
 	var reward = 0.0
-	var destination = ""
-	var transit_days = 0
-	var is_depot_mission = game_manager and game_manager.has_active_depot_mission()
-	if game_manager and game_manager.has_active_contract():
-		destination = game_manager.get_active_contract_destination()
-		var location_id = game_manager.get_active_contract_location_id()
-		transit_days = game_manager.get_mission_transit_days(location_id)
+	var route_summary = ""
+	var has_mission = game_manager and game_manager.has_manifest()
+	if has_mission:
+		route_summary = game_manager.get_manifest_route_summary()
 		if success:
-			reward = game_manager.complete_contract()
+			reward = game_manager.complete_launch()
 		else:
-			game_manager.fail_contract()
+			game_manager.fail_launch()
 		# Sync discovered flaw state from designer back to company's rocket_designs
-		if designer:
-			game_manager.sync_design_from(designer)
-		game_manager.update_current_rocket_design()
-	elif is_depot_mission:
-		destination = game_manager.get_active_depot_mission_destination()
-		var location_id = game_manager.get_active_mission_location_id()
-		transit_days = game_manager.get_mission_transit_days(location_id)
-		if success:
-			game_manager.complete_depot_mission()
-		else:
-			game_manager.fail_depot_mission()
 		if designer:
 			game_manager.sync_design_from(designer)
 		game_manager.update_current_rocket_design()
@@ -401,23 +361,14 @@ func _run_flat_launch():
 	if success:
 		result_label.text = "SUCCESS!"
 		result_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-		if is_depot_mission:
-			if transit_days > 0:
-				message_label.text = "Depot launched! In transit to %s.\nETA: %d days." % [destination, transit_days]
-			else:
-				message_label.text = "Depot deployed at %s!" % destination
-		elif transit_days > 0:
-			message_label.text = "Launch successful! In transit to %s.\nETA: %d days.\nReward on arrival: %s" % [
-				destination,
-				transit_days,
-				_format_money(reward)
-			]
-		elif reward > 0:
-			message_label.text = "Rocket arrived at %s!\nReward: %s\nNew Balance: %s" % [
-				destination,
+		if has_mission and reward > 0:
+			message_label.text = "Launch successful!\nRoute: %s\nReward: %s\nNew Balance: %s" % [
+				route_summary,
 				_format_money(reward),
 				game_manager.get_money_formatted()
 			]
+		elif has_mission:
+			message_label.text = "Launch successful!\nRoute: %s" % route_summary
 		else:
 			message_label.text = "Rocket reached orbit!"
 		continue_button.text = "CONTINUE"

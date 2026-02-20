@@ -169,7 +169,7 @@ func _update_header():
 	payload_value_label.text = _format_number(payload) + " kg"
 
 	# Enable/disable payload buttons based on whether there's an active contract
-	var has_contract = game_manager and game_manager.has_active_mission()
+	var has_contract = game_manager and game_manager.has_manifest()
 	payload_decrease_btn.visible = not has_contract
 	payload_increase_btn.visible = not has_contract
 
