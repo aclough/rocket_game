@@ -210,6 +210,11 @@ func _setup_map_content():
 	var map = content_areas[Tab.MAP]
 	if map.has_method("set_game_manager"):
 		map.set_game_manager(game_manager)
+	# Connect signals for live updates
+	game_manager.date_changed.connect(map._on_date_changed)
+	game_manager.flight_arrived.connect(map._on_flight_arrived)
+	game_manager.inventory_changed.connect(map._on_inventory_changed)
+	map.visibility_changed.connect(map._on_visibility_changed)
 
 func _setup_missions_content():
 	var missions = content_areas[Tab.MISSIONS]

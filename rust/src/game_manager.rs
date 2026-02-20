@@ -1493,6 +1493,57 @@ impl GameManager {
             .unwrap_or_default()
     }
 
+    /// Get the flight ID of an active flight by index
+    #[func]
+    pub fn get_active_flight_id(&self, index: i32) -> i32 {
+        let flights = self.state.player_company.active_flights();
+        flights.get(index as usize)
+            .map(|f| f.id as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Get the rocket design name for an active flight by index
+    #[func]
+    pub fn get_active_flight_design_name(&self, index: i32) -> GString {
+        let flights = self.state.player_company.active_flights();
+        flights.get(index as usize)
+            .and_then(|f| {
+                self.state.player_company.rocket_designs
+                    .get(f.design_lineage_index)
+                    .map(|l| GString::from(l.name.as_str()))
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get total transit days for the current leg of an active flight
+    #[func]
+    pub fn get_active_flight_current_leg_transit_days(&self, index: i32) -> i32 {
+        let flights = self.state.player_company.active_flights();
+        flights.get(index as usize)
+            .and_then(|f| f.leg(f.current_leg_index))
+            .map(|leg| leg.transit_days as i32)
+            .unwrap_or(0)
+    }
+
+    /// Get days remaining in the current leg of an active flight
+    #[func]
+    pub fn get_active_flight_current_leg_days_remaining(&self, index: i32) -> i32 {
+        let flights = self.state.player_company.active_flights();
+        flights.get(index as usize)
+            .map(|f| f.transit_days_remaining as i32)
+            .unwrap_or(0)
+    }
+
+    /// Get the next destination for the current leg of an active flight
+    #[func]
+    pub fn get_active_flight_next_destination(&self, index: i32) -> GString {
+        let flights = self.state.player_company.active_flights();
+        flights.get(index as usize)
+            .and_then(|f| f.leg(f.current_leg_index))
+            .map(|leg| GString::from(leg.to))
+            .unwrap_or_default()
+    }
+
     /// Get the transit time for a mission to a destination (total days)
     #[func]
     pub fn get_mission_transit_days(&self, destination: GString) -> i32 {

@@ -11,7 +11,7 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1")
 
-[node name="CenterContainer" type="CenterContainer" parent="."]
+[node name="HBoxContainer" type="HBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -19,7 +19,26 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="OrbitDiagram" type="Control" parent="CenterContainer"]
+[node name="SidebarPanel" type="PanelContainer" parent="HBoxContainer"]
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+
+[node name="SidebarScroll" type="ScrollContainer" parent="HBoxContainer/SidebarPanel"]
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="SidebarContent" type="VBoxContainer" parent="HBoxContainer/SidebarPanel/SidebarScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
+[node name="CenterContainer" type="CenterContainer" parent="HBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 1.0
+
+[node name="OrbitDiagram" type="Control" parent="HBoxContainer/CenterContainer"]
 custom_minimum_size = Vector2(800, 600)
 layout_mode = 2
 
