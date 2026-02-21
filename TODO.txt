@@ -1,6 +1,26 @@
 * UI
 * Fixes
 * Refactoring
+* Stages
+    * Stages have to track their propellant independantly
+        *potentially a first stage won't completely use its fuel before the second stage starts if it's going back to the launch site.
+    * Stages constructed indpendantly in the manufactury
+        * We should always break
+        * To make this resonable, objects in the manufactury shouldn't take floor space until their inputs are ready.
+            * Check for floor space the same way we check for parts?
+    * Stages should have indpendant identities so that, in the future, they can be re-used between designs like Centaur was
+    * Future spacecraft will function as a final stage for a booster which might otherwise have other payloads
+* Stage re-use
+    * If a stage has enough propellant remaining it can return and re-appear in the manufacturing area
+    * Mission planning can include saving propellant for return to the launch site.
+        * Landing on boats to be added later.
+    * Requires refurbishment to re-fly.  Shorter than building.
+* Spacecraft
+    * A new type of stage that hangs out in space for long periods of time and doesn't dissapear automatically with its mission.
+    * We should distinguish between aerodynamics stages, like boosters, non-aerodynamic ones, and ones capable of re-entry
+* Tourism
+    * Requires spacecraft, an extra stage on top of a rocket booster
+    * For now missions will be for some number of people to want to go to LEO, stay there for a week, and then return.
 * Propellant endurance tracking (build on propellant remaining data).
     * Will be important later when we have multi-stage missions and propellant depots
 * Places, delta-v map
@@ -14,15 +34,15 @@
     * Batteries
     * Solar panels
     * Ion drives
-* Part improvements
-    * Refined over time for better stats with diminishing returns but benefit from flight experience
-        * Things like increase chamber pressure or reduce complexity
-        * This will introduce flaws.
 * Save/load game (WorldSeed is already in GameState, ready to serialize)
+* Complexity adds sub-linearly for different part properties.
+    * Max rather than addition maybe?  But if the same add 1.
 * Design versioning improvements:
     * Making changes to a design (engines, tank size) when cutting a new version should introduce flaws depending on how large the change is.
+    * Add re-use to a booster that already exists
     * Flaws fixed on the "head" should not affect existing parts from older versions.
     * Changes to the design of parts can introduce flaws.
+    * Add the abilty to improve a designs thrust per weight
 * Prestige system
     * A bunch of modifiers with natural decays.
     * Types with no decay
