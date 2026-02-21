@@ -4,11 +4,6 @@
 * Stages
     * Stages have to track their propellant independantly
         *potentially a first stage won't completely use its fuel before the second stage starts if it's going back to the launch site.
-    * Stages constructed indpendantly in the manufactury
-        * We should always break
-        * To make this resonable, objects in the manufactury shouldn't take floor space until their inputs are ready.
-            * Check for floor space the same way we check for parts?
-    * Stages should have indpendant identities so that, in the future, they can be re-used between designs like Centaur was
     * Future spacecraft will function as a final stage for a booster which might otherwise have other payloads
 * Stage re-use
     * If a stage has enough propellant remaining it can return and re-appear in the manufacturing area

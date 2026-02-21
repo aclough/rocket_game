@@ -76,6 +76,13 @@ pub enum ManufacturingOrderType {
         /// Snapshot of the rocket design at time of order
         design_snapshot: RocketDesign,
     },
+    /// Building a stage from a stage design
+    Stage {
+        stage_design_index: usize,
+        revision_number: u32,
+        /// Physics snapshot at time of order
+        snapshot: RocketStage,
+    },
     /// Building a fuel depot
     Depot {
         depot_design_index: usize,
@@ -102,7 +109,7 @@ pub struct ManufacturingOrder {
     pub floor_space_used: usize,
     /// Whether this rocket order is waiting for engines to be manufactured
     /// When true, no teams can be assigned and no work progresses
-    pub waiting_for_engines: bool,
+    pub waiting_for_parts: bool,
 }
 
 impl ManufacturingOrder {
@@ -114,6 +121,9 @@ impl ManufacturingOrder {
             }
             ManufacturingOrderType::Rocket { design_snapshot, .. } => {
                 format!("Assemble {}", design_snapshot.name)
+            }
+            ManufacturingOrderType::Stage { snapshot, .. } => {
+                format!("Build Stage ({})", snapshot.engine_snapshot().name)
             }
             ManufacturingOrderType::Depot { depot_design, .. } => {
                 format!("Build Depot: {}", depot_design.name)
@@ -141,7 +151,9 @@ impl ManufacturingOrder {
             ManufacturingOrderType::Engine { quantity, completed, .. } => {
                 *completed >= *quantity
             }
-            ManufacturingOrderType::Rocket { .. } | ManufacturingOrderType::Depot { .. } => {
+            ManufacturingOrderType::Rocket { .. }
+            | ManufacturingOrderType::Stage { .. }
+            | ManufacturingOrderType::Depot { .. } => {
                 self.is_unit_complete()
             }
         }
@@ -165,8 +177,15 @@ impl ManufacturingOrder {
                 let remaining_units = (*quantity as f64) - (*completed as f64) - 1.0;
                 current_unit_remaining + remaining_units.max(0.0) * self.total_work
             }
-            ManufacturingOrderType::Rocket { .. } | ManufacturingOrderType::Depot { .. } => current_unit_remaining,
+            ManufacturingOrderType::Rocket { .. }
+            | ManufacturingOrderType::Stage { .. }
+            | ManufacturingOrderType::Depot { .. } => current_unit_remaining,
         }
+    }
+
+    /// Whether this is a stage order
+    pub fn is_stage_order(&self) -> bool {
+        matches!(self.order_type, ManufacturingOrderType::Stage { .. })
     }
 
     /// Whether this is a depot order
@@ -203,6 +222,19 @@ pub struct DepotInventoryEntry {
     pub serial_number: u32,
 }
 
+/// An entry in the stage inventory (grouped by design+revision)
+#[derive(Debug, Clone)]
+pub struct StageInventoryEntry {
+    /// Which stage design lineage this came from
+    pub stage_design_index: usize,
+    /// Which revision was used to build it
+    pub revision_number: u32,
+    /// Physics snapshot at time of manufacture
+    pub snapshot: RocketStage,
+    /// Number of this stage type available
+    pub quantity: u32,
+}
+
 /// An entry in the rocket inventory (each rocket is unique)
 #[derive(Debug, Clone)]
 pub struct RocketInventoryEntry {
@@ -225,11 +257,14 @@ pub fn floor_space_for_engine(scale: f64) -> usize {
     scale.ceil() as usize
 }
 
-/// Calculate floor space needed for a rocket assembly order
+/// Calculate floor space needed for a stage build order (2 units per stage)
+pub fn floor_space_for_stage(_stage: &RocketStage) -> usize {
+    2
+}
+
+/// Calculate floor space needed for rocket integration (stacking stages + final checkout)
 pub fn floor_space_for_rocket(design: &RocketDesign) -> usize {
-    let stage_space = design.stages.len() * 2;
-    let engine_space: u32 = design.stages.iter().map(|s| s.engine_count).sum();
-    stage_space + engine_space as usize
+    design.stages.len() + 1
 }
 
 // ==========================================
@@ -249,6 +284,8 @@ pub struct Manufacturing {
     pub engine_inventory: Vec<EngineInventoryEntry>,
     /// Assembled rockets ready for launch
     pub rocket_inventory: Vec<RocketInventoryEntry>,
+    /// Completed stages ready for rocket assembly
+    pub stage_inventory: Vec<StageInventoryEntry>,
     /// Manufactured depots ready for deployment
     pub depot_inventory: Vec<DepotInventoryEntry>,
     /// Next order ID
@@ -269,6 +306,7 @@ impl Manufacturing {
             active_orders: Vec::new(),
             engine_inventory: Vec::new(),
             rocket_inventory: Vec::new(),
+            stage_inventory: Vec::new(),
             depot_inventory: Vec::new(),
             next_order_id: 1,
             next_serial_number: 1,
@@ -364,7 +402,7 @@ impl Manufacturing {
             base_total_work: build_work,
             material_cost_per_unit: material_cost,
             floor_space_used: space_needed,
-            waiting_for_engines: false,
+            waiting_for_parts: false,
         });
 
         Some((order_id, total_material))
@@ -372,13 +410,13 @@ impl Manufacturing {
 
     /// Start a new rocket assembly order.
     /// Returns the order ID and material cost, or None if insufficient floor space.
-    /// If `waiting_for_engines` is true, the order is blocked until engines arrive.
+    /// If `waiting_for_parts` is true, the order is blocked until engines arrive.
     pub fn start_rocket_order(
         &mut self,
         rocket_design_id: usize,
         revision_number: u32,
         design_snapshot: RocketDesign,
-        waiting_for_engines: bool,
+        waiting_for_parts: bool,
     ) -> Option<(ManufacturingOrderId, f64)> {
         let space_needed = floor_space_for_rocket(&design_snapshot);
         if !self.can_start_rocket_order_with_space(space_needed) {
@@ -403,7 +441,7 @@ impl Manufacturing {
             base_total_work: assembly_work,
             material_cost_per_unit: material_cost,
             floor_space_used: space_needed,
-            waiting_for_engines,
+            waiting_for_parts,
         });
 
         Some((order_id, material_cost))
@@ -435,7 +473,9 @@ impl Manufacturing {
                 *quantity += quantity_to_add;
                 Some(order.material_cost_per_unit * quantity_to_add as f64)
             }
-            ManufacturingOrderType::Rocket { .. } | ManufacturingOrderType::Depot { .. } => None,
+            ManufacturingOrderType::Rocket { .. }
+            | ManufacturingOrderType::Stage { .. }
+            | ManufacturingOrderType::Depot { .. } => None,
         }
     }
 
@@ -531,7 +571,7 @@ impl Manufacturing {
             base_total_work: build_work,
             material_cost_per_unit: material_cost,
             floor_space_used: space_needed,
-            waiting_for_engines: false,
+            waiting_for_parts: false,
         });
 
         Some((order_id, material_cost))
@@ -560,6 +600,232 @@ impl Manufacturing {
         } else {
             None
         }
+    }
+
+    /// Start a new stage manufacturing order.
+    /// Returns the order ID and material cost, or None if insufficient floor space.
+    /// If `waiting_for_parts` is true, the order is blocked until engines arrive.
+    pub fn start_stage_order(
+        &mut self,
+        stage_design_index: usize,
+        revision_number: u32,
+        snapshot: RocketStage,
+        waiting_for_parts: bool,
+    ) -> Option<(ManufacturingOrderId, f64)> {
+        let space_needed = floor_space_for_stage(&snapshot);
+        if space_needed > self.floor_space_available() {
+            return None;
+        }
+
+        let material_cost = stage_material_cost(&snapshot);
+        let assembly_work = stage_assembly_work(&snapshot);
+
+        let order_id = self.next_order_id;
+        self.next_order_id += 1;
+
+        self.active_orders.push(ManufacturingOrder {
+            id: order_id,
+            order_type: ManufacturingOrderType::Stage {
+                stage_design_index,
+                revision_number,
+                snapshot,
+            },
+            progress: 0.0,
+            total_work: assembly_work,
+            base_total_work: assembly_work,
+            material_cost_per_unit: material_cost,
+            floor_space_used: if waiting_for_parts { 0 } else { space_needed },
+            waiting_for_parts,
+        });
+
+        Some((order_id, material_cost))
+    }
+
+    /// Add a completed stage to inventory
+    pub fn add_stage_to_inventory(
+        &mut self,
+        stage_design_index: usize,
+        revision_number: u32,
+        snapshot: RocketStage,
+    ) {
+        // Try to find an existing entry with the same design+revision
+        if let Some(entry) = self.stage_inventory.iter_mut().find(|e| {
+            e.stage_design_index == stage_design_index && e.revision_number == revision_number
+        }) {
+            entry.quantity += 1;
+        } else {
+            self.stage_inventory.push(StageInventoryEntry {
+                stage_design_index,
+                revision_number,
+                snapshot,
+                quantity: 1,
+            });
+        }
+    }
+
+    /// Get available stages for a specific design index
+    pub fn get_stages_available(&self, stage_design_index: usize) -> u32 {
+        self.stage_inventory.iter()
+            .filter(|e| e.stage_design_index == stage_design_index)
+            .map(|e| e.quantity)
+            .sum()
+    }
+
+    /// Check if all stages required by a rocket design are in inventory.
+    /// Requires stage_design_indices to be populated on the rocket design.
+    pub fn has_stages_for_rocket(&self, design: &RocketDesign) -> bool {
+        let required = stages_required(design);
+        for (stage_design_index, count) in &required {
+            if self.get_stages_available(*stage_design_index) < *count {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Consume stages from inventory for rocket assembly.
+    /// Returns true if all required stages were available and consumed.
+    pub fn consume_stages_for_rocket(&mut self, design: &RocketDesign) -> bool {
+        let required = stages_required(design);
+        // Check availability first
+        for (stage_design_index, count) in &required {
+            if self.get_stages_available(*stage_design_index) < *count {
+                return false;
+            }
+        }
+        // Consume
+        for (stage_design_index, mut remaining) in required {
+            for entry in self.stage_inventory.iter_mut() {
+                if entry.stage_design_index == stage_design_index && remaining > 0 {
+                    let consume = remaining.min(entry.quantity);
+                    entry.quantity -= consume;
+                    remaining -= consume;
+                }
+            }
+        }
+        self.stage_inventory.retain(|e| e.quantity > 0);
+        true
+    }
+
+    /// Sum stages needed across all waiting-for-parts rocket orders for a given stage design index.
+    pub fn stages_committed_to_waiting_rockets(&self, stage_design_index: usize) -> u32 {
+        self.active_orders.iter()
+            .filter(|o| o.waiting_for_parts && o.is_rocket_order())
+            .filter_map(|o| match &o.order_type {
+                ManufacturingOrderType::Rocket { design_snapshot, .. } => {
+                    Some(stages_required(design_snapshot))
+                }
+                _ => None,
+            })
+            .flat_map(|reqs| reqs.into_iter())
+            .filter(|(idx, _)| *idx == stage_design_index)
+            .map(|(_, count)| count)
+            .sum()
+    }
+
+    /// Sum stages pending in active stage orders for a given stage design index.
+    pub fn stages_pending_for_design(&self, stage_design_index: usize) -> u32 {
+        self.active_orders.iter()
+            .filter_map(|o| match &o.order_type {
+                ManufacturingOrderType::Stage {
+                    stage_design_index: idx, ..
+                } if *idx == stage_design_index => {
+                    if o.is_order_complete() { None } else { Some(1) }
+                }
+                _ => None,
+            })
+            .sum()
+    }
+
+    /// Sum engines needed across all waiting-for-parts stage orders for a given engine design ID.
+    pub fn engines_committed_to_waiting_stages(&self, engine_design_id: usize) -> u32 {
+        self.active_orders.iter()
+            .filter(|o| o.waiting_for_parts && o.is_stage_order())
+            .filter_map(|o| match &o.order_type {
+                ManufacturingOrderType::Stage { snapshot, .. } => {
+                    if snapshot.engine_design_id == engine_design_id {
+                        Some(snapshot.engine_count)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .sum()
+    }
+
+    /// Try to unblock stage orders that are waiting for engines.
+    /// Returns list of unblocked order IDs.
+    pub fn try_unblock_stage_orders(&mut self) -> Vec<ManufacturingOrderId> {
+        let mut unblocked = Vec::new();
+
+        let blocked_indices: Vec<usize> = self.active_orders.iter()
+            .enumerate()
+            .filter(|(_, o)| o.waiting_for_parts && o.is_stage_order())
+            .map(|(i, _)| i)
+            .collect();
+
+        for idx in blocked_indices {
+            let (engine_design_id, engine_count) = match &self.active_orders[idx].order_type {
+                ManufacturingOrderType::Stage { snapshot, .. } => {
+                    (snapshot.engine_design_id, snapshot.engine_count)
+                }
+                _ => continue,
+            };
+
+            if self.get_engines_available(engine_design_id) >= engine_count {
+                // Consume engines
+                let mut remaining = engine_count;
+                for entry in self.engine_inventory.iter_mut() {
+                    if entry.engine_design_id == engine_design_id && remaining > 0 {
+                        let consume = remaining.min(entry.quantity);
+                        entry.quantity -= consume;
+                        remaining -= consume;
+                    }
+                }
+                self.engine_inventory.retain(|e| e.quantity > 0);
+
+                // Unblock and assign floor space
+                self.active_orders[idx].waiting_for_parts = false;
+                let stage = match &self.active_orders[idx].order_type {
+                    ManufacturingOrderType::Stage { snapshot, .. } => snapshot.clone(),
+                    _ => unreachable!(),
+                };
+                self.active_orders[idx].floor_space_used = floor_space_for_stage(&stage);
+                unblocked.push(self.active_orders[idx].id);
+            }
+        }
+
+        unblocked
+    }
+
+    /// Try to unblock rocket orders that are waiting for stages.
+    /// Returns list of unblocked order IDs.
+    pub fn try_unblock_rocket_orders(&mut self) -> Vec<ManufacturingOrderId> {
+        let mut unblocked = Vec::new();
+
+        let blocked_indices: Vec<usize> = self.active_orders.iter()
+            .enumerate()
+            .filter(|(_, o)| o.waiting_for_parts && o.is_rocket_order())
+            .map(|(i, _)| i)
+            .collect();
+
+        for idx in blocked_indices {
+            let design = match &self.active_orders[idx].order_type {
+                ManufacturingOrderType::Rocket { design_snapshot, .. } => design_snapshot.clone(),
+                _ => continue,
+            };
+
+            if self.has_stages_for_rocket(&design) {
+                self.consume_stages_for_rocket(&design);
+                self.active_orders[idx].waiting_for_parts = false;
+                // Assign floor space now that stages are consumed
+                self.active_orders[idx].floor_space_used = floor_space_for_rocket(&design);
+                unblocked.push(self.active_orders[idx].id);
+            }
+        }
+
+        unblocked
     }
 
     /// Consume engines from inventory for rocket assembly.
@@ -655,52 +921,6 @@ impl Manufacturing {
             .sum()
     }
 
-    /// Sum engines needed across all waiting-for-engines rocket orders for a given engine design ID.
-    /// Used to calculate the total commitment so auto-ordering doesn't under-order.
-    pub fn engines_committed_to_waiting_rockets(&self, engine_design_id: usize) -> u32 {
-        self.active_orders.iter()
-            .filter(|o| o.waiting_for_engines)
-            .filter_map(|o| match &o.order_type {
-                ManufacturingOrderType::Rocket { design_snapshot, .. } => {
-                    Some(engines_required(design_snapshot))
-                }
-                _ => None,
-            })
-            .flat_map(|reqs| reqs.into_iter())
-            .filter(|(eid, _)| *eid == engine_design_id)
-            .map(|(_, count)| count)
-            .sum()
-    }
-
-    /// Try to unblock rocket orders that are waiting for engines.
-    /// Iterates in FIFO order. For each blocked order, checks if engines are
-    /// available; if so, consumes them and sets `waiting_for_engines = false`.
-    /// Returns list of unblocked order IDs.
-    pub fn try_unblock_rocket_orders(&mut self) -> Vec<ManufacturingOrderId> {
-        let mut unblocked = Vec::new();
-
-        // Collect indices of blocked rocket orders (FIFO = order in vec)
-        let blocked_indices: Vec<usize> = self.active_orders.iter()
-            .enumerate()
-            .filter(|(_, o)| o.waiting_for_engines)
-            .map(|(i, _)| i)
-            .collect();
-
-        for idx in blocked_indices {
-            let design = match &self.active_orders[idx].order_type {
-                ManufacturingOrderType::Rocket { design_snapshot, .. } => design_snapshot.clone(),
-                _ => continue,
-            };
-
-            if self.has_engines_for_rocket(&design) {
-                self.consume_engines_for_rocket(&design);
-                self.active_orders[idx].waiting_for_engines = false;
-                unblocked.push(self.active_orders[idx].id);
-            }
-        }
-
-        unblocked
-    }
 }
 
 impl Default for Manufacturing {
@@ -739,8 +959,14 @@ pub fn stage_material_cost(stage: &RocketStage) -> f64 {
     }
 }
 
-/// Calculate total material cost for a rocket design (stages + integration, no engines)
-pub fn rocket_material_cost(design: &RocketDesign) -> f64 {
+/// Calculate rocket integration material cost (just the integration, no stages)
+pub fn rocket_material_cost(_design: &RocketDesign) -> f64 {
+    crate::resources::rocket_integration_cost()
+}
+
+/// Calculate total material cost for a full rocket build (stages + integration, no engines)
+/// Used for display/budgeting purposes.
+pub fn rocket_total_material_cost(design: &RocketDesign) -> f64 {
     let stage_costs: f64 = design.stages.iter().map(|s| stage_material_cost(s)).sum();
     stage_costs + crate::resources::rocket_integration_cost()
 }
@@ -754,8 +980,14 @@ pub fn stage_assembly_work(stage: &RocketStage) -> f64 {
         + (extra_engines * ASSEMBLY_DAYS_PER_EXTRA_ENGINE)
 }
 
-/// Calculate total assembly work for a rocket design (team-days)
-pub fn rocket_assembly_work(design: &RocketDesign) -> f64 {
+/// Calculate rocket integration work (just stacking + checkout, no per-stage assembly)
+pub fn rocket_assembly_work(_design: &RocketDesign) -> f64 {
+    ROCKET_INTEGRATION_DAYS
+}
+
+/// Calculate total assembly work for a full rocket build (stages + integration)
+/// Used for display/budgeting purposes.
+pub fn rocket_total_assembly_work(design: &RocketDesign) -> f64 {
     let stage_work: f64 = design.stages.iter().map(|s| stage_assembly_work(s)).sum();
     stage_work + ROCKET_INTEGRATION_DAYS
 }
@@ -766,6 +998,21 @@ pub fn engines_required(design: &RocketDesign) -> Vec<(usize, u32)> {
     let mut counts: HashMap<usize, u32> = HashMap::new();
     for stage in &design.stages {
         *counts.entry(stage.engine_design_id).or_insert(0) += stage.engine_count;
+    }
+    let mut result: Vec<_> = counts.into_iter().collect();
+    result.sort_by_key(|(id, _)| *id);
+    result
+}
+
+/// Get the stages required by a rocket design as (stage_design_index, count) pairs.
+/// Only counts stages that have a linked stage_design_index.
+pub fn stages_required(design: &RocketDesign) -> Vec<(usize, u32)> {
+    use std::collections::HashMap;
+    let mut counts: HashMap<usize, u32> = HashMap::new();
+    for stage_idx in 0..design.stages.len() {
+        if let Some(sd_index) = design.stage_design_index(stage_idx) {
+            *counts.entry(sd_index).or_insert(0) += 1;
+        }
     }
     let mut result: Vec<_> = counts.into_iter().collect();
     result.sort_by_key(|(id, _)| *id);
@@ -812,9 +1059,14 @@ mod tests {
     fn test_floor_space_for_rocket() {
         let design = RocketDesign::default_design();
         let space = floor_space_for_rocket(&design);
-        // Default: 2 stages * 2 = 4, + 5 kerolox + 1 hydrolox = 6
-        // Total = 10
-        assert_eq!(space, 10);
+        // Integration bay: stages.len() + 1 = 2 + 1 = 3
+        assert_eq!(space, 3);
+    }
+
+    #[test]
+    fn test_floor_space_for_stage() {
+        let stage = RocketStage::new(kerolox_snapshot());
+        assert_eq!(floor_space_for_stage(&stage), 2);
     }
 
     // ==========================================
@@ -890,21 +1142,41 @@ mod tests {
     fn test_rocket_material_cost() {
         let design = RocketDesign::default_design();
         let cost = rocket_material_cost(&design);
+        // Integration only: ~$1.07M
+        let expected = crate::resources::rocket_integration_cost();
+        assert!((cost - expected).abs() < 100.0,
+            "Rocket material cost (integration only) should be ~${:.2}M, got ${:.2}M",
+            expected / 1_000_000.0, cost / 1_000_000.0);
+    }
+
+    #[test]
+    fn test_rocket_total_material_cost() {
+        let design = RocketDesign::default_design();
+        let cost = rocket_total_material_cost(&design);
         // 2 stages (tanks + assembly) + integration ≈ $2.65M
         assert!(cost > 2_000_000.0 && cost < 3_500_000.0,
-            "Rocket material cost should be ~$2.65M, got ${:.2}M", cost / 1_000_000.0);
+            "Rocket total material cost should be ~$2.65M, got ${:.2}M", cost / 1_000_000.0);
     }
 
     #[test]
     fn test_rocket_assembly_work() {
         let design = RocketDesign::default_design();
         let work = rocket_assembly_work(&design);
+        // Integration only: 30 days
+        assert!((work - ROCKET_INTEGRATION_DAYS).abs() < 0.1,
+            "Assembly work (integration only) should be {} days, got {}", ROCKET_INTEGRATION_DAYS, work);
+    }
+
+    #[test]
+    fn test_rocket_total_assembly_work() {
+        let design = RocketDesign::default_design();
+        let work = rocket_total_assembly_work(&design);
         // Stage 1: 5 engines -> 60 + 4*5 = 80 days
         // Stage 2: 1 engine -> 60 + 0*5 = 60 days
         // Integration: 30 days
         // Total: 80 + 60 + 30 = 170 days
         assert!((work - 170.0).abs() < 0.1,
-            "Assembly work should be 170 days, got {}", work);
+            "Total assembly work should be 170 days, got {}", work);
     }
 
     #[test]
@@ -1220,16 +1492,16 @@ mod tests {
     // ==========================================
 
     #[test]
-    fn test_engine_order_waiting_for_engines_defaults_false() {
+    fn test_engine_order_waiting_for_parts_defaults_false() {
         let mut mfg = Manufacturing::new();
         let snap = kerolox_snapshot();
         let (order_id, _) = mfg.start_engine_order(1, 1, snap, 1).unwrap();
         let order = mfg.get_order(order_id).unwrap();
-        assert!(!order.waiting_for_engines);
+        assert!(!order.waiting_for_parts);
     }
 
     #[test]
-    fn test_rocket_order_waiting_for_engines() {
+    fn test_rocket_order_waiting_for_parts() {
         let mut mfg = Manufacturing::new();
         mfg.floor_space_total = 30; // Enough for two rocket orders
         let design = RocketDesign::default_design();
@@ -1237,12 +1509,12 @@ mod tests {
         // Create with waiting = true
         let (order_id, _) = mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
         let order = mfg.get_order(order_id).unwrap();
-        assert!(order.waiting_for_engines);
+        assert!(order.waiting_for_parts);
 
         // Create with waiting = false
         let (order_id2, _) = mfg.start_rocket_order(0, 1, design, false).unwrap();
         let order2 = mfg.get_order(order_id2).unwrap();
-        assert!(!order2.waiting_for_engines);
+        assert!(!order2.waiting_for_parts);
     }
 
     #[test]
@@ -1267,86 +1539,103 @@ mod tests {
     }
 
     #[test]
-    fn test_try_unblock_rocket_orders_unblocks_when_engines_arrive() {
+    fn test_try_unblock_stage_orders_when_engines_arrive() {
         let mut mfg = Manufacturing::new();
         let kerolox = kerolox_snapshot();
-        let hydrolox = hydrolox_snapshot();
-        let design = RocketDesign::default_design();
+        let stage = RocketStage::new(kerolox.clone());
+
+        // Create a blocked stage order (needs 1 kerolox engine)
+        let (order_id, _) = mfg.start_stage_order(0, 1, stage.clone(), true).unwrap();
+        assert!(mfg.get_order(order_id).unwrap().waiting_for_parts);
+
+        // No engines yet — should not unblock
+        let unblocked = mfg.try_unblock_stage_orders();
+        assert!(unblocked.is_empty());
+
+        // Stock one kerolox engine
+        mfg.add_engine_to_inventory(1, 1, kerolox.clone());
+
+        // Now it should unblock and consume the engine
+        let unblocked = mfg.try_unblock_stage_orders();
+        assert_eq!(unblocked, vec![order_id]);
+        assert!(!mfg.get_order(order_id).unwrap().waiting_for_parts);
+        assert_eq!(mfg.get_engines_available(1), 0);
+    }
+
+    #[test]
+    fn test_try_unblock_rocket_orders_when_stages_arrive() {
+        let mut mfg = Manufacturing::new();
+        let stage = RocketStage::new(kerolox_snapshot());
+
+        // Build a rocket design with stage_design_indices
+        let mut design = RocketDesign::default_design();
+        design.set_stage_design_index(0, Some(0)); // stage design 0
+        design.set_stage_design_index(1, Some(1)); // stage design 1
 
         // Create a blocked rocket order
         let (order_id, _) = mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
-        assert!(mfg.get_order(order_id).unwrap().waiting_for_engines);
+        assert!(mfg.get_order(order_id).unwrap().waiting_for_parts);
 
-        // No engines yet — should not unblock
+        // No stages yet — should not unblock
         let unblocked = mfg.try_unblock_rocket_orders();
         assert!(unblocked.is_empty());
-        assert!(mfg.get_order(order_id).unwrap().waiting_for_engines);
 
-        // Stock the required engines (5 kerolox + 1 hydrolox)
-        for _ in 0..5 {
-            mfg.add_engine_to_inventory(1, 1, kerolox.clone());
-        }
-        mfg.add_engine_to_inventory(0, 1, hydrolox.clone());
+        // Stock both stages
+        mfg.add_stage_to_inventory(0, 1, stage.clone());
+        mfg.add_stage_to_inventory(1, 1, stage.clone());
 
-        // Now it should unblock and consume engines
+        // Now it should unblock and consume stages
         let unblocked = mfg.try_unblock_rocket_orders();
         assert_eq!(unblocked, vec![order_id]);
-        assert!(!mfg.get_order(order_id).unwrap().waiting_for_engines);
-
-        // Engines should be consumed
-        assert_eq!(mfg.get_engines_available(1), 0);
-        assert_eq!(mfg.get_engines_available(0), 0);
+        assert!(!mfg.get_order(order_id).unwrap().waiting_for_parts);
+        assert_eq!(mfg.get_stages_available(0), 0);
+        assert_eq!(mfg.get_stages_available(1), 0);
     }
 
     #[test]
     fn test_try_unblock_fifo_priority() {
         let mut mfg = Manufacturing::new();
-        mfg.floor_space_total = 30; // Enough for two rocket orders
+        mfg.floor_space_total = 30;
         let kerolox = kerolox_snapshot();
-        let hydrolox = hydrolox_snapshot();
-        let design = RocketDesign::default_design();
+        let stage = RocketStage::new(kerolox.clone());
 
-        // Create two blocked rocket orders
-        let (order1, _) = mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
-        let (order2, _) = mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
+        // Create two blocked stage orders
+        let (order1, _) = mfg.start_stage_order(0, 1, stage.clone(), true).unwrap();
+        let (order2, _) = mfg.start_stage_order(0, 1, stage.clone(), true).unwrap();
 
-        // Stock enough engines for only one rocket (5 kerolox + 1 hydrolox)
-        for _ in 0..5 {
-            mfg.add_engine_to_inventory(1, 1, kerolox.clone());
-        }
-        mfg.add_engine_to_inventory(0, 1, hydrolox.clone());
+        // Stock enough engines for only one stage (1 kerolox engine)
+        mfg.add_engine_to_inventory(1, 1, kerolox.clone());
 
         // First order should unblock (FIFO), second remains blocked
-        let unblocked = mfg.try_unblock_rocket_orders();
+        let unblocked = mfg.try_unblock_stage_orders();
         assert_eq!(unblocked, vec![order1]);
-        assert!(!mfg.get_order(order1).unwrap().waiting_for_engines);
-        assert!(mfg.get_order(order2).unwrap().waiting_for_engines);
+        assert!(!mfg.get_order(order1).unwrap().waiting_for_parts);
+        assert!(mfg.get_order(order2).unwrap().waiting_for_parts);
     }
 
     // ==========================================
-    // Engines Committed to Waiting Rockets Tests
+    // Engines Committed to Waiting Stages Tests
     // ==========================================
 
     #[test]
-    fn test_engines_committed_to_waiting_rockets() {
+    fn test_engines_committed_to_waiting_stages() {
         let mut mfg = Manufacturing::new();
-        mfg.floor_space_total = 50; // Plenty of space
-        let design = RocketDesign::default_design();
+        mfg.floor_space_total = 50;
+        let stage = RocketStage::new(kerolox_snapshot());
 
         // No waiting orders → 0 committed
-        assert_eq!(mfg.engines_committed_to_waiting_rockets(1), 0);
+        assert_eq!(mfg.engines_committed_to_waiting_stages(1), 0);
 
-        // Create two waiting rocket orders (each needs 5 kerolox + 1 hydrolox)
-        mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
-        mfg.start_rocket_order(0, 1, design.clone(), true).unwrap();
+        // Create two waiting stage orders (each needs 1 kerolox engine)
+        mfg.start_stage_order(0, 1, stage.clone(), true).unwrap();
+        mfg.start_stage_order(0, 1, stage.clone(), true).unwrap();
 
         // Should sum engines across both waiting orders
-        assert_eq!(mfg.engines_committed_to_waiting_rockets(1), 10); // 5+5 kerolox
-        assert_eq!(mfg.engines_committed_to_waiting_rockets(0), 2);  // 1+1 hydrolox
+        assert_eq!(mfg.engines_committed_to_waiting_stages(1), 2);
 
         // Non-waiting order shouldn't count
-        mfg.start_rocket_order(0, 1, design.clone(), false).unwrap();
-        assert_eq!(mfg.engines_committed_to_waiting_rockets(1), 10); // Still 10
+        mfg.start_stage_order(0, 1, stage.clone(), false).unwrap();
+        assert_eq!(mfg.engines_committed_to_waiting_stages(1), 2); // Still 2
     }
 
     // ==========================================
@@ -1531,7 +1820,7 @@ mod tests {
         assert_eq!(mfg.active_orders.len(), 1);
         assert_eq!(mfg.active_orders[0].id, order_id);
         assert_eq!(mfg.active_orders[0].total_work, expected_work);
-        assert!(!mfg.active_orders[0].waiting_for_engines);
+        assert!(!mfg.active_orders[0].waiting_for_parts);
     }
 
     #[test]

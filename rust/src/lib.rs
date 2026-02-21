@@ -24,6 +24,7 @@ pub mod launcher;
 pub mod resources;
 pub mod rocket_design;
 pub mod stage;
+pub mod stage_design;
 pub mod time_system;
 pub mod world_seed;
 

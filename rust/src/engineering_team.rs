@@ -201,6 +201,15 @@ pub enum WorkEvent {
         destination: String,
         is_contract: bool,
     },
+    /// A stage was manufactured
+    StageManufactured {
+        stage_design_index: usize,
+        order_id: crate::manufacturing::ManufacturingOrderId,
+    },
+    /// A stage order was unblocked (engines arrived)
+    StageOrderUnblocked {
+        order_id: crate::manufacturing::ManufacturingOrderId,
+    },
     /// A fuel depot was manufactured
     DepotManufactured {
         depot_design_index: usize,

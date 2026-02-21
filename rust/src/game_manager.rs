@@ -2121,6 +2121,15 @@ impl GameManager {
                 dict.set("depot_design_index", *depot_design_index as i32);
                 dict.set("serial_number", *serial_number as i32);
             }
+            WorkEvent::StageManufactured { stage_design_index, order_id } => {
+                dict.set("type", "stage_manufactured");
+                dict.set("stage_design_index", *stage_design_index as i32);
+                dict.set("order_id", *order_id as i32);
+            }
+            WorkEvent::StageOrderUnblocked { order_id } => {
+                dict.set("type", "stage_order_unblocked");
+                dict.set("order_id", *order_id as i32);
+            }
             WorkEvent::AllProductionIdle => {
                 dict.set("type", "all_production_idle");
             }
@@ -2164,6 +2173,12 @@ impl GameManager {
             }
             crate::engineering_team::WorkEvent::DepotManufactured { .. } => {
                 "depot_manufactured"
+            }
+            crate::engineering_team::WorkEvent::StageManufactured { .. } => {
+                "stage_manufactured"
+            }
+            crate::engineering_team::WorkEvent::StageOrderUnblocked { .. } => {
+                "stage_order_unblocked"
             }
             crate::engineering_team::WorkEvent::AllProductionIdle => {
                 "all_production_idle"
@@ -3170,12 +3185,12 @@ impl GameManager {
             rocket_design_id as usize,
             revision_number as u32,
         ) {
-            Ok((order_id, _, engines_consumed)) => {
+            Ok((order_id, _, stages_consumed)) => {
                 self.last_order_error.clear();
 
-                // If engines weren't consumed, auto-order the missing ones
-                if !engines_consumed {
-                    if let Err(reason) = self.state.player_company.auto_order_engines_for_rocket(
+                // If stages weren't consumed, auto-order the missing stages (and their engines)
+                if !stages_consumed {
+                    if let Err(reason) = self.state.player_company.auto_order_stages_for_rocket(
                         rocket_design_id as usize,
                     ) {
                         self.last_order_error = reason.to_string();
@@ -3185,7 +3200,7 @@ impl GameManager {
                 self.sync_money_from_state();
                 self.emit_money_changed();
                 self.base_mut().emit_signal("manufacturing_changed", &[]);
-                if engines_consumed {
+                if stages_consumed {
                     self.base_mut().emit_signal("inventory_changed", &[]);
                 }
                 order_id as i32
@@ -3263,7 +3278,7 @@ impl GameManager {
             dict.set("is_engine", order.is_engine_order());
             dict.set("total_work", order.total_work);
             dict.set("current_progress", order.progress);
-            dict.set("waiting_for_engines", order.waiting_for_engines);
+            dict.set("waiting_for_parts", order.waiting_for_parts);
             dict.set("material_cost_per_unit", order.material_cost_per_unit);
 
             match &order.order_type {
@@ -3277,6 +3292,9 @@ impl GameManager {
                 }
                 crate::manufacturing::ManufacturingOrderType::Depot { depot_design_index, .. } => {
                     dict.set("depot_design_index", *depot_design_index as i32);
+                }
+                crate::manufacturing::ManufacturingOrderType::Stage { stage_design_index, .. } => {
+                    dict.set("stage_design_index", *stage_design_index as i32);
                 }
             }
         }
@@ -3433,16 +3451,16 @@ impl GameManager {
         result
     }
 
-    /// Auto-order engines needed for a rocket design.
-    /// Accounts for engines in inventory and pending in active orders.
-    /// Returns total engines ordered, or -1 on failure.
+    /// Auto-order stages (and their engines) needed for a rocket design.
+    /// Accounts for stages in inventory and pending in active orders.
+    /// Returns total stages ordered, or -1 on failure.
     #[func]
-    pub fn auto_order_engines_for_rocket(&mut self, index: i32) -> i32 {
+    pub fn auto_order_stages_for_rocket(&mut self, index: i32) -> i32 {
         if index < 0 {
             return -1;
         }
         self.sync_money_to_state();
-        match self.state.player_company.auto_order_engines_for_rocket(index as usize) {
+        match self.state.player_company.auto_order_stages_for_rocket(index as usize) {
             Ok(total_ordered) => {
                 self.sync_money_from_state();
                 self.emit_money_changed();

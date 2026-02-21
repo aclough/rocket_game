@@ -203,6 +203,9 @@ pub struct RocketDesign {
     pub surface_gravity: f64,
     /// Orbital velocity at the launch body's surface in m/s (default: Earth ~7900)
     pub orbital_velocity: f64,
+    /// Parallel to `stages`: index into Company.stage_designs for each stage.
+    /// None means the stage has no linked StageDesign yet.
+    pub stage_design_indices: Vec<Option<usize>>,
 }
 
 impl RocketDesign {
@@ -221,6 +224,7 @@ impl RocketDesign {
             tank_material: TankMaterial::default(),
             surface_gravity: costs::G0,
             orbital_velocity: 7900.0,
+            stage_design_indices: Vec::new(),
         }
     }
 
@@ -333,7 +337,9 @@ impl RocketDesign {
         stage2.propellant_mass_kg = 20000.0;
 
         design.stages.push(stage1);
+        design.stage_design_indices.push(None);
         design.stages.push(stage2);
+        design.stage_design_indices.push(None);
 
         design
     }
@@ -343,6 +349,14 @@ impl RocketDesign {
         let mut stage = RocketStage::new(snapshot);
         stage.tank_material = self.tank_material;
         self.stages.push(stage);
+        self.stage_design_indices.push(None);
+        self.stages.len() - 1
+    }
+
+    /// Add a new stage linked to an existing stage design
+    pub fn add_stage_linked(&mut self, stage: RocketStage, stage_design_index: usize) -> usize {
+        self.stages.push(stage);
+        self.stage_design_indices.push(Some(stage_design_index));
         self.stages.len() - 1
     }
 
@@ -357,6 +371,7 @@ impl RocketDesign {
     /// Remove a stage by index
     pub fn remove_stage(&mut self, index: usize) -> Option<RocketStage> {
         if index < self.stages.len() {
+            self.stage_design_indices.remove(index);
             Some(self.stages.remove(index))
         } else {
             None
@@ -368,7 +383,24 @@ impl RocketDesign {
         if from < self.stages.len() && to < self.stages.len() && from != to {
             let stage = self.stages.remove(from);
             self.stages.insert(to, stage);
+            let idx = self.stage_design_indices.remove(from);
+            self.stage_design_indices.insert(to, idx);
         }
+    }
+
+    /// Get the stage design index for a given stage, if linked.
+    /// Returns None if the stage has no linked design or the index is out of range.
+    pub fn stage_design_index(&self, stage_idx: usize) -> Option<usize> {
+        self.stage_design_indices.get(stage_idx).copied().flatten()
+    }
+
+    /// Set the stage design index for a given stage.
+    /// Extends the parallel array with None entries if needed.
+    pub fn set_stage_design_index(&mut self, stage_idx: usize, design_idx: Option<usize>) {
+        while self.stage_design_indices.len() <= stage_idx {
+            self.stage_design_indices.push(None);
+        }
+        self.stage_design_indices[stage_idx] = design_idx;
     }
 
     // ==========================================

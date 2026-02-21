@@ -18,6 +18,8 @@ use crate::manufacturing::{Manufacturing, ManufacturingOrderId, ManufacturingOrd
 
 use crate::location::DELTA_V_MAP;
 use crate::rocket_design::RocketDesign;
+use crate::stage::RocketStage;
+use crate::stage_design::{StageDesign, StageDesignId};
 
 /// Cost to refresh the contract list
 pub const CONTRACT_REFRESH_COST: f64 = 10_000_000.0; // $10M
@@ -75,6 +77,10 @@ pub struct Company {
     pub depot_designs: Vec<DepotDesign>,
     /// Next payload ID to assign
     next_payload_id: u32,
+    /// Stage design lineages (head + frozen revisions)
+    pub stage_designs: Vec<DesignLineage<StageDesign>>,
+    /// Next stage design ID to assign
+    next_stage_design_id: StageDesignId,
 }
 
 impl Company {
@@ -105,6 +111,8 @@ impl Company {
             infrastructure: HashMap::new(),
             depot_designs: Vec::new(),
             next_payload_id: 1,
+            stage_designs: Vec::new(),
+            next_stage_design_id: 1,
         };
 
         // Generate initial contracts
@@ -454,6 +462,37 @@ impl Company {
         // Minimum rocket cost is roughly: 1 engine + overhead
         // Cheapest engine is Kerolox at $10M + $5M stage + $10M rocket overhead = $25M minimum
         self.money < 25_000_000.0
+    }
+
+    // ==========================================
+    // Stage Design Management
+    // ==========================================
+
+    /// Create a new stage design from a RocketStage snapshot.
+    /// Assigns a unique ID, wraps in a DesignLineage, and returns the index.
+    pub fn create_stage_design(&mut self, name: &str, stage: RocketStage) -> usize {
+        let id = self.next_stage_design_id;
+        self.next_stage_design_id += 1;
+        let sd = StageDesign::new(id, name.to_string(), stage);
+        self.stage_designs.push(DesignLineage::new(name, sd));
+        self.stage_designs.len() - 1
+    }
+
+    /// Ensure every stage in the given rocket design has a linked StageDesign.
+    /// Creates new StageDesigns for any unlinked stages.
+    pub fn ensure_stage_designs_for_rocket(&mut self, rocket_idx: usize) {
+        let rocket_name = self.rocket_designs[rocket_idx].head().name.clone();
+        let stage_count = self.rocket_designs[rocket_idx].head().stages.len();
+
+        for stage_idx in 0..stage_count {
+            let existing = self.rocket_designs[rocket_idx].head().stage_design_index(stage_idx);
+            if existing.is_none() {
+                let stage_snapshot = self.rocket_designs[rocket_idx].head().stages[stage_idx].clone();
+                let name = format!("{} Stage {}", rocket_name, stage_idx + 1);
+                let sd_index = self.create_stage_design(&name, stage_snapshot);
+                self.rocket_designs[rocket_idx].head_mut().set_stage_design_index(stage_idx, Some(sd_index));
+            }
+        }
     }
 
     // ==========================================
@@ -1036,11 +1075,9 @@ impl Company {
         Ok(result)
     }
 
-    /// Start a rocket assembly order.
-    /// Requires a frozen revision. If engines are not in inventory, the order
-    /// is created with `waiting_for_engines = true` and the caller should
-    /// auto-order the missing engines.
-    /// Returns Ok((order_id, material_cost, engines_consumed)) or Err with a reason string.
+    /// Start a rocket assembly order (three-tier cascade).
+    /// Creates rocket order waiting for stages, auto-orders stages (which auto-order engines).
+    /// Returns Ok((order_id, material_cost, stages_consumed)) or Err with a reason string.
     pub fn start_rocket_order(
         &mut self,
         rocket_design_id: usize,
@@ -1051,25 +1088,39 @@ impl Company {
         if !lineage.head().workflow.status.can_launch() {
             return Err("Design engineering not complete");
         }
-        let revision = lineage.get_revision(revision_number)
+        let _revision = lineage.get_revision(revision_number)
             .ok_or("Invalid revision")?;
-        let design_snapshot = revision.snapshot.clone();
 
-        // Check floor space
+        // Ensure stage designs exist for all stages (updates head)
+        self.ensure_stage_designs_for_rocket(rocket_design_id);
+        // Use revision snapshot for physics, but copy stage_design_indices from head
+        // (revisions are immutable and may not have indices set)
+        let mut design_snapshot = self.rocket_designs[rocket_design_id]
+            .get_revision(revision_number)
+            .map(|r| r.snapshot.clone())
+            .unwrap_or_else(|| self.rocket_designs[rocket_design_id].head().clone());
+        let head = self.rocket_designs[rocket_design_id].head();
+        for i in 0..design_snapshot.stages.len() {
+            if let Some(sd_idx) = head.stage_design_index(i) {
+                design_snapshot.set_stage_design_index(i, Some(sd_idx));
+            }
+        }
+
+        // Check floor space (rocket integration bay is small now)
         let space_needed = crate::manufacturing::floor_space_for_rocket(&design_snapshot);
         if !self.manufacturing.can_start_rocket_order_with_space(space_needed) {
             return Err("Not enough floor space");
         }
 
-        // Create the order — initially waiting for engines
+        // Create the order — initially waiting for stages
         let result = self.manufacturing.start_rocket_order(
             rocket_design_id,
             revision_number,
             design_snapshot.clone(),
-            true, // waiting_for_engines
+            true, // waiting_for_parts (stages)
         ).ok_or("Manufacturing order failed")?;
 
-        // Deduct material cost
+        // Deduct material cost (integration only now)
         let (order_id, material_cost) = result;
         if self.money < material_cost {
             self.manufacturing.cancel_order(order_id);
@@ -1077,35 +1128,102 @@ impl Company {
         }
         self.money -= material_cost;
 
-        // Try to consume engines immediately
-        let engines_consumed = if self.manufacturing.consume_engines_for_rocket(&design_snapshot) {
-            self.manufacturing.get_order_mut(order_id).unwrap().waiting_for_engines = false;
+        // Try to consume stages immediately
+        let stages_consumed = if self.manufacturing.has_stages_for_rocket(&design_snapshot) {
+            self.manufacturing.consume_stages_for_rocket(&design_snapshot);
+            self.manufacturing.get_order_mut(order_id).unwrap().waiting_for_parts = false;
+            self.manufacturing.get_order_mut(order_id).unwrap().floor_space_used = space_needed;
             true
         } else {
+            // Set floor space to 0 while waiting
+            self.manufacturing.get_order_mut(order_id).unwrap().floor_space_used = 0;
             false
         };
 
-        Ok((order_id, material_cost, engines_consumed))
+        Ok((order_id, material_cost, stages_consumed))
     }
 
-    /// Auto-order engines needed for a rocket design.
-    /// Accounts for engines already in inventory and pending in active orders.
-    /// Cuts revisions as needed and starts engine orders for deficit quantities.
-    /// Returns total engines ordered, or Err on failure.
-    pub fn auto_order_engines_for_rocket(
+    /// Auto-order stages needed for a rocket design.
+    /// For each missing stage, creates a stage order (which may wait for engines).
+    /// Then auto-orders engines for any waiting stage orders.
+    /// Returns total stages ordered, or Err on failure.
+    pub fn auto_order_stages_for_rocket(
         &mut self,
         rocket_design_id: usize,
     ) -> Result<u32, &'static str> {
-        let design = self.rocket_designs.get(rocket_design_id)
-            .ok_or("Invalid design")?
-            .head()
-            .clone();
+        // Ensure stage designs exist
+        self.ensure_stage_designs_for_rocket(rocket_design_id);
+
+        let design = self.rocket_designs[rocket_design_id].head().clone();
+        let required = crate::manufacturing::stages_required(&design);
 
         let mut total_ordered: u32 = 0;
 
-        for (engine_design_id, _needed) in design.engines_required() {
-            // Use committed count across ALL waiting rockets (includes current one)
-            let committed = self.manufacturing.engines_committed_to_waiting_rockets(engine_design_id);
+        for (stage_design_index, _needed) in &required {
+            let committed = self.manufacturing.stages_committed_to_waiting_rockets(*stage_design_index);
+            let available = self.manufacturing.get_stages_available(*stage_design_index);
+            let pending = self.manufacturing.stages_pending_for_design(*stage_design_index);
+            let deficit = (committed as i32) - (available as i32) - (pending as i32);
+            if deficit <= 0 {
+                continue;
+            }
+
+            // Get the stage snapshot from the stage design
+            let stage_snapshot = self.stage_designs.get(*stage_design_index)
+                .ok_or("Invalid stage design")?
+                .head()
+                .stage
+                .clone();
+
+            // Cut a revision for manufacturing
+            let rev = self.stage_designs[*stage_design_index].cut_revision("auto-mfg");
+
+            // Start stage orders for the deficit
+            for _ in 0..deficit {
+                let result = self.manufacturing.start_stage_order(
+                    *stage_design_index,
+                    rev,
+                    stage_snapshot.clone(),
+                    true, // waiting_for_parts (engines)
+                );
+
+                if let Some((_order_id, material_cost)) = result {
+                    if self.money >= material_cost {
+                        self.money -= material_cost;
+                        total_ordered += 1;
+                    } else {
+                        // Can't afford — cancel the order
+                        self.manufacturing.cancel_order(_order_id);
+                        return Err("Not enough funds for stage materials");
+                    }
+                }
+            }
+        }
+
+        // Now auto-order engines for any waiting stage orders
+        self.auto_order_engines_for_stages()?;
+
+        Ok(total_ordered)
+    }
+
+    /// Auto-order engines needed by waiting stage orders.
+    /// Accounts for engines in inventory, pending in orders, and committed to stages.
+    pub fn auto_order_engines_for_stages(&mut self) -> Result<u32, &'static str> {
+        // Collect unique engine design IDs needed by waiting stages
+        let engine_ids: Vec<usize> = self.manufacturing.active_orders.iter()
+            .filter(|o| o.waiting_for_parts && o.is_stage_order())
+            .filter_map(|o| match &o.order_type {
+                ManufacturingOrderType::Stage { snapshot, .. } => Some(snapshot.engine_design_id),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        let mut total_ordered: u32 = 0;
+
+        for engine_design_id in engine_ids {
+            let committed = self.manufacturing.engines_committed_to_waiting_stages(engine_design_id);
             let available = self.manufacturing.get_engines_available(engine_design_id);
             let pending = self.manufacturing.engines_pending_for_design(engine_design_id);
             let deficit = (committed as i32) - (available as i32) - (pending as i32);
@@ -1117,10 +1235,7 @@ impl Company {
                 return Err("Invalid engine design");
             }
 
-            // Cut a revision for manufacturing
             let rev = self.engine_designs[engine_design_id].cut_revision("auto-mfg");
-
-            // Start the engine order
             match self.start_engine_order(engine_design_id, rev, deficit as u32) {
                 Ok(_) => {
                     total_ordered += deficit as u32;
@@ -1168,7 +1283,7 @@ impl Company {
     pub fn assign_team_to_manufacturing(&mut self, team_id: u32, order_id: ManufacturingOrderId) -> bool {
         // Verify order exists and is not waiting for engines
         match self.manufacturing.get_order(order_id) {
-            Some(order) if order.waiting_for_engines => return false,
+            Some(order) if order.waiting_for_parts => return false,
             Some(_) => {},
             None => return false,
         }
@@ -1228,7 +1343,7 @@ impl Company {
             // Find the order with the lowest teams/remaining_work ratio
             let best_order_id = self.manufacturing.active_orders.iter()
                 .filter(|o| !o.is_order_complete())
-                .filter(|o| !o.waiting_for_engines)
+                .filter(|o| !o.waiting_for_parts)
                 .filter(|o| o.remaining_work() > 0.0)
                 .map(|o| {
                     let teams_on = self.get_teams_on_order(o.id).len() as f64;
@@ -1759,50 +1874,44 @@ impl Company {
     fn process_manufacturing_work(&mut self) -> Vec<WorkEvent> {
         let mut events = Vec::new();
 
-        // Try to unblock rocket orders waiting for engines
-        let unblocked_ids = self.manufacturing.try_unblock_rocket_orders();
-        for order_id in &unblocked_ids {
+        // Tier 1: Try to unblock stage orders waiting for engines
+        let stage_unblocked_ids = self.manufacturing.try_unblock_stage_orders();
+        for order_id in &stage_unblocked_ids {
+            events.push(WorkEvent::StageOrderUnblocked { order_id: *order_id });
+        }
+
+        // Tier 2: Try to unblock rocket orders waiting for stages
+        let rocket_unblocked_ids = self.manufacturing.try_unblock_rocket_orders();
+        for order_id in &rocket_unblocked_ids {
             events.push(WorkEvent::RocketOrderUnblocked { order_id: *order_id });
         }
 
-        // Auto-reassign half the teams from engine orders that fed each unblocked rocket
-        for order_id in &unblocked_ids {
-            // Find which engine design IDs this rocket uses
-            let engine_design_ids: Vec<usize> = self.manufacturing.active_orders.iter()
-                .find(|o| o.id == *order_id)
-                .and_then(|o| match &o.order_type {
-                    ManufacturingOrderType::Rocket { design_snapshot, .. } => {
-                        Some(design_snapshot.get_unique_engine_design_ids())
-                    }
-                    _ => None,
-                })
-                .unwrap_or_default();
+        // Auto-reassign teams from completed feeder orders to newly unblocked orders
+        let all_unblocked: Vec<ManufacturingOrderId> = stage_unblocked_ids.iter()
+            .chain(rocket_unblocked_ids.iter())
+            .copied()
+            .collect();
 
-            // Find engine order IDs for those engine designs
-            let engine_order_ids: Vec<ManufacturingOrderId> = self.manufacturing.active_orders.iter()
-                .filter(|o| match &o.order_type {
-                    ManufacturingOrderType::Engine { engine_design_id, .. } => {
-                        engine_design_ids.contains(engine_design_id)
-                    }
-                    _ => false,
-                })
+        for order_id in &all_unblocked {
+            // Find completed or idle feeder order IDs that teams could move from
+            let feeder_order_ids: Vec<ManufacturingOrderId> = self.manufacturing.active_orders.iter()
+                .filter(|o| o.is_engine_order() || o.is_stage_order())
                 .map(|o| o.id)
                 .collect();
 
-            // Find teams assigned to those engine orders
-            let teams_on_engine_orders: Vec<u32> = self.teams.iter()
+            // Find teams assigned to feeder orders
+            let teams_on_feeders: Vec<u32> = self.teams.iter()
                 .filter(|t| {
                     matches!(&t.assignment,
                         Some(TeamAssignment::Manufacturing { order_id })
-                        if engine_order_ids.contains(order_id))
+                        if feeder_order_ids.contains(order_id))
                 })
                 .map(|t| t.id)
                 .collect();
 
-            // Reassign half (rounded up) to the rocket order
-            let teams_to_reassign = (teams_on_engine_orders.len() + 1) / 2;
-            for team_id in teams_on_engine_orders.into_iter().take(teams_to_reassign) {
-                // Unassign from engine order first, then assign to rocket
+            // Reassign half (rounded up) to the newly unblocked order
+            let teams_to_reassign = (teams_on_feeders.len() + 1) / 2;
+            for team_id in teams_on_feeders.into_iter().take(teams_to_reassign) {
                 if let Some(team) = self.teams.iter_mut().find(|t| t.id == team_id) {
                     team.unassign();
                 }
@@ -1813,7 +1922,7 @@ impl Company {
         // Calculate efficiency for each active order (skip blocked ones)
         let order_efficiencies: Vec<(ManufacturingOrderId, f64)> = self.manufacturing.active_orders
             .iter()
-            .filter(|o| !o.waiting_for_engines)
+            .filter(|o| !o.waiting_for_parts)
             .map(|o| (o.id, self.get_manufacturing_order_efficiency(o.id)))
             .filter(|(_, eff)| *eff > 0.0)
             .collect();
@@ -1895,6 +2004,28 @@ impl Company {
                             rocket_design_id: rid,
                             revision_number: rev,
                             serial_number: serial,
+                        });
+
+                        events.push(WorkEvent::ManufacturingOrderComplete {
+                            order_id: oid,
+                        });
+                    }
+                    ManufacturingOrderType::Stage {
+                        stage_design_index,
+                        revision_number,
+                        snapshot,
+                    } => {
+                        let sid = *stage_design_index;
+                        let rev = *revision_number;
+                        let snap = snapshot.clone();
+                        let oid = order_id;
+
+                        // Add completed stage to inventory
+                        self.manufacturing.add_stage_to_inventory(sid, rev, snap);
+
+                        events.push(WorkEvent::StageManufactured {
+                            stage_design_index: sid,
+                            order_id: oid,
                         });
 
                         events.push(WorkEvent::ManufacturingOrderComplete {
@@ -2276,39 +2407,45 @@ mod tests {
     fn test_start_rocket_order_without_engines_queues() {
         let (mut company, design_id, rev) = company_with_rocket_revision();
 
-        // No engines in inventory — order should succeed with waiting_for_engines = true
+        // No engines in inventory — order should succeed with waiting_for_parts = true
         let result = company.start_rocket_order(design_id, rev);
         assert!(result.is_ok(), "Expected Ok, got {:?}", result);
         let (order_id, _cost, engines_consumed) = result.unwrap();
         assert!(!engines_consumed);
 
         let order = company.manufacturing.get_order(order_id).unwrap();
-        assert!(order.waiting_for_engines);
+        assert!(order.waiting_for_parts);
     }
 
     #[test]
-    fn test_start_rocket_order_with_engines_consumes() {
+    fn test_start_rocket_order_with_stages_consumes() {
         let (mut company, design_id, rev) = company_with_rocket_revision();
 
-        // Stock engines: 5 kerolox (id=1) + 1 hydrolox (id=0)
-        let kerolox_snap = crate::engine_design::default_snapshot(1);
-        let hydrolox_snap = crate::engine_design::default_snapshot(0);
-        for _ in 0..5 {
-            company.manufacturing.add_engine_to_inventory(1, 1, kerolox_snap.clone());
+        // Ensure stage designs exist so we can stock them
+        company.ensure_stage_designs_for_rocket(design_id);
+        let design = company.rocket_designs[design_id].head().clone();
+        let stage_requirements = crate::manufacturing::stages_required(&design);
+
+        // Stock stages for each required stage design
+        for (sd_index, count) in &stage_requirements {
+            let stage_snap = company.stage_designs[*sd_index].head().stage.clone();
+            for _ in 0..*count {
+                company.manufacturing.add_stage_to_inventory(*sd_index, 1, stage_snap.clone());
+            }
         }
-        company.manufacturing.add_engine_to_inventory(0, 1, hydrolox_snap.clone());
 
         let result = company.start_rocket_order(design_id, rev);
         assert!(result.is_ok());
-        let (order_id, _cost, engines_consumed) = result.unwrap();
-        assert!(engines_consumed);
+        let (order_id, _cost, stages_consumed) = result.unwrap();
+        assert!(stages_consumed);
 
         let order = company.manufacturing.get_order(order_id).unwrap();
-        assert!(!order.waiting_for_engines);
+        assert!(!order.waiting_for_parts);
 
-        // Engines should be consumed
-        assert_eq!(company.manufacturing.get_engines_available(1), 0);
-        assert_eq!(company.manufacturing.get_engines_available(0), 0);
+        // Stages should be consumed
+        for (sd_index, _) in &stage_requirements {
+            assert_eq!(company.manufacturing.get_stages_available(*sd_index), 0);
+        }
     }
 
     #[test]
@@ -2339,23 +2476,27 @@ mod tests {
     }
 
     #[test]
-    fn test_engine_manufactured_unblocks_rocket() {
+    fn test_stages_manufactured_unblocks_rocket() {
         let (mut company, design_id, rev) = company_with_rocket_revision();
 
-        // Create a blocked rocket order
-        let (order_id, _, engines_consumed) = company.start_rocket_order(design_id, rev).unwrap();
-        assert!(!engines_consumed);
-        assert!(company.manufacturing.get_order(order_id).unwrap().waiting_for_engines);
+        // Create a blocked rocket order (waiting for stages)
+        let (order_id, _, stages_consumed) = company.start_rocket_order(design_id, rev).unwrap();
+        assert!(!stages_consumed);
+        assert!(company.manufacturing.get_order(order_id).unwrap().waiting_for_parts);
 
-        // Add engines to inventory (simulating completed manufacturing)
-        let kerolox_snap = crate::engine_design::default_snapshot(1);
-        let hydrolox_snap = crate::engine_design::default_snapshot(0);
-        for _ in 0..5 {
-            company.manufacturing.add_engine_to_inventory(1, 1, kerolox_snap.clone());
+        // Get the stage design indices created by start_rocket_order
+        let design = company.rocket_designs[design_id].head().clone();
+        let stage_requirements = crate::manufacturing::stages_required(&design);
+
+        // Add stages to inventory (simulating completed stage manufacturing)
+        for (sd_index, count) in &stage_requirements {
+            let stage_snap = company.stage_designs[*sd_index].head().stage.clone();
+            for _ in 0..*count {
+                company.manufacturing.add_stage_to_inventory(*sd_index, 1, stage_snap.clone());
+            }
         }
-        company.manufacturing.add_engine_to_inventory(0, 1, hydrolox_snap.clone());
 
-        // process_manufacturing_work should unblock the order
+        // process_manufacturing_work should unblock the rocket order
         let events = company.process_manufacturing_work();
         let unblock_events: Vec<_> = events.iter()
             .filter(|e| matches!(e, WorkEvent::RocketOrderUnblocked { .. }))
@@ -2363,11 +2504,12 @@ mod tests {
         assert_eq!(unblock_events.len(), 1);
 
         // Order should now be unblocked
-        assert!(!company.manufacturing.get_order(order_id).unwrap().waiting_for_engines);
+        assert!(!company.manufacturing.get_order(order_id).unwrap().waiting_for_parts);
 
-        // Engines should be consumed
-        assert_eq!(company.manufacturing.get_engines_available(1), 0);
-        assert_eq!(company.manufacturing.get_engines_available(0), 0);
+        // Stages should be consumed
+        for (sd_index, _) in &stage_requirements {
+            assert_eq!(company.manufacturing.get_stages_available(*sd_index), 0);
+        }
     }
 
     #[test]
@@ -2411,31 +2553,26 @@ mod tests {
     // ==========================================
 
     #[test]
-    fn test_auto_order_engines_accounts_for_queued_rockets() {
+    fn test_auto_order_stages_accounts_for_queued_rockets() {
         let (mut company, design_id, rev) = company_with_rocket_revision();
         company.manufacturing.floor_space_total = 100; // Plenty of space
 
-        // First rocket order — no engines in stock, creates waiting order
-        let (_, _, engines_consumed) = company.start_rocket_order(design_id, rev).unwrap();
-        assert!(!engines_consumed);
+        // First rocket order — no stages in stock, creates waiting order
+        let (_, _, stages_consumed) = company.start_rocket_order(design_id, rev).unwrap();
+        assert!(!stages_consumed);
 
-        // Auto-order engines for the first rocket
-        let ordered_1 = company.auto_order_engines_for_rocket(design_id).unwrap();
-        // Default rocket needs 5 kerolox + 1 hydrolox = 6 engines
-        assert_eq!(ordered_1, 6, "First rocket should order 6 engines");
+        // Auto-order stages (and engines) for the first rocket
+        let ordered_1 = company.auto_order_stages_for_rocket(design_id).unwrap();
+        // Default rocket has 2 stages
+        assert_eq!(ordered_1, 2, "First rocket should order 2 stages");
 
         // Second rocket order — same design, also waiting
-        let (_, _, engines_consumed) = company.start_rocket_order(design_id, rev).unwrap();
-        assert!(!engines_consumed);
+        let (_, _, stages_consumed) = company.start_rocket_order(design_id, rev).unwrap();
+        assert!(!stages_consumed);
 
-        // Auto-order engines for the second rocket
-        // Should order 6 MORE (committed=10+2 across both rockets, available=0, pending=6 from first)
-        let ordered_2 = company.auto_order_engines_for_rocket(design_id).unwrap();
-        assert_eq!(ordered_2, 6, "Second rocket should order 6 more engines, got {}", ordered_2);
-
-        // Total pending should now be 12
-        assert_eq!(company.manufacturing.engines_pending_for_design(1), 10); // 5+5 kerolox
-        assert_eq!(company.manufacturing.engines_pending_for_design(0), 2);  // 1+1 hydrolox
+        // Auto-order stages for the second rocket
+        let ordered_2 = company.auto_order_stages_for_rocket(design_id).unwrap();
+        assert_eq!(ordered_2, 2, "Second rocket should order 2 more stages, got {}", ordered_2);
     }
 
     // ==========================================
