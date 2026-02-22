@@ -3,6 +3,7 @@ extends Control
 signal design_selected(design_index: int)  # -1 for new design
 signal back_requested
 signal engine_edit_requested(engine_index: int)
+signal stage_edit_requested(stage_index: int)
 signal engineering_submitted
 
 # Game manager reference (set by parent)
@@ -151,6 +152,23 @@ func _rebuild_designs_list():
 	var sep = HSeparator.new()
 	sep.add_theme_constant_override("separation", 20)
 	designs_list.add_child(sep)
+
+	# --- Stage Designs Section ---
+	var stage_header = Label.new()
+	stage_header.text = "Stage Designs"
+	stage_header.add_theme_font_size_override("font_size", 18)
+	stage_header.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
+	designs_list.add_child(stage_header)
+
+	var stage_count = game_manager.get_stage_design_count()
+	for i in range(stage_count):
+		var stage_card = _create_stage_design_card(i)
+		designs_list.add_child(stage_card)
+
+	# --- Separator ---
+	var sep2 = HSeparator.new()
+	sep2.add_theme_constant_override("separation", 20)
+	designs_list.add_child(sep2)
 
 	# --- Engine Designs Section ---
 	var engine_header = Label.new()
@@ -575,6 +593,191 @@ func _on_delete_engine_pressed(index: int):
 
 func _on_new_engine_pressed():
 	engine_edit_requested.emit(-1)
+
+# ==========================================
+# Stage Design Cards
+# ==========================================
+
+func _create_stage_design_card(index: int) -> Control:
+	var stage_name = game_manager.get_stage_design_name(index)
+	var engine_name = game_manager.get_stage_design_engine_name(index)
+	var engine_count = game_manager.get_stage_design_engine_count(index)
+	var thrust = game_manager.get_stage_design_thrust(index)
+	var dry_mass = game_manager.get_stage_design_dry_mass(index)
+	var cost = game_manager.get_stage_design_cost(index)
+	var is_booster = game_manager.get_stage_design_is_booster(index)
+	var material_name = game_manager.get_stage_design_tank_material_name(index)
+	var status = game_manager.get_stage_design_status(index)
+	var base_status = game_manager.get_stage_design_status_base(index)
+	var progress = game_manager.get_stage_design_progress(index)
+	var teams_count = game_manager.get_teams_on_stage_design_count(index)
+	var testing_level = game_manager.get_stage_design_testing_level(index)
+	var testing_level_name = game_manager.get_stage_design_testing_level_name(index)
+
+	var wrapper = DesignCardWrapper.new()
+	wrapper.design_index = index
+	wrapper.game_manager = game_manager
+	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrapper.team_assigned.connect(_on_team_assigned_to_stage)
+
+	var panel = PanelContainer.new()
+	var style = StyleBoxFlat.new()
+	style.set_bg_color(Color(0.06, 0.08, 0.12))
+	style.set_border_width_all(1)
+	style.set_border_color(Color(0.3, 0.4, 0.6, 0.5))
+	panel.add_theme_stylebox_override("panel", style)
+	wrapper.add_child(panel)
+
+	var margin = MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 15)
+	margin.add_theme_constant_override("margin_right", 15)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	panel.add_child(margin)
+
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 15)
+	margin.add_child(hbox)
+
+	# Stage info
+	var info_vbox = VBoxContainer.new()
+	info_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info_vbox.add_theme_constant_override("separation", 3)
+	hbox.add_child(info_vbox)
+
+	var name_label = Label.new()
+	name_label.text = stage_name
+	name_label.add_theme_font_size_override("font_size", 20)
+	info_vbox.add_child(name_label)
+
+	var role_str = "Booster" if is_booster else "Upper Stage"
+	var stats_label = Label.new()
+	stats_label.text = "%s | %dx %s | %s | %.0f kN | %s | $%s" % [
+		role_str, engine_count, engine_name, material_name, thrust, _format_mass(dry_mass), _format_money(cost)
+	]
+	stats_label.add_theme_font_size_override("font_size", 14)
+	stats_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	info_vbox.add_child(stats_label)
+
+	# Status label
+	if base_status != "Specification":
+		var status_hbox = HBoxContainer.new()
+		status_hbox.add_theme_constant_override("separation", 8)
+		var status_label = Label.new()
+		status_label.text = status
+		status_label.add_theme_font_size_override("font_size", 11)
+		if base_status == "Engineering":
+			status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+		elif base_status == "Testing":
+			status_label.add_theme_color_override("font_color", Color(0.4, 0.6, 1.0))
+		elif base_status == "Fixing":
+			status_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
+		elif base_status == "Complete":
+			status_label.add_theme_color_override("font_color", Color(0.3, 0.8, 0.3))
+		status_hbox.add_child(status_label)
+		if teams_count > 0:
+			var icons = _create_team_count_icons_hbox(teams_count, _get_eng_team_icon())
+			status_hbox.add_child(icons)
+		# Progress bar for work phases
+		if base_status == "Engineering" and progress > 0 and progress < 1:
+			var progress_bar = ProgressBar.new()
+			progress_bar.value = progress * 100
+			progress_bar.custom_minimum_size = Vector2(0, 8)
+			progress_bar.show_percentage = false
+			status_hbox.add_child(progress_bar)
+		elif base_status == "Fixing":
+			var progress_bar = ProgressBar.new()
+			progress_bar.value = progress * 100
+			progress_bar.custom_minimum_size = Vector2(0, 8)
+			progress_bar.show_percentage = false
+			var fill_style = StyleBoxFlat.new()
+			fill_style.set_bg_color(Color(0.9, 0.6, 0.3))
+			fill_style.set_corner_radius_all(2)
+			progress_bar.add_theme_stylebox_override("fill", fill_style)
+			status_hbox.add_child(progress_bar)
+		elif base_status == "Testing":
+			var progress_bar = ProgressBar.new()
+			progress_bar.value = progress * 100
+			progress_bar.custom_minimum_size = Vector2(0, 8)
+			progress_bar.show_percentage = false
+			var fill_style = StyleBoxFlat.new()
+			fill_style.set_bg_color(Color(0.3, 0.5, 0.9))
+			fill_style.set_corner_radius_all(2)
+			progress_bar.add_theme_stylebox_override("fill", fill_style)
+			status_hbox.add_child(progress_bar)
+		info_vbox.add_child(status_hbox)
+	else:
+		var spec_label = Label.new()
+		spec_label.text = "Specification"
+		spec_label.add_theme_font_size_override("font_size", 11)
+		spec_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		info_vbox.add_child(spec_label)
+
+	# Testing level
+	var testing_vbox = VBoxContainer.new()
+	testing_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	hbox.add_child(testing_vbox)
+
+	var testing_label = Label.new()
+	testing_label.text = testing_level_name
+	testing_label.add_theme_font_size_override("font_size", 16)
+	testing_label.add_theme_color_override("font_color", _testing_level_color(testing_level))
+	testing_vbox.add_child(testing_label)
+
+	var testing_title = Label.new()
+	testing_title.text = "testing"
+	testing_title.add_theme_font_size_override("font_size", 10)
+	testing_title.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+	testing_vbox.add_child(testing_title)
+
+	# Buttons
+	var buttons_vbox = VBoxContainer.new()
+	buttons_vbox.add_theme_constant_override("separation", 5)
+	hbox.add_child(buttons_vbox)
+
+	var edit_btn = Button.new()
+	edit_btn.text = "EDIT"
+	edit_btn.custom_minimum_size = Vector2(100, 35)
+	edit_btn.add_theme_font_size_override("font_size", 14)
+	edit_btn.pressed.connect(_on_edit_stage_pressed.bind(index))
+	buttons_vbox.add_child(edit_btn)
+
+	var dup_btn = Button.new()
+	dup_btn.text = "DUPLICATE"
+	dup_btn.custom_minimum_size = Vector2(100, 28)
+	dup_btn.add_theme_font_size_override("font_size", 11)
+	dup_btn.pressed.connect(_on_duplicate_stage_pressed.bind(index))
+	buttons_vbox.add_child(dup_btn)
+
+	var del_btn = Button.new()
+	del_btn.text = "DELETE"
+	del_btn.custom_minimum_size = Vector2(100, 25)
+	del_btn.add_theme_font_size_override("font_size", 10)
+	del_btn.pressed.connect(_on_delete_stage_pressed.bind(index))
+	buttons_vbox.add_child(del_btn)
+
+	return wrapper
+
+func _on_team_assigned_to_stage(design_index: int, team_id: int):
+	if game_manager:
+		game_manager.assign_team_to_stage_design(team_id, design_index)
+		_update_ui()
+
+func _on_edit_stage_pressed(index: int):
+	stage_edit_requested.emit(index)
+
+func _on_duplicate_stage_pressed(index: int):
+	if game_manager:
+		var new_idx = game_manager.duplicate_stage_design(index)
+		if new_idx >= 0:
+			stage_edit_requested.emit(new_idx)
+
+func _on_delete_stage_pressed(index: int):
+	if game_manager:
+		game_manager.delete_stage_design(index)
+
+func _on_new_stage_pressed():
+	stage_edit_requested.emit(-1)
 
 # Helper to get color for a testing level index (0-4)
 func _testing_level_color(level: int) -> Color:

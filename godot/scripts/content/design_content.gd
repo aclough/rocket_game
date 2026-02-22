@@ -9,7 +9,7 @@ signal testing_requested
 signal back_requested
 signal engineering_submitted
 
-enum View { SELECT, EDITOR, ENGINE_EDITOR }
+enum View { SELECT, EDITOR, ENGINE_EDITOR, STAGE_EDITOR }
 
 var current_view: View = View.SELECT
 var game_manager: GameManager = null
@@ -17,12 +17,14 @@ var game_manager: GameManager = null
 @onready var select_view = $DesignSelectView
 @onready var editor_view = $DesignEditorView
 @onready var engine_editor_view = $EngineEditorView
+@onready var stage_editor_view = $StageEditorView
 
 func _ready():
 	# Connect design select signals
 	select_view.design_selected.connect(_on_design_selected)
 	select_view.back_requested.connect(_on_select_back_requested)
 	select_view.engine_edit_requested.connect(_on_engine_edit_requested)
+	select_view.stage_edit_requested.connect(_on_stage_edit_requested)
 	select_view.engineering_submitted.connect(func(): engineering_submitted.emit())
 
 	# Connect design editor signals
@@ -33,16 +35,21 @@ func _ready():
 	# Connect engine editor signals
 	engine_editor_view.back_requested.connect(_on_engine_editor_back_requested)
 
+	# Connect stage editor signals
+	stage_editor_view.back_requested.connect(_on_stage_editor_back_requested)
+
 func set_game_manager(gm: GameManager):
 	game_manager = gm
 	select_view.set_game_manager(gm)
 	editor_view.set_game_manager(gm)
 	engine_editor_view.set_game_manager(gm)
+	stage_editor_view.set_game_manager(gm)
 
 func show_select_view():
 	select_view.visible = true
 	editor_view.visible = false
 	engine_editor_view.visible = false
+	stage_editor_view.visible = false
 	current_view = View.SELECT
 	# Refresh the list when showing
 	if game_manager:
@@ -52,14 +59,24 @@ func show_editor_view():
 	select_view.visible = false
 	editor_view.visible = true
 	engine_editor_view.visible = false
+	stage_editor_view.visible = false
 	current_view = View.EDITOR
 
 func show_engine_editor_view(engine_index: int):
 	select_view.visible = false
 	editor_view.visible = false
 	engine_editor_view.visible = true
+	stage_editor_view.visible = false
 	engine_editor_view.load_engine(engine_index)
 	current_view = View.ENGINE_EDITOR
+
+func show_stage_editor_view(stage_index: int):
+	select_view.visible = false
+	editor_view.visible = false
+	engine_editor_view.visible = false
+	stage_editor_view.visible = true
+	stage_editor_view.load_stage(stage_index)
+	current_view = View.STAGE_EDITOR
 
 func get_designer():
 	return editor_view.get_designer()
@@ -106,6 +123,13 @@ func _on_editor_submit_to_engineering():
 
 # Engine editor signals
 func _on_engine_editor_back_requested():
+	show_select_view()
+
+func _on_stage_edit_requested(stage_index: int):
+	show_stage_editor_view(stage_index)
+
+# Stage editor signals
+func _on_stage_editor_back_requested():
 	show_select_view()
 
 # Called when this content becomes visible

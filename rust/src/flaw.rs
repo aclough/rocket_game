@@ -27,8 +27,11 @@ pub struct Flaw {
     /// Whether the flaw has been fixed
     pub fixed: bool,
     /// For engine flaws: which engine design this flaw is associated with (index into company's engine_designs)
-    /// None for design flaws
+    /// None for design/stage flaws
     pub engine_design_id: Option<usize>,
+    /// For stage flaws: which stage design this flaw is associated with (index into company's stage_designs)
+    /// None for engine/design flaws
+    pub stage_design_index: Option<usize>,
 }
 
 /// Type of flaw - determines what kind of testing discovers it
@@ -37,8 +40,11 @@ pub enum FlawType {
     /// Engine flaws are discovered by engine testing
     /// They trigger at ignition events
     Engine,
+    /// Stage flaws are discovered by stage testing
+    /// They trigger at liftoff, max-Q, and separation events
+    Stage,
     /// Design flaws are discovered by rocket testing
-    /// They trigger at various flight phases
+    /// They trigger at various flight phases (integration-level)
     Design,
 }
 
@@ -199,14 +205,56 @@ pub const SOLID_MOTOR_FLAW_TEMPLATES: &[FlawTemplate] = &[
     },
 ];
 
-/// Design flaw templates - discovered by rocket testing, trigger at various phases
-pub const DESIGN_FLAW_TEMPLATES: &[FlawTemplate] = &[
+/// Stage flaw templates — discovered by stage testing, trigger at liftoff/max-Q/separation.
+/// These are structural/plumbing issues specific to a stage assembly.
+pub const STAGE_FLAW_TEMPLATES: &[FlawTemplate] = &[
+    FlawTemplate {
+        name: "Tank Weld Failure",
+        description: "Micro-cracks in propellant tank welds propagate under pressurization, causing structural failure.",
+        flaw_type: FlawType::Stage,
+        trigger_event_type: FlawTrigger::Liftoff,
+    },
     FlawTemplate {
         name: "Structural Resonance",
-        description: "Vehicle natural frequency matches aerodynamic buffet frequency during max-Q, causing destructive oscillations.",
-        flaw_type: FlawType::Design,
+        description: "Stage natural frequency matches aerodynamic buffet frequency during max-Q, causing destructive oscillations.",
+        flaw_type: FlawType::Stage,
         trigger_event_type: FlawTrigger::MaxQ,
     },
+    FlawTemplate {
+        name: "Tank Pressurization Fault",
+        description: "Helium pressurization system delivers inconsistent pressure, causing propellant feed instability.",
+        flaw_type: FlawType::Stage,
+        trigger_event_type: FlawTrigger::Liftoff,
+    },
+    FlawTemplate {
+        name: "Propellant Feed Line Crack",
+        description: "Hairline crack in main propellant feed line grows under vibration and thermal cycling at max-Q.",
+        flaw_type: FlawType::Stage,
+        trigger_event_type: FlawTrigger::MaxQ,
+    },
+    FlawTemplate {
+        name: "Thermal Insulation Gap",
+        description: "Gaps in cryogenic tank insulation cause ice formation and aerodynamic asymmetry during ascent.",
+        flaw_type: FlawType::Stage,
+        trigger_event_type: FlawTrigger::MaxQ,
+    },
+    FlawTemplate {
+        name: "Separation Interface Defect",
+        description: "Stage separation interface has misaligned attachment points causing binding during separation.",
+        flaw_type: FlawType::Stage,
+        trigger_event_type: FlawTrigger::Separation,
+    },
+    FlawTemplate {
+        name: "Propellant Slosh Instability",
+        description: "Propellant sloshing in partially-filled tanks couples with control system, causing loss of control.",
+        flaw_type: FlawType::Stage,
+        trigger_event_type: FlawTrigger::MaxQ,
+    },
+];
+
+/// Design flaw templates — rocket integration flaws discovered by rocket testing.
+/// Only integration-level issues that span across stages.
+pub const DESIGN_FLAW_TEMPLATES: &[FlawTemplate] = &[
     FlawTemplate {
         name: "Stage Separation Bolt Defect",
         description: "Explosive bolts for stage separation have inconsistent charge, leading to asymmetric separation.",
@@ -218,18 +266,6 @@ pub const DESIGN_FLAW_TEMPLATES: &[FlawTemplate] = &[
         description: "Edge case in guidance algorithms causes incorrect attitude determination under specific orbital conditions.",
         flaw_type: FlawType::Design,
         trigger_event_type: FlawTrigger::PayloadRelease,
-    },
-    FlawTemplate {
-        name: "Propellant Slosh Instability",
-        description: "Propellant sloshing in partially-filled tanks couples with control system, causing loss of control.",
-        flaw_type: FlawType::Design,
-        trigger_event_type: FlawTrigger::MaxQ,
-    },
-    FlawTemplate {
-        name: "Thermal Protection Gap",
-        description: "Gaps in aerodynamic heating protection allow hot gases to damage structure during ascent.",
-        flaw_type: FlawType::Design,
-        trigger_event_type: FlawTrigger::MaxQ,
     },
     FlawTemplate {
         name: "Interstage Coupler Flaw",
@@ -293,6 +329,25 @@ pub fn engine_testing_modifier_mean(fuel_type: FuelType, _scale: f64) -> f64 {
         FuelType::Methalox => 0.50,
         FuelType::Hypergolic => 0.70,
     }
+}
+
+/// Mean failure rate for stage flaws, based on engine count and tank material.
+/// More engines increase complexity; carbon composite tanks are harder to get right.
+pub fn stage_failure_rate_mean(engine_count: u32, tank_material: crate::resources::TankMaterial) -> f64 {
+    let base = 0.20;
+    let engine_mult = 1.0 + 0.05 * (engine_count as f64 - 1.0);
+    let material_mult = match tank_material {
+        crate::resources::TankMaterial::Aluminium => 1.0,
+        crate::resources::TankMaterial::CarbonComposite => 1.3,
+    };
+    base * engine_mult * material_mult
+}
+
+/// Mean testing modifier for stage flaws, based on engine count.
+/// More engines make testing slightly harder.
+pub fn stage_testing_modifier_mean(engine_count: u32) -> f64 {
+    let base = 0.50;
+    base / (1.0 + 0.05 * (engine_count as f64 - 1.0))
 }
 
 /// Mean failure rate for rocket design flaws, based on complexity.
@@ -389,9 +444,23 @@ pub fn rocket_testing_level(
     total_engines: u32,
     testing_work_completed: f64,
 ) -> TestingLevel {
-    let expected_flaw_count = (3 + stage_count.min(3)) as f64;
+    let expected_flaw_count = (2 + stage_count.min(2)) as f64;
     let fr_mean = rocket_failure_rate_mean(stage_count, unique_fuel_types, total_engines);
     let tm_mean = rocket_testing_modifier_mean(stage_count);
+    let expected_work = expected_flaw_count * TESTING_WORK as f64 / (fr_mean * tm_mean);
+    let coverage = testing_work_completed / expected_work;
+    coverage_to_testing_level(coverage)
+}
+
+/// Estimate the testing level of a stage design based on engine count, material, and cumulative testing work.
+pub fn stage_testing_level(
+    engine_count: u32,
+    tank_material: crate::resources::TankMaterial,
+    testing_work_completed: f64,
+) -> TestingLevel {
+    let expected_flaw_count = 3.0; // stages get 2-4 flaws, average ~3
+    let fr_mean = stage_failure_rate_mean(engine_count, tank_material);
+    let tm_mean = stage_testing_modifier_mean(engine_count);
     let expected_work = expected_flaw_count * TESTING_WORK as f64 / (fr_mean * tm_mean);
     let coverage = testing_work_completed / expected_work;
     coverage_to_testing_level(coverage)
@@ -439,6 +508,7 @@ impl Flaw {
             discovered: false,
             fixed: false,
             engine_design_id: None,
+            stage_design_index: None,
         }
     }
 
@@ -456,6 +526,24 @@ impl Flaw {
             discovered: false,
             fixed: false,
             engine_design_id: Some(engine_design_id),
+            stage_design_index: None,
+        }
+    }
+
+    /// Create a new stage flaw from a template with a specific stage design index.
+    pub fn from_template_with_stage(template: &FlawTemplate, id: u32, stage_design_index: usize, fr_mean: f64, tm_mean: f64) -> Self {
+        Self {
+            id,
+            flaw_type: FlawType::Stage,
+            name: template.name.to_string(),
+            description: template.description.to_string(),
+            failure_rate: Self::randomize_failure_rate(fr_mean),
+            testing_modifier: Self::randomize_testing_modifier(tm_mean),
+            trigger_event_type: template.trigger_event_type.clone(),
+            discovered: false,
+            fixed: false,
+            engine_design_id: None,
+            stage_design_index: Some(stage_design_index),
         }
     }
 
@@ -566,9 +654,36 @@ impl FlawGenerator {
         self.generate_engine_flaws_for_type_with_category(engine_design_id, FlawCategory::LiquidEngine, FuelType::Kerolox, 1.0)
     }
 
-    /// Generate only design flaws for a rocket (engine flaws are on EngineDesign now).
+    /// Generate stage flaws for a stage design.
+    /// Called when a stage design is first submitted for engineering.
+    /// Flaw count: 2-4 flaws. Severity depends on engine_count and tank_material.
+    pub fn generate_stage_flaws(
+        &mut self,
+        stage_design_index: usize,
+        engine_count: u32,
+        tank_material: crate::resources::TankMaterial,
+    ) -> Vec<Flaw> {
+        let mut rng = rand::thread_rng();
+
+        let fr_mean = stage_failure_rate_mean(engine_count, tank_material);
+        let tm_mean = stage_testing_modifier_mean(engine_count);
+
+        let flaw_count = (2 + rng.gen_range(0..3)) as usize; // 2-4 flaws
+        let selected = self.select_random_templates(STAGE_FLAW_TEMPLATES, flaw_count, &mut rng);
+
+        selected
+            .into_iter()
+            .map(|template| {
+                let flaw = Flaw::from_template_with_stage(template, self.next_id, stage_design_index, fr_mean, tm_mean);
+                self.next_id += 1;
+                flaw
+            })
+            .collect()
+    }
+
+    /// Generate only design flaws for a rocket (engine/stage flaws are on their own designs now).
     /// Called when a rocket design is created.
-    /// Flaw severity depends on stage_count, unique_fuel_types, and total_engines.
+    /// Reduced flaw count since stage complexity is now handled at stage level.
     pub fn generate_design_flaws(
         &mut self,
         stage_count: usize,
@@ -580,9 +695,8 @@ impl FlawGenerator {
         let fr_mean = rocket_failure_rate_mean(stage_count, unique_fuel_types, total_engines);
         let tm_mean = rocket_testing_modifier_mean(stage_count);
 
-        // Design flaws: 3-6 based on stage count
-        // More flaws with long tail distribution for varied gameplay
-        let design_flaw_count = 3 + stage_count.min(3);
+        // Integration flaws: 2-4 based on stage count (reduced from 3-6)
+        let design_flaw_count = 2 + stage_count.min(2);
         let design_templates = self.select_random_templates(
             DESIGN_FLAW_TEMPLATES,
             design_flaw_count,
@@ -625,23 +739,37 @@ impl Default for FlawGenerator {
     }
 }
 
-/// Calculate the total failure contribution from flaws for a given event
-/// stage_engine_design_id: the engine design ID of the stage (for filtering engine flaws)
-pub fn calculate_flaw_failure_rate(flaws: &[Flaw], event_name: &str, stage_engine_design_id: Option<usize>) -> f64 {
+/// Calculate the total failure contribution from flaws for a given event.
+/// Three-tier filtering:
+/// - Engine flaws: only count if engine_design_id matches stage_engine_design_id
+/// - Stage flaws: only count if stage_design_index matches active_stage_design_index
+/// - Design flaws: always count (integration-level)
+pub fn calculate_flaw_failure_rate(
+    flaws: &[Flaw],
+    event_name: &str,
+    stage_engine_design_id: Option<usize>,
+    active_stage_design_index: Option<usize>,
+) -> f64 {
     flaws
         .iter()
         .filter(|f| {
             if !f.can_trigger_at(event_name) {
                 return false;
             }
-            // For engine flaws, only count if engine design matches the stage
-            if f.flaw_type == FlawType::Engine {
-                match (f.engine_design_id, stage_engine_design_id) {
-                    (Some(flaw_engine), Some(stage_engine)) => flaw_engine == stage_engine,
-                    _ => false,
+            match f.flaw_type {
+                FlawType::Engine => {
+                    match (f.engine_design_id, stage_engine_design_id) {
+                        (Some(flaw_engine), Some(stage_engine)) => flaw_engine == stage_engine,
+                        _ => false,
+                    }
                 }
-            } else {
-                true
+                FlawType::Stage => {
+                    match (f.stage_design_index, active_stage_design_index) {
+                        (Some(flaw_stage), Some(active_stage)) => flaw_stage == active_stage,
+                        _ => false,
+                    }
+                }
+                FlawType::Design => true,
             }
         })
         .map(|f| f.effective_failure_rate())
@@ -704,31 +832,36 @@ pub fn mark_flaw_discovered(flaws: &mut [Flaw], flaw_id: u32) -> Option<String> 
     None
 }
 
-/// Find which flaw caused a failure at the given event
-/// Called AFTER a failure has already been determined
-/// Picks a flaw weighted by failure rate (higher rate = more likely to be the cause)
-/// stage_engine_design_id: the engine design ID of the stage that failed (for filtering engine flaws)
-/// Returns the flaw ID of the responsible flaw, or None if no flaws could have triggered
-pub fn check_flaw_trigger(flaws: &[Flaw], event_name: &str, stage_engine_design_id: Option<usize>) -> Option<u32> {
+/// Find which flaw caused a failure at the given event.
+/// Three-tier filtering (same as calculate_flaw_failure_rate).
+pub fn check_flaw_trigger(
+    flaws: &[Flaw],
+    event_name: &str,
+    stage_engine_design_id: Option<usize>,
+    active_stage_design_index: Option<usize>,
+) -> Option<u32> {
     let mut rng = rand::thread_rng();
 
-    // Get all active flaws that can trigger at this event, with their effective rates
-    // For engine flaws, only include if the engine design matches the stage's engine design
     let triggerable: Vec<(&Flaw, f64)> = flaws
         .iter()
         .filter(|f| {
             if !f.can_trigger_at(event_name) {
                 return false;
             }
-            // For engine flaws, check that the engine design matches
-            if f.flaw_type == FlawType::Engine {
-                match (f.engine_design_id, stage_engine_design_id) {
-                    (Some(flaw_engine), Some(stage_engine)) => flaw_engine == stage_engine,
-                    _ => false, // Engine flaw without design info or stage without design info
+            match f.flaw_type {
+                FlawType::Engine => {
+                    match (f.engine_design_id, stage_engine_design_id) {
+                        (Some(flaw_engine), Some(stage_engine)) => flaw_engine == stage_engine,
+                        _ => false,
+                    }
                 }
-            } else {
-                // Design flaws can trigger on any stage
-                true
+                FlawType::Stage => {
+                    match (f.stage_design_index, active_stage_design_index) {
+                        (Some(flaw_stage), Some(active_stage)) => flaw_stage == active_stage,
+                        _ => false,
+                    }
+                }
+                FlawType::Design => true,
             }
         })
         .map(|f| (f, f.effective_failure_rate()))
@@ -793,7 +926,8 @@ mod tests {
         assert!(ignition_flaw.can_trigger_at("Stage 1 Ignition"));
         assert!(!ignition_flaw.can_trigger_at("Liftoff"));
 
-        let maxq_flaw = Flaw::from_template(&DESIGN_FLAW_TEMPLATES[0], 2, 0.25, 0.55);
+        // STAGE_FLAW_TEMPLATES[1] is "Structural Resonance" which triggers at MaxQ
+        let maxq_flaw = Flaw::from_template(&STAGE_FLAW_TEMPLATES[1], 2, 0.25, 0.55);
         assert!(maxq_flaw.can_trigger_at("Max-Q"));
         assert!(!maxq_flaw.can_trigger_at("Stage 1 Ignition"));
     }
@@ -857,7 +991,7 @@ mod tests {
         let engine_flaws = generator.generate_engine_flaws_for_type(0);
 
         // Get ignition failure rate for engine type 0
-        let ignition_rate = calculate_flaw_failure_rate(&engine_flaws, "Stage 1 Ignition", Some(0));
+        let ignition_rate = calculate_flaw_failure_rate(&engine_flaws, "Stage 1 Ignition", Some(0), None);
 
         // Should be sum of all engine flaw failure rates for engine type 0
         let expected: f64 = engine_flaws

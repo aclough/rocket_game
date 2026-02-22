@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/content/design_content.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/design_select_screen.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/design_screen.tscn" id="3"]
 [ext_resource type="PackedScene" path="res://scenes/engine_editor.tscn" id="4"]
+[ext_resource type="PackedScene" path="res://scenes/stage_editor.tscn" id="5"]
 
 [node name="DesignContent" type="Control"]
 layout_mode = 3
@@ -32,6 +33,15 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="EngineEditorView" parent="." instance=ExtResource("4")]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="StageEditorView" parent="." instance=ExtResource("5")]
 visible = false
 layout_mode = 1
 anchors_preset = 15

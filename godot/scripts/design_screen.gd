@@ -88,7 +88,33 @@ func _setup_engine_cards():
 	for child in engines_container.get_children():
 		child.queue_free()
 
-	# Create engine cards
+	# Stage designs section (linked stages)
+	if game_manager:
+		var stage_design_count = game_manager.get_stage_design_count()
+		if stage_design_count > 0:
+			var sd_header = Label.new()
+			sd_header.text = "Stage Designs"
+			sd_header.add_theme_font_size_override("font_size", 14)
+			sd_header.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
+			sd_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			engines_container.add_child(sd_header)
+
+			for i in range(stage_design_count):
+				var card = _create_stage_design_picker_card(i)
+				engines_container.add_child(card)
+
+			var sep = HSeparator.new()
+			sep.add_theme_constant_override("separation", 10)
+			engines_container.add_child(sep)
+
+	# Engine types section (custom unlinked stages)
+	var eng_header = Label.new()
+	eng_header.text = "Custom Stages"
+	eng_header.add_theme_font_size_override("font_size", 14)
+	eng_header.add_theme_color_override("font_color", Color(1.0, 0.8, 0.6))
+	eng_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	engines_container.add_child(eng_header)
+
 	var engine_count = designer.get_engine_type_count()
 	for i in range(engine_count):
 		var card = _create_engine_card(i)
@@ -160,6 +186,60 @@ func _create_engine_card(engine_type: int) -> Control:
 func _on_add_engine_stage_pressed(engine_type: int):
 	designer.add_stage(engine_type)
 
+func _create_stage_design_picker_card(stage_design_index: int) -> Control:
+	var panel = PanelContainer.new()
+	var style = StyleBoxFlat.new()
+	style.set_bg_color(Color(0.06, 0.08, 0.12))
+	style.set_border_width_all(1)
+	style.set_border_color(Color(0.3, 0.4, 0.6, 0.5))
+	panel.add_theme_stylebox_override("panel", style)
+
+	var margin = MarginContainer.new()
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_right", 10)
+	margin.add_theme_constant_override("margin_top", 8)
+	margin.add_theme_constant_override("margin_bottom", 8)
+	panel.add_child(margin)
+
+	var vbox = VBoxContainer.new()
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_theme_constant_override("separation", 4)
+	margin.add_child(vbox)
+
+	var sd_name = game_manager.get_stage_design_name(stage_design_index)
+	var name_label = Label.new()
+	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name_label.text = sd_name
+	name_label.add_theme_font_size_override("font_size", 16)
+	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(name_label)
+
+	var engine_name = game_manager.get_stage_design_engine_name(stage_design_index)
+	var ec = game_manager.get_stage_design_engine_count(stage_design_index)
+	var thrust = game_manager.get_stage_design_thrust(stage_design_index)
+	var is_booster = game_manager.get_stage_design_is_booster(stage_design_index)
+	var testing_name = game_manager.get_stage_design_testing_level_name(stage_design_index)
+
+	var role_str = "Booster" if is_booster else "Upper Stage"
+	var stats_label = Label.new()
+	stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stats_label.text = "%s | %dx %s\n%.0f kN | %s" % [role_str, ec, engine_name, thrust, testing_name]
+	stats_label.add_theme_font_size_override("font_size", 11)
+	stats_label.add_theme_color_override("font_color", Color(0.6, 0.7, 0.8))
+	vbox.add_child(stats_label)
+
+	var add_btn = Button.new()
+	add_btn.text = "ADD STAGE"
+	add_btn.add_theme_font_size_override("font_size", 12)
+	add_btn.pressed.connect(_on_add_stage_design_pressed.bind(stage_design_index))
+	vbox.add_child(add_btn)
+
+	return panel
+
+func _on_add_stage_design_pressed(stage_design_index: int):
+	if game_manager:
+		game_manager.add_stage_from_stage_design(designer, stage_design_index)
 
 func _update_header():
 	design_name_label.text = "- " + designer.get_design_name()
@@ -378,6 +458,11 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 	var engine_type = designer.get_stage_engine_type(stage_index)
 	var engine_name = designer.get_engine_name(engine_type)
 
+	# Check if this stage is linked to a stage design
+	var linked_sd_name = ""
+	if game_manager:
+		linked_sd_name = game_manager.get_stage_slot_design_name(designer, stage_index)
+
 	# Calculate actual stage number (only counting non-booster stages)
 	var stage_num = 0
 	for i in range(stage_index + 1):
@@ -395,10 +480,16 @@ func _create_stage_card(stage_index: int) -> PanelContainer:
 		for i in range(core_index + 1):
 			if not designer.is_stage_booster(i):
 				core_stage_num += 1
-		title_label.text = " Stage %d Booster: %s" % [core_stage_num, engine_name]
+		if linked_sd_name != "":
+			title_label.text = " Stage %d Booster: %s" % [core_stage_num, linked_sd_name]
+		else:
+			title_label.text = " Stage %d Booster: %s" % [core_stage_num, engine_name]
 		title_label.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
 	else:
-		title_label.text = " Stage %d: %s" % [stage_num, engine_name]
+		if linked_sd_name != "":
+			title_label.text = " Stage %d: %s" % [stage_num, linked_sd_name]
+		else:
+			title_label.text = " Stage %d: %s" % [stage_num, engine_name]
 	title_label.add_theme_font_size_override("font_size", 16)
 	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header_hbox.add_child(title_label)

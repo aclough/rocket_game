@@ -1126,6 +1126,16 @@ impl GameManager {
             .collect();
         designer.bind_mut().sync_engine_data(snapshots, flaws);
 
+        // Sync stage flaw data from Company to Designer
+        let stage_flaws: Vec<_> = self.state.player_company.stage_designs
+            .iter()
+            .map(|lineage| {
+                let head = lineage.head();
+                (head.workflow.active_flaws.clone(), head.workflow.fixed_flaws.clone())
+            })
+            .collect();
+        designer.bind_mut().sync_stage_data(stage_flaws);
+
         designer.bind_mut().set_design(design);
         designer.bind_mut().set_finance(self.finance.clone());
     }
@@ -1147,6 +1157,16 @@ impl GameManager {
             })
             .collect();
         designer.bind_mut().sync_engine_data(snapshots, flaws);
+
+        // Also sync stage flaw data
+        let stage_flaws: Vec<_> = self.state.player_company.stage_designs
+            .iter()
+            .map(|lineage| {
+                let head = lineage.head();
+                (head.workflow.active_flaws.clone(), head.workflow.fixed_flaws.clone())
+            })
+            .collect();
+        designer.bind_mut().sync_stage_data(stage_flaws);
     }
 
     // ==========================================
@@ -2508,6 +2528,10 @@ impl GameManager {
                     dict.set("type", "engine");
                     dict.set("engine_design_id", *engine_design_id as i32);
                 }
+                Some(TeamAssignment::StageDesign { stage_design_id, .. }) => {
+                    dict.set("type", "stage");
+                    dict.set("stage_design_id", *stage_design_id as i32);
+                }
                 Some(TeamAssignment::Manufacturing { order_id }) => {
                     dict.set("type", "manufacturing");
                     dict.set("order_id", *order_id as i32);
@@ -3064,6 +3088,478 @@ impl GameManager {
             return 0;
         }
         self.state.player_company.get_teams_on_engine(engine_design_id as usize).len() as i32
+    }
+
+    // ==========================================
+    // Stage Design CRUD
+    // ==========================================
+
+    /// Get the number of stage designs
+    #[func]
+    pub fn get_stage_design_count(&self) -> i32 {
+        self.state.player_company.stage_designs.len() as i32
+    }
+
+    /// Create a new stage design from an engine design
+    /// Returns the index of the new stage design or -1 on failure
+    #[func]
+    pub fn create_stage_design(&mut self, engine_index: i32) -> i32 {
+        if engine_index < 0 {
+            return -1;
+        }
+        match self.state.player_company.create_stage_design_from_engine(engine_index as usize) {
+            Some(idx) => {
+                self.base_mut().emit_signal("designs_changed", &[]);
+                idx as i32
+            }
+            None => -1,
+        }
+    }
+
+    /// Duplicate a stage design
+    /// Returns the new index or -1 on failure
+    #[func]
+    pub fn duplicate_stage_design(&mut self, index: i32) -> i32 {
+        if index < 0 {
+            return -1;
+        }
+        match self.state.player_company.duplicate_stage_design(index as usize) {
+            Some(new_index) => {
+                self.base_mut().emit_signal("designs_changed", &[]);
+                new_index as i32
+            }
+            None => -1,
+        }
+    }
+
+    /// Delete a stage design (refuses if in-use by any rocket design)
+    #[func]
+    pub fn delete_stage_design(&mut self, index: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let result = self.state.player_company.delete_stage_design(index as usize);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Rename a stage design
+    #[func]
+    pub fn rename_stage_design(&mut self, index: i32, new_name: GString) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let result = self.state.player_company.rename_stage_design(index as usize, &new_name.to_string());
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    // ==========================================
+    // Stage Design Modification
+    // ==========================================
+
+    /// Set the engine of a stage design (by engine design index)
+    #[func]
+    pub fn set_stage_design_engine(&mut self, stage_idx: i32, engine_idx: i32) -> bool {
+        if stage_idx < 0 || engine_idx < 0 {
+            return false;
+        }
+        let result = self.state.player_company.set_stage_design_engine(stage_idx as usize, engine_idx as usize);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Set the engine count of a stage design
+    #[func]
+    pub fn set_stage_design_engine_count(&mut self, index: i32, count: i32) -> bool {
+        if index < 0 || count < 1 {
+            return false;
+        }
+        let result = self.state.player_company.set_stage_design_engine_count(index as usize, count as u32);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Set the propellant mass of a stage design (kg)
+    #[func]
+    pub fn set_stage_design_propellant(&mut self, index: i32, mass_kg: f64) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let result = self.state.player_company.set_stage_design_propellant(index as usize, mass_kg);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Set whether a stage design is a booster
+    #[func]
+    pub fn set_stage_design_booster(&mut self, index: i32, is_booster: bool) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let result = self.state.player_company.set_stage_design_booster(index as usize, is_booster);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Set the tank material of a stage design (0=Aluminium, 1=CarbonComposite)
+    #[func]
+    pub fn set_stage_design_tank_material(&mut self, index: i32, material: i32) -> bool {
+        if index < 0 {
+            return false;
+        }
+        let mat = match crate::resources::TankMaterial::from_index(material as usize) {
+            Some(m) => m,
+            None => return false,
+        };
+        let result = self.state.player_company.set_stage_design_tank_material(index as usize, mat);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Check if a stage design can be modified (only when in Specification)
+    #[func]
+    pub fn can_modify_stage_design(&self, index: i32) -> bool {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().can_modify()
+        } else {
+            false
+        }
+    }
+
+    // ==========================================
+    // Stage Design Stat Queries
+    // ==========================================
+
+    /// Get the name of a stage design
+    #[func]
+    pub fn get_stage_design_name(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            GString::from(self.state.player_company.stage_designs[index as usize].name.as_str())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Get the engine name used in a stage design
+    #[func]
+    pub fn get_stage_design_engine_name(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            let sd = self.state.player_company.stage_designs[index as usize].head();
+            GString::from(sd.stage.engine_snapshot().name.as_str())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Get the engine design index used in a stage design
+    #[func]
+    pub fn get_stage_design_engine_index(&self, index: i32) -> i32 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().stage.engine_design_id as i32
+        } else {
+            -1
+        }
+    }
+
+    /// Get the engine count of a stage design
+    #[func]
+    pub fn get_stage_design_engine_count(&self, index: i32) -> i32 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().stage.engine_count as i32
+        } else {
+            0
+        }
+    }
+
+    /// Get the propellant mass of a stage design (kg)
+    #[func]
+    pub fn get_stage_design_propellant(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().stage.propellant_mass_kg
+        } else {
+            0.0
+        }
+    }
+
+    /// Get the delta-v of a stage design with the given payload (m/s)
+    #[func]
+    pub fn get_stage_design_delta_v(&self, index: i32, payload_kg: f64) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().stage.delta_v(payload_kg)
+        } else {
+            0.0
+        }
+    }
+
+    /// Get the dry mass of a stage design (kg)
+    #[func]
+    pub fn get_stage_design_dry_mass(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().stage.dry_mass_kg()
+        } else {
+            0.0
+        }
+    }
+
+    /// Get the wet mass of a stage design (kg)
+    #[func]
+    pub fn get_stage_design_wet_mass(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().stage.wet_mass_kg()
+        } else {
+            0.0
+        }
+    }
+
+    /// Get the total thrust of a stage design (kN)
+    #[func]
+    pub fn get_stage_design_thrust(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().stage.total_thrust_kn()
+        } else {
+            0.0
+        }
+    }
+
+    /// Get whether a stage design is a booster
+    #[func]
+    pub fn get_stage_design_is_booster(&self, index: i32) -> bool {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().stage.is_booster
+        } else {
+            false
+        }
+    }
+
+    /// Get the tank material name of a stage design
+    #[func]
+    pub fn get_stage_design_tank_material_name(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            GString::from(self.state.player_company.stage_designs[index as usize].head().stage.tank_material.display_name())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Get the tank material index of a stage design (0=Aluminium, 1=CarbonComposite)
+    #[func]
+    pub fn get_stage_design_tank_material(&self, index: i32) -> i32 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().stage.tank_material.index() as i32
+        } else {
+            0
+        }
+    }
+
+    /// Get the total cost of a stage design ($)
+    #[func]
+    pub fn get_stage_design_cost(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            self.state.player_company.stage_designs[index as usize].head().stage.total_cost()
+        } else {
+            0.0
+        }
+    }
+
+    // ==========================================
+    // Stage Design Status & Workflow
+    // ==========================================
+
+    /// Get the status of a stage design (includes flaw name if Fixing)
+    #[func]
+    pub fn get_stage_design_status(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            let sd = self.state.player_company.stage_designs[index as usize].head();
+            GString::from(sd.workflow.status.display_name().as_str())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Get the base status of a stage design (without flaw name)
+    #[func]
+    pub fn get_stage_design_status_base(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            let sd = self.state.player_company.stage_designs[index as usize].head();
+            GString::from(sd.workflow.status.name())
+        } else {
+            GString::from("")
+        }
+    }
+
+    /// Get the progress of a stage design (0.0 to 1.0)
+    #[func]
+    pub fn get_stage_design_progress(&self, index: i32) -> f64 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            let sd = self.state.player_company.stage_designs[index as usize].head();
+            sd.workflow.status.progress_fraction()
+        } else {
+            0.0
+        }
+    }
+
+    /// Get the testing level of a stage design (0-4)
+    #[func]
+    pub fn get_stage_design_testing_level(&self, index: i32) -> i32 {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            let sd = self.state.player_company.stage_designs[index as usize].head();
+            crate::flaw::stage_testing_level(
+                sd.stage.engine_count,
+                sd.stage.tank_material,
+                sd.workflow.testing_work_completed,
+            ).to_index() as i32
+        } else {
+            0
+        }
+    }
+
+    /// Get the testing level name of a stage design
+    #[func]
+    pub fn get_stage_design_testing_level_name(&self, index: i32) -> GString {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            let sd = self.state.player_company.stage_designs[index as usize].head();
+            let level = crate::flaw::stage_testing_level(
+                sd.stage.engine_count,
+                sd.stage.tank_material,
+                sd.workflow.testing_work_completed,
+            );
+            GString::from(level.name())
+        } else {
+            GString::from("")
+        }
+    }
+
+    // ==========================================
+    // Stage Design Flaws
+    // ==========================================
+
+    /// Get names of discovered (unfixed) flaws for a stage design
+    #[func]
+    pub fn get_stage_design_unfixed_flaw_names(&self, index: i32) -> Array<GString> {
+        let mut result = Array::new();
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            let sd = self.state.player_company.stage_designs[index as usize].head();
+            for name in sd.workflow.get_unfixed_flaw_names() {
+                result.push(&GString::from(name.as_str()));
+            }
+        }
+        result
+    }
+
+    /// Get names of fixed flaws for a stage design
+    #[func]
+    pub fn get_stage_design_fixed_flaw_names(&self, index: i32) -> Array<GString> {
+        let mut result = Array::new();
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            let sd = self.state.player_company.stage_designs[index as usize].head();
+            for name in sd.workflow.get_fixed_flaw_names() {
+                result.push(&GString::from(name.as_str()));
+            }
+        }
+        result
+    }
+
+    /// Submit a stage design to engineering (generates flaws, starts workflow)
+    #[func]
+    pub fn submit_stage_to_engineering(&mut self, index: i32) -> bool {
+        if index >= 0 && (index as usize) < self.state.player_company.stage_designs.len() {
+            let idx = index as usize;
+            let flaw_gen = &mut self.state.player_company.flaw_generator;
+            let sd = self.state.player_company.stage_designs[idx].head_mut();
+            let result = sd.submit_to_engineering(flaw_gen, idx);
+            if result {
+                self.base_mut().emit_signal("designs_changed", &[]);
+            }
+            result
+        } else {
+            false
+        }
+    }
+
+    // ==========================================
+    // Stage Design Teams
+    // ==========================================
+
+    /// Assign a team to a stage design
+    #[func]
+    pub fn assign_team_to_stage_design(&mut self, team_id: i32, stage_design_id: i32) -> bool {
+        if stage_design_id < 0 {
+            return false;
+        }
+        let result = self.state.player_company.assign_team_to_stage_design(team_id as u32, stage_design_id as usize);
+        if result {
+            self.base_mut().emit_signal("designs_changed", &[]);
+        }
+        result
+    }
+
+    /// Get number of teams working on a stage design
+    #[func]
+    pub fn get_teams_on_stage_design_count(&self, stage_design_id: i32) -> i32 {
+        if stage_design_id < 0 {
+            return 0;
+        }
+        self.state.player_company.get_teams_on_stage_design(stage_design_id as usize).len() as i32
+    }
+
+    // ==========================================
+    // Stage Design Integration with Rocket Designer
+    // ==========================================
+
+    /// Add a stage to a rocket designer by cloning physics from a stage design.
+    /// Returns the new stage index or -1 on failure.
+    #[func]
+    pub fn add_stage_from_stage_design(&self, mut designer: Gd<RocketDesigner>, stage_design_index: i32) -> i32 {
+        if stage_design_index < 0 || (stage_design_index as usize) >= self.state.player_company.stage_designs.len() {
+            return -1;
+        }
+        let sd = self.state.player_company.stage_designs[stage_design_index as usize].head();
+        let stage_clone = sd.stage.clone();
+        designer.bind_mut().add_stage_from_stage_design(stage_clone, stage_design_index as usize)
+    }
+
+    /// Get the stage design name for a stage slot in a rocket designer.
+    /// Returns empty string if the stage is not linked to a stage design.
+    #[func]
+    pub fn get_stage_slot_design_name(&self, designer: Gd<RocketDesigner>, stage_index: i32) -> GString {
+        let sd_idx = designer.bind().get_stage_design_index(stage_index);
+        if sd_idx >= 0 && (sd_idx as usize) < self.state.player_company.stage_designs.len() {
+            GString::from(self.state.player_company.stage_designs[sd_idx as usize].name.as_str())
+        } else {
+            GString::from("")
+        }
+    }
+
+    // ==========================================
+    // Stage Design Sync
+    // ==========================================
+
+    /// Sync stage flaw data from Company to a RocketDesigner
+    #[func]
+    pub fn sync_stage_data_to_designer(&self, mut designer: Gd<RocketDesigner>) {
+        let flaws: Vec<_> = self.state.player_company.stage_designs
+            .iter()
+            .map(|lineage| {
+                let head = lineage.head();
+                (head.workflow.active_flaws.clone(), head.workflow.fixed_flaws.clone())
+            })
+            .collect();
+        designer.bind_mut().sync_stage_data(flaws);
     }
 
     // ==========================================

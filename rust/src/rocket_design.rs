@@ -1495,11 +1495,10 @@ impl RocketDesign {
         false
     }
 
-    /// Get the additional failure rate from flaws for a given event
-    /// stage_engine_design_id: the engine design ID of the stage (for filtering engine flaws)
-    /// Only considers active (unfixed) flaws
-    pub fn get_flaw_failure_contribution(&self, event_name: &str, stage_engine_design_id: Option<usize>) -> f64 {
-        calculate_flaw_failure_rate(&self.workflow.active_flaws, event_name, stage_engine_design_id)
+    /// Get the additional failure rate from flaws for a given event.
+    /// Three-tier: engine flaws filtered by engine_design_id, stage flaws by stage_design_index, design flaws always.
+    pub fn get_flaw_failure_contribution(&self, event_name: &str, stage_engine_design_id: Option<usize>, active_stage_design_index: Option<usize>) -> f64 {
+        calculate_flaw_failure_rate(&self.workflow.active_flaws, event_name, stage_engine_design_id, active_stage_design_index)
     }
 
     /// Check if a flaw can be afforded
@@ -1532,8 +1531,8 @@ impl RocketDesign {
     /// stage_engine_design_id: the engine design ID of the stage that failed
     /// Returns Some(flaw_id) if a flaw triggered failure, None otherwise
     /// Only checks active (unfixed) flaws
-    pub fn check_flaw_trigger(&self, event_name: &str, stage_engine_design_id: Option<usize>) -> Option<u32> {
-        crate::flaw::check_flaw_trigger(&self.workflow.active_flaws, event_name, stage_engine_design_id)
+    pub fn check_flaw_trigger(&self, event_name: &str, stage_engine_design_id: Option<usize>, active_stage_design_index: Option<usize>) -> Option<u32> {
+        crate::flaw::check_flaw_trigger(&self.workflow.active_flaws, event_name, stage_engine_design_id, active_stage_design_index)
     }
 
     /// Mark a flaw as discovered and return its name

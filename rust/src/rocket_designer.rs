@@ -16,6 +16,8 @@ pub struct RocketDesigner {
     engine_snapshots: Vec<EngineDesignSnapshot>,
     /// Engine flaw data (active_flaws, fixed_flaws) per engine design (synced from Company)
     engine_designs_flaws: Vec<(Vec<Flaw>, Vec<Flaw>)>,
+    /// Stage flaw data (active_flaws, fixed_flaws) per stage design (synced from Company)
+    stage_designs_flaws: Vec<(Vec<Flaw>, Vec<Flaw>)>,
     /// Whether engine flaws have been synced from Company
     engine_flaws_synced: bool,
     base: Base<Node>,
@@ -37,6 +39,7 @@ impl INode for RocketDesigner {
             design: RocketDesign::new(),
             engine_snapshots: snapshots,
             engine_designs_flaws: vec![(Vec::new(), Vec::new()); 3],
+            stage_designs_flaws: Vec::new(),
             engine_flaws_synced: false,
             base,
             finance: None,
@@ -212,6 +215,15 @@ impl RocketDesigner {
         index
     }
 
+    /// Adds a new stage by cloning physics from a StageDesign.
+    /// Called from Rust (GameManager) — not a #[func].
+    /// Returns the index of the new stage.
+    pub fn add_stage_from_stage_design(&mut self, stage: crate::stage::RocketStage, stage_design_index: usize) -> i32 {
+        let index = self.design.add_stage_linked(stage, stage_design_index) as i32;
+        self.emit_design_changed();
+        index
+    }
+
     /// Removes a stage by index
     /// Returns true if successful
     #[func]
@@ -243,6 +255,18 @@ impl RocketDesigner {
             return -1;
         }
         self.design.stages[stage_index as usize].engine_design_id as i32
+    }
+
+    /// Gets the stage design index for a stage slot (-1 if none)
+    #[func]
+    pub fn get_stage_design_index(&self, stage_index: i32) -> i32 {
+        if stage_index < 0 || stage_index as usize >= self.design.stages.len() {
+            return -1;
+        }
+        match self.design.stage_design_index(stage_index as usize) {
+            Some(idx) => idx as i32,
+            None => -1,
+        }
     }
 
     /// Gets the engine type name for a stage (e.g., "Kerolox", "Hydrolox", "Solid")
@@ -1135,29 +1159,44 @@ impl RocketDesigner {
         }
     }
 
-    /// Check if any flaw triggers at a given event
-    /// Checks both design flaws and engine flaws.
+    /// Check if any flaw triggers at a given event (three-tier: engine + stage + design).
     /// stage_engine_design_id: the engine design id of the stage that failed (-1 if unknown)
+    /// stage_design_index: the stage design index of the active stage (-1 if unknown)
     /// Returns the flaw ID if a flaw caused failure, or -1 if no flaw triggered
     #[func]
-    pub fn check_flaw_trigger(&mut self, event_name: GString, stage_engine_design_id: i32) -> i32 {
+    pub fn check_flaw_trigger(&mut self, event_name: GString, stage_engine_design_id: i32, stage_design_index: i32) -> i32 {
         let event = event_name.to_string();
         let engine_id = if stage_engine_design_id >= 0 {
             Some(stage_engine_design_id as usize)
         } else {
             None
         };
+        let stage_id = if stage_design_index >= 0 {
+            Some(stage_design_index as usize)
+        } else {
+            None
+        };
 
-        // First check design flaws
-        if let Some(id) = self.design.check_flaw_trigger(&event, engine_id) {
+        // Check design flaws (integration-level, includes stage_design_index for stage flaws merged in)
+        if let Some(id) = self.design.check_flaw_trigger(&event, engine_id, stage_id) {
             return id as i32;
         }
 
-        // Then check engine flaws (if we have an engine design id)
+        // Check engine flaws
         if let Some(idx) = engine_id {
             if idx < self.engine_designs_flaws.len() {
                 let active = &self.engine_designs_flaws[idx].0;
-                if let Some(id) = check_flaw_trigger(active, &event, engine_id) {
+                if let Some(id) = check_flaw_trigger(active, &event, engine_id, stage_id) {
+                    return id as i32;
+                }
+            }
+        }
+
+        // Check stage flaws
+        if let Some(idx) = stage_id {
+            if idx < self.stage_designs_flaws.len() {
+                let active = &self.stage_designs_flaws[idx].0;
+                if let Some(id) = check_flaw_trigger(active, &event, engine_id, stage_id) {
                     return id as i32;
                 }
             }
@@ -1469,6 +1508,26 @@ impl RocketDesigner {
             }
         }
 
+        // Merge stage flaws into the design clone
+        for stage_idx in 0..self.design.stages.len() {
+            if let Some(sd_idx) = self.design.stage_design_index(stage_idx) {
+                if sd_idx < self.stage_designs_flaws.len() {
+                    let (ref active, ref fixed) = self.stage_designs_flaws[sd_idx];
+
+                    for flaw in active {
+                        if !design.workflow.active_flaws.iter().any(|f| f.id == flaw.id) {
+                            design.workflow.active_flaws.push(flaw.clone());
+                        }
+                    }
+                    for flaw in fixed {
+                        if !design.workflow.fixed_flaws.iter().any(|f| f.id == flaw.id) {
+                            design.workflow.fixed_flaws.push(flaw.clone());
+                        }
+                    }
+                }
+            }
+        }
+
         // Debug: log final state
         godot_print!(
             "get_design_clone: AFTER merge - active_flaws={}, fixed_flaws={}",
@@ -1546,12 +1605,53 @@ impl RocketDesigner {
             }
         }
 
-        // Now set the design (keeping only non-engine flaws in the design's lists)
+        // Extract stage flaws from the design
+        let stage_active_flaws: Vec<_> = design
+            .workflow.active_flaws
+            .iter()
+            .filter(|f| f.flaw_type == crate::flaw::FlawType::Stage)
+            .cloned()
+            .collect();
+        let stage_fixed_flaws: Vec<_> = design
+            .workflow.fixed_flaws
+            .iter()
+            .filter(|f| f.flaw_type == crate::flaw::FlawType::Stage)
+            .cloned()
+            .collect();
+
+        // Restore stage flaws to the synced flaw data by stage design index
+        for flaw in &stage_active_flaws {
+            if let Some(idx) = flaw.stage_design_index {
+                while self.stage_designs_flaws.len() <= idx {
+                    self.stage_designs_flaws.push((Vec::new(), Vec::new()));
+                }
+                let (ref mut active, ref fixed) = self.stage_designs_flaws[idx];
+                if !active.iter().any(|f| f.id == flaw.id) && !fixed.iter().any(|f| f.id == flaw.id) {
+                    active.push(flaw.clone());
+                } else if let Some(existing) = active.iter_mut().find(|f| f.id == flaw.id) {
+                    existing.discovered = flaw.discovered;
+                }
+            }
+        }
+        for flaw in &stage_fixed_flaws {
+            if let Some(idx) = flaw.stage_design_index {
+                while self.stage_designs_flaws.len() <= idx {
+                    self.stage_designs_flaws.push((Vec::new(), Vec::new()));
+                }
+                let (ref mut active, ref mut fixed) = self.stage_designs_flaws[idx];
+                active.retain(|f| f.id != flaw.id);
+                if !fixed.iter().any(|f| f.id == flaw.id) {
+                    fixed.push(flaw.clone());
+                }
+            }
+        }
+
+        // Now set the design (keeping only design flaws in the design's lists — engine and stage flaws are stored separately)
         let mut clean_design = design;
         let before_active = clean_design.workflow.active_flaws.len();
         let before_fixed = clean_design.workflow.fixed_flaws.len();
-        clean_design.workflow.active_flaws.retain(|f| f.flaw_type != crate::flaw::FlawType::Engine);
-        clean_design.workflow.fixed_flaws.retain(|f| f.flaw_type != crate::flaw::FlawType::Engine);
+        clean_design.workflow.active_flaws.retain(|f| f.flaw_type == crate::flaw::FlawType::Design);
+        clean_design.workflow.fixed_flaws.retain(|f| f.flaw_type == crate::flaw::FlawType::Design);
 
         godot_print!(
             "set_design: AFTER filter - active: {} -> {}, fixed: {} -> {}",
@@ -1580,6 +1680,14 @@ impl RocketDesigner {
         self.engine_snapshots = snapshots;
         self.engine_designs_flaws = flaws;
         self.engine_flaws_synced = true;
+    }
+
+    /// Sync stage flaw data from Company (called by GameManager)
+    pub fn sync_stage_data(
+        &mut self,
+        flaws: Vec<(Vec<Flaw>, Vec<Flaw>)>,
+    ) {
+        self.stage_designs_flaws = flaws;
     }
 
     /// Set the PlayerFinance reference

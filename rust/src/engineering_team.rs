@@ -117,6 +117,11 @@ pub enum TeamAssignment {
         engine_design_id: usize,
         work_phase: WorkPhase,
     },
+    /// Working on a stage design
+    StageDesign {
+        stage_design_id: usize,
+        work_phase: WorkPhase,
+    },
     /// Working on a manufacturing order
     Manufacturing {
         order_id: crate::manufacturing::ManufacturingOrderId,

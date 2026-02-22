@@ -478,8 +478,141 @@ impl Company {
         self.stage_designs.len() - 1
     }
 
+    /// Create a new stage design from an existing engine design.
+    /// The stage gets a default RocketStage with a snapshot of that engine.
+    pub fn create_stage_design_from_engine(&mut self, engine_design_id: usize) -> Option<usize> {
+        let lineage = self.engine_designs.get(engine_design_id)?;
+        let name_str = lineage.name.clone();
+        let snapshot = lineage.head().snapshot(engine_design_id, &name_str);
+        let stage = RocketStage::new(snapshot);
+        let stage_name = format!("{} Stage #{}", name_str, self.stage_designs.len() + 1);
+        Some(self.create_stage_design(&stage_name, stage))
+    }
+
+    /// Duplicate a stage design lineage.
+    /// The copy resets to Specification so it can be modified.
+    pub fn duplicate_stage_design(&mut self, index: usize) -> Option<usize> {
+        if let Some(lineage) = self.stage_designs.get(index) {
+            let mut new_sd = lineage.head().clone();
+            new_sd.workflow = crate::design_workflow::DesignWorkflow::new();
+            let new_name = format!("{} (Copy)", lineage.name);
+            let id = self.next_stage_design_id;
+            self.next_stage_design_id += 1;
+            new_sd.id = id;
+            self.stage_designs.push(DesignLineage::new(&new_name, new_sd));
+            Some(self.stage_designs.len() - 1)
+        } else {
+            None
+        }
+    }
+
+    /// Delete a stage design by index.
+    /// Refuses if any rocket design references it.
+    pub fn delete_stage_design(&mut self, index: usize) -> bool {
+        if index >= self.stage_designs.len() {
+            return false;
+        }
+        // Check if any rocket design references this stage design
+        for rocket_lineage in &self.rocket_designs {
+            let rocket = rocket_lineage.head();
+            for stage_idx in 0..rocket.stages.len() {
+                if rocket.stage_design_index(stage_idx) == Some(index) {
+                    return false; // In use
+                }
+            }
+        }
+        // Unassign any teams working on this stage design
+        for team in &mut self.teams {
+            if matches!(&team.assignment, Some(TeamAssignment::StageDesign { stage_design_id, .. }) if *stage_design_id == index) {
+                team.unassign();
+            }
+            // Fix up team assignments referencing higher indices
+            if let Some(TeamAssignment::StageDesign { stage_design_id, .. }) = &mut team.assignment {
+                if *stage_design_id > index {
+                    *stage_design_id -= 1;
+                }
+            }
+        }
+        self.stage_designs.remove(index);
+        // Fix up stage_design_indices in rocket designs that reference higher indices
+        for rocket_lineage in &mut self.rocket_designs {
+            let rocket = rocket_lineage.head_mut();
+            for stage_idx in 0..rocket.stage_design_indices.len() {
+                if let Some(sd_idx) = rocket.stage_design_indices[stage_idx] {
+                    if sd_idx > index {
+                        rocket.stage_design_indices[stage_idx] = Some(sd_idx - 1);
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Rename a stage design lineage.
+    pub fn rename_stage_design(&mut self, index: usize, new_name: &str) -> bool {
+        if let Some(lineage) = self.stage_designs.get_mut(index) {
+            lineage.name = new_name.to_string();
+            lineage.head_mut().name = new_name.to_string();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Set the engine for a stage design.
+    pub fn set_stage_design_engine(&mut self, stage_idx: usize, engine_design_id: usize) -> bool {
+        let snapshot = if let Some(lineage) = self.engine_designs.get(engine_design_id) {
+            let name_str = lineage.name.clone();
+            lineage.head().snapshot(engine_design_id, &name_str)
+        } else {
+            return false;
+        };
+        if let Some(lineage) = self.stage_designs.get_mut(stage_idx) {
+            lineage.head_mut().set_engine(engine_design_id, snapshot)
+        } else {
+            false
+        }
+    }
+
+    /// Set the engine count for a stage design.
+    pub fn set_stage_design_engine_count(&mut self, stage_idx: usize, count: u32) -> bool {
+        if let Some(lineage) = self.stage_designs.get_mut(stage_idx) {
+            lineage.head_mut().set_engine_count(count)
+        } else {
+            false
+        }
+    }
+
+    /// Set the propellant mass for a stage design.
+    pub fn set_stage_design_propellant(&mut self, stage_idx: usize, mass_kg: f64) -> bool {
+        if let Some(lineage) = self.stage_designs.get_mut(stage_idx) {
+            lineage.head_mut().set_propellant_mass(mass_kg)
+        } else {
+            false
+        }
+    }
+
+    /// Set whether a stage design is a booster.
+    pub fn set_stage_design_booster(&mut self, stage_idx: usize, is_booster: bool) -> bool {
+        if let Some(lineage) = self.stage_designs.get_mut(stage_idx) {
+            lineage.head_mut().set_is_booster(is_booster)
+        } else {
+            false
+        }
+    }
+
+    /// Set the tank material for a stage design.
+    pub fn set_stage_design_tank_material(&mut self, stage_idx: usize, material: crate::resources::TankMaterial) -> bool {
+        if let Some(lineage) = self.stage_designs.get_mut(stage_idx) {
+            lineage.head_mut().set_tank_material(material)
+        } else {
+            false
+        }
+    }
+
     /// Ensure every stage in the given rocket design has a linked StageDesign.
     /// Creates new StageDesigns for any unlinked stages.
+    /// Auto-created stages get workflow set to Complete (backward compat).
     pub fn ensure_stage_designs_for_rocket(&mut self, rocket_idx: usize) {
         let rocket_name = self.rocket_designs[rocket_idx].head().name.clone();
         let stage_count = self.rocket_designs[rocket_idx].head().stages.len();
@@ -490,6 +623,9 @@ impl Company {
                 let stage_snapshot = self.rocket_designs[rocket_idx].head().stages[stage_idx].clone();
                 let name = format!("{} Stage {}", rocket_name, stage_idx + 1);
                 let sd_index = self.create_stage_design(&name, stage_snapshot);
+                // Auto-created stages skip engineering — they're already part of an existing rocket
+                self.stage_designs[sd_index].head_mut().workflow.status =
+                    crate::design_workflow::DesignStatus::Complete;
                 self.rocket_designs[rocket_idx].head_mut().set_stage_design_index(stage_idx, Some(sd_index));
             }
         }
@@ -939,6 +1075,59 @@ impl Company {
         team_efficiency(productive_teams.len())
     }
 
+    /// Get teams working on a specific stage design
+    pub fn get_teams_on_stage_design(&self, stage_design_id: usize) -> Vec<&EngineeringTeam> {
+        self.teams
+            .iter()
+            .filter(|t| {
+                matches!(
+                    &t.assignment,
+                    Some(TeamAssignment::StageDesign { stage_design_id: idx, .. }) if *idx == stage_design_id
+                )
+            })
+            .collect()
+    }
+
+    /// Calculate total team efficiency for teams on a stage design
+    pub fn get_stage_team_efficiency(&self, stage_design_id: usize) -> f64 {
+        let productive_teams: Vec<_> = self
+            .get_teams_on_stage_design(stage_design_id)
+            .into_iter()
+            .filter(|t| !t.is_ramping_up())
+            .collect();
+        team_efficiency(productive_teams.len())
+    }
+
+    /// Assign a team to work on a stage design (engineering teams only)
+    pub fn assign_team_to_stage_design(&mut self, team_id: u32, stage_design_id: usize) -> bool {
+        if stage_design_id >= self.stage_designs.len() {
+            return false;
+        }
+
+        if let Some(team) = self.get_team_mut(team_id) {
+            if team.team_type != TeamType::Engineering {
+                return false;
+            }
+            team.assign(TeamAssignment::StageDesign {
+                stage_design_id,
+                work_phase: crate::engineering_team::WorkPhase::Engineering {
+                    progress: 0.0,
+                    total_work: crate::engineering_team::DETAILED_ENGINEERING_WORK,
+                },
+            });
+        } else {
+            return false;
+        }
+
+        // Auto-submit from Specification to Engineering when a team is assigned
+        let design = self.stage_designs[stage_design_id].head_mut();
+        if design.can_modify() {
+            design.submit_to_engineering(&mut self.flaw_generator, stage_design_id);
+        }
+
+        true
+    }
+
     /// Deduct salaries for all teams
     /// Returns total amount deducted
     pub fn deduct_salaries(&mut self) -> f64 {
@@ -957,30 +1146,42 @@ impl Company {
     fn attribute_salary_to_designs(&mut self) {
         use crate::engineering_team::TeamAssignment;
 
-        // Collect (design_kind, design_id, salary) tuples first to avoid borrow issues
-        let attributions: Vec<(bool, usize, f64)> = self.teams.iter()
+        // (kind: 0=rocket, 1=engine, 2=stage, design_id, salary)
+        let attributions: Vec<(u8, usize, f64)> = self.teams.iter()
             .filter_map(|team| {
                 match &team.assignment {
                     Some(TeamAssignment::RocketDesign { rocket_design_id, .. }) => {
-                        Some((true, *rocket_design_id, team.monthly_salary))
+                        Some((0, *rocket_design_id, team.monthly_salary))
                     }
                     Some(TeamAssignment::EngineDesign { engine_design_id, .. }) => {
-                        Some((false, *engine_design_id, team.monthly_salary))
+                        Some((1, *engine_design_id, team.monthly_salary))
+                    }
+                    Some(TeamAssignment::StageDesign { stage_design_id, .. }) => {
+                        Some((2, *stage_design_id, team.monthly_salary))
                     }
                     _ => None, // Manufacturing teams not attributed
                 }
             })
             .collect();
 
-        for (is_rocket, design_id, salary) in attributions {
-            if is_rocket {
-                if let Some(lineage) = self.rocket_designs.get_mut(design_id) {
-                    lineage.cost_tracker.add_salary(salary);
+        for (kind, design_id, salary) in attributions {
+            match kind {
+                0 => {
+                    if let Some(lineage) = self.rocket_designs.get_mut(design_id) {
+                        lineage.cost_tracker.add_salary(salary);
+                    }
                 }
-            } else {
-                if let Some(lineage) = self.engine_designs.get_mut(design_id) {
-                    lineage.cost_tracker.add_salary(salary);
+                1 => {
+                    if let Some(lineage) = self.engine_designs.get_mut(design_id) {
+                        lineage.cost_tracker.add_salary(salary);
+                    }
                 }
+                2 => {
+                    if let Some(lineage) = self.stage_designs.get_mut(design_id) {
+                        lineage.cost_tracker.add_salary(salary);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -1636,6 +1837,10 @@ impl Company {
         let engine_events = self.process_engine_work();
         events.extend(engine_events);
 
+        // Process work on stage designs
+        let stage_events = self.process_stage_work();
+        events.extend(stage_events);
+
         // Process manufacturing work
         let manufacturing_events = self.process_manufacturing_work();
         events.extend(manufacturing_events);
@@ -1688,7 +1893,11 @@ impl Company {
             .any(|l| matches!(l.head().workflow.status,
                 DesignStatus::Engineering { .. } | DesignStatus::Fixing { .. }));
 
-        has_manufacturing || has_finite_design_work || has_finite_engine_work
+        let has_finite_stage_work = self.stage_designs.iter()
+            .any(|l| matches!(l.head().workflow.status,
+                DesignStatus::Engineering { .. } | DesignStatus::Fixing { .. }));
+
+        has_manufacturing || has_finite_design_work || has_finite_engine_work || has_finite_stage_work
     }
 
     /// Shared workflow tick: advance work, discover flaws, auto-start flaw fixing.
@@ -1798,7 +2007,14 @@ impl Company {
     fn auto_unassign_completed_designs(&mut self) {
         use crate::design_workflow::DesignStatus;
 
-        let completed_indices: Vec<usize> = self.rocket_designs
+        let completed_rocket_indices: Vec<usize> = self.rocket_designs
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| matches!(l.head().workflow.status, DesignStatus::Complete))
+            .map(|(i, _)| i)
+            .collect();
+
+        let completed_stage_indices: Vec<usize> = self.stage_designs
             .iter()
             .enumerate()
             .filter(|(_, l)| matches!(l.head().workflow.status, DesignStatus::Complete))
@@ -1806,10 +2022,18 @@ impl Company {
             .collect();
 
         for team in &mut self.teams {
-            if let Some(TeamAssignment::RocketDesign { rocket_design_id, .. }) = &team.assignment {
-                if completed_indices.contains(rocket_design_id) {
-                    team.unassign();
+            match &team.assignment {
+                Some(TeamAssignment::RocketDesign { rocket_design_id, .. }) => {
+                    if completed_rocket_indices.contains(rocket_design_id) {
+                        team.unassign();
+                    }
                 }
+                Some(TeamAssignment::StageDesign { stage_design_id, .. }) => {
+                    if completed_stage_indices.contains(stage_design_id) {
+                        team.unassign();
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -1865,6 +2089,23 @@ impl Company {
                 self.engine_designs[design_id].head_mut().workflow.reset_hardware_boost();
                 events.push(WorkEvent::HardwareTestConsumed { engine_design_id });
             }
+        }
+
+        events
+    }
+
+    /// Process work progress on all stage designs
+    fn process_stage_work(&mut self) -> Vec<WorkEvent> {
+        let mut events = Vec::new();
+
+        let stage_efficiencies: Vec<(usize, f64)> = (0..self.stage_designs.len())
+            .map(|idx| (idx, self.get_stage_team_efficiency(idx)))
+            .filter(|(_, eff)| *eff > 0.0)
+            .collect();
+
+        for (design_id, efficiency) in stage_efficiencies {
+            let workflow = &mut self.stage_designs[design_id].head_mut().workflow;
+            events.extend(Self::process_workflow_tick(workflow, efficiency, "stage", design_id));
         }
 
         events
@@ -3171,5 +3412,211 @@ mod tests {
         assert_eq!(company.rocket_designs[0].head().workflow.hardware_boost, boost_before);
         // But testing work should still be added
         assert!(company.rocket_designs[0].head().workflow.testing_work_completed > 0.0);
+    }
+
+    // ==========================================
+    // Stage Design CRUD Tests
+    // ==========================================
+
+    #[test]
+    fn test_create_stage_design_from_engine() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+        assert_eq!(company.stage_designs.len(), sd_idx + 1);
+        assert_eq!(company.stage_designs[sd_idx].head().stage.engine_design_id, engine_idx);
+    }
+
+    #[test]
+    fn test_create_stage_design_from_invalid_engine() {
+        let mut company = Company::new();
+        assert!(company.create_stage_design_from_engine(999).is_none());
+    }
+
+    #[test]
+    fn test_duplicate_stage_design() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+        company.set_stage_design_engine_count(sd_idx, 3);
+
+        let dup_idx = company.duplicate_stage_design(sd_idx).unwrap();
+        // Duplicate should have same engine count
+        assert_eq!(company.stage_designs[dup_idx].head().stage.engine_count, 3);
+        // Duplicate should be in Specification (reset workflow)
+        assert!(company.stage_designs[dup_idx].head().can_modify());
+        // Duplicate should have different ID
+        assert_ne!(company.stage_designs[dup_idx].head().id, company.stage_designs[sd_idx].head().id);
+        // Name should have (Copy)
+        assert!(company.stage_designs[dup_idx].name.contains("(Copy)"));
+    }
+
+    #[test]
+    fn test_delete_stage_design() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+        assert!(company.delete_stage_design(sd_idx));
+        assert_eq!(company.stage_designs.len(), 0);
+    }
+
+    #[test]
+    fn test_delete_stage_design_in_use() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+        // Link it to the default rocket design
+        let snap = company.stage_designs[sd_idx].head().stage.clone();
+        company.rocket_designs[0].head_mut().add_stage_linked(snap, sd_idx);
+        // Should refuse to delete
+        assert!(!company.delete_stage_design(sd_idx));
+    }
+
+    #[test]
+    fn test_delete_stage_design_fixes_indices() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let _sd0 = company.create_stage_design_from_engine(engine_idx).unwrap();
+        let sd1 = company.create_stage_design_from_engine(engine_idx).unwrap();
+        // Link sd1 to a rocket
+        let snap = company.stage_designs[sd1].head().stage.clone();
+        company.rocket_designs[0].head_mut().add_stage_linked(snap, sd1);
+        // Delete sd0 — sd1 should shift to index 0
+        assert!(company.delete_stage_design(0));
+        assert_eq!(company.rocket_designs[0].head().stage_design_index(
+            company.rocket_designs[0].head().stages.len() - 1
+        ), Some(0));
+    }
+
+    #[test]
+    fn test_rename_stage_design() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+        assert!(company.rename_stage_design(sd_idx, "Big Booster"));
+        assert_eq!(company.stage_designs[sd_idx].name, "Big Booster");
+        assert_eq!(company.stage_designs[sd_idx].head().name, "Big Booster");
+    }
+
+    #[test]
+    fn test_stage_design_setters() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+
+        assert!(company.set_stage_design_engine_count(sd_idx, 5));
+        assert_eq!(company.stage_designs[sd_idx].head().stage.engine_count, 5);
+
+        assert!(company.set_stage_design_propellant(sd_idx, 50000.0));
+        assert_eq!(company.stage_designs[sd_idx].head().stage.propellant_mass_kg, 50000.0);
+
+        assert!(company.set_stage_design_booster(sd_idx, true));
+        assert!(company.stage_designs[sd_idx].head().stage.is_booster);
+
+        assert!(company.set_stage_design_tank_material(sd_idx, crate::resources::TankMaterial::CarbonComposite));
+        assert_eq!(company.stage_designs[sd_idx].head().stage.tank_material, crate::resources::TankMaterial::CarbonComposite);
+
+        // Change engine
+        let hydrolox_idx = company.create_engine_design(FuelType::Hydrolox, 1.0);
+        assert!(company.set_stage_design_engine(sd_idx, hydrolox_idx));
+        assert_eq!(company.stage_designs[sd_idx].head().stage.engine_design_id, hydrolox_idx);
+    }
+
+    #[test]
+    fn test_ensure_stage_designs_sets_complete() {
+        let mut company = Company::new();
+        company.ensure_stage_designs_for_rocket(0);
+        // Auto-created stage designs should be Complete
+        for sd_lineage in &company.stage_designs {
+            assert!(matches!(sd_lineage.head().workflow.status, crate::design_workflow::DesignStatus::Complete));
+        }
+    }
+
+    // ==========================================
+    // Stage Design Team Assignment Tests
+    // ==========================================
+
+    #[test]
+    fn test_assign_team_to_stage_design() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+        company.hire_engineering_team();
+        let team_id = company.get_engineering_team_ids()[0];
+
+        assert!(company.assign_team_to_stage_design(team_id, sd_idx));
+        assert_eq!(company.get_teams_on_stage_design(sd_idx).len(), 1);
+    }
+
+    #[test]
+    fn test_assign_manufacturing_team_to_stage_design_fails() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+        company.hire_manufacturing_team();
+        let team_id = company.get_manufacturing_team_ids()[0];
+
+        assert!(!company.assign_team_to_stage_design(team_id, sd_idx));
+    }
+
+    #[test]
+    fn test_assign_team_auto_submits_stage() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+        // Stage should start in Specification
+        assert!(company.stage_designs[sd_idx].head().can_modify());
+
+        company.hire_engineering_team();
+        let team_id = company.get_engineering_team_ids()[0];
+        company.assign_team_to_stage_design(team_id, sd_idx);
+
+        // Should have auto-submitted to Engineering
+        assert!(!company.stage_designs[sd_idx].head().can_modify());
+        assert!(matches!(
+            company.stage_designs[sd_idx].head().workflow.status,
+            crate::design_workflow::DesignStatus::Engineering { .. }
+        ));
+    }
+
+    #[test]
+    fn test_process_stage_work_advances() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+        company.hire_engineering_team();
+        let team_id = company.get_engineering_team_ids()[0];
+        company.assign_team_to_stage_design(team_id, sd_idx);
+
+        // Skip ramp-up
+        for _ in 0..7 {
+            company.process_day(false);
+        }
+
+        // Process enough days for engineering to complete (30 work units with 1 team)
+        for _ in 0..31 {
+            company.process_day(false);
+        }
+
+        // Should be in Testing now
+        assert!(matches!(
+            company.stage_designs[sd_idx].head().workflow.status,
+            crate::design_workflow::DesignStatus::Testing { .. }
+        ));
+    }
+
+    #[test]
+    fn test_stage_salary_attribution() {
+        let mut company = Company::new();
+        let engine_idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        let sd_idx = company.create_stage_design_from_engine(engine_idx).unwrap();
+        company.hire_engineering_team();
+        let team_id = company.get_engineering_team_ids()[0];
+        company.assign_team_to_stage_design(team_id, sd_idx);
+
+        // Process a salary day
+        company.process_day(true);
+
+        assert!(company.stage_designs[sd_idx].cost_tracker.engineering_salary_spent > 0.0);
     }
 }

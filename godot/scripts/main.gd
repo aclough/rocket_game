@@ -411,9 +411,11 @@ func run_launch_with_delays():
 						# Get the engine type of the stage that failed
 						var rocket_stage = launcher.get_event_rocket_stage(i)
 						var stage_engine_type = -1
+						var stage_design_idx = -1
 						if rocket_stage >= 0:
 							stage_engine_type = designer.get_stage_engine_type(rocket_stage)
-						var flaw_id = designer.check_flaw_trigger(stage_name, stage_engine_type)
+							stage_design_idx = designer.get_stage_design_index(rocket_stage)
+						var flaw_id = designer.check_flaw_trigger(stage_name, stage_engine_type, stage_design_idx)
 						if flaw_id >= 0:
 							discovered_flaw_name = designer.discover_flaw_by_id(flaw_id)
 

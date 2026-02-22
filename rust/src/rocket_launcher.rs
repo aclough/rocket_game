@@ -185,7 +185,8 @@ impl RocketLauncher {
                 let stage_engine_design_id = design.stages
                     .get(event.rocket_stage)
                     .map(|s| s.engine_design_id);
-                let flaw_rate = design.get_flaw_failure_contribution(&event.name, stage_engine_design_id);
+                let active_stage_design_index = design.stage_design_index(event.rocket_stage);
+                let flaw_rate = design.get_flaw_failure_contribution(&event.name, stage_engine_design_id, active_stage_design_index);
                 return flaw_rate.min(0.95);
             }
         }
@@ -200,7 +201,8 @@ impl RocketLauncher {
                 let stage_engine_design_id = design.stages
                     .get(event.rocket_stage)
                     .map(|s| s.engine_design_id);
-                return design.get_flaw_failure_contribution(&event.name, stage_engine_design_id);
+                let active_stage_design_index = design.stage_design_index(event.rocket_stage);
+                return design.get_flaw_failure_contribution(&event.name, stage_engine_design_id, active_stage_design_index);
             }
         }
         0.0
@@ -288,9 +290,9 @@ impl RocketLauncher {
                     .get(event.rocket_stage)
                     .map(|s| s.engine_design_id);
 
-                // All flaws (design + engine) are in the copied design
-                // Don't use self.engine_registry - those flaws weren't fixed by the user
-                return design.get_flaw_failure_contribution(event_name, stage_engine_design_id);
+                // All flaws (design + engine + stage) are in the copied design
+                let active_stage_design_index = design.stage_design_index(event.rocket_stage);
+                return design.get_flaw_failure_contribution(event_name, stage_engine_design_id, active_stage_design_index);
             }
         }
         0.0
