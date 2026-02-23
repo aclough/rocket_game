@@ -2,6 +2,8 @@
 /// Payloads are first-class objects with physical properties, environmental
 /// hazard susceptibility, and type-specific data via PayloadKind.
 
+use crate::engine_design::FuelType;
+
 pub type PayloadId = u32;
 
 /// Type-specific payload data.
@@ -19,6 +21,11 @@ pub enum PayloadKind {
         capacity_kg: f64,
         serial_number: u32,
         insulated: bool,
+    },
+    /// Fuel delivery to an orbital depot
+    FuelDelivery {
+        fuel_type: FuelType,
+        quantity_kg: f64,
     },
 }
 
@@ -119,6 +126,30 @@ impl Payload {
                 debris_sensitivity: 0.7,
                 thermal_sensitivity: 0.5,
             },
+        }
+    }
+
+    /// Create a fuel delivery payload.
+    pub fn fuel_delivery(
+        id: PayloadId,
+        fuel_type: FuelType,
+        quantity_kg: f64,
+        destination: String,
+    ) -> Self {
+        Self {
+            id,
+            name: format!("{:.0} kg {} Propellant", quantity_kg, fuel_type.display_name()),
+            kind: PayloadKind::FuelDelivery {
+                fuel_type,
+                quantity_kg,
+            },
+            mass_kg: quantity_kg,
+            destination,
+            power_watts: 0.0,
+            power_draw_watts: 0.0,
+            insulated: false,
+            thermal_range_k: (150.0, 400.0),
+            hazard_susceptibility: HazardSusceptibility::neutral(),
         }
     }
 

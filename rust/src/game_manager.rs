@@ -94,6 +94,9 @@ impl GameManager {
     #[signal]
     fn flight_arrived(flight_id: i32, destination: GString, reward: f64);
 
+    #[signal]
+    fn flights_changed();
+
     // ==========================================
     // Money and Budget
     // ==========================================
@@ -119,6 +122,21 @@ impl GameManager {
     /// Sync money from GameState to PlayerFinance (call after GameState operations that modify money)
     fn sync_money_from_state(&mut self) {
         self.finance.bind_mut().set_money(self.state.player_company.money);
+    }
+
+    /// Get current_rocket_design_id, validated to be in-bounds.
+    /// Clamps to last valid index if the stored ID is stale (e.g. after design deletion).
+    fn validated_design_id(&mut self) -> usize {
+        let id = self.current_rocket_design_id.unwrap_or(0);
+        let len = self.state.player_company.rocket_designs.len();
+        if id >= len && len > 0 {
+            let clamped = len - 1;
+            godot_warn!("validated_design_id: id {} out of range (len {}), clamping to {}", id, len, clamped);
+            self.current_rocket_design_id = Some(clamped);
+            clamped
+        } else {
+            id
+        }
     }
 
     /// Get current money
@@ -1017,7 +1035,8 @@ impl GameManager {
         let design = designer.bind().get_design_clone();
 
         // Update the active lineage head
-        if let Some(index) = self.current_rocket_design_id {
+        let index = self.validated_design_id();
+        if self.current_rocket_design_id.is_some() {
             self.state.player_company.update_rocket_design(index, design);
             // If the design is Testing and has a discovered unfixed flaw, start fixing it
             let design = self.state.player_company.rocket_designs[index].head_mut();
@@ -1427,7 +1446,7 @@ impl GameManager {
                 self.state.player_company.money -= cost;
                 self.sync_money_from_state();
                 self.base_mut().emit_signal("manufacturing_changed", &[]);
-                self.base_mut().emit_signal("money_changed", &[]);
+                self.emit_money_changed();
                 order_id as i32
             }
             None => -1,
@@ -1647,7 +1666,7 @@ impl GameManager {
     #[func]
     pub fn get_manifest_entry_name(&self, index: i32) -> GString {
         self.state.player_company.manifest.get(index as usize)
-            .map(|e| GString::from(e.display_name()))
+            .map(|e| GString::from(e.display_name().as_str()))
             .unwrap_or_default()
     }
 
@@ -1737,7 +1756,7 @@ impl GameManager {
     #[func]
     pub fn complete_launch(&mut self) -> f64 {
         self.sync_money_to_state();
-        let design_id = self.current_rocket_design_id.unwrap_or(0);
+        let design_id = self.validated_design_id();
         let revision = self.launched_revision_number;
         let reward = self.state.player_company.complete_manifest_launch(design_id, revision);
         if reward > 0.0 || !self.state.player_company.manifest.is_empty() {
@@ -1755,7 +1774,7 @@ impl GameManager {
     #[func]
     pub fn fail_launch(&mut self) {
         self.sync_money_to_state();
-        let design_id = self.current_rocket_design_id.unwrap_or(0);
+        let design_id = self.validated_design_id();
         let revision = self.launched_revision_number;
         self.state.player_company.fail_manifest_launch(design_id, revision);
         self.sync_money_from_state();
@@ -1763,10 +1782,201 @@ impl GameManager {
         self.base_mut().emit_signal("contract_failed", &[]);
     }
 
+    /// Successful free launch (no manifest): creates a flight to the specified destination.
+    /// Returns the flight ID, or -1 if path not found.
+    #[func]
+    pub fn complete_free_launch(&mut self, destination: GString) -> i32 {
+        self.sync_money_to_state();
+        let design_id = self.validated_design_id();
+        let revision = self.launched_revision_number;
+        let dest = destination.to_string();
+        let flight_id = self.state.player_company.complete_free_launch(design_id, revision, &dest);
+        self.sync_money_from_state();
+        self.base_mut().emit_signal("flights_changed", &[]);
+        self.base_mut().emit_signal("inventory_changed", &[]);
+        flight_id.map(|id| id as i32).unwrap_or(-1)
+    }
+
+    /// Failed free launch (no manifest): records failure.
+    #[func]
+    pub fn fail_free_launch(&mut self) {
+        self.sync_money_to_state();
+        let design_id = self.validated_design_id();
+        let revision = self.launched_revision_number;
+        self.state.player_company.fail_free_launch(design_id, revision);
+        self.sync_money_from_state();
+        self.adjust_fame(-15.0);
+    }
+
+    // ==========================================
+    // Fuel Delivery
+    // ==========================================
+
+    /// Add a fuel delivery to the manifest.
+    /// Returns entry_id on success, -1 on failure. Error in last_order_error.
+    #[func]
+    pub fn add_fuel_delivery_to_manifest(&mut self, fuel_type_index: i32, quantity_kg: f64, destination: GString) -> i32 {
+        use crate::engine_design::FuelType;
+        let fuel_type = match FuelType::from_index(fuel_type_index as usize) {
+            Some(ft) => ft,
+            None => {
+                self.last_order_error = "Invalid fuel type".to_string();
+                return -1;
+            }
+        };
+        let dest = destination.to_string();
+        match self.state.player_company.add_fuel_delivery_to_manifest(fuel_type, quantity_kg, &dest) {
+            Ok(id) => {
+                self.base_mut().emit_signal("manifest_changed", &[]);
+                id as i32
+            }
+            Err(e) => {
+                self.last_order_error = e;
+                -1
+            }
+        }
+    }
+
+    /// Get the maximum payload capacity for the current rocket design (kg).
+    #[func]
+    pub fn get_current_design_payload_capacity(&self) -> f64 {
+        if let Some(id) = self.current_rocket_design_id {
+            if let Some(lineage) = self.state.player_company.rocket_designs.get(id) {
+                return lineage.head().payload_mass_kg;
+            }
+        }
+        0.0
+    }
+
+    /// Get the delta-v the current rocket design achieves with the given payload mass.
+    #[func]
+    pub fn get_delta_v_with_payload(&self, payload_kg: f64) -> f64 {
+        if let Some(id) = self.current_rocket_design_id {
+            if let Some(lineage) = self.state.player_company.rocket_designs.get(id) {
+                return lineage.head().total_delta_v_with_payload(payload_kg);
+            }
+        }
+        0.0
+    }
+
+    /// Get the required delta-v to reach a destination from Earth surface.
+    #[func]
+    pub fn get_destination_required_delta_v(&self, destination: GString) -> f64 {
+        use crate::location::DELTA_V_MAP;
+        match DELTA_V_MAP.shortest_path("earth_surface", &destination.to_string()) {
+            Some((_path, dv)) => dv,
+            None => 0.0,
+        }
+    }
+
+    /// Check if the current rocket design can reach the given destination
+    /// with the specified payload mass.
+    /// Computes delta-v with the requested payload mass to see if the rocket
+    /// can actually deliver that much cargo to the destination.
+    #[func]
+    pub fn can_reach_destination_with_payload(&self, destination: GString, payload_kg: f64) -> bool {
+        use crate::location::DELTA_V_MAP;
+        let dest = destination.to_string();
+        let required_dv = match DELTA_V_MAP.shortest_path("earth_surface", &dest) {
+            Some((_path, dv)) => dv,
+            None => return false,
+        };
+        if let Some(id) = self.current_rocket_design_id {
+            if let Some(lineage) = self.state.player_company.rocket_designs.get(id) {
+                let design = lineage.head();
+                let dv_with_payload = design.total_delta_v_with_payload(payload_kg);
+                return dv_with_payload >= required_dv;
+            }
+        }
+        false
+    }
+
+    /// Liquid fuel types for depot filling (excludes Solid).
+    const LIQUID_FUEL_TYPES: &'static [crate::engine_design::FuelType] = &[
+        crate::engine_design::FuelType::Kerolox,
+        crate::engine_design::FuelType::Hydrolox,
+        crate::engine_design::FuelType::Methalox,
+        crate::engine_design::FuelType::Hypergolic,
+    ];
+
+    /// Get number of liquid fuel types available for depot filling.
+    #[func]
+    pub fn get_fuel_type_count(&self) -> i32 {
+        Self::LIQUID_FUEL_TYPES.len() as i32
+    }
+
+    /// Get fuel type display name at index.
+    #[func]
+    pub fn get_fuel_type_name(&self, index: i32) -> GString {
+        Self::LIQUID_FUEL_TYPES.get(index as usize)
+            .map(|ft| GString::from(ft.display_name()))
+            .unwrap_or_default()
+    }
+
+    /// Get fuel type index value at list index.
+    #[func]
+    pub fn get_fuel_type_index(&self, list_index: i32) -> i32 {
+        Self::LIQUID_FUEL_TYPES.get(list_index as usize)
+            .map(|ft| ft.index() as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Check if a depot exists at a location.
+    #[func]
+    pub fn has_depot_at(&self, location: GString) -> bool {
+        let loc = location.to_string();
+        self.state.player_company.infrastructure.get(&loc)
+            .map(|infra| infra.depot.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Get locations that have depots, returning count.
+    #[func]
+    pub fn get_depot_location_count(&self) -> i32 {
+        self.state.player_company.infrastructure.iter()
+            .filter(|(_loc, infra)| infra.depot.is_some())
+            .count() as i32
+    }
+
+    /// Get depot location id at index.
+    #[func]
+    pub fn get_depot_location_id(&self, index: i32) -> GString {
+        let mut locs: Vec<&String> = self.state.player_company.infrastructure.iter()
+            .filter(|(_loc, infra)| infra.depot.is_some())
+            .map(|(loc, _)| loc)
+            .collect();
+        locs.sort();
+        locs.get(index as usize)
+            .map(|l| GString::from(l.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Get depot location display name at index.
+    #[func]
+    pub fn get_depot_location_name(&self, index: i32) -> GString {
+        use crate::location::DELTA_V_MAP;
+        let loc_id = self.get_depot_location_id(index);
+        if loc_id.is_empty() {
+            return GString::default();
+        }
+        DELTA_V_MAP.location(&loc_id.to_string())
+            .map(|l| GString::from(l.display_name))
+            .unwrap_or_default()
+    }
+
     // ==========================================
     // ==========================================
     // Orbital Locations (for depot destination selection)
     // ==========================================
+
+    /// Get the display name for a location ID.
+    #[func]
+    pub fn get_location_display_name(&self, location_id: GString) -> GString {
+        use crate::location::DELTA_V_MAP;
+        DELTA_V_MAP.location(&location_id.to_string())
+            .map(|l| GString::from(l.display_name))
+            .unwrap_or(location_id)
+    }
 
     /// Get number of orbital/non-surface locations available for depot missions
     #[func]
@@ -1832,6 +2042,279 @@ impl GameManager {
     }
 
     // ==========================================
+    // Idle Flight Commands
+    // ==========================================
+
+    /// Get number of idle flights
+    #[func]
+    pub fn get_idle_flight_count(&self) -> i32 {
+        self.state.player_company.idle_flights().len() as i32
+    }
+
+    /// Get the flight ID of an idle flight by index
+    #[func]
+    pub fn get_idle_flight_id(&self, index: i32) -> i32 {
+        let flights = self.state.player_company.idle_flights();
+        flights.get(index as usize)
+            .map(|f| f.id as i32)
+            .unwrap_or(-1)
+    }
+
+    /// Get the location of an idle flight by index
+    #[func]
+    pub fn get_idle_flight_location(&self, index: i32) -> GString {
+        let flights = self.state.player_company.idle_flights();
+        flights.get(index as usize)
+            .map(|f| GString::from(f.current_location.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Get the design name of an idle flight by index
+    #[func]
+    pub fn get_idle_flight_design_name(&self, index: i32) -> GString {
+        let flights = self.state.player_company.idle_flights();
+        flights.get(index as usize)
+            .and_then(|f| {
+                self.state.player_company.rocket_designs
+                    .get(f.design_lineage_index)
+                    .map(|l| GString::from(l.name.as_str()))
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the remaining delta-v budget for an idle flight by index (m/s)
+    #[func]
+    pub fn get_idle_flight_remaining_delta_v(&self, index: i32) -> f64 {
+        let flights = self.state.player_company.idle_flights();
+        let flight = match flights.get(index as usize) {
+            Some(f) => f,
+            None => return 0.0,
+        };
+        let design = match self.state.player_company.rocket_designs.get(flight.design_lineage_index) {
+            Some(lineage) => lineage.head(),
+            None => return 0.0,
+        };
+        flight.remaining_delta_v(design)
+    }
+
+    /// Get total propellant remaining for an idle flight (kg)
+    #[func]
+    pub fn get_idle_flight_propellant_remaining(&self, index: i32) -> f64 {
+        let flights = self.state.player_company.idle_flights();
+        flights.get(index as usize)
+            .map(|f| f.total_propellant_remaining_kg())
+            .unwrap_or(0.0)
+    }
+
+    /// Get payload count for an idle flight
+    #[func]
+    pub fn get_idle_flight_payload_count(&self, index: i32) -> i32 {
+        let flights = self.state.player_company.idle_flights();
+        flights.get(index as usize)
+            .map(|f| f.payloads.len() as i32)
+            .unwrap_or(0)
+    }
+
+    /// Get the name of a payload on an idle flight
+    #[func]
+    pub fn get_idle_flight_payload_name(&self, flight_index: i32, payload_index: i32) -> GString {
+        let flights = self.state.player_company.idle_flights();
+        flights.get(flight_index as usize)
+            .and_then(|f| f.payloads.get(payload_index as usize))
+            .map(|p| GString::from(p.name.as_str()))
+            .unwrap_or_default()
+    }
+
+    /// Get the mass of a payload on an idle flight (kg)
+    #[func]
+    pub fn get_idle_flight_payload_mass(&self, flight_index: i32, payload_index: i32) -> f64 {
+        let flights = self.state.player_company.idle_flights();
+        flights.get(flight_index as usize)
+            .and_then(|f| f.payloads.get(payload_index as usize))
+            .map(|p| p.mass_kg)
+            .unwrap_or(0.0)
+    }
+
+    /// Get the destination of a payload on an idle flight
+    #[func]
+    pub fn get_idle_flight_payload_destination(&self, flight_index: i32, payload_index: i32) -> GString {
+        let flights = self.state.player_company.idle_flights();
+        flights.get(flight_index as usize)
+            .and_then(|f| f.payloads.get(payload_index as usize))
+            .map(|p| GString::from(p.destination.as_str()))
+            .unwrap_or_default()
+    }
+
+    // ==========================================
+    // Flight Destination Planning
+    // ==========================================
+
+    /// Get the number of available destinations from an idle flight
+    #[func]
+    pub fn get_flight_available_destination_count(&self, flight_id: i32) -> i32 {
+        self.state.player_company
+            .get_flight_available_destinations(flight_id as u32)
+            .len() as i32
+    }
+
+    /// Get the name of an available destination for an idle flight
+    #[func]
+    pub fn get_flight_available_destination_name(&self, flight_id: i32, dest_index: i32) -> GString {
+        let dests = self.state.player_company.get_flight_available_destinations(flight_id as u32);
+        dests.get(dest_index as usize)
+            .map(|(id, _, _)| GString::from(*id))
+            .unwrap_or_default()
+    }
+
+    /// Get the delta-v cost to reach an available destination
+    #[func]
+    pub fn get_flight_available_destination_delta_v(&self, flight_id: i32, dest_index: i32) -> f64 {
+        let dests = self.state.player_company.get_flight_available_destinations(flight_id as u32);
+        dests.get(dest_index as usize)
+            .map(|(_, dv, _)| *dv)
+            .unwrap_or(0.0)
+    }
+
+    /// Get the transit days to reach an available destination
+    #[func]
+    pub fn get_flight_available_destination_transit_days(&self, flight_id: i32, dest_index: i32) -> i32 {
+        let dests = self.state.player_company.get_flight_available_destinations(flight_id as u32);
+        dests.get(dest_index as usize)
+            .map(|(_, _, days)| *days as i32)
+            .unwrap_or(0)
+    }
+
+    /// Check if a flight has enough delta-v to reach a destination
+    #[func]
+    pub fn can_flight_reach_destination(&self, flight_id: i32, dest_index: i32) -> bool {
+        let dests = self.state.player_company.get_flight_available_destinations(flight_id as u32);
+        let dv_cost = match dests.get(dest_index as usize) {
+            Some((_, dv, _)) => *dv,
+            None => return false,
+        };
+
+        let flight = match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f,
+            None => return false,
+        };
+        let design = match self.state.player_company.rocket_designs.get(flight.design_lineage_index) {
+            Some(lineage) => lineage.head(),
+            None => return false,
+        };
+        flight.remaining_delta_v(design) >= dv_cost
+    }
+
+    // ==========================================
+    // Flight Commands
+    // ==========================================
+
+    /// Plan a route for an idle flight to a destination
+    #[func]
+    pub fn plan_flight_to(&mut self, flight_id: i32, destination: GString) -> bool {
+        let dest = destination.to_string();
+        let result = self.state.player_company.plan_flight_to(flight_id as u32, &dest);
+        if result {
+            self.base_mut().emit_signal("flights_changed", &[]);
+        }
+        result
+    }
+
+    /// Execute an idle flight (start transit on pending legs)
+    #[func]
+    pub fn execute_flight(&mut self, flight_id: i32) -> bool {
+        let result = self.state.player_company.execute_flight(flight_id as u32);
+        if result {
+            self.base_mut().emit_signal("flights_changed", &[]);
+        }
+        result
+    }
+
+    /// Retire an idle flight
+    #[func]
+    pub fn retire_flight(&mut self, flight_id: i32) -> bool {
+        let result = self.state.player_company.retire_flight(flight_id as u32);
+        if result {
+            self.base_mut().emit_signal("flights_changed", &[]);
+        }
+        result
+    }
+
+    /// Drop a payload from an idle flight
+    #[func]
+    pub fn drop_flight_payload(&mut self, flight_id: i32, payload_index: i32) -> bool {
+        let result = self.state.player_company.drop_flight_payload(flight_id as u32, payload_index as usize);
+        if result {
+            self.base_mut().emit_signal("flights_changed", &[]);
+        }
+        result
+    }
+
+    // ==========================================
+    // Multi-Leg Trip Planning
+    // ==========================================
+
+    /// Add a waypoint to an idle flight's plan
+    #[func]
+    pub fn add_flight_waypoint(&mut self, flight_id: i32, destination: GString) -> bool {
+        let dest = destination.to_string();
+        let result = self.state.player_company.plan_flight_to(flight_id as u32, &dest);
+        if result {
+            self.base_mut().emit_signal("flights_changed", &[]);
+        }
+        result
+    }
+
+    /// Clear pending legs from an idle flight's plan
+    #[func]
+    pub fn clear_flight_plan(&mut self, flight_id: i32) -> bool {
+        let result = self.state.player_company.clear_flight_plan(flight_id as u32);
+        if result {
+            self.base_mut().emit_signal("flights_changed", &[]);
+        }
+        result
+    }
+
+    /// Get the number of pending legs for a flight
+    #[func]
+    pub fn get_flight_pending_leg_count(&self, flight_id: i32) -> i32 {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.pending_leg_count() as i32,
+            None => 0,
+        }
+    }
+
+    /// Get the destination of a pending leg
+    #[func]
+    pub fn get_flight_pending_leg_destination(&self, flight_id: i32, leg_index: i32) -> GString {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.pending_leg(leg_index as usize)
+                .map(|l| GString::from(l.to))
+                .unwrap_or_default(),
+            None => GString::from(""),
+        }
+    }
+
+    /// Get the delta-v of a pending leg
+    #[func]
+    pub fn get_flight_pending_leg_delta_v(&self, flight_id: i32, leg_index: i32) -> f64 {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.pending_leg(leg_index as usize)
+                .map(|l| l.delta_v_required)
+                .unwrap_or(0.0),
+            None => 0.0,
+        }
+    }
+
+    /// Get total planned delta-v across all pending legs
+    #[func]
+    pub fn get_flight_total_planned_delta_v(&self, flight_id: i32) -> f64 {
+        match self.state.player_company.get_flight(flight_id as u32) {
+            Some(f) => f.pending_delta_v(),
+            None => 0.0,
+        }
+    }
+
+    // ==========================================
     // Continuous Time System
     // ==========================================
 
@@ -1857,37 +2340,56 @@ impl GameManager {
             self.emit_money_changed();
         }
 
-        // Process flight arrivals: pay rewards, emit signals
-        let flight_arrived_events: Vec<_> = events.iter().filter_map(|e| {
-            if let crate::engineering_team::WorkEvent::FlightArrived { flight_id, destination, is_contract } = e {
-                Some((*flight_id, destination.clone(), *is_contract))
-            } else {
-                None
-            }
-        }).collect();
+        // Process flight events: rewards are already paid in process_flights(),
+        // we just need to sync money, handle fame, and emit signals.
 
-        for (flight_id, destination, is_contract) in &flight_arrived_events {
-            self.sync_money_to_state();
-            let reward = self.state.player_company.complete_flight_arrival(*flight_id).unwrap_or(0.0);
+        // Sync money after flight payload deliveries
+        let has_flight_event = events.iter().any(|e| {
+            matches!(e,
+                crate::engineering_team::WorkEvent::FlightArrived { .. }
+                | crate::engineering_team::WorkEvent::FlightIdle { .. }
+            )
+        });
+        if has_flight_event {
             self.sync_money_from_state();
-
-            if *is_contract && reward > 0.0 {
-                // Fame gain on arrival (same formula as before)
-                let fame_gain = 10.0 + (reward / 10_000_000.0);
-                self.adjust_fame(fame_gain);
-                self.base_mut()
-                    .emit_signal("contract_completed", &[Variant::from(reward)]);
-            }
-
-            self.base_mut().emit_signal(
-                "flight_arrived",
-                &[
-                    Variant::from(*flight_id as i32),
-                    Variant::from(GString::from(destination.as_str())),
-                    Variant::from(reward),
-                ],
-            );
             self.emit_money_changed();
+            self.base_mut().emit_signal("flights_changed", &[]);
+        }
+
+        // Handle FlightArrived (auto-retired empty flights) — emit signal for UI
+        for event in &events {
+            if let crate::engineering_team::WorkEvent::FlightArrived { flight_id, destination, is_contract } = event {
+                self.base_mut().emit_signal(
+                    "flight_arrived",
+                    &[
+                        Variant::from(*flight_id as i32),
+                        Variant::from(GString::from(destination.as_str())),
+                        Variant::from(0.0_f64),
+                    ],
+                );
+                let _ = is_contract; // rewards already paid in process_flights
+            }
+        }
+
+        // Handle FlightIdle — emit signals for UI update and fame
+        for event in &events {
+            if let crate::engineering_team::WorkEvent::FlightIdle { flight_id, location, reward } = event {
+                if *reward > 0.0 {
+                    let fame_gain = 10.0 + (*reward / 10_000_000.0);
+                    self.adjust_fame(fame_gain);
+                    self.base_mut()
+                        .emit_signal("contract_completed", &[Variant::from(*reward)]);
+                }
+                // Emit flight_arrived signal for backward compat (UI refresh)
+                self.base_mut().emit_signal(
+                    "flight_arrived",
+                    &[
+                        Variant::from(*flight_id as i32),
+                        Variant::from(GString::from(location.as_str())),
+                        Variant::from(*reward),
+                    ],
+                );
+            }
         }
 
         // Check for manufacturing events to emit appropriate signals
@@ -2136,6 +2638,12 @@ impl GameManager {
                 dict.set("destination", GString::from(destination.as_str()));
                 dict.set("is_contract", *is_contract);
             }
+            WorkEvent::FlightIdle { flight_id, location, reward } => {
+                dict.set("type", "flight_idle");
+                dict.set("flight_id", *flight_id as i32);
+                dict.set("location", GString::from(location.as_str()));
+                dict.set("reward", *reward);
+            }
             WorkEvent::DepotManufactured { depot_design_index, serial_number } => {
                 dict.set("type", "depot_manufactured");
                 dict.set("depot_design_index", *depot_design_index as i32);
@@ -2190,6 +2698,9 @@ impl GameManager {
             }
             crate::engineering_team::WorkEvent::FlightArrived { .. } => {
                 "flight_arrived"
+            }
+            crate::engineering_team::WorkEvent::FlightIdle { .. } => {
+                "flight_idle"
             }
             crate::engineering_team::WorkEvent::DepotManufactured { .. } => {
                 "depot_manufactured"
@@ -4345,6 +4856,7 @@ impl GameManager {
             Some(f) => GString::from(match &f.status {
                 FlightStatus::InTransit => "InTransit",
                 FlightStatus::AtLocation => "AtLocation",
+                FlightStatus::Idle => "Idle",
                 FlightStatus::Completed => "Completed",
                 FlightStatus::Failed => "Failed",
             }),

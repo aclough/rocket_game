@@ -17,6 +17,9 @@ pub struct StageFlightState {
 pub enum FlightStatus {
     InTransit,
     AtLocation,
+    /// Flight has completed all planned legs and is idle at its location,
+    /// waiting for new commands (navigate, drop payload, retire).
+    Idle,
     Completed,
     Failed,
 }
@@ -207,9 +210,9 @@ impl FlightState {
         delivered
     }
 
-    /// Whether the flight is still active (InTransit or AtLocation).
+    /// Whether the flight is still active (InTransit, AtLocation, or Idle).
     pub fn is_active(&self) -> bool {
-        matches!(self.status, FlightStatus::InTransit | FlightStatus::AtLocation)
+        matches!(self.status, FlightStatus::InTransit | FlightStatus::AtLocation | FlightStatus::Idle)
     }
 
     /// Total reward across all payloads.
@@ -230,6 +233,116 @@ impl FlightState {
     /// Whether any payload is a fuel depot.
     pub fn has_depot_payload(&self) -> bool {
         self.payloads.iter().any(|p| p.is_depot())
+    }
+
+    // ==========================================
+    // Flight Commands (for Idle flights)
+    // ==========================================
+
+    /// Append new legs to the mission plan.
+    /// Used when commanding an idle flight to navigate to a new destination.
+    pub fn append_legs(&mut self, new_legs: Vec<MissionLeg>) {
+        if new_legs.is_empty() {
+            return;
+        }
+        // Update the flight's destination to the final leg's destination
+        if let Some(last) = new_legs.last() {
+            self.destination = last.to.to_string();
+        }
+        self.mission_plan.total_delta_v += new_legs.iter().map(|l| l.delta_v_required).sum::<f64>();
+        self.mission_plan.legs.extend(new_legs);
+    }
+
+    /// Set the flight to InTransit, starting the transit timer for the current pending leg.
+    /// Returns false if there are no pending legs.
+    pub fn execute(&mut self) -> bool {
+        if self.current_leg_index >= self.mission_plan.legs.len() {
+            return false;
+        }
+        self.status = FlightStatus::InTransit;
+        self.start_current_leg_transit();
+        true
+    }
+
+    /// Number of pending (unstarted) legs.
+    pub fn pending_leg_count(&self) -> usize {
+        self.mission_plan.legs.len().saturating_sub(self.current_leg_index)
+    }
+
+    /// Get a pending leg by index (0 = first pending leg).
+    pub fn pending_leg(&self, index: usize) -> Option<&MissionLeg> {
+        self.mission_plan.legs.get(self.current_leg_index + index)
+    }
+
+    /// Total delta-v of all pending legs.
+    pub fn pending_delta_v(&self) -> f64 {
+        self.mission_plan.legs[self.current_leg_index..]
+            .iter()
+            .map(|l| l.delta_v_required)
+            .sum()
+    }
+
+    /// Compute remaining delta-v from current propellant state.
+    /// Uses Tsiolkovsky equation with the design's stage parameters.
+    /// Considers only attached stages with remaining propellant.
+    pub fn remaining_delta_v(&self, design: &RocketDesign) -> f64 {
+        let mut total_dv = 0.0;
+
+        // Process stages bottom-up (firing order) — each burns sequentially
+        // Mass above: payload + all stages above the current one
+        let mass_above = self.payload_mass_kg;
+
+        // Collect attached stages in reverse order (top-down for mass calculation)
+        let mut attached_stages: Vec<(usize, f64)> = Vec::new();
+        for stage_state in &self.stages {
+            if stage_state.attached && stage_state.propellant_remaining_kg > 0.01 {
+                if let Some(stage) = design.stages.get(stage_state.stage_index) {
+                    attached_stages.push((stage_state.stage_index, stage_state.propellant_remaining_kg));
+                    let _ = stage; // Used below
+                }
+            }
+        }
+
+        // Stages fire bottom-up: stage 0 fires first, then stage 1, etc.
+        // Mass above each stage includes all upper stages + payload
+        for &(stage_idx, remaining_prop) in attached_stages.iter().rev() {
+            if let Some(stage) = design.stages.get(stage_idx) {
+                let ve = stage.exhaust_velocity_ms();
+                if ve <= 0.0 {
+                    continue;
+                }
+                let dry_mass = stage.dry_mass_kg();
+                let m0 = dry_mass + remaining_prop + mass_above;
+                let mf = dry_mass + mass_above;
+                if mf > 0.0 {
+                    total_dv += ve * (m0 / mf).ln();
+                }
+                // After this stage is jettisoned, it no longer contributes to mass_above
+                // (mass_above stays as-is for upper stages since they were already counted)
+            }
+        }
+
+        total_dv
+    }
+
+    /// Drop a payload by index, reducing payload_mass_kg.
+    /// Returns the dropped payload, or None if index is out of bounds.
+    pub fn drop_payload(&mut self, index: usize) -> Option<Payload> {
+        if index >= self.payloads.len() {
+            return None;
+        }
+        let p = self.payloads.remove(index);
+        self.payload_mass_kg = (self.payload_mass_kg - p.mass_kg).max(0.0);
+        Some(p)
+    }
+
+    /// Clear all pending (unstarted) legs from the mission plan.
+    pub fn clear_pending_legs(&mut self) {
+        self.mission_plan.legs.truncate(self.current_leg_index);
+        // Update destination to current location if no legs remain
+        if self.current_leg_index >= self.mission_plan.legs.len() {
+            self.destination = self.current_location.clone();
+        }
     }
 }
 
@@ -359,6 +472,9 @@ mod tests {
         flight.status = FlightStatus::AtLocation;
         assert!(flight.is_active());
 
+        flight.status = FlightStatus::Idle;
+        assert!(flight.is_active());
+
         flight.status = FlightStatus::Completed;
         assert!(!flight.is_active());
 
@@ -476,5 +592,111 @@ mod tests {
         assert!(!flight.has_depot_payload());
         assert_eq!(flight.total_reward(), 5_000_000.0);
         assert_eq!(flight.contract_ids(), vec![42]);
+    }
+
+    #[test]
+    fn test_idle_status() {
+        let design = RocketDesign::default_design();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
+
+        flight.status = FlightStatus::Idle;
+        assert!(flight.is_active(), "Idle flights should be active");
+        assert_eq!(flight.status, FlightStatus::Idle);
+    }
+
+    #[test]
+    fn test_flight_goes_idle_after_legs_complete() {
+        let design = RocketDesign::default_design();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
+
+        // Complete the single leg
+        flight.tick_transit_day();
+        flight.advance_leg();
+        assert!(flight.all_legs_completed());
+
+        // Set to Idle (as process_flights would do)
+        flight.status = FlightStatus::Idle;
+        flight.current_location = "leo".to_string();
+        assert_eq!(flight.status, FlightStatus::Idle);
+        assert_eq!(flight.current_location, "leo");
+        assert!(flight.is_active());
+    }
+
+    #[test]
+    fn test_append_legs_and_execute() {
+        let design = RocketDesign::default_design();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
+
+        // Simulate arriving at LEO and going idle
+        flight.tick_transit_day();
+        flight.advance_leg();
+        flight.status = FlightStatus::Idle;
+        flight.current_location = "leo".to_string();
+
+        // Plan new route from LEO to MEO
+        let meo_plan = MissionPlan::from_shortest_path("leo", "meo").unwrap();
+        flight.append_legs(meo_plan.legs);
+
+        assert_eq!(flight.destination, "meo");
+        assert_eq!(flight.pending_leg_count(), 1);
+        assert!(flight.pending_delta_v() > 0.0);
+
+        // Execute
+        assert!(flight.execute());
+        assert_eq!(flight.status, FlightStatus::InTransit);
+    }
+
+    #[test]
+    fn test_remaining_delta_v() {
+        let design = RocketDesign::default_design();
+        let flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
+
+        // At launch, should have significant delta-v available
+        let dv = flight.remaining_delta_v(&design);
+        assert!(dv > 8000.0, "Default design should have >8000 m/s dv, got {:.0}", dv);
+    }
+
+    #[test]
+    fn test_drop_payload() {
+        let design = RocketDesign::default_design();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
+
+        flight.payloads.push(Payload::contract_satellite(
+            1, 42, "Comms".to_string(), 500.0, 5_000_000.0, "leo".to_string(),
+        ));
+        flight.payload_mass_kg = 500.0;
+
+        assert_eq!(flight.payloads.len(), 1);
+        let dropped = flight.drop_payload(0);
+        assert!(dropped.is_some());
+        assert_eq!(flight.payloads.len(), 0);
+        assert!((flight.payload_mass_kg - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_drop_payload_out_of_bounds() {
+        let design = RocketDesign::default_design();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "leo", leo_plan());
+        assert!(flight.drop_payload(0).is_none());
+    }
+
+    #[test]
+    fn test_clear_pending_legs() {
+        let design = RocketDesign::default_design();
+        let geo_plan = MissionPlan::from_shortest_path("earth_surface", "geo").unwrap();
+        let mut flight = FlightState::from_design(1, 0, 1, &design, "geo", geo_plan);
+
+        // Advance one leg
+        flight.tick_transit_day();
+        flight.advance_leg();
+        flight.status = FlightStatus::Idle;
+        flight.current_location = "leo".to_string();
+
+        // Should have 2 pending legs (leo->gto, gto->geo)
+        assert_eq!(flight.pending_leg_count(), 2);
+
+        flight.clear_pending_legs();
+        assert_eq!(flight.pending_leg_count(), 0);
+        assert_eq!(flight.destination, "leo");
     }
 }

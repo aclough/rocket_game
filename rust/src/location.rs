@@ -290,6 +290,88 @@ impl DeltaVMap {
                 can_aerobrake: false,
                 transit_days: 0, // ascent
             },
+            // Reverse/cross-orbit transfers for spacecraft navigation
+            Transfer {
+                from: "sso",
+                to: "leo",
+                delta_v: 500.0,
+                aero_drag_loss: 0.0,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 0,
+            },
+            Transfer {
+                from: "meo",
+                to: "leo",
+                delta_v: 2100.0,
+                aero_drag_loss: 0.0,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 0,
+            },
+            Transfer {
+                from: "gto",
+                to: "leo",
+                delta_v: 2440.0,
+                aero_drag_loss: 0.0,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 1,
+            },
+            Transfer {
+                from: "geo",
+                to: "gto",
+                delta_v: 1500.0,
+                aero_drag_loss: 0.0,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 0,
+            },
+            Transfer {
+                from: "lunar_orbit",
+                to: "leo",
+                delta_v: 3850.0,
+                aero_drag_loss: 0.0,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 4,
+            },
+            Transfer {
+                from: "lunar_orbit",
+                to: "l1",
+                delta_v: 700.0,
+                aero_drag_loss: 0.0,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 2,
+            },
+            Transfer {
+                from: "l1",
+                to: "leo",
+                delta_v: 3150.0,
+                aero_drag_loss: 0.0,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 5,
+            },
+            Transfer {
+                from: "l2",
+                to: "lunar_orbit",
+                delta_v: 800.0,
+                aero_drag_loss: 0.0,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 2,
+            },
+            Transfer {
+                from: "leo",
+                to: "l2",
+                delta_v: 3200.0,
+                aero_drag_loss: 0.0,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 5,
+            },
         ];
 
         DeltaVMap {
@@ -481,7 +563,7 @@ mod tests {
     fn test_transfers_from_leo() {
         let map = DeltaVMap::earth_moon();
         let transfers = map.transfers_from("leo");
-        assert_eq!(transfers.len(), 5); // sso, meo, gto, l1, lunar_orbit
+        assert_eq!(transfers.len(), 6); // sso, meo, gto, l1, lunar_orbit, l2
     }
 
     #[test]
@@ -569,6 +651,89 @@ mod tests {
         let map = DeltaVMap::earth_moon();
         assert!(map.surface_properties("leo").is_none());
         assert!(map.surface_properties("l1").is_none());
+    }
+
+    #[test]
+    fn test_reverse_transfer_geo_to_leo() {
+        let map = DeltaVMap::earth_moon();
+        // geo -> gto -> leo
+        let (path, dv) = map.shortest_path("geo", "leo").unwrap();
+        assert_eq!(path, vec!["geo", "gto", "leo"]);
+        assert_eq!(dv, 1500.0 + 2440.0); // 3940
+    }
+
+    #[test]
+    fn test_reverse_transfer_meo_to_leo() {
+        let map = DeltaVMap::earth_moon();
+        let (path, dv) = map.shortest_path("meo", "leo").unwrap();
+        assert_eq!(path, vec!["meo", "leo"]);
+        assert_eq!(dv, 2100.0);
+    }
+
+    #[test]
+    fn test_reverse_transfer_lunar_orbit_to_leo() {
+        let map = DeltaVMap::earth_moon();
+        let (_path, dv) = map.shortest_path("lunar_orbit", "leo").unwrap();
+        assert_eq!(dv, 3850.0);
+    }
+
+    #[test]
+    fn test_reverse_transfer_sso_to_leo() {
+        let map = DeltaVMap::earth_moon();
+        let (path, dv) = map.shortest_path("sso", "leo").unwrap();
+        assert_eq!(path, vec!["sso", "leo"]);
+        assert_eq!(dv, 500.0);
+    }
+
+    #[test]
+    fn test_l2_to_lunar_orbit() {
+        let map = DeltaVMap::earth_moon();
+        let (path, dv) = map.shortest_path("l2", "lunar_orbit").unwrap();
+        assert_eq!(path, vec!["l2", "lunar_orbit"]);
+        assert_eq!(dv, 800.0);
+    }
+
+    #[test]
+    fn test_leo_to_l2() {
+        let map = DeltaVMap::earth_moon();
+        let (path, dv) = map.shortest_path("leo", "l2").unwrap();
+        assert_eq!(path, vec!["leo", "l2"]);
+        assert_eq!(dv, 3200.0);
+    }
+
+    #[test]
+    fn test_cross_orbit_geo_to_meo() {
+        let map = DeltaVMap::earth_moon();
+        // geo -> gto -> leo -> meo
+        let result = map.shortest_path("geo", "meo");
+        assert!(result.is_some());
+        let (path, dv) = result.unwrap();
+        // Via LEO: 1500 + 2440 + 2100 = 6040
+        assert_eq!(dv, 6040.0);
+        assert_eq!(path, vec!["geo", "gto", "leo", "meo"]);
+    }
+
+    #[test]
+    fn test_no_return_to_earth_surface() {
+        // Still no path from any orbit back to earth surface (no re-entry)
+        let map = DeltaVMap::earth_moon();
+        assert!(map.shortest_path("leo", "earth_surface").is_none());
+        assert!(map.shortest_path("geo", "earth_surface").is_none());
+        assert!(map.shortest_path("lunar_orbit", "earth_surface").is_none());
+    }
+
+    #[test]
+    fn test_reverse_transfer_transit_days() {
+        let map = DeltaVMap::earth_moon();
+        assert_eq!(map.transfer("sso", "leo").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("meo", "leo").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("gto", "leo").unwrap().transit_days, 1);
+        assert_eq!(map.transfer("geo", "gto").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("lunar_orbit", "leo").unwrap().transit_days, 4);
+        assert_eq!(map.transfer("lunar_orbit", "l1").unwrap().transit_days, 2);
+        assert_eq!(map.transfer("l1", "leo").unwrap().transit_days, 5);
+        assert_eq!(map.transfer("l2", "lunar_orbit").unwrap().transit_days, 2);
+        assert_eq!(map.transfer("leo", "l2").unwrap().transit_days, 5);
     }
 
     #[test]

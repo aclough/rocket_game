@@ -213,6 +213,7 @@ func _setup_map_content():
 	# Connect signals for live updates
 	game_manager.date_changed.connect(map._on_date_changed)
 	game_manager.flight_arrived.connect(map._on_flight_arrived)
+	game_manager.flights_changed.connect(map._on_flights_changed)
 	game_manager.inventory_changed.connect(map._on_inventory_changed)
 	map.visibility_changed.connect(map._on_visibility_changed)
 
@@ -1472,7 +1473,7 @@ func _update_finance_design_costs():
 	# Engine designs
 	var engine_count = game_manager.get_engine_type_count()
 	for i in range(engine_count):
-		var name = game_manager.get_engine_type_name(i)
+		var engine_name = game_manager.get_engine_type_name(i)
 		var nre = game_manager.get_engine_nre(i)
 		var marginal = game_manager.get_engine_marginal_cost(i)
 		var units = game_manager.get_engine_units_produced(i)
@@ -1480,7 +1481,7 @@ func _update_finance_design_costs():
 
 		has_any = true
 		var header = Label.new()
-		header.text = "%s (Engine)" % name
+		header.text = "%s (Engine)" % engine_name
 		header.add_theme_font_size_override("font_size", 15)
 		header.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 		_finance_design_costs_container.add_child(header)
@@ -1494,7 +1495,7 @@ func _update_finance_design_costs():
 	# Rocket designs
 	var rocket_count = game_manager.get_rocket_design_count()
 	for i in range(rocket_count):
-		var name = game_manager.get_rocket_design_name(i)
+		var rocket_name = game_manager.get_rocket_design_name(i)
 		var nre = game_manager.get_rocket_design_nre(i)
 		var marginal = game_manager.get_rocket_design_marginal_cost(i)
 		var units = game_manager.get_rocket_design_units_produced(i)
@@ -1503,7 +1504,7 @@ func _update_finance_design_costs():
 
 		has_any = true
 		var header = Label.new()
-		header.text = "%s (Rocket)" % name
+		header.text = "%s (Rocket)" % rocket_name
 		header.add_theme_font_size_override("font_size", 15)
 		header.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 		_finance_design_costs_container.add_child(header)
@@ -2233,6 +2234,7 @@ func _on_prod_build_engines_pressed():
 	dialog.popup_centered()
 
 func _on_prod_engine_selected(engine_index: int, dialog: AcceptDialog):
+	dialog.hide()
 	dialog.queue_free()
 
 	# Show quantity dialog
@@ -2800,9 +2802,9 @@ func _check_hardware_warnings():
 		if status == "Testing" or status == "Fixing":
 			var mult = game_manager.get_engine_hardware_multiplier(i)
 			if mult < threshold:
-				var name = game_manager.get_engine_type_name(i)
+				var engine_name = game_manager.get_engine_type_name(i)
 				var pct = int(mult * 100)
-				var msg = "Engine '%s' hardware at %d%%" % [name, pct]
+				var msg = "Engine '%s' hardware at %d%%" % [engine_name, pct]
 				_set_notification(id, msg)
 				seen_ids[id] = true
 			else:
@@ -2818,9 +2820,9 @@ func _check_hardware_warnings():
 		if status == "Testing" or status == "Fixing":
 			var mult = game_manager.get_rocket_design_hardware_multiplier(i)
 			if mult < threshold:
-				var name = game_manager.get_rocket_design_name(i)
+				var design_name = game_manager.get_rocket_design_name(i)
 				var pct = int(mult * 100)
-				var msg = "Rocket '%s' hardware at %d%%" % [name, pct]
+				var msg = "Rocket '%s' hardware at %d%%" % [design_name, pct]
 				_set_notification(id, msg)
 				seen_ids[id] = true
 			else:
@@ -2999,7 +3001,7 @@ func _on_testing_requested():
 	_show_tab(Tab.LAUNCH_SITE)
 
 # Launch site content signal handlers
-func _on_launch_requested(serial_number: int):
+func _on_launch_requested(serial_number: int, free_launch_destination: String):
 	# Get the designer from design content
 	var design = content_areas[Tab.DESIGN]
 	var designer = design.get_designer()
@@ -3019,7 +3021,7 @@ func _on_launch_requested(serial_number: int):
 		return
 
 	# Show launch overlay
-	launch_overlay.show_launch(game_manager, designer)
+	launch_overlay.show_launch(game_manager, designer, free_launch_destination)
 
 # Launch overlay signal handlers
 func _on_launch_completed(success: bool):

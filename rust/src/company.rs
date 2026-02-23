@@ -240,6 +240,31 @@ impl Company {
         }
     }
 
+    /// Add a fuel delivery to the manifest.
+    /// Validates destination and quantity > 0.
+    /// Returns the manifest entry_id on success.
+    pub fn add_fuel_delivery_to_manifest(
+        &mut self,
+        fuel_type: FuelType,
+        quantity_kg: f64,
+        destination: &str,
+    ) -> Result<u32, String> {
+        if quantity_kg <= 0.0 {
+            return Err("Quantity must be greater than zero".to_string());
+        }
+        let loc = DELTA_V_MAP.location(destination)
+            .ok_or_else(|| format!("Unknown destination: {}", destination))?;
+
+        let entry_id = self.manifest.add_fuel_delivery(
+            fuel_type,
+            quantity_kg,
+            destination.to_string(),
+            loc.display_name.to_string(),
+        );
+
+        Ok(entry_id)
+    }
+
     /// Get the target delta-v from the manifest (farthest destination).
     /// Falls back to LEO if manifest is empty.
     pub fn get_manifest_target_delta_v(&self) -> f64 {
@@ -266,7 +291,12 @@ impl Company {
     /// Unified successful launch using the manifest.
     /// Deducts rocket cost + testing costs, creates flight with manifest payloads.
     /// Returns the total reward (deferred until flight arrival).
-    pub fn complete_manifest_launch(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) -> f64 {
+    /// Shared bookkeeping for a successful launch: deduct costs, record success, add testing work.
+    fn record_launch_success(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) {
+        assert!(rocket_design_id < self.rocket_designs.len(),
+            "record_launch_success: design_id {} out of range (len {})",
+            rocket_design_id, self.rocket_designs.len());
+
         self.total_launches += 1;
         self.successful_launches += 1;
 
@@ -300,6 +330,45 @@ impl Company {
         } else {
             self.rocket_designs[rocket_design_id].head_mut().workflow.add_testing_work_no_boost(30.0);
         }
+    }
+
+    /// Shared bookkeeping for a failed launch: deduct costs, record failure, add testing work.
+    fn record_launch_failure(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) {
+        self.total_launches += 1;
+
+        // Deduct rocket cost and testing costs
+        let design = self.rocket_designs[rocket_design_id].head();
+        let rocket_cost = design.total_cost();
+        let testing_cost = design.get_testing_spent();
+        self.money -= rocket_cost + testing_cost;
+
+        // Store propellant data
+        let propellant_loaded = design.propellant_by_fuel_type();
+
+        // Record failure on design
+        let head = self.rocket_designs[rocket_design_id].head_mut();
+        head.launch_record.record_failure();
+        head.launch_record.last_propellant_loaded = Some(propellant_loaded);
+        head.launch_record.last_propellant_remaining = None;
+        self.rocket_designs[rocket_design_id].launch_record.record_failure();
+
+        // Reset testing_spent
+        self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
+
+        // Failed launches still provide partial testing data — only reset boost for latest revision
+        let is_latest = launched_revision.map_or(true, |rev| {
+            self.rocket_designs[rocket_design_id].latest_revision()
+                .map_or(true, |latest| latest.revision_number == rev)
+        });
+        if is_latest {
+            self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(20.0);
+        } else {
+            self.rocket_designs[rocket_design_id].head_mut().workflow.add_testing_work_no_boost(20.0);
+        }
+    }
+
+    pub fn complete_manifest_launch(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) -> f64 {
+        self.record_launch_success(rocket_design_id, launched_revision);
 
         // Build mission plan from manifest
         let farthest_dest = self.manifest.unique_destinations_sorted_by_delta_v()
@@ -342,6 +411,14 @@ impl Company {
                             entry.destination.clone(),
                         ));
                     }
+                    crate::manifest::ManifestEntryKind::FuelDelivery { fuel_type, quantity_kg } => {
+                        payloads.push(Payload::fuel_delivery(
+                            payload_id,
+                            *fuel_type,
+                            *quantity_kg,
+                            entry.destination.clone(),
+                        ));
+                    }
                 }
             }
             if let Some(flight) = self.get_flight_mut(flight_id) {
@@ -380,37 +457,7 @@ impl Company {
     /// Unified failed launch using the manifest.
     /// Deducts costs, records failure. Keeps manifest intact for retry.
     pub fn fail_manifest_launch(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) {
-        self.total_launches += 1;
-
-        // Deduct rocket cost and testing costs
-        let design = self.rocket_designs[rocket_design_id].head();
-        let rocket_cost = design.total_cost();
-        let testing_cost = design.get_testing_spent();
-        self.money -= rocket_cost + testing_cost;
-
-        // Store propellant data
-        let propellant_loaded = design.propellant_by_fuel_type();
-
-        // Record failure on design
-        let head = self.rocket_designs[rocket_design_id].head_mut();
-        head.launch_record.record_failure();
-        head.launch_record.last_propellant_loaded = Some(propellant_loaded);
-        head.launch_record.last_propellant_remaining = None;
-        self.rocket_designs[rocket_design_id].launch_record.record_failure();
-
-        // Reset testing_spent
-        self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
-
-        // Failed launches still provide partial testing data — only reset boost for latest revision
-        let is_latest = launched_revision.map_or(true, |rev| {
-            self.rocket_designs[rocket_design_id].latest_revision()
-                .map_or(true, |latest| latest.revision_number == rev)
-        });
-        if is_latest {
-            self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(20.0);
-        } else {
-            self.rocket_designs[rocket_design_id].head_mut().workflow.add_testing_work_no_boost(20.0);
-        }
+        self.record_launch_failure(rocket_design_id, launched_revision);
 
         // Create and immediately fail a flight record
         let farthest_dest = self.manifest.unique_destinations_sorted_by_delta_v()
@@ -424,6 +471,27 @@ impl Company {
         }
 
         // DON'T clear manifest — player can retry
+    }
+
+    /// Successful free launch (no manifest): creates a flight to the specified destination.
+    /// Returns the flight ID, or None if path not found.
+    pub fn complete_free_launch(&mut self, rocket_design_id: usize, launched_revision: Option<u32>, destination: &str) -> Option<FlightId> {
+        self.record_launch_success(rocket_design_id, launched_revision);
+
+        // Create flight to destination (no payloads)
+        self.create_flight(rocket_design_id, destination)
+    }
+
+    /// Failed free launch (no manifest): records failure, creates and fails a flight record.
+    pub fn fail_free_launch(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) {
+        self.record_launch_failure(rocket_design_id, launched_revision);
+
+        // Create and immediately fail a flight record
+        if let Some(flight_id) = self.create_flight(rocket_design_id, "leo") {
+            if let Some(flight) = self.get_flight_mut(flight_id) {
+                flight.fail();
+            }
+        }
     }
 
     /// Create a flight using a manifest-derived mission plan.
@@ -704,6 +772,25 @@ impl Company {
     pub fn delete_rocket_design(&mut self, index: usize) -> bool {
         if index < self.rocket_designs.len() && self.rocket_designs.len() > 1 {
             self.rocket_designs.remove(index);
+
+            // Update rocket_design_id on inventory entries and flights that referenced
+            // designs at or above the deleted index
+            for entry in &mut self.manufacturing.rocket_inventory {
+                if entry.rocket_design_id == index {
+                    // Rocket was built from the deleted design — point to 0 as fallback
+                    entry.rocket_design_id = 0;
+                } else if entry.rocket_design_id > index {
+                    entry.rocket_design_id -= 1;
+                }
+            }
+            for flight in &mut self.flights {
+                if flight.design_lineage_index == index {
+                    flight.design_lineage_index = 0;
+                } else if flight.design_lineage_index > index {
+                    flight.design_lineage_index -= 1;
+                }
+            }
+
             true
         } else {
             false
@@ -1680,9 +1767,14 @@ impl Company {
         self.flights.iter_mut().find(|f| f.id == id)
     }
 
-    /// Get all active flights (InTransit or AtLocation).
+    /// Get all active flights (InTransit, AtLocation, or Idle).
     pub fn active_flights(&self) -> Vec<&FlightState> {
         self.flights.iter().filter(|f| f.is_active()).collect()
+    }
+
+    /// Get all idle flights (waiting for commands).
+    pub fn idle_flights(&self) -> Vec<&FlightState> {
+        self.flights.iter().filter(|f| f.status == FlightStatus::Idle).collect()
     }
 
     /// Get total number of flights.
@@ -1690,15 +1782,116 @@ impl Company {
         self.flights.len()
     }
 
+    /// Retire an idle flight (mark as Completed and remove from active tracking).
+    /// Returns true if the flight was successfully retired.
+    pub fn retire_flight(&mut self, flight_id: FlightId) -> bool {
+        if let Some(flight) = self.flights.iter_mut().find(|f| f.id == flight_id) {
+            if flight.status == FlightStatus::Idle {
+                flight.status = FlightStatus::Completed;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Plan a route from an idle flight's current location to a destination.
+    /// Appends the shortest-path legs to the flight's mission plan.
+    /// Returns true if a path was found and legs were appended.
+    pub fn plan_flight_to(&mut self, flight_id: FlightId, destination: &str) -> bool {
+        let flight = match self.flights.iter().find(|f| f.id == flight_id) {
+            Some(f) if f.status == FlightStatus::Idle => f,
+            _ => return false,
+        };
+        let from = flight.current_location.clone();
+
+        let plan = match MissionPlan::from_shortest_path(&from, destination) {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let flight = self.flights.iter_mut().find(|f| f.id == flight_id).unwrap();
+        flight.append_legs(plan.legs);
+        true
+    }
+
+    /// Set an idle flight with pending legs to InTransit.
+    /// Returns true if the flight was successfully set to transit.
+    pub fn execute_flight(&mut self, flight_id: FlightId) -> bool {
+        if let Some(flight) = self.flights.iter_mut().find(|f| f.id == flight_id) {
+            if flight.status == FlightStatus::Idle {
+                return flight.execute();
+            }
+        }
+        false
+    }
+
+    /// Drop a payload from an idle flight by index.
+    /// Returns true if the payload was dropped.
+    pub fn drop_flight_payload(&mut self, flight_id: FlightId, payload_index: usize) -> bool {
+        if let Some(flight) = self.flights.iter_mut().find(|f| f.id == flight_id) {
+            if flight.status == FlightStatus::Idle {
+                return flight.drop_payload(payload_index).is_some();
+            }
+        }
+        false
+    }
+
+    /// Get available destinations from an idle flight's current location.
+    /// Returns (location_id, delta_v_cost, transit_days) for each reachable location.
+    pub fn get_flight_available_destinations(&self, flight_id: FlightId) -> Vec<(&'static str, f64, u32)> {
+        let flight = match self.flights.iter().find(|f| f.id == flight_id) {
+            Some(f) if f.status == FlightStatus::Idle => f,
+            _ => return Vec::new(),
+        };
+
+        let from = &flight.current_location;
+        let mut destinations = Vec::new();
+
+        // Get all locations except earth_surface (no re-entry) and the current location
+        for loc in DELTA_V_MAP.locations() {
+            if loc.id == from.as_str() {
+                continue;
+            }
+            // Skip earth_surface — no re-entry yet
+            if loc.id == "earth_surface" || loc.id == "suborbital" {
+                continue;
+            }
+            if let Some((_path, total_dv)) = DELTA_V_MAP.shortest_path(from, loc.id) {
+                // Sum transit days along the path
+                let plan = MissionPlan::from_shortest_path(from, loc.id).unwrap();
+                let transit_days = plan.total_transit_days();
+                destinations.push((loc.id, total_dv, transit_days));
+            }
+        }
+
+        // Sort by delta-v cost ascending
+        destinations.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        destinations
+    }
+
+    /// Clear pending legs from an idle flight's plan.
+    pub fn clear_flight_plan(&mut self, flight_id: FlightId) -> bool {
+        if let Some(flight) = self.flights.iter_mut().find(|f| f.id == flight_id) {
+            if flight.status == FlightStatus::Idle {
+                flight.clear_pending_legs();
+                return true;
+            }
+        }
+        false
+    }
+
     /// Process all in-transit flights: tick transit days, advance legs, detect arrivals.
-    /// Delivers payloads at intermediate stops.
-    /// Returns events for flights that completed all legs.
+    /// Delivers payloads at intermediate stops and at the final destination.
+    /// Flights that complete all legs go Idle (waiting for commands).
+    /// Flights with no remaining payloads and no propellant are auto-retired.
     /// 0-transit legs are advanced immediately in the same tick.
     pub fn process_flights(&mut self) -> Vec<WorkEvent> {
         let mut events = Vec::new();
-        let mut arrived_ids = Vec::new();
+        let mut idle_ids = Vec::new();
         // Collect intermediate deliveries: (flight_id, location, delivered_payloads)
         let mut intermediate_deliveries: Vec<(FlightId, String, Vec<Payload>)> = Vec::new();
+        // Collect final deliveries separately
+        let mut final_deliveries: Vec<(FlightId, String, Vec<Payload>)> = Vec::new();
 
         for flight in &mut self.flights {
             if flight.status != FlightStatus::InTransit {
@@ -1715,7 +1908,17 @@ impl Company {
                 flight.advance_leg();
 
                 if flight.all_legs_completed() {
-                    arrived_ids.push(flight.id);
+                    // Deliver payloads at final destination
+                    let final_loc = flight.current_location.clone();
+                    let delivered = flight.deliver_payloads_at(&final_loc);
+                    if !delivered.is_empty() {
+                        final_deliveries.push((flight.id, final_loc, delivered));
+                    }
+
+                    // Update propellant from design calculations
+                    // (we store the flight's current propellant state)
+                    flight.status = FlightStatus::Idle;
+                    idle_ids.push(flight.id);
                     break;
                 }
 
@@ -1736,65 +1939,76 @@ impl Company {
 
         // Process intermediate deliveries (pay rewards, deploy depots, record completions)
         for (_flight_id, destination, payloads) in intermediate_deliveries {
-            for payload in &payloads {
-                let reward = payload.reward();
-                if reward > 0.0 {
-                    self.money += reward;
-                }
-                if let Some(cid) = payload.contract_id() {
-                    self.completed_contracts.push(cid);
-                }
-                if let PayloadKind::Depot { capacity_kg, .. } = &payload.kind {
-                    self.deploy_depot(&destination, *capacity_kg);
+            self.process_payload_deliveries(&destination, &payloads);
+        }
+
+        // Process final deliveries — track reward per flight
+        let mut final_rewards: HashMap<FlightId, f64> = HashMap::new();
+        for (flight_id, destination, payloads) in final_deliveries {
+            let reward = self.process_payload_deliveries(&destination, &payloads);
+            if reward > 0.0 {
+                *final_rewards.entry(flight_id).or_insert(0.0) += reward;
+            }
+        }
+
+        // Emit FlightIdle events and auto-retire empty flights
+        let mut auto_retire_ids = Vec::new();
+        for flight_id in idle_ids {
+            if let Some(flight) = self.flights.iter().find(|f| f.id == flight_id) {
+                let location = flight.current_location.clone();
+                let has_payloads = !flight.payloads.is_empty();
+                let has_propellant = flight.total_propellant_remaining_kg() > 0.1;
+                let reward = final_rewards.get(&flight_id).copied().unwrap_or(0.0);
+
+                if !has_payloads && !has_propellant {
+                    // Auto-retire: expendable rocket with nothing left
+                    auto_retire_ids.push(flight_id);
+                    events.push(WorkEvent::FlightArrived {
+                        flight_id,
+                        destination: location,
+                        is_contract: false,
+                    });
+                } else {
+                    events.push(WorkEvent::FlightIdle {
+                        flight_id,
+                        location,
+                        reward,
+                    });
                 }
             }
         }
 
-        // Process final arrivals
-        for flight_id in arrived_ids {
-            if let Some(flight) = self.flights.iter().find(|f| f.id == flight_id) {
-                let destination = flight.destination.clone();
-                let is_contract = flight.has_contract_payload();
-                events.push(WorkEvent::FlightArrived {
-                    flight_id,
-                    destination,
-                    is_contract,
-                });
+        // Auto-retire empty flights
+        for flight_id in auto_retire_ids {
+            if let Some(flight) = self.flights.iter_mut().find(|f| f.id == flight_id) {
+                flight.status = FlightStatus::Completed;
             }
         }
 
         events
     }
 
-    /// Complete a flight that has arrived at its destination.
-    /// Pays contract reward, adds fame, records completion.
-    pub fn complete_flight_arrival(&mut self, flight_id: FlightId) -> Option<f64> {
-        let flight = self.flights.iter_mut().find(|f| f.id == flight_id)?;
-
-        // Mark flight as completed
-        flight.status = FlightStatus::Completed;
-        flight.current_location = flight.destination.clone();
-
-        let destination = flight.destination.clone();
-        let payloads = flight.payloads.clone();
-
-        // Process all payloads
+    /// Process payload deliveries: pay rewards, deploy depots, record completions.
+    /// Returns the total reward paid.
+    fn process_payload_deliveries(&mut self, destination: &str, payloads: &[Payload]) -> f64 {
         let mut total_reward = 0.0;
-        for payload in &payloads {
-            total_reward += payload.reward();
+        for payload in payloads {
+            let reward = payload.reward();
+            if reward > 0.0 {
+                self.money += reward;
+                total_reward += reward;
+            }
             if let Some(cid) = payload.contract_id() {
                 self.completed_contracts.push(cid);
             }
             if let PayloadKind::Depot { capacity_kg, .. } = &payload.kind {
-                self.deploy_depot(&destination, *capacity_kg);
+                self.deploy_depot(destination, *capacity_kg);
+            }
+            if let PayloadKind::FuelDelivery { fuel_type, quantity_kg } = &payload.kind {
+                self.deposit_fuel(destination, *fuel_type, *quantity_kg);
             }
         }
-
-        if total_reward > 0.0 {
-            self.money += total_reward;
-        }
-
-        Some(total_reward)
+        total_reward
     }
 
     // ==========================================

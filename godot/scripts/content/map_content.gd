@@ -5,6 +5,9 @@ extends Control
 
 var game_manager: GameManager = null
 
+# Currently selected idle flight for command panel (-1 = none)
+var _selected_flight_id: int = -1
+
 @onready var orbit_diagram = $HBoxContainer/CenterContainer/OrbitDiagram
 @onready var sidebar_content = $HBoxContainer/SidebarPanel/SidebarScroll/SidebarContent
 
@@ -17,6 +20,7 @@ const LUNAR_COLOR = Color(0.8, 0.8, 1.0, 0.8)  # Light blue/white
 # Flight colors
 const FLIGHT_CONTRACT_COLOR = Color(0.3, 0.9, 1.0, 0.9)  # Cyan
 const FLIGHT_DEPOT_COLOR = Color(0.9, 0.7, 0.3, 0.9)     # Amber
+const IDLE_FLIGHT_COLOR = Color(0.6, 0.9, 0.6, 0.9)       # Light green
 
 # Earth colors
 const EARTH_OCEAN = Color(0.1, 0.3, 0.6, 1.0)
@@ -73,6 +77,10 @@ func _on_flight_arrived(_flight_id: int, _destination: String, _reward: float):
 	if is_visible_in_tree():
 		refresh()
 
+func _on_flights_changed():
+	if is_visible_in_tree():
+		refresh()
+
 func _on_inventory_changed():
 	if is_visible_in_tree():
 		refresh()
@@ -111,6 +119,9 @@ func _on_orbit_diagram_draw():
 		var depot_locations = game_manager.get_depot_locations()
 		for loc in depot_locations:
 			_draw_depot_indicator(center, loc)
+
+		# Draw planned routes for idle flights (behind flight icons)
+		_draw_planned_routes(center)
 
 		# Draw active flights (on top)
 		_draw_active_flights(center)
@@ -202,6 +213,27 @@ func _draw_dashed_line(from: Vector2, to: Vector2, color: Color, width: float, d
 		drawn = segment_end
 		drawing = !drawing
 
+func _draw_planned_routes(center: Vector2):
+	if not game_manager:
+		return
+	var idle_count = game_manager.get_idle_flight_count()
+	for i in range(idle_count):
+		var flight_id = game_manager.get_idle_flight_id(i)
+		var pending_count = game_manager.get_flight_pending_leg_count(flight_id)
+		if pending_count <= 0:
+			continue
+
+		var location = game_manager.get_idle_flight_location(i)
+		var prev_pos = _get_location_pos(center, location)
+		var color = IDLE_FLIGHT_COLOR
+		color.a = 0.4
+
+		for li in range(pending_count):
+			var dest = game_manager.get_flight_pending_leg_destination(flight_id, li)
+			var to_pos = _get_location_pos(center, dest)
+			_draw_dashed_line(prev_pos, to_pos, color, 1.5, 4.0)
+			prev_pos = to_pos
+
 func _draw_active_flights(center: Vector2):
 	if not game_manager:
 		return
@@ -210,13 +242,23 @@ func _draw_active_flights(center: Vector2):
 	var location_flight_counts: Dictionary = {}
 
 	for i in range(count):
+		var flight_id = game_manager.get_active_flight_id(i)
 		var current_loc = game_manager.get_active_flight_current_location(i)
 		var days_remaining = game_manager.get_active_flight_days_remaining(i)
 		var leg_transit_days = game_manager.get_active_flight_current_leg_transit_days(i)
 		var next_dest = game_manager.get_active_flight_next_destination(i)
 		var design_name = game_manager.get_active_flight_design_name(i)
 		var payload_type = game_manager.get_active_flight_payload_type(i)
-		var color = FLIGHT_CONTRACT_COLOR if payload_type == "contract" else FLIGHT_DEPOT_COLOR
+		var status = game_manager.get_flight_status(flight_id)
+
+		var is_idle = (status == "Idle")
+		var color: Color
+		if is_idle:
+			color = IDLE_FLIGHT_COLOR
+		elif payload_type == "contract":
+			color = FLIGHT_CONTRACT_COLOR
+		else:
+			color = FLIGHT_DEPOT_COLOR
 
 		var pos: Vector2
 		var label_text: String
@@ -230,7 +272,7 @@ func _draw_active_flights(center: Vector2):
 			var to_pos = _get_location_pos(center, next_dest)
 			pos = from_pos.lerp(to_pos, progress)
 			var dest_short = _get_location_short_name(game_manager.get_active_flight_destination(i))
-			label_text = "%s → %s %dd" % [design_name, dest_short, days_remaining]
+			label_text = "%s -> %s %dd" % [design_name, dest_short, days_remaining]
 		else:
 			# At location — offset from base position
 			var loc_key = current_loc
@@ -239,10 +281,16 @@ func _draw_active_flights(center: Vector2):
 			pos = _get_location_pos(center, current_loc)
 			# Offset each flight slightly to avoid overlap with depots
 			pos += Vector2(0, -20 - offset_index * 14)
-			label_text = design_name
+			if is_idle:
+				label_text = "%s (idle)" % design_name
+			else:
+				label_text = design_name
 
-		# Draw flight triangle icon
-		_draw_flight_icon(pos, color)
+		# Draw flight icon — circle for idle, triangle for in-transit
+		if is_idle:
+			_draw_idle_flight_icon(pos, color)
+		else:
+			_draw_flight_icon(pos, color)
 
 		# Draw label
 		var font = ThemeDB.fallback_font
@@ -251,15 +299,20 @@ func _draw_active_flights(center: Vector2):
 
 func _draw_flight_icon(pos: Vector2, color: Color):
 	# Small triangle pointing right
-	var size = 5.0
+	var icon_size = 5.0
 	var points = PackedVector2Array([
-		pos + Vector2(-size, -size),
-		pos + Vector2(size, 0),
-		pos + Vector2(-size, size),
+		pos + Vector2(-icon_size, -icon_size),
+		pos + Vector2(icon_size, 0),
+		pos + Vector2(-icon_size, icon_size),
 	])
 	orbit_diagram.draw_colored_polygon(points, color)
 	# Small outline
 	orbit_diagram.draw_polyline(points, color.lightened(0.3), 1.0, true)
+
+func _draw_idle_flight_icon(pos: Vector2, color: Color):
+	# Circle for idle flights (distinct from transit triangles)
+	orbit_diagram.draw_circle(pos, 5.0, color)
+	orbit_diagram.draw_arc(pos, 5.0, 0, TAU, 16, color.lightened(0.3), 1.0, true)
 
 # ==========================================
 # Sidebar
@@ -299,9 +352,13 @@ func _update_sidebar():
 			"text": "Depot: %s / %s kg" % [_format_mass(stored), _format_mass(capacity)],
 		})
 
-	# Active flights
+	# Active flights (non-idle)
 	var flight_count = game_manager.get_active_flight_count()
 	for i in range(flight_count):
+		var flight_id = game_manager.get_active_flight_id(i)
+		var status = game_manager.get_flight_status(flight_id)
+		if status == "Idle":
+			continue  # Handled separately below
 		var current_loc = game_manager.get_active_flight_current_location(i)
 		var days_remaining = game_manager.get_active_flight_days_remaining(i)
 		var design_name = game_manager.get_active_flight_design_name(i)
@@ -315,15 +372,19 @@ func _update_sidebar():
 		}
 
 		if days_remaining > 0:
-			flight_info["text"] = "%s → %s (%dd)" % [design_name, dest_short, days_remaining]
+			flight_info["text"] = "%s -> %s (%dd)" % [design_name, dest_short, days_remaining]
 			in_transit_flights.append(flight_info)
 		else:
-			flight_info["text"] = "%s (arrived)" % design_name
+			flight_info["text"] = design_name
 			if not assets_by_location.has(current_loc):
 				assets_by_location[current_loc] = []
 			assets_by_location[current_loc].append(flight_info)
 
-	var has_any_assets = assets_by_location.size() > 0 or in_transit_flights.size() > 0
+	# Check for idle flights
+	var idle_count = game_manager.get_idle_flight_count()
+	var has_idle = idle_count > 0
+
+	var has_any_assets = assets_by_location.size() > 0 or in_transit_flights.size() > 0 or has_idle
 
 	if not has_any_assets:
 		var placeholder = Label.new()
@@ -380,6 +441,228 @@ func _update_sidebar():
 			var color = FLIGHT_CONTRACT_COLOR if flight["payload_type"] == "contract" else FLIGHT_DEPOT_COLOR
 			entry.add_theme_color_override("font_color", color)
 			sidebar_content.add_child(entry)
+
+	# Idle flights section
+	if has_idle:
+		var spacer = Control.new()
+		spacer.custom_minimum_size = Vector2(0, 6)
+		sidebar_content.add_child(spacer)
+
+		var idle_header = Label.new()
+		idle_header.text = "Spacecraft (Idle)"
+		idle_header.add_theme_font_size_override("font_size", 13)
+		idle_header.add_theme_color_override("font_color", IDLE_FLIGHT_COLOR)
+		sidebar_content.add_child(idle_header)
+
+		var idle_sep = HSeparator.new()
+		sidebar_content.add_child(idle_sep)
+
+		for i in range(idle_count):
+			_add_idle_flight_entry(i)
+
+# ==========================================
+# Idle Flight Sidebar Entries
+# ==========================================
+
+func _add_idle_flight_entry(index: int):
+	var flight_id = game_manager.get_idle_flight_id(index)
+	var design_name = game_manager.get_idle_flight_design_name(index)
+	var location = game_manager.get_idle_flight_location(index)
+	var loc_short = _get_location_short_name(location)
+	var remaining_dv = game_manager.get_idle_flight_remaining_delta_v(index)
+	var propellant = game_manager.get_idle_flight_propellant_remaining(index)
+	var _payload_count = game_manager.get_idle_flight_payload_count(index)
+	var is_selected = (flight_id == _selected_flight_id)
+
+	# Flight header button
+	var header_btn = Button.new()
+	header_btn.text = "%s @ %s" % [design_name, loc_short]
+	header_btn.add_theme_font_size_override("font_size", 11)
+	header_btn.flat = true
+	header_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	if is_selected:
+		header_btn.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
+	else:
+		header_btn.add_theme_color_override("font_color", IDLE_FLIGHT_COLOR)
+	header_btn.pressed.connect(_on_idle_flight_clicked.bind(flight_id))
+	sidebar_content.add_child(header_btn)
+
+	# Stats line
+	var stats = Label.new()
+	stats.text = "  dv: %.0f m/s  fuel: %s" % [remaining_dv, _format_mass(propellant)]
+	stats.add_theme_font_size_override("font_size", 10)
+	stats.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	sidebar_content.add_child(stats)
+
+	# Expanded command panel
+	if is_selected:
+		_add_flight_command_panel(flight_id, index)
+
+func _on_idle_flight_clicked(flight_id: int):
+	if _selected_flight_id == flight_id:
+		_selected_flight_id = -1  # Toggle off
+	else:
+		_selected_flight_id = flight_id
+	_update_sidebar()
+
+func _add_flight_command_panel(flight_id: int, index: int):
+	var panel = VBoxContainer.new()
+	panel.add_theme_constant_override("separation", 2)
+	var panel_style = StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.15, 0.15, 0.2, 0.8)
+	panel_style.set_corner_radius_all(4)
+	panel_style.set_content_margin_all(6)
+	var panel_wrapper = PanelContainer.new()
+	panel_wrapper.add_theme_stylebox_override("panel", panel_style)
+	panel_wrapper.add_child(panel)
+	sidebar_content.add_child(panel_wrapper)
+
+	# Payloads section
+	var payload_count = game_manager.get_idle_flight_payload_count(index)
+	if payload_count > 0:
+		var payload_label = Label.new()
+		payload_label.text = "Payloads:"
+		payload_label.add_theme_font_size_override("font_size", 10)
+		payload_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+		panel.add_child(payload_label)
+
+		for pi in range(payload_count):
+			var pname = game_manager.get_idle_flight_payload_name(index, pi)
+			var pmass = game_manager.get_idle_flight_payload_mass(index, pi)
+			var pdest = game_manager.get_idle_flight_payload_destination(index, pi)
+			var pdest_short = _get_location_short_name(pdest)
+
+			var row = HBoxContainer.new()
+			var plabel = Label.new()
+			plabel.text = "  %s (%s -> %s)" % [pname, _format_mass(pmass), pdest_short]
+			plabel.add_theme_font_size_override("font_size", 10)
+			plabel.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+			plabel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(plabel)
+
+			var drop_btn = Button.new()
+			drop_btn.text = "Drop"
+			drop_btn.add_theme_font_size_override("font_size", 9)
+			drop_btn.custom_minimum_size = Vector2(36, 0)
+			drop_btn.pressed.connect(_on_drop_payload.bind(flight_id, pi))
+			row.add_child(drop_btn)
+			panel.add_child(row)
+
+	# Pending legs section
+	var pending_count = game_manager.get_flight_pending_leg_count(flight_id)
+	if pending_count > 0:
+		var legs_label = Label.new()
+		legs_label.text = "Planned route:"
+		legs_label.add_theme_font_size_override("font_size", 10)
+		legs_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+		panel.add_child(legs_label)
+
+		var total_planned_dv = game_manager.get_flight_total_planned_delta_v(flight_id)
+		for li in range(pending_count):
+			var dest = game_manager.get_flight_pending_leg_destination(flight_id, li)
+			var dv = game_manager.get_flight_pending_leg_delta_v(flight_id, li)
+			var dest_short = _get_location_short_name(dest)
+			var leg_label = Label.new()
+			leg_label.text = "  -> %s (%.0f m/s)" % [dest_short, dv]
+			leg_label.add_theme_font_size_override("font_size", 10)
+			leg_label.add_theme_color_override("font_color", Color(0.7, 0.8, 0.7))
+			panel.add_child(leg_label)
+
+		var total_label = Label.new()
+		total_label.text = "  Total: %.0f m/s" % total_planned_dv
+		total_label.add_theme_font_size_override("font_size", 10)
+		total_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.5))
+		panel.add_child(total_label)
+
+	# Navigate section
+	var nav_label = Label.new()
+	nav_label.text = "Navigate to:"
+	nav_label.add_theme_font_size_override("font_size", 10)
+	nav_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	panel.add_child(nav_label)
+
+	var dest_count = game_manager.get_flight_available_destination_count(flight_id)
+	var nav_row = HBoxContainer.new()
+	var dest_option = OptionButton.new()
+	dest_option.add_theme_font_size_override("font_size", 10)
+	dest_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	for di in range(dest_count):
+		var dest_name = game_manager.get_flight_available_destination_name(flight_id, di)
+		var dest_dv = game_manager.get_flight_available_destination_delta_v(flight_id, di)
+		var dest_days = game_manager.get_flight_available_destination_transit_days(flight_id, di)
+		var can_reach = game_manager.can_flight_reach_destination(flight_id, di)
+		var short_name = _get_location_short_name(dest_name)
+		var suffix = "" if can_reach else " [!]"
+		var day_str = "%dd " % dest_days if dest_days > 0 else ""
+		dest_option.add_item("%s (%s%.0f m/s)%s" % [short_name, day_str, dest_dv, suffix], di)
+
+	nav_row.add_child(dest_option)
+
+	var plan_btn = Button.new()
+	plan_btn.text = "Plan"
+	plan_btn.add_theme_font_size_override("font_size", 10)
+	plan_btn.custom_minimum_size = Vector2(40, 0)
+	plan_btn.pressed.connect(_on_plan_route.bind(flight_id, dest_option))
+	nav_row.add_child(plan_btn)
+	panel.add_child(nav_row)
+
+	# Action buttons
+	var spacer = Control.new()
+	spacer.custom_minimum_size = Vector2(0, 2)
+	panel.add_child(spacer)
+
+	var action_row = HBoxContainer.new()
+	action_row.add_theme_constant_override("separation", 4)
+
+	if pending_count > 0:
+		var exec_btn = Button.new()
+		exec_btn.text = "Execute"
+		exec_btn.add_theme_font_size_override("font_size", 10)
+		exec_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		exec_btn.pressed.connect(_on_execute_flight.bind(flight_id))
+		action_row.add_child(exec_btn)
+
+		var clear_btn = Button.new()
+		clear_btn.text = "Clear"
+		clear_btn.add_theme_font_size_override("font_size", 10)
+		clear_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		clear_btn.pressed.connect(_on_clear_plan.bind(flight_id))
+		action_row.add_child(clear_btn)
+
+	var retire_btn = Button.new()
+	retire_btn.text = "Retire"
+	retire_btn.add_theme_font_size_override("font_size", 10)
+	retire_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	retire_btn.pressed.connect(_on_retire_flight.bind(flight_id))
+	action_row.add_child(retire_btn)
+
+	panel.add_child(action_row)
+
+# ==========================================
+# Flight command callbacks
+# ==========================================
+
+func _on_plan_route(flight_id: int, dest_option: OptionButton):
+	var selected = dest_option.selected
+	if selected < 0:
+		return
+	var dest_name = game_manager.get_flight_available_destination_name(flight_id, selected)
+	game_manager.plan_flight_to(flight_id, dest_name)
+
+func _on_execute_flight(flight_id: int):
+	game_manager.execute_flight(flight_id)
+	_selected_flight_id = -1
+
+func _on_retire_flight(flight_id: int):
+	game_manager.retire_flight(flight_id)
+	_selected_flight_id = -1
+
+func _on_drop_payload(flight_id: int, payload_index: int):
+	game_manager.drop_flight_payload(flight_id, payload_index)
+
+func _on_clear_plan(flight_id: int):
+	game_manager.clear_flight_plan(flight_id)
 
 # ==========================================
 # Existing drawing functions
@@ -480,8 +763,6 @@ func _draw_legend():
 	var font = ThemeDB.fallback_font
 	var x = 15.0
 	var y = orbit_diagram.size.y - 20.0
-	var has_legend = false
-
 	# Flight legend entries
 	if game_manager and game_manager.get_active_flight_count() > 0:
 		# Contract flight icon
@@ -492,7 +773,12 @@ func _draw_legend():
 		_draw_flight_icon(Vector2(x + 5, y - 3), FLIGHT_DEPOT_COLOR)
 		orbit_diagram.draw_string(font, Vector2(x + 14, y + 2), "Depot Delivery", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, FLIGHT_DEPOT_COLOR)
 		y -= 16.0
-		has_legend = true
+
+	# Idle flight legend
+	if game_manager and game_manager.get_idle_flight_count() > 0:
+		_draw_idle_flight_icon(Vector2(x + 5, y - 3), IDLE_FLIGHT_COLOR)
+		orbit_diagram.draw_string(font, Vector2(x + 14, y + 2), "Idle Spacecraft", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, IDLE_FLIGHT_COLOR)
+		y -= 16.0
 
 	# Depot legend
 	if game_manager and game_manager.get_depot_locations().size() > 0:

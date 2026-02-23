@@ -8,6 +8,7 @@ signal launch_completed(success: bool)
 var game_manager: GameManager = null
 var designer: RocketDesigner = null
 var last_launch_success: bool = false
+var free_launch_destination: String = ""
 
 # UI references
 @onready var title_label = $ContentMargin/VBox/HeaderPanel/HeaderMargin/HeaderVBox/Title
@@ -49,9 +50,10 @@ func set_game_manager(gm: GameManager):
 func set_designer(d: RocketDesigner):
 	designer = d
 
-func show_launch(gm: GameManager, d: RocketDesigner):
+func show_launch(gm: GameManager, d: RocketDesigner, dest: String = ""):
 	game_manager = gm
 	designer = d
+	free_launch_destination = dest
 
 	# Copy design to launcher
 	launcher.copy_design_from(designer)
@@ -60,12 +62,17 @@ func show_launch(gm: GameManager, d: RocketDesigner):
 	if game_manager.has_manifest():
 		var location_id = game_manager.get_active_mission_location_id()
 		launcher.set_mission_plan(location_id)
+	elif free_launch_destination != "":
+		launcher.set_mission_plan(free_launch_destination)
 
 	# Update header
 	if game_manager.has_manifest():
 		var entry_count = game_manager.get_manifest_entry_count()
 		var route = game_manager.get_manifest_route_summary()
 		mission_label.text = "%d payload%s → %s" % [entry_count, "s" if entry_count != 1 else "", route]
+	elif free_launch_destination != "":
+		var dest_display = game_manager.get_location_display_name(free_launch_destination) if game_manager else free_launch_destination
+		mission_label.text = "Free Launch → %s" % dest_display
 	else:
 		mission_label.text = "Free Launch"
 
@@ -210,20 +217,28 @@ func run_launch_with_delays():
 	# Update state
 	last_launch_success = success
 
-	# Handle manifest launch completion/failure
+	# Handle launch completion/failure
 	var reward = 0.0
 	var route_summary = ""
 	var has_mission = game_manager and game_manager.has_manifest()
+	var flight_id = -1
 	if has_mission:
 		route_summary = game_manager.get_manifest_route_summary()
 		if success:
 			reward = game_manager.complete_launch()
 		else:
 			game_manager.fail_launch()
-		# Sync discovered flaw state from designer back to company's rocket_designs
-		if designer:
-			game_manager.sync_design_from(designer)
-		game_manager.update_current_rocket_design()
+	else:
+		# Free launch — create or fail flight
+		if success:
+			var dest = free_launch_destination if free_launch_destination != "" else "leo"
+			flight_id = game_manager.complete_free_launch(dest)
+		else:
+			game_manager.fail_free_launch()
+	# Sync discovered flaw state from designer back to company's rocket_designs
+	if designer:
+		game_manager.sync_design_from(designer)
+	game_manager.update_current_rocket_design()
 
 	# Show result panel
 	result_panel.visible = true
@@ -240,6 +255,10 @@ func run_launch_with_delays():
 			]
 		elif has_mission:
 			message_label.text = "Launch successful!\nRoute: %s" % route_summary
+		elif flight_id >= 0:
+			var dest_id = free_launch_destination if free_launch_destination != "" else "leo"
+			var dest_name = game_manager.get_location_display_name(dest_id) if game_manager else dest_id
+			message_label.text = "Spacecraft deployed to %s!\nFlight #%d" % [dest_name, flight_id]
 		else:
 			message_label.text = "Rocket reached orbit!"
 		continue_button.text = "CONTINUE"
@@ -343,20 +362,28 @@ func _run_flat_launch():
 	# Update state
 	last_launch_success = success
 
-	# Handle manifest launch completion/failure
+	# Handle launch completion/failure
 	var reward = 0.0
 	var route_summary = ""
 	var has_mission = game_manager and game_manager.has_manifest()
+	var flat_flight_id = -1
 	if has_mission:
 		route_summary = game_manager.get_manifest_route_summary()
 		if success:
 			reward = game_manager.complete_launch()
 		else:
 			game_manager.fail_launch()
-		# Sync discovered flaw state from designer back to company's rocket_designs
-		if designer:
-			game_manager.sync_design_from(designer)
-		game_manager.update_current_rocket_design()
+	else:
+		# Free launch — create or fail flight
+		if success:
+			var dest = free_launch_destination if free_launch_destination != "" else "leo"
+			flat_flight_id = game_manager.complete_free_launch(dest)
+		else:
+			game_manager.fail_free_launch()
+	# Sync discovered flaw state from designer back to company's rocket_designs
+	if designer:
+		game_manager.sync_design_from(designer)
+	game_manager.update_current_rocket_design()
 
 	# Show result panel
 	result_panel.visible = true
@@ -373,6 +400,9 @@ func _run_flat_launch():
 			]
 		elif has_mission:
 			message_label.text = "Launch successful!\nRoute: %s" % route_summary
+		elif flat_flight_id >= 0:
+			var dest_name = free_launch_destination if free_launch_destination != "" else "LEO"
+			message_label.text = "Spacecraft deployed to %s!\nFlight #%d" % [dest_name, flat_flight_id]
 		else:
 			message_label.text = "Rocket reached orbit!"
 		continue_button.text = "CONTINUE"

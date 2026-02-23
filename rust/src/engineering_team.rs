@@ -211,6 +211,13 @@ pub enum WorkEvent {
         stage_design_index: usize,
         order_id: crate::manufacturing::ManufacturingOrderId,
     },
+    /// A flight has completed all legs and is now idle at a location
+    FlightIdle {
+        flight_id: crate::flight_state::FlightId,
+        location: String,
+        /// Reward from payloads delivered at the final destination
+        reward: f64,
+    },
     /// A stage order was unblocked (engines arrived)
     StageOrderUnblocked {
         order_id: crate::manufacturing::ManufacturingOrderId,

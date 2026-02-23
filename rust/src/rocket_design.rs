@@ -797,6 +797,14 @@ impl RocketDesign {
         total
     }
 
+    /// Calculate total delta-v with an arbitrary payload mass (instead of self.payload_mass_kg).
+    /// Used for feasibility checks like "can this rocket reach X with Y kg of cargo?"
+    pub fn total_delta_v_with_payload(&self, payload_kg: f64) -> f64 {
+        let mut copy = self.clone();
+        copy.payload_mass_kg = payload_kg;
+        copy.total_delta_v()
+    }
+
     // ==========================================
     // TWR and Gravity Loss Calculations
     // ==========================================

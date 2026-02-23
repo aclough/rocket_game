@@ -27,6 +27,15 @@ var _dest_option: OptionButton = null
 var _depot_info_label: Label = null
 var _depot_select_btn: Button = null
 
+# Fuel delivery UI elements
+var _fuel_delivery_container: VBoxContainer = null
+var _fuel_dest_option: OptionButton = null
+var _fuel_type_option: OptionButton = null
+var _fuel_quantity_slider: HSlider = null
+var _fuel_quantity_label: Label = null
+var _fuel_feasibility_label: Label = null
+var _fuel_add_btn: Button = null
+
 func _ready():
 	pass
 
@@ -152,6 +161,96 @@ func _setup_dynamic_sections():
 	_depot_select_btn.pressed.connect(_on_select_depot_mission_pressed)
 	_company_missions_container.add_child(_depot_select_btn)
 
+	# === Fuel Delivery Section ===
+	var fuel_panel = PanelContainer.new()
+	fuel_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(fuel_panel)
+
+	var fuel_margin = MarginContainer.new()
+	fuel_margin.add_theme_constant_override("margin_left", 20)
+	fuel_margin.add_theme_constant_override("margin_top", 15)
+	fuel_margin.add_theme_constant_override("margin_right", 20)
+	fuel_margin.add_theme_constant_override("margin_bottom", 15)
+	fuel_panel.add_child(fuel_margin)
+
+	_fuel_delivery_container = VBoxContainer.new()
+	_fuel_delivery_container.add_theme_constant_override("separation", 10)
+	fuel_margin.add_child(_fuel_delivery_container)
+
+	var fuel_title = Label.new()
+	fuel_title.text = "FUEL DELIVERY"
+	fuel_title.add_theme_font_size_override("font_size", 18)
+	_fuel_delivery_container.add_child(fuel_title)
+
+	# Destination selector
+	var fuel_dest_row = HBoxContainer.new()
+	fuel_dest_row.add_theme_constant_override("separation", 10)
+	_fuel_delivery_container.add_child(fuel_dest_row)
+
+	var fuel_dest_label = Label.new()
+	fuel_dest_label.text = "Depot:"
+	fuel_dest_label.add_theme_font_size_override("font_size", 14)
+	fuel_dest_row.add_child(fuel_dest_label)
+
+	_fuel_dest_option = OptionButton.new()
+	_fuel_dest_option.add_theme_font_size_override("font_size", 13)
+	_fuel_dest_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_fuel_dest_option.item_selected.connect(_on_fuel_delivery_changed)
+	fuel_dest_row.add_child(_fuel_dest_option)
+
+	# Fuel type selector
+	var fuel_type_row = HBoxContainer.new()
+	fuel_type_row.add_theme_constant_override("separation", 10)
+	_fuel_delivery_container.add_child(fuel_type_row)
+
+	var fuel_type_label = Label.new()
+	fuel_type_label.text = "Fuel:"
+	fuel_type_label.add_theme_font_size_override("font_size", 14)
+	fuel_type_row.add_child(fuel_type_label)
+
+	_fuel_type_option = OptionButton.new()
+	_fuel_type_option.add_theme_font_size_override("font_size", 13)
+	_fuel_type_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_fuel_type_option.item_selected.connect(_on_fuel_delivery_changed)
+	fuel_type_row.add_child(_fuel_type_option)
+
+	# Quantity slider
+	var qty_row = HBoxContainer.new()
+	qty_row.add_theme_constant_override("separation", 10)
+	_fuel_delivery_container.add_child(qty_row)
+
+	var qty_label = Label.new()
+	qty_label.text = "Quantity:"
+	qty_label.add_theme_font_size_override("font_size", 14)
+	qty_row.add_child(qty_label)
+
+	_fuel_quantity_slider = HSlider.new()
+	_fuel_quantity_slider.min_value = 100
+	_fuel_quantity_slider.max_value = 10000
+	_fuel_quantity_slider.step = 100
+	_fuel_quantity_slider.value = 1000
+	_fuel_quantity_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_fuel_quantity_slider.value_changed.connect(_on_fuel_quantity_changed)
+	qty_row.add_child(_fuel_quantity_slider)
+
+	_fuel_quantity_label = Label.new()
+	_fuel_quantity_label.text = "1,000 kg"
+	_fuel_quantity_label.add_theme_font_size_override("font_size", 14)
+	_fuel_quantity_label.custom_minimum_size = Vector2(80, 0)
+	qty_row.add_child(_fuel_quantity_label)
+
+	# Feasibility label
+	_fuel_feasibility_label = Label.new()
+	_fuel_feasibility_label.add_theme_font_size_override("font_size", 13)
+	_fuel_delivery_container.add_child(_fuel_feasibility_label)
+
+	# Add button
+	_fuel_add_btn = Button.new()
+	_fuel_add_btn.text = "ADD FUEL DELIVERY TO MANIFEST"
+	_fuel_add_btn.add_theme_font_size_override("font_size", 14)
+	_fuel_add_btn.pressed.connect(_on_add_fuel_delivery_pressed)
+	_fuel_delivery_container.add_child(_fuel_add_btn)
+
 func _update_ui():
 	if not game_manager:
 		return
@@ -160,6 +259,7 @@ func _update_ui():
 	_update_active_contract()
 	_update_active_flights()
 	_update_depot_selectors()
+	_update_fuel_delivery()
 
 func _update_contracts_list():
 	# Clear existing contracts
@@ -437,6 +537,109 @@ func _update_active_flights():
 			days_label.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
 		days_label.add_theme_font_size_override("font_size", 14)
 		hbox.add_child(days_label)
+
+func _update_fuel_delivery():
+	if not _fuel_dest_option or not _fuel_type_option:
+		return
+
+	# Populate destination selector (only locations with depots)
+	_fuel_dest_option.clear()
+	var depot_loc_count = game_manager.get_depot_location_count()
+	for i in range(depot_loc_count):
+		var loc_name = game_manager.get_depot_location_name(i)
+		var loc_id = game_manager.get_depot_location_id(i)
+		_fuel_dest_option.add_item(loc_name)
+		_fuel_dest_option.set_item_metadata(i, loc_id)
+
+	if depot_loc_count == 0:
+		_fuel_dest_option.add_item("No depots deployed")
+		_fuel_dest_option.disabled = true
+	else:
+		_fuel_dest_option.disabled = false
+
+	# Populate fuel type selector (once)
+	if _fuel_type_option.item_count == 0:
+		var ft_count = game_manager.get_fuel_type_count()
+		for i in range(ft_count):
+			var ft_name = game_manager.get_fuel_type_name(i)
+			var ft_idx = game_manager.get_fuel_type_index(i)
+			_fuel_type_option.add_item(ft_name)
+			_fuel_type_option.set_item_metadata(i, ft_idx)
+
+	# Slider max is fixed at a generous upper bound;
+	# the feasibility check prevents adding more than the rocket can carry.
+	_fuel_quantity_slider.max_value = 50000
+
+	_update_fuel_feasibility()
+
+func _update_fuel_feasibility():
+	if not _fuel_feasibility_label or not _fuel_dest_option or not _fuel_add_btn:
+		return
+
+	var has_dest = _fuel_dest_option.item_count > 0 and _fuel_dest_option.selected >= 0
+	if not has_dest or game_manager.get_depot_location_count() == 0:
+		_fuel_feasibility_label.text = "Deploy a depot first to enable fuel delivery."
+		_fuel_feasibility_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		_fuel_add_btn.disabled = true
+		return
+
+	var dest_id = _fuel_dest_option.get_item_metadata(_fuel_dest_option.selected)
+	var quantity = _fuel_quantity_slider.value
+	var total_manifest_mass = game_manager.get_manifest_total_mass()
+	var total_needed = total_manifest_mass + quantity
+
+	var can_reach = game_manager.can_reach_destination_with_payload(dest_id, total_needed)
+	var rocket_dv = game_manager.get_delta_v_with_payload(total_needed)
+	var required_dv = game_manager.get_destination_required_delta_v(dest_id)
+
+	if can_reach:
+		var dv_margin = rocket_dv - required_dv
+		_fuel_feasibility_label.text = "%.0f kg fuel | Δv margin: %.0f m/s" % [quantity, dv_margin]
+		_fuel_feasibility_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+		_fuel_add_btn.disabled = false
+	else:
+		var dv_shortfall = required_dv - rocket_dv
+		_fuel_feasibility_label.text = "%.0f kg fuel | Δv short by %.0f m/s" % [quantity, dv_shortfall]
+		_fuel_feasibility_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3))
+		_fuel_add_btn.disabled = true
+
+func _on_fuel_delivery_changed(_index: int):
+	_update_fuel_feasibility()
+
+func _on_fuel_quantity_changed(value: float):
+	if _fuel_quantity_label:
+		_fuel_quantity_label.text = _format_number(value) + " kg"
+	_update_fuel_feasibility()
+
+func _on_add_fuel_delivery_pressed():
+	if not _fuel_dest_option or not _fuel_type_option:
+		return
+	var dest_idx = _fuel_dest_option.selected
+	var ft_idx = _fuel_type_option.selected
+	if dest_idx < 0 or ft_idx < 0:
+		return
+
+	var dest_id = _fuel_dest_option.get_item_metadata(dest_idx)
+	var fuel_type_index = _fuel_type_option.get_item_metadata(ft_idx)
+	var quantity = _fuel_quantity_slider.value
+
+	var entry_id = game_manager.add_fuel_delivery_to_manifest(fuel_type_index, quantity, dest_id)
+	if entry_id >= 0:
+		_update_ui()
+	else:
+		_show_toast("Failed to add fuel delivery to manifest")
+
+func _format_number(value: float) -> String:
+	var int_value = int(value)
+	var str_val = str(int_value)
+	var result = ""
+	var count = 0
+	for i in range(str_val.length() - 1, -1, -1):
+		if count > 0 and count % 3 == 0:
+			result = "," + result
+		result = str_val[i] + result
+		count += 1
+	return result
 
 func _on_flight_arrived_update(_flight_id: int, _destination: String, _reward: float):
 	_update_active_flights()

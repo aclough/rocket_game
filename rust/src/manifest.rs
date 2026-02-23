@@ -1,6 +1,7 @@
 /// Launch manifest: a collection of payloads (contracts and/or depots)
 /// to be delivered on a single rocket launch, potentially to multiple destinations.
 
+use crate::engine_design::FuelType;
 use crate::location::DELTA_V_MAP;
 
 /// Type-specific manifest entry data.
@@ -18,6 +19,10 @@ pub enum ManifestEntryKind {
         depot_name: String,
         capacity_kg: f64,
         insulated: bool,
+    },
+    FuelDelivery {
+        fuel_type: FuelType,
+        quantity_kg: f64,
     },
 }
 
@@ -58,11 +63,19 @@ impl ManifestEntry {
         }
     }
 
+    /// Whether this entry is a fuel delivery.
+    pub fn is_fuel_delivery(&self) -> bool {
+        matches!(self.kind, ManifestEntryKind::FuelDelivery { .. })
+    }
+
     /// Display name for this entry.
-    pub fn display_name(&self) -> &str {
+    pub fn display_name(&self) -> String {
         match &self.kind {
-            ManifestEntryKind::Contract { name, .. } => name,
-            ManifestEntryKind::Depot { depot_name, .. } => depot_name,
+            ManifestEntryKind::Contract { name, .. } => name.clone(),
+            ManifestEntryKind::Depot { depot_name, .. } => depot_name.clone(),
+            ManifestEntryKind::FuelDelivery { fuel_type, quantity_kg } => {
+                format!("{:.0} kg {} Propellant", quantity_kg, fuel_type.display_name())
+            }
         }
     }
 
@@ -71,6 +84,7 @@ impl ManifestEntry {
         match &self.kind {
             ManifestEntryKind::Contract { .. } => "Contract",
             ManifestEntryKind::Depot { .. } => "Depot",
+            ManifestEntryKind::FuelDelivery { .. } => "Fuel Delivery",
         }
     }
 }
@@ -144,6 +158,29 @@ impl Manifest {
             destination,
             destination_display,
             mass_kg,
+        });
+        entry_id
+    }
+
+    /// Add a fuel delivery to the manifest. Returns the entry_id.
+    pub fn add_fuel_delivery(
+        &mut self,
+        fuel_type: FuelType,
+        quantity_kg: f64,
+        destination: String,
+        destination_display: String,
+    ) -> u32 {
+        let entry_id = self.next_entry_id;
+        self.next_entry_id += 1;
+        self.entries.push(ManifestEntry {
+            entry_id,
+            kind: ManifestEntryKind::FuelDelivery {
+                fuel_type,
+                quantity_kg,
+            },
+            destination,
+            destination_display,
+            mass_kg: quantity_kg,
         });
         entry_id
     }

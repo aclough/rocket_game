@@ -3,7 +3,7 @@ extends Control
 ## Launch site content showing infrastructure and testing
 ## Includes pad upgrade, propellant storage, and testing panel
 
-signal launch_requested(serial_number: int)
+signal launch_requested(serial_number: int, free_launch_destination: String)
 
 var game_manager: GameManager = null
 var designer: RocketDesigner = null
@@ -23,6 +23,11 @@ var _selected_serial: int = -1
 
 # Mission info section (built dynamically)
 var _mission_section: VBoxContainer = null
+
+# Free launch destination picker
+var _dest_option: OptionButton = null
+var _dest_dv_label: Label = null
+var _free_launch_destination: String = "leo"
 
 # Testing view
 @onready var testing_view = $MarginContainer/HBox/TestingView
@@ -202,11 +207,43 @@ func _update_mission_info():
 		child.queue_free()
 
 	if not game_manager.has_manifest():
-		var no_mission = Label.new()
-		no_mission.text = "No mission selected"
-		no_mission.add_theme_font_size_override("font_size", 14)
-		no_mission.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-		_mission_section.add_child(no_mission)
+		# Free launch mode - show destination picker
+		var free_header = Label.new()
+		free_header.text = "Free Launch"
+		free_header.add_theme_font_size_override("font_size", 16)
+		_mission_section.add_child(free_header)
+
+		var desc = Label.new()
+		desc.text = "Deploy spacecraft to orbit"
+		desc.add_theme_font_size_override("font_size", 13)
+		desc.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		_mission_section.add_child(desc)
+
+		var dest_label = Label.new()
+		dest_label.text = "Destination:"
+		dest_label.add_theme_font_size_override("font_size", 14)
+		_mission_section.add_child(dest_label)
+
+		_dest_option = OptionButton.new()
+		_dest_option.add_theme_font_size_override("font_size", 13)
+		var loc_count = game_manager.get_orbital_location_count()
+		var selected_idx = 0
+		for i in range(loc_count):
+			var loc_name = game_manager.get_orbital_location_name(i)
+			var loc_id = game_manager.get_orbital_location_id(i)
+			var loc_dv = game_manager.get_orbital_location_delta_v(i)
+			_dest_option.add_item("%s (%.0f m/s)" % [loc_name, loc_dv])
+			_dest_option.set_item_metadata(i, loc_id)
+			if loc_id == _free_launch_destination:
+				selected_idx = i
+		_dest_option.selected = selected_idx
+		_dest_option.item_selected.connect(_on_free_launch_dest_selected)
+		_mission_section.add_child(_dest_option)
+
+		_dest_dv_label = Label.new()
+		_dest_dv_label.add_theme_font_size_override("font_size", 13)
+		_mission_section.add_child(_dest_dv_label)
+		_update_dest_dv_label()
 		return
 
 	# Header
@@ -264,8 +301,38 @@ func _on_upgrade_pressed():
 	if game_manager and game_manager.upgrade_pad():
 		_update_infrastructure()
 
+func _on_free_launch_dest_selected(index: int):
+	if _dest_option:
+		_free_launch_destination = _dest_option.get_item_metadata(index)
+		_update_dest_dv_label()
+		_update_launch_readiness()
+
+func _update_dest_dv_label():
+	if not _dest_dv_label or not designer or not designer.is_design_valid():
+		if _dest_dv_label:
+			_dest_dv_label.text = ""
+		return
+	# Find the delta-v for the selected destination
+	var loc_count = game_manager.get_orbital_location_count()
+	var target_dv = 0.0
+	for i in range(loc_count):
+		if game_manager.get_orbital_location_id(i) == _free_launch_destination:
+			target_dv = game_manager.get_orbital_location_delta_v(i)
+			break
+	var rocket_dv = designer.get_total_effective_delta_v()
+	if rocket_dv >= target_dv:
+		_dest_dv_label.text = "Δv: %.0f / %.0f m/s" % [rocket_dv, target_dv]
+		_dest_dv_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+	else:
+		_dest_dv_label.text = "Δv: %.0f / %.0f m/s (insufficient)" % [rocket_dv, target_dv]
+		_dest_dv_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3))
+
+func get_free_launch_destination() -> String:
+	return _free_launch_destination
+
 func _on_launch_pressed():
-	launch_requested.emit(_selected_serial)
+	var dest = "" if game_manager.has_manifest() else _free_launch_destination
+	launch_requested.emit(_selected_serial, dest)
 
 # Explicitly refresh the testing view (called after launch returns)
 func refresh_testing_view():

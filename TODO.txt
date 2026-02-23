@@ -1,6 +1,7 @@
-* UI
+* Add already researched and debugged rocket and engines mirroring the template for faster testing.  Add a "(Remove)" to the names
+    * There should be two already built as well
 * Fixes
-* Refactoring
+    * A failed rocket launch should restore the research hardware productivity for the rocket.
 * Stages
     * Stages have to track their propellant independantly
         *potentially a first stage won't completely use its fuel before the second stage starts if it's going back to the launch site.
