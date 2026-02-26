@@ -123,6 +123,26 @@ impl Company {
         company.teams.push(starting_team);
         company.next_team_id += 1;
 
+        // === Starter rockets: mark all default designs as Complete and populate inventory ===
+
+        // Mark all engine designs as Complete and cut revisions
+        for lineage in &mut company.engine_designs {
+            lineage.head_mut().workflow.set_complete();
+            lineage.name = format!("{} (Remove)", lineage.name);
+            lineage.cut_revision("Starter");
+        }
+
+        // Mark rocket design as Complete and cut a revision
+        company.rocket_designs[0].head_mut().workflow.set_complete();
+        company.rocket_designs[0].name = "Default Rocket (Remove)".to_string();
+        company.rocket_designs[0].head_mut().name = "Default Rocket (Remove)".to_string();
+        company.rocket_designs[0].cut_revision("Starter");
+
+        // Add 2 completed rockets directly to inventory (no loose engines needed)
+        let rocket_snapshot = company.rocket_designs[0].head().clone();
+        company.manufacturing.add_rocket_to_inventory(0, 1, rocket_snapshot.clone());
+        company.manufacturing.add_rocket_to_inventory(0, 1, rocket_snapshot);
+
         company
     }
 
@@ -292,7 +312,7 @@ impl Company {
     /// Deducts rocket cost + testing costs, creates flight with manifest payloads.
     /// Returns the total reward (deferred until flight arrival).
     /// Shared bookkeeping for a successful launch: deduct costs, record success, add testing work.
-    fn record_launch_success(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) {
+    fn record_launch_success(&mut self, rocket_design_id: usize, _launched_revision: Option<u32>) {
         assert!(rocket_design_id < self.rocket_designs.len(),
             "record_launch_success: design_id {} out of range (len {})",
             rocket_design_id, self.rocket_designs.len());
@@ -320,20 +340,12 @@ impl Company {
         // Reset testing_spent
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
 
-        // Launching IS hardware testing — but only reset boost for latest revision
-        let is_latest = launched_revision.map_or(true, |rev| {
-            self.rocket_designs[rocket_design_id].latest_revision()
-                .map_or(true, |latest| latest.revision_number == rev)
-        });
-        if is_latest {
-            self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(30.0);
-        } else {
-            self.rocket_designs[rocket_design_id].head_mut().workflow.add_testing_work_no_boost(30.0);
-        }
+        // Launching IS hardware testing — always reset boost regardless of revision
+        self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(30.0);
     }
 
     /// Shared bookkeeping for a failed launch: deduct costs, record failure, add testing work.
-    fn record_launch_failure(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) {
+    fn record_launch_failure(&mut self, rocket_design_id: usize, _launched_revision: Option<u32>) {
         self.total_launches += 1;
 
         // Deduct rocket cost and testing costs
@@ -355,16 +367,8 @@ impl Company {
         // Reset testing_spent
         self.rocket_designs[rocket_design_id].head_mut().testing_spent = 0.0;
 
-        // Failed launches still provide partial testing data — only reset boost for latest revision
-        let is_latest = launched_revision.map_or(true, |rev| {
-            self.rocket_designs[rocket_design_id].latest_revision()
-                .map_or(true, |latest| latest.revision_number == rev)
-        });
-        if is_latest {
-            self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(20.0);
-        } else {
-            self.rocket_designs[rocket_design_id].head_mut().workflow.add_testing_work_no_boost(20.0);
-        }
+        // Failed launches still provide partial testing data — always reset boost
+        self.rocket_designs[rocket_design_id].head_mut().workflow.add_launch_testing_work(20.0);
     }
 
     pub fn complete_manifest_launch(&mut self, rocket_design_id: usize, launched_revision: Option<u32>) -> f64 {
@@ -2616,15 +2620,17 @@ mod tests {
     #[test]
     fn test_set_engine_design_scale() {
         let mut company = Company::new();
-        assert!(company.set_engine_design_scale(0, 2.5));
-        assert_eq!(company.engine_designs[0].head().scale, 2.5);
+        let idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        assert!(company.set_engine_design_scale(idx, 2.5));
+        assert_eq!(company.engine_designs[idx].head().scale, 2.5);
     }
 
     #[test]
     fn test_set_engine_design_fuel_type() {
         let mut company = Company::new();
-        assert!(company.set_engine_design_fuel_type(0, FuelType::Solid));
-        assert_eq!(company.engine_designs[0].head().fuel_type(), FuelType::Solid);
+        let idx = company.create_engine_design(FuelType::Kerolox, 1.0);
+        assert!(company.set_engine_design_fuel_type(idx, FuelType::Solid));
+        assert_eq!(company.engine_designs[idx].head().fuel_type(), FuelType::Solid);
     }
 
     #[test]
@@ -2755,7 +2761,7 @@ mod tests {
     fn test_update_rocket_design_propagates_name() {
         let mut company = Company::new();
         let original_name = company.rocket_designs[0].name.clone();
-        assert_eq!(original_name, "Default Rocket");
+        assert_eq!(original_name, "Default Rocket (Remove)");
 
         // Load the design, change its name, and update
         let mut design = company.load_rocket_design(0).unwrap();
@@ -3037,8 +3043,8 @@ mod tests {
     #[test]
     fn test_start_engine_order_blocked_in_specification() {
         let mut company = Company::new();
-        // Default engines start in Specification
-        let idx = company.engine_designs.len() - 1;
+        // Create a new engine in Specification status
+        let idx = company.create_engine_design(FuelType::Kerolox, 1.0);
         assert!(company.engine_designs[idx].head().workflow.status.can_edit());
         company.engine_designs[idx].cut_revision("v1");
         let rev = company.engine_designs[idx].revisions.len() as u32;
@@ -3066,7 +3072,8 @@ mod tests {
     #[test]
     fn test_start_rocket_order_blocked_in_specification() {
         let mut company = Company::new();
-        // Default rocket starts in Specification
+        // Reset the default rocket back to Specification for this test
+        company.rocket_designs[0].head_mut().workflow = crate::design_workflow::DesignWorkflow::new();
         assert!(company.rocket_designs[0].head().workflow.status.can_edit());
         company.rocket_designs[0].cut_revision("v1");
         let rev = company.rocket_designs[0].revisions.len() as u32;
@@ -3147,6 +3154,7 @@ mod tests {
             total: 30.0,
         };
         company.engine_designs[engine_id].head_mut().workflow.flaws_generated = true;
+        company.engine_designs[engine_id].head_mut().workflow.testing_work_completed = 0.0;
 
         // Assign an engineering team
         company.assign_team_to_engine(company.teams[0].id, engine_id);
@@ -3197,10 +3205,11 @@ mod tests {
         // Assign a team
         company.assign_team_to_engine(company.teams[0].id, engine_id);
 
-        // Add an engine to inventory
+        // Add an engine to inventory and note starting count
         let snap = company.engine_designs[engine_id].head().snapshot(engine_id, "Kerolox");
+        let before_count = company.manufacturing.get_engines_available(engine_id);
         company.manufacturing.add_engine_to_inventory(engine_id, 1, snap);
-        assert_eq!(company.manufacturing.get_engines_available(engine_id), 1);
+        assert_eq!(company.manufacturing.get_engines_available(engine_id), before_count + 1);
 
         // Decay hardware boost until it drops below 0.8 threshold
         // With Aggressive threshold 0.8, mult = 0.2 + 0.8 * boost < 0.8 when boost < 0.75
@@ -3211,7 +3220,7 @@ mod tests {
             let consumed = events.iter().any(|e| matches!(e, WorkEvent::HardwareTestConsumed { .. }));
             if consumed {
                 // Engine should have been consumed and boost reset
-                assert_eq!(company.manufacturing.get_engines_available(engine_id), 0);
+                assert_eq!(company.manufacturing.get_engines_available(engine_id), before_count);
                 assert_eq!(company.engine_designs[engine_id].head().workflow.hardware_boost, 1.0);
                 return;
             }
@@ -3240,17 +3249,18 @@ mod tests {
         // Assign a team
         company.assign_team_to_engine(company.teams[0].id, engine_id);
 
-        // Add an engine to inventory
+        // Add an engine to inventory and note starting count
         let snap = company.engine_designs[engine_id].head().snapshot(engine_id, "Kerolox");
         company.manufacturing.add_engine_to_inventory(engine_id, 1, snap);
+        let count_before = company.manufacturing.get_engines_available(engine_id);
 
         // Process many days — Off policy should never consume
         for _ in 0..200 {
             company.process_day(false);
         }
 
-        // Engine should still be in inventory
-        assert_eq!(company.manufacturing.get_engines_available(engine_id), 1);
+        // Engine should still be in inventory (count unchanged)
+        assert_eq!(company.manufacturing.get_engines_available(engine_id), count_before);
     }
 
 
@@ -3603,7 +3613,7 @@ mod tests {
     }
 
     #[test]
-    fn test_launch_old_revision_does_not_reset_hardware_boost() {
+    fn test_launch_old_revision_resets_hardware_boost() {
         let mut company = Company::new();
         make_rockets_manufacturable(&mut company);
 
@@ -3621,10 +3631,10 @@ mod tests {
         let c1 = company.available_contracts[0].id;
         company.add_contract_to_manifest(c1);
 
-        // Launch with old revision — boost should NOT reset
+        // Launch with old revision — boost SHOULD reset (physical launch = real testing)
         company.complete_manifest_launch(0, Some(rev1));
-        assert_eq!(company.rocket_designs[0].head().workflow.hardware_boost, boost_before);
-        // But testing work should still be added
+        assert_eq!(company.rocket_designs[0].head().workflow.hardware_boost, 1.0);
+        // Testing work should be added
         assert!(company.rocket_designs[0].head().workflow.testing_work_completed > 0.0);
     }
 

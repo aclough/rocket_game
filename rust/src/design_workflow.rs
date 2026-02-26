@@ -161,6 +161,16 @@ impl DesignWorkflow {
         self.testing_work_completed += work;
     }
 
+    /// Set the workflow directly to Complete status.
+    /// Clears all flaws, marks flaws_generated, and sets testing_work_completed.
+    pub fn set_complete(&mut self) {
+        self.status = DesignStatus::Complete;
+        self.active_flaws.clear();
+        self.fixed_flaws.clear();
+        self.flaws_generated = true;
+        self.testing_work_completed = TESTING_WORK * 3.0; // equivalent to 3 testing cycles
+    }
+
     /// Transition from Specification to Engineering phase
     pub fn submit_to_engineering(&mut self) -> bool {
         if !matches!(self.status, DesignStatus::Specification) {
