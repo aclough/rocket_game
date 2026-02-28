@@ -57,11 +57,7 @@ scumming.  Other contingent things like if a rocket explodes will have a more co
 
 # Interface
 
-I’m thinking of a 2D pixel art approach with zooming.  Bodies like the Moon or Asteroids shouldn’t shrink as fast as zooming would make them to keep them visible as the user zooms out though at some point minor planets have to disappear to keep things from being too cluttered.  When zoomed in enough orbital bands and maybe things like the Van Allen belts can appear.
-
-Tools to help the user figure out what the delta-V cost of a trip is and let them make designs to hit that target are going to be important for avoiding frustration and something to iterate on.
-
-Financial planning and making projections would also be important for whether, e.g., launching a space station makes sense.  It would be good if the player can see prices accounted for with just things purchased, purchased plus the wages of employees who worked on it direclty, and price inclusive of R&D prorated over the number purchased so far.
+ A. terminal UI
 
 # Income
 
@@ -87,7 +83,7 @@ own research.
 
 ## Comms
 
-Like Iridium or Starlink.
+A continual flow of money that comes by providing a service like Iridium or Starlink.
 
 ## Power
 
@@ -98,12 +94,12 @@ Space based solar power.
 Some that might be determined by the seed and wait for the conditions to trigger
 
 - Someone wants a joint venture with your for a commsat constellation
-- NASA does COTS and will fund you making a rocket and spacecraft
+- NASA does COTS and will fund you making a rocket and spacecraft for missions that will later occur for them.
 - Old Soviet engines available, or some other third party part.
-- Or the same idea but a space station
-- Aliens are discovered and NASA really, really needs a mission to Jupiter ASAP to investiage the monolith
+- Aliens are discovered and NASA really, really needs a mission to Jupiter ASAP to investiage the monolith (rarely
+  triggers!)
 - Helium 3 is suddenly really valuable
-- Technologies being unlocked
+- Technologies being unlocked (always happens for some triggers)
 
 Others might be unseeded
 

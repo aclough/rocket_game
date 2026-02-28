@@ -1,0 +1,10 @@
+A Rocket object consists of a number of stages and typically a payload such as a satellite.  Stages will often be seqeunctial as in a traditiona rocket launching from the Earth's surface.  Sometimes they will be parallel and simultanious such as with solid rocket boosters for the space shuttle.  Sometimes they will be parallel and not simultanious as with a spaceship that transfer from deep space to orbit around an asteroid with ion drivers, lands and takes off with hydrozene thrusters, and they comes home with its ion thruster.
+
+A stage will consist of one or more identical engines and the tankage they need to perform.  This might be hydrogen and oxygen for a hydrolox drive.  This might be fissiles and hydrogen for a NERVA drive.  For an electric drive we won't consider the electricity part of the fuel but will handle that as a special case requirement.
+
+Stages might be streamlined, capable for taking off through Earth's atmosphere.  They might be unaerodynamic, capable for functioning in space or on the Moon.  They migth be manueverable, capable of flying back to their launch site without or with less fuel.  Unaerodynamic stages need to be carried in a faring during a launch from a planet with an atmosphere.
+
+The rocket needs to keep track of the order of sequential stage and where in the stages its faring is.
+
+There need to be functions used in planning for figuring out the delta-v of the rocket across several manuevers.  Manuevers like taking off from Earth, a transfer burn, and then landing on the Moon.  Or transfering from LEO to lunar orbit, releaseing a setllite there are so decreasing mass, and then returning back to LEO.  The time taken by these manuevers should also be calculated.
+
