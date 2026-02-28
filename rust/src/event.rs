@@ -12,7 +12,15 @@ pub enum GameEvent {
     DayAdvanced,
     MonthStart,
     MoneyChanged { amount: f64, reason: String },
-    // Future phases: LaunchResult, ContractOffered, FlawDiscovered, TechUnlocked, etc.
+    TeamHired { name: String },
+    EngineDesignStarted { engine_name: String },
+    EngineDesignComplete { engine_name: String, flaw_count: u32 },
+    FlawDiscovered { engine_name: String, flaw_description: String },
+    RevisionComplete { engine_name: String },
+    SalariesPaid { amount: f64 },
+    InsufficientFunds { shortfall: f64 },
+    EnginePurchased { engine_name: String, cost: f64 },
+    // Future phases: LaunchResult, ContractOffered, TechUnlocked, etc.
 }
 
 impl fmt::Display for GameEvent {
@@ -28,6 +36,21 @@ impl fmt::Display for GameEvent {
                     write!(f, "-${:.0}: {}", amount.abs(), reason)
                 }
             }
+            GameEvent::TeamHired { name } => write!(f, "Hired team: {}", name),
+            GameEvent::EngineDesignStarted { engine_name } =>
+                write!(f, "Started design: {}", engine_name),
+            GameEvent::EngineDesignComplete { engine_name, flaw_count } =>
+                write!(f, "Design complete: {} ({} flaws)", engine_name, flaw_count),
+            GameEvent::FlawDiscovered { engine_name, flaw_description } =>
+                write!(f, "Flaw found in {}: {}", engine_name, flaw_description),
+            GameEvent::RevisionComplete { engine_name } =>
+                write!(f, "Revision complete: {}", engine_name),
+            GameEvent::SalariesPaid { amount } =>
+                write!(f, "Salaries paid: ${:.0}", amount),
+            GameEvent::InsufficientFunds { shortfall } =>
+                write!(f, "Warning: ${:.0} in debt", shortfall),
+            GameEvent::EnginePurchased { engine_name, cost } =>
+                write!(f, "Purchased {}: ${:.0}", engine_name, cost),
         }
     }
 }
@@ -45,9 +68,17 @@ pub enum EventImportance {
 impl GameEvent {
     pub fn importance(&self) -> EventImportance {
         match self {
-            GameEvent::DayAdvanced | GameEvent::MonthStart => EventImportance::Routine,
+            GameEvent::DayAdvanced | GameEvent::MonthStart | GameEvent::SalariesPaid { .. } =>
+                EventImportance::Routine,
             GameEvent::GameStarted
-            | GameEvent::MoneyChanged { .. } => EventImportance::Notable,
+            | GameEvent::MoneyChanged { .. }
+            | GameEvent::TeamHired { .. }
+            | GameEvent::EngineDesignStarted { .. }
+            | GameEvent::EngineDesignComplete { .. }
+            | GameEvent::FlawDiscovered { .. }
+            | GameEvent::RevisionComplete { .. }
+            | GameEvent::InsufficientFunds { .. }
+            | GameEvent::EnginePurchased { .. } => EventImportance::Notable,
         }
     }
 }
