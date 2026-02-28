@@ -6,8 +6,10 @@ This is a Rust + Godot (GDScript) rocket tycoon game. The Rust code handles game
 
 See 'Rocket_Tycoon.md' for what the final game will be like.
 
-Ask clarifying questions when the architecture or parameters ars unclear.
+Ask clarifying questions when the architecture or parameters are unclear.
 
+For plans always save them as markdown files in the main directory for me to go over offline.  I will make comments as
+USER:.  You can them answer questions as CLAUDE until everything is worked out.
 
 # Implementation Approach
 
