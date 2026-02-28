@@ -1,5 +1,7 @@
+use serde::{Serialize, Deserialize};
+
 /// Propellant types used by rocket engines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Propellant {
     LOX,
     RP1,

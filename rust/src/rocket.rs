@@ -1,11 +1,13 @@
+use serde::{Serialize, Deserialize};
+
 use crate::stage::Stage;
 
 /// Unique identifier for a rocket design.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RocketDesignId(pub u64);
 
 /// Unique identifier for a rocket instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RocketId(pub u64);
 
 /// A rocket design blueprint.
@@ -16,7 +18,7 @@ pub struct RocketId(pub u64);
 /// - Inner index: parallel stages within a group
 ///
 /// Example: `[[core, srb1, srb2], [upper]]` — core+SRBs fire together, then upper stage.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RocketDesign {
     pub id: RocketDesignId,
     pub name: String,
@@ -24,14 +26,14 @@ pub struct RocketDesign {
 }
 
 /// Runtime state for a single stage within a rocket instance.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageState {
     pub propellant_remaining_kg: f64,
     pub attached: bool,
 }
 
 /// A physical rocket instance with runtime state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rocket {
     pub id: RocketId,
     pub design_id: RocketDesignId,

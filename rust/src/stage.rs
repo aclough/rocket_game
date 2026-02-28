@@ -1,11 +1,13 @@
+use serde::{Serialize, Deserialize};
+
 use crate::engine::EngineDesign;
 
 /// Unique identifier for a stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StageId(pub u64);
 
 /// A payload fairing that sits on top of a stage.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fairing {
     pub mass_kg: f64,
     pub diameter_m: f64,
@@ -15,7 +17,7 @@ pub struct Fairing {
 ///
 /// The stage holds a reference to its engine design (by clone) and the number of
 /// engines of that type. It does NOT own fuel composition — that comes from the engine.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stage {
     pub id: StageId,
     pub name: String,

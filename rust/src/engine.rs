@@ -1,10 +1,12 @@
+use serde::{Serialize, Deserialize};
+
 use crate::propellant::Propellant;
 
 /// Standard gravity (m/s²), used for Isp <-> exhaust velocity conversion.
 pub const G0: f64 = 9.80665;
 
 /// Engine thermodynamic cycle type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EngineCycle {
     PressureFed,
     GasGenerator,
@@ -14,18 +16,18 @@ pub enum EngineCycle {
 }
 
 /// A single propellant component in the engine's mix.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropellantFraction {
     pub propellant: Propellant,
     pub mass_fraction: f64,
 }
 
 /// Unique identifier for an engine design.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EngineId(pub u64);
 
 /// An engine design blueprint.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineDesign {
     pub id: EngineId,
     pub name: String,
