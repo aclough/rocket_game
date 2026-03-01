@@ -1,5 +1,6 @@
 use serde::{Serialize, Deserialize};
 
+use crate::location::{self, DELTA_V_MAP};
 use crate::stage::Stage;
 
 /// Unique identifier for a rocket design.
@@ -309,6 +310,107 @@ impl Rocket {
         }
         mass
     }
+}
+
+/// Per-stage-group performance statistics for the rocket designer display.
+#[derive(Debug, Clone)]
+pub struct StageGroupStats {
+    /// Mass ratio: (wet + payload_above) / (dry + payload_above)
+    pub mass_ratio: f64,
+    /// Tsiolkovsky delta-v (vacuum, no losses)
+    pub delta_v_vacuum: f64,
+    /// Gravity loss from numerical simulation (m/s)
+    pub gravity_loss: f64,
+    /// Atmospheric drag loss (first stage only, m/s)
+    pub aero_drag_loss: f64,
+    /// Effective delta-v: vacuum - gravity - aero
+    pub delta_v_effective: f64,
+    /// Thrust-to-weight ratio at ignition
+    pub twr: f64,
+    /// Burn time in seconds
+    pub burn_time_s: f64,
+}
+
+/// Compute per-stage-group stats for a rocket design.
+///
+/// `payload_kg` and `launch_from` are user-configurable in the designer.
+pub fn compute_stage_stats(
+    design: &RocketDesign,
+    payload_kg: f64,
+    launch_from: &str,
+) -> Vec<StageGroupStats> {
+    let n = design.stage_groups.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let surface_props = DELTA_V_MAP.surface_properties(launch_from);
+    let surface_g = surface_props.map_or(9.81, |p| p.gravity_m_s2);
+    let has_atmosphere = surface_props.map_or(false, |p| p.has_atmosphere);
+
+    // Collect per-group params for gravity sim: (thrust_n, mass_flow_kg_s, propellant_kg)
+    let mut stage_params: Vec<(f64, f64, f64)> = Vec::with_capacity(n);
+    for group in &design.stage_groups {
+        let thrust: f64 = group.iter().map(|s| s.total_thrust_n()).sum();
+        let flow: f64 = group.iter()
+            .map(|s| s.engine.mass_flow_rate() * s.engine_count as f64)
+            .sum();
+        let prop: f64 = group.iter().map(|s| s.propellant_mass_kg).sum();
+        stage_params.push((thrust, flow, prop));
+    }
+
+    let total_mass = design.total_mass_kg() + payload_kg;
+    let body_radius = surface_props.map_or(6_371_000.0, |p| p.radius_m);
+    let gravity_losses = location::simulate_gravity_losses(surface_g, body_radius, &stage_params, total_mass);
+
+    // Compute aero drag loss for first stage only
+    let first_stage_aero = if has_atmosphere {
+        location::aero_drag_loss(total_mass)
+    } else {
+        0.0
+    };
+
+    let mut results = Vec::with_capacity(n);
+
+    for gi in 0..n {
+        let group = &design.stage_groups[gi];
+        let (thrust, flow, prop) = stage_params[gi];
+
+        // Mass above this group: upper groups + payload
+        let payload_above: f64 = design.stage_groups[gi + 1..].iter()
+            .flat_map(|g| g.iter())
+            .map(|s| s.wet_mass_kg())
+            .sum::<f64>()
+            + payload_kg;
+
+        let group_wet: f64 = group.iter().map(|s| s.wet_mass_kg()).sum();
+        let group_dry: f64 = group.iter().map(|s| s.dry_mass_kg()).sum();
+
+        let mass_ratio = (group_wet + payload_above) / (group_dry + payload_above);
+        let delta_v_vacuum = design.group_delta_v(gi, payload_above);
+        let twr = if (group_wet + payload_above) > 0.0 {
+            thrust / ((group_wet + payload_above) * surface_g)
+        } else {
+            0.0
+        };
+        let burn_time = if flow > 0.0 { prop / flow } else { 0.0 };
+
+        let grav_loss = gravity_losses[gi];
+        let aero_loss = if gi == 0 { first_stage_aero } else { 0.0 };
+        let delta_v_effective = (delta_v_vacuum - grav_loss - aero_loss).max(0.0);
+
+        results.push(StageGroupStats {
+            mass_ratio,
+            delta_v_vacuum,
+            gravity_loss: grav_loss,
+            aero_drag_loss: aero_loss,
+            delta_v_effective,
+            twr,
+            burn_time_s: burn_time,
+        });
+    }
+
+    results
 }
 
 #[cfg(test)]
@@ -729,5 +831,123 @@ mod tests {
         assert!(design.validate().is_empty());
         let dv = design.total_delta_v(500.0);
         assert!(dv > 0.0, "Should have positive delta-v");
+    }
+
+    // ==========================================
+    // Stage stats tests
+    // ==========================================
+
+    #[test]
+    fn test_compute_stage_stats_two_stage() {
+        // Realistic two-stage: high-thrust first stage, lighter upper stage
+        let engine1 = kerolox_engine(1, 2_000_000.0, 500.0, 300.0);
+        let engine2 = kerolox_engine(2, 400_000.0, 100.0, 340.0);
+
+        let s1 = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: engine1, engine_count: 1,
+            propellant_mass_kg: 80_000.0, structural_mass_kg: 3_000.0,
+            fairing: None,
+        };
+        let s2 = Stage {
+            id: StageId(2), name: "S2".into(),
+            engine: engine2, engine_count: 1,
+            propellant_mass_kg: 15_000.0, structural_mass_kg: 500.0,
+            fairing: None,
+        };
+
+        let design = RocketDesign {
+            id: RocketDesignId(1),
+            name: "Test".into(),
+            stage_groups: vec![vec![s1], vec![s2]],
+        };
+
+        let stats = compute_stage_stats(&design, 1_000.0, "earth_surface");
+        assert_eq!(stats.len(), 2);
+
+        // First stage should have gravity and aero losses
+        assert!(stats[0].gravity_loss > 0.0, "S1 should have gravity loss");
+        assert!(stats[0].aero_drag_loss > 0.0, "S1 should have aero loss on Earth");
+        assert!(stats[0].delta_v_effective < stats[0].delta_v_vacuum,
+            "S1 effective dv should be less than vacuum");
+        assert!(stats[0].twr > 0.0, "S1 should have positive TWR");
+        assert!(stats[0].mass_ratio > 1.0, "S1 mass ratio should be > 1");
+
+        // Second stage should have no aero loss
+        assert_eq!(stats[1].aero_drag_loss, 0.0, "S2 should have no aero loss");
+        // Both stages have gravity losses, but effective dv should be less than vacuum for both
+        assert!(stats[1].delta_v_effective <= stats[1].delta_v_vacuum,
+            "Upper stage effective dv should not exceed vacuum");
+    }
+
+    #[test]
+    fn test_stage_stats_more_engines_less_gravity_loss() {
+        let engine = kerolox_engine(1, 500_000.0, 200.0, 300.0);
+
+        // 1 engine first stage
+        let s1_single = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: engine.clone(), engine_count: 1,
+            propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
+            fairing: None,
+        };
+        let design_single = RocketDesign {
+            id: RocketDesignId(1),
+            name: "Single".into(),
+            stage_groups: vec![vec![s1_single]],
+        };
+
+        // 3 engine first stage
+        let s1_triple = Stage {
+            id: StageId(2), name: "S1".into(),
+            engine: engine.clone(), engine_count: 3,
+            propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
+            fairing: None,
+        };
+        let design_triple = RocketDesign {
+            id: RocketDesignId(2),
+            name: "Triple".into(),
+            stage_groups: vec![vec![s1_triple]],
+        };
+
+        let stats_single = compute_stage_stats(&design_single, 1_000.0, "earth_surface");
+        let stats_triple = compute_stage_stats(&design_triple, 1_000.0, "earth_surface");
+
+        assert!(stats_triple[0].twr > stats_single[0].twr,
+            "3 engines should have higher TWR");
+        assert!(stats_triple[0].gravity_loss < stats_single[0].gravity_loss,
+            "3 engines (loss={:.0}) should have less gravity loss than 1 engine (loss={:.0})",
+            stats_triple[0].gravity_loss, stats_single[0].gravity_loss);
+    }
+
+    #[test]
+    fn test_stage_stats_lunar_no_aero() {
+        let engine = kerolox_engine(1, 500_000.0, 200.0, 300.0);
+        let s1 = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: engine, engine_count: 1,
+            propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
+            fairing: None,
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(1),
+            name: "Test".into(),
+            stage_groups: vec![vec![s1]],
+        };
+
+        let stats = compute_stage_stats(&design, 1_000.0, "lunar_surface");
+        assert_eq!(stats[0].aero_drag_loss, 0.0, "No aero loss on Moon");
+        assert!(stats[0].gravity_loss > 0.0, "Should still have gravity loss on Moon");
+    }
+
+    #[test]
+    fn test_stage_stats_empty_design() {
+        let design = RocketDesign {
+            id: RocketDesignId(1),
+            name: "Empty".into(),
+            stage_groups: vec![],
+        };
+        let stats = compute_stage_stats(&design, 1_000.0, "earth_surface");
+        assert!(stats.is_empty());
     }
 }

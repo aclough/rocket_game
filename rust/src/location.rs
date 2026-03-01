@@ -493,6 +493,93 @@ impl DeltaVMap {
     }
 }
 
+/// Velocity at which the rocket begins pitching from vertical (gravity turn initiation).
+pub const KICK_OVER_VELOCITY: f64 = 50.0;
+
+/// Simulate gravity turn ascent to estimate gravity losses.
+///
+/// Numerically integrates the gravity turn equations with a coarse 1-second timestep:
+///   d(pitch)/dt = -g * cos(pitch) / velocity + velocity * cos(pitch) / R
+///   gravity_loss accumulates g * sin(pitch) * dt each step
+///
+/// The second term is the Earth-curvature correction: at orbital velocity
+/// (v = sqrt(g*R)) the two terms cancel and pitch rate goes to zero (orbit
+/// achieved). Without this term vehicles pitch horizontal too early and
+/// upper stages show unrealistically low gravity losses.
+///
+/// Parameters come from the stage group (thrust, mass flow, propellant) and
+/// the launch location (surface gravity, body radius). The only free parameter
+/// is KICK_OVER_VELOCITY (~50 m/s), the velocity at which the rocket begins
+/// pitching from vertical.
+///
+/// For multi-stage rockets, each stage group is simulated sequentially:
+/// the first group starts at velocity=0, pitch=90°. Subsequent groups
+/// inherit the velocity and pitch from the end of the previous group's burn.
+///
+/// # Arguments
+/// * `surface_gravity` - Surface gravity in m/s² (e.g. 9.81 for Earth)
+/// * `body_radius` - Radius of the body in meters (e.g. 6_371_000.0 for Earth)
+/// * `stage_params` - Per group: (thrust_n, mass_flow_kg_s, propellant_kg)
+/// * `initial_mass_kg` - Total rocket mass including payload
+///
+/// # Returns
+/// Gravity loss in m/s per stage group.
+pub fn simulate_gravity_losses(
+    surface_gravity: f64,
+    body_radius: f64,
+    stage_params: &[(f64, f64, f64)],
+    initial_mass_kg: f64,
+) -> Vec<f64> {
+    let g = surface_gravity;
+    let mut velocity = 0.0_f64;
+    let mut pitch = std::f64::consts::FRAC_PI_2; // 90° = vertical
+    let mut mass = initial_mass_kg;
+    let mut results = Vec::with_capacity(stage_params.len());
+
+    let mut kicked_over = false;
+
+    for &(thrust, mass_flow, propellant) in stage_params {
+        let mut gravity_loss = 0.0;
+        let mut remaining_prop = propellant;
+
+        while remaining_prop > 1e-6 {
+            let dt = (1.0_f64).min(remaining_prop / mass_flow);
+            gravity_loss += g * pitch.sin() * dt;
+
+            let net_accel = thrust / mass - g * pitch.sin();
+            velocity += net_accel * dt;
+            velocity = velocity.max(0.0); // can't go backwards
+
+            if velocity > KICK_OVER_VELOCITY {
+                // Initiate gravity turn with a small kick if we haven't already
+                if !kicked_over {
+                    kicked_over = true;
+                    // Small initial pitch-over: ~1 degree
+                    pitch -= 0.02;
+                }
+                let pitch_rate = g * pitch.cos() / velocity
+                    - velocity * pitch.cos() / body_radius;
+                pitch -= pitch_rate * dt;
+                pitch = pitch.clamp(0.0, std::f64::consts::FRAC_PI_2);
+            }
+
+            let dm = mass_flow * dt;
+            mass -= dm;
+            remaining_prop -= dm;
+        }
+
+        results.push(gravity_loss);
+        // Next group inherits velocity and pitch
+    }
+
+    results
+}
+
+/// Return the IDs of locations that are surfaces (where launches can originate).
+pub fn surface_location_ids() -> &'static [&'static str] {
+    &["earth_surface", "lunar_surface"]
+}
+
 /// Global delta-v map instance
 pub static DELTA_V_MAP: LazyLock<DeltaVMap> = LazyLock::new(DeltaVMap::earth_moon);
 
@@ -790,5 +877,144 @@ mod tests {
         // Both should be in the ballpark of 7800 + some drag
         assert!(dv_light > 7800.0 && dv_light < 9000.0);
         assert!(dv_heavy > 7800.0 && dv_heavy < 9000.0);
+    }
+
+    // ==========================================
+    // Gravity loss simulation tests
+    // ==========================================
+
+    const EARTH_RADIUS: f64 = 6_371_000.0;
+    const MOON_RADIUS: f64 = 1_737_000.0;
+
+    #[test]
+    fn test_gravity_loss_single_stage_positive() {
+        // A single stage launching from Earth: should have significant gravity loss
+        let thrust = 2_000_000.0; // 2 MN
+        let isp = 300.0;
+        let ve = isp * 9.80665;
+        let mass_flow = thrust / ve;
+        let propellant = 100_000.0;
+        let dry_mass = 10_000.0;
+        let total_mass = dry_mass + propellant;
+
+        let losses = simulate_gravity_losses(9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant)], total_mass);
+        assert_eq!(losses.len(), 1);
+        assert!(losses[0] > 500.0, "Earth launch should have >500 m/s gravity loss, got {}", losses[0]);
+        assert!(losses[0] < 3000.0, "Gravity loss should be <3000 m/s, got {}", losses[0]);
+    }
+
+    #[test]
+    fn test_gravity_loss_higher_twr_means_less_loss() {
+        // More engines = higher TWR = rocket gets through vertical phase faster = less gravity loss
+        let isp = 300.0;
+        let ve = isp * 9.80665;
+        let single_thrust = 500_000.0;
+        let mass_flow_per_engine = single_thrust / ve;
+        let propellant = 50_000.0;
+        let dry_mass = 5_000.0;
+        let total_mass = dry_mass + propellant;
+
+        // 1 engine
+        let loss_1 = simulate_gravity_losses(
+            9.81, EARTH_RADIUS,
+            &[(single_thrust, mass_flow_per_engine, propellant)],
+            total_mass,
+        )[0];
+
+        // 3 engines (3x thrust, 3x flow, same propellant = 1/3 burn time)
+        let loss_3 = simulate_gravity_losses(
+            9.81, EARTH_RADIUS,
+            &[(single_thrust * 3.0, mass_flow_per_engine * 3.0, propellant)],
+            total_mass,
+        )[0];
+
+        assert!(loss_3 < loss_1,
+            "3 engines (loss={:.0}) should have less gravity loss than 1 engine (loss={:.0})",
+            loss_3, loss_1);
+    }
+
+    #[test]
+    fn test_gravity_loss_lunar_less_than_earth() {
+        let thrust = 1_000_000.0;
+        let isp = 300.0;
+        let ve = isp * 9.80665;
+        let mass_flow = thrust / ve;
+        let propellant = 50_000.0;
+        let total_mass = 60_000.0;
+
+        let loss_earth = simulate_gravity_losses(
+            9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant)], total_mass,
+        )[0];
+        let loss_moon = simulate_gravity_losses(
+            1.62, MOON_RADIUS, &[(thrust, mass_flow, propellant)], total_mass,
+        )[0];
+
+        assert!(loss_moon < loss_earth,
+            "Moon (loss={:.0}) should have less gravity loss than Earth (loss={:.0})",
+            loss_moon, loss_earth);
+    }
+
+    #[test]
+    fn test_gravity_loss_upper_stages_less_than_first() {
+        // Falcon 9-like: first stage has high TWR and long burn.
+        // With curvature correction, S1 won't pitch fully horizontal at suborbital
+        // speeds, so S2 still shows meaningful gravity loss — but less than S1.
+        // S1: 9 engines, ~7MN, burns ~160s
+        let thrust_s1 = 7_000_000.0;
+        let isp = 300.0;
+        let ve = isp * 9.80665;
+        let mass_flow_s1 = thrust_s1 / ve;
+        let prop_s1 = mass_flow_s1 * 160.0; // 160 second burn
+
+        // S2: 1 engine at higher Isp
+        let thrust_s2 = 800_000.0;
+        let isp_s2 = 340.0;
+        let ve_s2 = isp_s2 * 9.80665;
+        let mass_flow_s2 = thrust_s2 / ve_s2;
+        let prop_s2 = mass_flow_s2 * 60.0; // 60 second burn
+
+        // Total mass: S1 dry (5000) + S1 prop + S2 dry (1000) + S2 prop + payload (5000)
+        let total_mass = 5_000.0 + prop_s1 + 1_000.0 + prop_s2 + 5_000.0;
+
+        let losses = simulate_gravity_losses(
+            9.81, EARTH_RADIUS,
+            &[
+                (thrust_s1, mass_flow_s1, prop_s1),
+                (thrust_s2, mass_flow_s2, prop_s2),
+            ],
+            total_mass,
+        );
+
+        assert_eq!(losses.len(), 2);
+        assert!(losses[0] > losses[1],
+            "First stage loss ({:.0}) should exceed upper stage loss ({:.0})",
+            losses[0], losses[1]);
+    }
+
+    #[test]
+    fn test_gravity_loss_ssto_moderate() {
+        // SSTO: long burn but most is horizontal after pitch-over
+        let thrust = 3_000_000.0;
+        let isp = 350.0;
+        let ve = isp * 9.80665;
+        let mass_flow = thrust / ve;
+        let propellant = 200_000.0;
+        let total_mass = 220_000.0;
+
+        let losses = simulate_gravity_losses(
+            9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant)], total_mass,
+        );
+        assert_eq!(losses.len(), 1);
+        // Should be moderate — not as bad as a weak first stage, but still significant
+        assert!(losses[0] > 300.0 && losses[0] < 2500.0,
+            "SSTO gravity loss should be moderate, got {:.0}", losses[0]);
+    }
+
+    #[test]
+    fn test_surface_location_ids() {
+        let ids = surface_location_ids();
+        assert!(ids.contains(&"earth_surface"));
+        assert!(ids.contains(&"lunar_surface"));
+        assert!(!ids.contains(&"leo"));
     }
 }
