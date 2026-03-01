@@ -1,0 +1,12 @@
+[] Revise design workflow
+
+The rocket design modal should allow feedback and design refinement.  The user should be able to go back to previous stages and make adjustments, or insert new stages between existing ones.
+Each stage should have a mass ratio, delta-v (with gravity loss noted), and TWR listed.
+These should assume launching from Earth with a 1000 kg payload by default, but those figures can be changed during design.
+The Delta-V Feasibilty display should also be on this screen.
+
+During desing the user should be
+
+[] Add solid rockets as an option when designing rocket engines
+[] Manufacturing teams should assign themselves to the project with the least workers if they are idle.
+[] If I press + to assigna a manufacturing or research team when there are no free ones, instead steal one from the project with the most workers.
