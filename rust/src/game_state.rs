@@ -70,6 +70,9 @@ pub struct Company {
     pub contracted_engines: Vec<ContractedEngine>,
     pub rocket_designs: Vec<RocketDesign>,
     pub manufacturing: Manufacturing,
+    /// Flag to avoid repeatedly pausing when manufacturing is idle.
+    #[serde(default)]
+    pub notified_manufacturing_idle: bool,
 }
 
 impl Company {
@@ -92,6 +95,7 @@ impl Company {
             contracted_engines: Vec::new(),
             rocket_designs: Vec::new(),
             manufacturing: Manufacturing::new(),
+            notified_manufacturing_idle: false,
         }
     }
 
@@ -324,6 +328,9 @@ impl Company {
         // Deduct costs
         self.money -= total_cost;
 
+        // Reset idle notification since new orders were placed
+        self.notified_manufacturing_idle = false;
+
         Some((total_cost, GameEvent::RocketBuildOrdered {
             rocket_name,
             total_cost,
@@ -433,6 +440,128 @@ impl Company {
         };
         self.contracted_engines.push(contracted);
         Some(GameEvent::EngineContracted { engine_name: name })
+    }
+
+    /// Whether any manufacturing order is actionable (not waiting for prerequisites).
+    pub fn has_actionable_manufacturing_orders(&self) -> bool {
+        self.manufacturing.orders.iter().any(|o| !o.waiting_for_prerequisites)
+    }
+
+    /// Auto-assign idle manufacturing teams to the order with the fewest teams.
+    pub fn auto_assign_idle_manufacturing_teams(&mut self) {
+        loop {
+            if self.unassigned_manufacturing_team_count() == 0 {
+                break;
+            }
+            // Find the non-waiting order with the fewest teams assigned
+            let best = self.manufacturing.orders.iter().enumerate()
+                .filter(|(_, o)| !o.waiting_for_prerequisites)
+                .min_by_key(|(_, o)| o.teams_assigned)
+                .map(|(i, _)| i);
+            match best {
+                Some(idx) => {
+                    let available = self.unassigned_manufacturing_team_count();
+                    self.manufacturing.add_team_to_order(idx, available);
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// Steal an engineering team from the busiest project and assign to the target engine project.
+    /// Returns the name of the project stolen from, or None if no team can be stolen.
+    pub fn steal_engineering_team_to_engine_project(&mut self, target: usize) -> Option<String> {
+        if target >= self.engine_projects.len() {
+            return None;
+        }
+        // Find the engine or rocket project with the most teams assigned (>0, not target engine project)
+        let mut best_source: Option<(&str, u32)> = None;
+        let mut best_kind: Option<(bool, usize)> = None; // (is_engine, index)
+
+        for (i, ep) in self.engine_projects.iter().enumerate() {
+            if i == target || ep.teams_assigned == 0 { continue; }
+            if best_source.is_none() || ep.teams_assigned > best_source.unwrap().1 {
+                best_source = Some((&ep.design.name, ep.teams_assigned));
+                best_kind = Some((true, i));
+            }
+        }
+        for (i, rp) in self.rocket_projects.iter().enumerate() {
+            if rp.teams_assigned == 0 { continue; }
+            if best_source.is_none() || rp.teams_assigned > best_source.unwrap().1 {
+                best_source = Some((&rp.design.name, rp.teams_assigned));
+                best_kind = Some((false, i));
+            }
+        }
+
+        let (is_engine, idx) = best_kind?;
+        let name = if is_engine {
+            let n = self.engine_projects[idx].design.name.clone();
+            self.engine_projects[idx].teams_assigned -= 1;
+            n
+        } else {
+            let n = self.rocket_projects[idx].design.name.clone();
+            self.rocket_projects[idx].teams_assigned -= 1;
+            n
+        };
+        self.engine_projects[target].teams_assigned += 1;
+        Some(name)
+    }
+
+    /// Steal an engineering team from the busiest project and assign to the target rocket project.
+    pub fn steal_engineering_team_to_rocket_project(&mut self, target: usize) -> Option<String> {
+        if target >= self.rocket_projects.len() {
+            return None;
+        }
+        let mut best_source: Option<(&str, u32)> = None;
+        let mut best_kind: Option<(bool, usize)> = None;
+
+        for (i, ep) in self.engine_projects.iter().enumerate() {
+            if ep.teams_assigned == 0 { continue; }
+            if best_source.is_none() || ep.teams_assigned > best_source.unwrap().1 {
+                best_source = Some((&ep.design.name, ep.teams_assigned));
+                best_kind = Some((true, i));
+            }
+        }
+        for (i, rp) in self.rocket_projects.iter().enumerate() {
+            if i == target || rp.teams_assigned == 0 { continue; }
+            if best_source.is_none() || rp.teams_assigned > best_source.unwrap().1 {
+                best_source = Some((&rp.design.name, rp.teams_assigned));
+                best_kind = Some((false, i));
+            }
+        }
+
+        let (is_engine, idx) = best_kind?;
+        let name = if is_engine {
+            let n = self.engine_projects[idx].design.name.clone();
+            self.engine_projects[idx].teams_assigned -= 1;
+            n
+        } else {
+            let n = self.rocket_projects[idx].design.name.clone();
+            self.rocket_projects[idx].teams_assigned -= 1;
+            n
+        };
+        self.rocket_projects[target].teams_assigned += 1;
+        Some(name)
+    }
+
+    /// Steal a manufacturing team from the busiest order and assign to the target order.
+    pub fn steal_manufacturing_team_to_order(&mut self, target: usize) -> Option<String> {
+        if target >= self.manufacturing.orders.len() {
+            return None;
+        }
+        if self.manufacturing.orders[target].waiting_for_prerequisites {
+            return None;
+        }
+        // Find non-waiting order with most teams (>0, not target)
+        let best = self.manufacturing.orders.iter().enumerate()
+            .filter(|(i, o)| *i != target && !o.waiting_for_prerequisites && o.teams_assigned > 0)
+            .max_by_key(|(_, o)| o.teams_assigned)
+            .map(|(i, o)| (i, o.order_type.display_name()));
+
+        let (idx, name) = best?;
+        self.manufacturing.orders[idx].teams_assigned -= 1;
+        self.manufacturing.orders[target].teams_assigned += 1;
+        Some(name)
     }
 
     /// Look up the EngineSource for an engine by its EngineId.
@@ -576,6 +705,24 @@ impl GameState {
 
         // Try to unblock manufacturing orders that now have prerequisites
         self.player_company.try_unblock_manufacturing_orders();
+
+        // Auto-assign idle manufacturing teams to least-staffed orders
+        self.player_company.auto_assign_idle_manufacturing_teams();
+
+        // Pause on transition to idle manufacturing
+        if !self.player_company.manufacturing_teams.is_empty()
+            && !self.player_company.has_actionable_manufacturing_orders()
+            && !self.player_company.notified_manufacturing_idle
+        {
+            self.speed = GameSpeed::Paused;
+            self.player_company.notified_manufacturing_idle = true;
+            let evt = GameEvent::ManufacturingIdle;
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+        }
+        if self.player_company.has_actionable_manufacturing_orders() {
+            self.player_company.notified_manufacturing_idle = false;
+        }
 
         events
     }

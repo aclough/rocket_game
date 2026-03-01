@@ -105,6 +105,17 @@ pub enum ManufacturingOrderType {
     },
 }
 
+impl ManufacturingOrderType {
+    /// Human-readable name for this order.
+    pub fn display_name(&self) -> String {
+        match self {
+            ManufacturingOrderType::Engine { engine_name, .. } => engine_name.clone(),
+            ManufacturingOrderType::Stage { stage_name, .. } => stage_name.clone(),
+            ManufacturingOrderType::RocketIntegration { rocket_name, .. } => rocket_name.clone(),
+        }
+    }
+}
+
 /// A manufacturing order in progress.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManufacturingOrder {

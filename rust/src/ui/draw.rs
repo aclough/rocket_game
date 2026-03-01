@@ -5,12 +5,20 @@ use crate::engine::EngineCycle;
 use crate::engine_project::{self, EngineDesignStatus, EngineSource, PropellantPreset};
 use crate::event::EventImportance;
 use crate::flaw::FlawConsequence;
-use crate::structure;
-use crate::ui::{App, FocusedPane, InputMode, Tab};
+use crate::location::DELTA_V_MAP;
+use crate::rocket;
+use crate::rocket_project;
+use crate::ui::{App, FocusedPane, InputMode, RocketDesignerState, Tab};
 
 /// Draw the entire application frame.
 pub fn draw(frame: &mut Frame, app: &App) {
     let size = frame.area();
+
+    // Check if we're in the rocket designer — it replaces the full UI
+    if let InputMode::RocketDesigner { state } = &app.input_mode {
+        draw_rocket_designer_full(frame, app, state, size);
+        return;
+    }
 
     // Top-level layout: status bar, main area, event feed, help bar
     let outer = Layout::default()
@@ -344,9 +352,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     ];
 
     if company.rocket_projects.is_empty() {
-        lines.push(Line::from("  No rocket projects yet."));
-        lines.push(Line::from("  (Rocket designer coming soon — projects can be"));
-        lines.push(Line::from("   created via the game state for now.)"));
+        lines.push(Line::from("  No rocket projects yet. Press [N] to start a new design."));
     }
 
     for (i, project) in company.rocket_projects.iter().enumerate() {
@@ -543,8 +549,8 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
             lines.push(Line::from(format!("    Stages: {}", mfg.inventory.stages.len())));
         }
         if !mfg.inventory.rockets.is_empty() {
-            for rocket in &mfg.inventory.rockets {
-                lines.push(Line::from(format!("    Rocket: {}", rocket.rocket_name)));
+            for rocket_inv in &mfg.inventory.rockets {
+                lines.push(Line::from(format!("    Rocket: {}", rocket_inv.rocket_name)));
             }
         }
     }
@@ -624,12 +630,214 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
+// ==========================================
+// Rocket Designer — Full Screen
+// ==========================================
+
+fn draw_rocket_designer_full(frame: &mut Frame, app: &App, state: &RocketDesignerState, area: Rect) {
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(10),     // designer content
+            Constraint::Length(3),    // help bar
+        ])
+        .split(area);
+
+    draw_rocket_designer_content(frame, state, outer[0]);
+
+    // Help bar for designer
+    let help_text = if let Some(ref msg) = app.status_message {
+        format!(" {} ", msg)
+    } else {
+        " [Enter] Edit  [←→] Engines  [+/-] Prop  [A] Add  [I] Ins  [X] Rem  [P] Payload  [L] Site  [D] Done  [Esc] Cancel ".to_string()
+    };
+    let style = if app.status_message.is_some() {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default().borders(Borders::ALL);
+    let paragraph = Paragraph::new(help_text).block(block).style(style);
+    frame.render_widget(paragraph, outer[1]);
+}
+
+fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, area: Rect) {
+    let mut lines = Vec::new();
+
+    // Launch site display name
+    let launch_display = DELTA_V_MAP.location(state.launch_from)
+        .map_or(state.launch_from, |l| l.display_name);
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(format!(
+        "  Launch: {}    Payload: {:.0} kg",
+        launch_display, state.payload_kg,
+    )));
+    lines.push(Line::from(""));
+
+    // Build a temporary RocketDesign to compute stats
+    let temp_design = rocket::RocketDesign {
+        id: rocket::RocketDesignId(0),
+        name: state.rocket_name.clone(),
+        stage_groups: state.stage_groups.clone(),
+    };
+
+    let stats = if !state.stage_groups.is_empty() {
+        rocket::compute_stage_stats(&temp_design, state.payload_kg, state.launch_from)
+    } else {
+        Vec::new()
+    };
+
+    // Header and rows use a shared formatting function for alignment.
+    // Row prefix: " M S#  " (7 chars: space, marker, space, S, digit, 2 spaces)
+    // Header prefix: "   #   " (7 chars to match)
+    // Header widths must match row: " M S#  {:<14} x#  {:>6.1}t  {:>5.0}s  {:>5.1}  {:>6.0}  {:>8.0}  {:>5.2}"
+    // The 't' and 's' suffixes in the row eat one char, so header cols are 1 wider
+    lines.push(Line::from(Span::styled(
+        format!(
+            "   #   {:<14} {:>2}  {:>6} {:>6}  {:>5}  {:>6}  {:>8}  {:>5}",
+            "Engine", " N", "Prop", "Burn", "MR", "Eff dV", "Vac dV", "TWR",
+        ),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(
+        "  ─────────────────────────────────────────────────────────────────────"
+    ));
+
+    // Stage rows
+    for (gi, group) in state.stage_groups.iter().enumerate() {
+        let selected = gi == state.selected_stage;
+        let marker = if selected { "▶" } else { " " };
+
+        for stage in group {
+            let tag = match &state.engine_sources.get(gi) {
+                Some(EngineSource::Contracted(_)) => "[3P]",
+                _ => "",
+            };
+            let engine_label = format!("{}{}", stage.engine.name, tag);
+
+            // Compute burn time: propellant_mass / (mass_flow_rate * engine_count)
+            let burn_time_s = {
+                let mfr = stage.engine.mass_flow_rate() * stage.engine_count as f64;
+                if mfr > 0.0 { stage.propellant_mass_kg / mfr } else { 0.0 }
+            };
+
+            let stat_str = if let Some(s) = stats.get(gi) {
+                format!(
+                    "{:>5.0}s  {:>5.1}  {:>6.0}  {:>8.0}  {:>5.2}",
+                    burn_time_s,
+                    s.mass_ratio,
+                    s.delta_v_effective,
+                    s.delta_v_vacuum,
+                    s.twr,
+                )
+            } else {
+                format!("{:>5.0}s", burn_time_s)
+            };
+
+            let style = if selected {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            lines.push(Line::from(Span::styled(
+                format!(
+                    " {} S{}  {:<14} x{}  {:>6.1}t  {}",
+                    marker,
+                    gi + 1,
+                    engine_label,
+                    stage.engine_count,
+                    stage.propellant_mass_kg / 1000.0,
+                    stat_str,
+                ),
+                style,
+            )));
+
+            // Show losses sub-line
+            if let Some(s) = stats.get(gi) {
+                let mut loss_parts = Vec::new();
+                if s.gravity_loss >= 0.5 {
+                    loss_parts.push(format!("grav: -{:.0}", s.gravity_loss));
+                }
+                if s.aero_drag_loss >= 0.5 {
+                    loss_parts.push(format!("aero: -{:.0}", s.aero_drag_loss));
+                }
+                if !loss_parts.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("                 ({})", loss_parts.join("  ")),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+        }
+    }
+
+    // "Add stage" slot
+    let on_add = state.on_add_slot();
+    let add_marker = if on_add { "▶" } else { " " };
+    let add_style = if on_add {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    lines.push(Line::from(Span::styled(
+        format!(" {} ── add stage ──", add_marker),
+        add_style,
+    )));
+
+    lines.push(Line::from(""));
+
+    // Totals
+    if !stats.is_empty() {
+        let total_dv_effective: f64 = stats.iter().map(|s| s.delta_v_effective).sum();
+        let total_dv_vacuum: f64 = stats.iter().map(|s| s.delta_v_vacuum).sum();
+        let total_mass = temp_design.total_mass_kg() + state.payload_kg;
+
+        lines.push(Line::from(format!(
+            "  Total dV: {:.0} m/s (vacuum: {:.0})",
+            total_dv_effective, total_dv_vacuum,
+        )));
+        lines.push(Line::from(format!(
+            "  Total mass: {:.0} kg",
+            total_mass,
+        )));
+        lines.push(Line::from(""));
+
+        // Payload feasibility table
+        let table = rocket_project::payload_table(&temp_design, state.launch_from);
+        if !table.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  Payload Feasibility:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+            for (dest, payload) in &table {
+                lines.push(Line::from(format!(
+                    "    {:24} {:>8.0} kg", dest, payload,
+                )));
+            }
+        }
+    }
+
+    let title = format!(" Rocket Designer: \"{}\" ", state.rocket_name);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .style(Style::default().fg(Color::Yellow));
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+// ==========================================
+// Modal overlays (engine design flow + rocket sub-modals)
+// ==========================================
+
 fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
     let modal_area = centered_rect(60, 50, area);
     frame.render_widget(Clear, modal_area);
 
     match &app.input_mode {
-        InputMode::Normal => {}
+        InputMode::Normal | InputMode::RocketDesigner { .. } => {}
         InputMode::EngineName { buffer } => {
             let lines = vec![
                 Line::from(""),
@@ -651,6 +859,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 ("Expander", "Efficient, limited thrust"),
                 ("Staged Combustion", "High performance, complex"),
                 ("Full Flow", "Maximum performance, most complex"),
+                ("Solid Rocket Motor", "Simple, cheap, not throttleable"),
             ];
             let mut lines = vec![
                 Line::from(format!("  Design: {}", name)),
@@ -785,127 +994,76 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
-        InputMode::RocketSelectEngine { rocket_name, stage_groups, selected, .. } => {
-            // Build combined engine list: player engines + contracted engines
-            let mut engines: Vec<(EngineSource, &crate::engine::EngineDesign, bool)> = Vec::new();
-            for ep in &app.game.player_company.engine_projects {
-                if matches!(ep.status, EngineDesignStatus::Testing { .. }) {
-                    engines.push((EngineSource::PlayerDesign(ep.project_id), &ep.design, false));
-                }
-            }
-            for ce in &app.game.player_company.contracted_engines {
-                engines.push((EngineSource::Contracted(ce.id), &ce.design, true));
-            }
-
-            let total_stages: usize = stage_groups.iter().map(|g| g.len()).sum();
-            let mut lines = vec![
-                Line::from(format!("  Rocket: {}    Stages added: {}", rocket_name, total_stages)),
-                Line::from(""),
-            ];
-
-            // Show existing stages
-            for (gi, group) in stage_groups.iter().enumerate() {
-                for stage in group {
-                    lines.push(Line::from(format!(
-                        "    Stage {}: {} x{}  {:.0}kg prop  {:.0}kg struct",
-                        gi + 1, stage.engine.name, stage.engine_count,
-                        stage.propellant_mass_kg, stage.structural_mass_kg,
-                    )));
-                }
-            }
-
-            if !stage_groups.is_empty() {
-                lines.push(Line::from(""));
-            }
-
-            lines.push(Line::from("  Select engine for next stage:"));
-            lines.push(Line::from(""));
-
-            if engines.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "  No engines ready! Design and test an engine first, or contract a 3rd-party engine.",
-                    Style::default().fg(Color::Red),
-                )));
-            }
-
-            for (i, (_source, design, is_3p)) in engines.iter().enumerate() {
-                let marker = if i == *selected { "▶" } else { " " };
-                let tag = if *is_3p { " [3P]" } else { "" };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                lines.push(Line::from(Span::styled(
-                    format!("  {} {}{}  {:.0}kN  {:.0}s  {:.0}kg",
-                        marker, design.name, tag, design.thrust_n / 1000.0, design.isp_s, design.mass_kg),
-                    style,
-                )));
-            }
-
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  [Enter] Select  [D] Done  [Esc] Cancel",
-                Style::default().fg(Color::Cyan),
-            )));
-
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Add Stage ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+        InputMode::RocketPickEngine { state, selected, .. } => {
+            draw_rocket_pick_engine_modal(frame, app, state, *selected, modal_area);
         }
-        InputMode::RocketConfigStage {
-            rocket_name, stage_groups, engine, engine_count, propellant_mass_kg, ..
-        } => {
-            let group_index = stage_groups.len();
-            let is_first = group_index == 0;
-            let propellant_mix: Vec<(crate::propellant::Propellant, f64)> =
-                engine.propellant_mix.iter()
-                    .map(|f| (f.propellant, f.mass_fraction))
-                    .collect();
-            let breakdown = structure::compute_structural_mass(
-                *propellant_mass_kg,
-                &propellant_mix,
-                engine,
-                *engine_count,
-                is_first,
-                true,
-            );
-
+        InputMode::RocketPayloadInput { buffer, .. } => {
             let lines = vec![
-                Line::from(format!("  Rocket: {}    Stage {}", rocket_name, group_index + 1)),
                 Line::from(""),
-                Line::from(format!("  Engine: {}  ({:.0}kN, {:.0}s)", engine.name, engine.thrust_n / 1000.0, engine.isp_s)),
+                Line::from("  Enter payload mass (kg):"),
                 Line::from(""),
-                Line::from(format!("  Engine count:   {}    [←→ to adjust]", engine_count)),
-                Line::from(format!("  Propellant:     {:.0} kg  [↑↓ to adjust, 5t steps]", propellant_mass_kg)),
-                Line::from(""),
-                Line::from(format!("  Structural mass: {:.0} kg", breakdown.total)),
-                Line::from(format!("    Tank: {:.0}  Thrust struct: {:.0}  Aero: {:.0}  Interstage: {:.0}",
-                    breakdown.tank_mass, breakdown.thrust_structure, breakdown.aero_shell, breakdown.interstage)),
-                Line::from(""),
-                Line::from(format!("  Total thrust:    {:.0} kN", engine.thrust_n * *engine_count as f64 / 1000.0)),
-                Line::from(format!("  Dry mass:        {:.0} kg",
-                    breakdown.total + engine.mass_kg * *engine_count as f64)),
-                Line::from(format!("  Wet mass:        {:.0} kg",
-                    breakdown.total + engine.mass_kg * *engine_count as f64 + propellant_mass_kg)),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "  [Enter] Add stage  [Esc] Back",
-                    Style::default().fg(Color::Cyan),
-                )),
+                Line::from(format!("  > {}█", buffer)),
             ];
-
             let block = Block::default()
                 .borders(Borders::ALL)
-                .title(" Configure Stage ")
+                .title(" Set Payload ")
                 .style(Style::default().fg(Color::Yellow));
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
     }
+}
+
+fn draw_rocket_pick_engine_modal(
+    frame: &mut Frame,
+    app: &App,
+    state: &RocketDesignerState,
+    selected: usize,
+    area: Rect,
+) {
+    let engines = app.available_engines();
+
+    let mut lines = vec![
+        Line::from(format!("  Rocket: {}    Stages: {}", state.rocket_name, state.stage_groups.len())),
+        Line::from(""),
+        Line::from("  Select engine:"),
+        Line::from(""),
+    ];
+
+    if engines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No engines ready! Design and test an engine first, or contract a 3rd-party engine.",
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    for (i, (source, design)) in engines.iter().enumerate() {
+        let marker = if i == selected { "▶" } else { " " };
+        let tag = if matches!(source, EngineSource::Contracted(_)) { " [3P]" } else { "" };
+        let style = if i == selected {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {} {}{}  {:.0}kN  {:.0}s  {:.0}kg",
+                marker, design.name, tag, design.thrust_n / 1000.0, design.isp_s, design.mass_kg),
+            style,
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [Enter] Select  [Esc] Back",
+        Style::default().fg(Color::Cyan),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Pick Engine ")
+        .style(Style::default().fg(Color::Yellow));
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

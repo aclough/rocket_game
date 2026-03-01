@@ -32,6 +32,7 @@ pub enum GameEvent {
     RocketIntegrated { rocket_name: String },
     FloorSpaceComplete { units: u32 },
     RocketBuildOrdered { rocket_name: String, total_cost: f64 },
+    ManufacturingIdle,
     // Future: LaunchResult, ContractOffered, TechUnlocked, etc.
 }
 
@@ -83,6 +84,8 @@ impl fmt::Display for GameEvent {
                 write!(f, "Floor space +{} units", units),
             GameEvent::RocketBuildOrdered { rocket_name, total_cost } =>
                 write!(f, "Ordered build: {} (${:.0})", rocket_name, total_cost),
+            GameEvent::ManufacturingIdle =>
+                write!(f, "Manufacturing teams idle — no orders to work on"),
         }
     }
 }
@@ -120,7 +123,8 @@ impl GameEvent {
             | GameEvent::StageBuilt { .. }
             | GameEvent::RocketIntegrated { .. }
             | GameEvent::FloorSpaceComplete { .. }
-            | GameEvent::RocketBuildOrdered { .. } => EventImportance::Notable,
+            | GameEvent::RocketBuildOrdered { .. }
+            | GameEvent::ManufacturingIdle => EventImportance::Notable,
         }
     }
 }

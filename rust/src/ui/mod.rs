@@ -14,6 +14,7 @@ use ratatui::prelude::*;
 use crate::engine::{EngineCycle, EngineDesign};
 use crate::engine_project::{EngineDesignStatus, EngineSource, PropellantPreset};
 use crate::game_state::{GameSpeed, GameState};
+use crate::location;
 use crate::rocket_project::RocketDesignStatus;
 use crate::save;
 use crate::stage::{Stage, StageId};
@@ -55,6 +56,75 @@ impl Tab {
     }
 }
 
+/// Shared state for the rocket designer screen.
+#[derive(Debug, Clone)]
+pub struct RocketDesignerState {
+    pub rocket_name: String,
+    pub stage_groups: Vec<Vec<Stage>>,
+    pub engine_sources: Vec<EngineSource>,
+    pub next_stage_id: u64,
+    pub selected_stage: usize,
+    pub payload_kg: f64,
+    pub launch_from: &'static str,
+}
+
+impl RocketDesignerState {
+    fn new(name: String) -> Self {
+        Self {
+            rocket_name: name,
+            stage_groups: Vec::new(),
+            engine_sources: Vec::new(),
+            next_stage_id: 1,
+            selected_stage: 0,
+            payload_kg: 1000.0,
+            launch_from: "earth_surface",
+        }
+    }
+
+    /// Number of items in the stage list (stages + "add stage" slot at bottom).
+    fn list_len(&self) -> usize {
+        self.stage_groups.len() + 1 // +1 for the "add stage" slot
+    }
+
+    /// Whether the selection cursor is on the "add stage" slot.
+    fn on_add_slot(&self) -> bool {
+        self.selected_stage >= self.stage_groups.len()
+    }
+}
+
+/// Compute thrust-scaled propellant step size for inline adjustments.
+/// ~10s of burn time, rounded to nearest 100 kg, min 100 kg.
+fn propellant_step(engine: &EngineDesign, engine_count: u32) -> f64 {
+    let raw = engine.mass_flow_rate() * engine_count as f64 * 10.0;
+    (raw / 100.0).round().max(1.0) * 100.0
+}
+
+/// Recompute structural masses for all stage groups based on their position.
+/// Aero shell depends on being group 0 (exposed to airflow).
+/// Interstage depends on whether the stage is the last group.
+fn recompute_structural_masses(stage_groups: &mut [Vec<Stage>]) {
+    let n = stage_groups.len();
+    for (gi, group) in stage_groups.iter_mut().enumerate() {
+        let is_first = gi == 0;
+        let has_interstage = gi + 1 < n;
+        for stage in group.iter_mut() {
+            let propellant_mix: Vec<(crate::propellant::Propellant, f64)> =
+                stage.engine.propellant_mix.iter()
+                    .map(|f| (f.propellant, f.mass_fraction))
+                    .collect();
+            let breakdown = structure::compute_structural_mass(
+                stage.propellant_mass_kg,
+                &propellant_mix,
+                &stage.engine,
+                stage.engine_count,
+                is_first,
+                has_interstage,
+            );
+            stage.structural_mass_kg = breakdown.total;
+        }
+    }
+}
+
 /// Modal input state for new engine design flow.
 #[derive(Debug, Clone)]
 pub enum InputMode {
@@ -77,25 +147,19 @@ pub enum InputMode {
     SelectThirdParty { selected: usize },
     /// Typing rocket name.
     RocketName { buffer: String },
-    /// Adding a stage to the rocket being designed.
-    /// Shows list of completed engines to pick from.
-    RocketSelectEngine {
-        rocket_name: String,
-        /// Stage groups built so far.
-        stage_groups: Vec<Vec<Stage>>,
-        /// Next stage ID to assign.
-        next_stage_id: u64,
+    /// Persistent rocket designer screen.
+    RocketDesigner { state: Box<RocketDesignerState> },
+    /// Picking an engine for a new or replacement stage.
+    RocketPickEngine {
+        state: Box<RocketDesignerState>,
+        target_index: Option<usize>,
+        editing: bool,
         selected: usize,
     },
-    /// Configuring a stage: engine count and propellant mass.
-    RocketConfigStage {
-        rocket_name: String,
-        stage_groups: Vec<Vec<Stage>>,
-        next_stage_id: u64,
-        engine_source: EngineSource,
-        engine: EngineDesign,
-        engine_count: u32,
-        propellant_mass_kg: f64,
+    /// Typing a payload mass (kg).
+    RocketPayloadInput {
+        state: Box<RocketDesignerState>,
+        buffer: String,
     },
 }
 
@@ -110,6 +174,8 @@ pub struct App {
     pub input_mode: InputMode,
     /// Selected item index in content pane (for engines list).
     pub selected_item: usize,
+    /// Speed before entering a modal, so we can restore on exit.
+    pub pre_modal_speed: Option<GameSpeed>,
 }
 
 impl App {
@@ -123,6 +189,22 @@ impl App {
             status_message: None,
             input_mode: InputMode::Normal,
             selected_item: 0,
+            pre_modal_speed: None,
+        }
+    }
+
+    /// Save current speed and pause the game when entering a modal.
+    fn enter_modal(&mut self, mode: InputMode) {
+        self.pre_modal_speed = Some(self.game.speed);
+        self.game.speed = GameSpeed::Paused;
+        self.input_mode = mode;
+    }
+
+    /// Restore the speed saved before entering a modal.
+    fn exit_modal(&mut self) {
+        self.input_mode = InputMode::Normal;
+        if let Some(s) = self.pre_modal_speed.take() {
+            self.game.speed = s;
         }
     }
 
@@ -247,20 +329,22 @@ impl App {
         match key {
             KeyCode::Char('n') => {
                 // Start new engine design flow
-                self.input_mode = InputMode::EngineName { buffer: String::new() };
+                self.enter_modal(InputMode::EngineName { buffer: String::new() });
             }
             KeyCode::Char('b') => {
                 // Buy third-party engine
                 if !self.game.player_company.third_party_catalog.is_empty() {
-                    self.input_mode = InputMode::SelectThirdParty { selected: 0 };
+                    self.enter_modal(InputMode::SelectThirdParty { selected: 0 });
                 }
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
-                // Add team to selected project
+                // Add team to selected project, or steal from busiest
                 if self.game.player_company.add_team_to_project(self.selected_item) {
                     self.status_message = Some("Team assigned".into());
+                } else if let Some(from) = self.game.player_company.steal_engineering_team_to_engine_project(self.selected_item) {
+                    self.status_message = Some(format!("Team reassigned from {}", from));
                 } else {
-                    self.status_message = Some("No unassigned teams".into());
+                    self.status_message = Some("No teams to reassign".into());
                 }
             }
             KeyCode::Char('-') => {
@@ -290,13 +374,15 @@ impl App {
         match key {
             KeyCode::Char('n') => {
                 // Start new rocket design flow
-                self.input_mode = InputMode::RocketName { buffer: String::new() };
+                self.enter_modal(InputMode::RocketName { buffer: String::new() });
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 if self.game.player_company.add_team_to_rocket_project(self.selected_item) {
                     self.status_message = Some("Team assigned".into());
+                } else if let Some(from) = self.game.player_company.steal_engineering_team_to_rocket_project(self.selected_item) {
+                    self.status_message = Some(format!("Team reassigned from {}", from));
                 } else {
-                    self.status_message = Some("No unassigned teams".into());
+                    self.status_message = Some("No teams to reassign".into());
                 }
             }
             KeyCode::Char('-') => {
@@ -340,8 +426,10 @@ impl App {
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 if self.game.player_company.add_team_to_manufacturing_order(self.selected_item) {
                     self.status_message = Some("Mfg team assigned".into());
+                } else if let Some(from) = self.game.player_company.steal_manufacturing_team_to_order(self.selected_item) {
+                    self.status_message = Some(format!("Mfg team reassigned from {}", from));
                 } else {
-                    self.status_message = Some("No unassigned mfg teams or order is waiting".into());
+                    self.status_message = Some("No mfg teams to reassign".into());
                 }
             }
             KeyCode::Char('-') => {
@@ -358,11 +446,11 @@ impl App {
             InputMode::Normal => unreachable!(),
             InputMode::EngineName { buffer } => {
                 match key {
-                    KeyCode::Esc => { self.input_mode = InputMode::Normal; }
+                    KeyCode::Esc => { self.exit_modal(); }
                     KeyCode::Enter => {
                         if buffer.is_empty() {
                             self.status_message = Some("Name cannot be empty".into());
-                            self.input_mode = InputMode::Normal;
+                            self.exit_modal();
                         } else {
                             let name = buffer.clone();
                             self.input_mode = InputMode::SelectCycle {
@@ -384,18 +472,31 @@ impl App {
                     EngineCycle::StagedCombustion,
                     EngineCycle::FullFlow,
                 ];
+                let num_options = cycles.len() + 1; // +1 for Solid Rocket Motor
                 match key {
-                    KeyCode::Esc => { self.input_mode = InputMode::Normal; }
+                    KeyCode::Esc => { self.exit_modal(); }
                     KeyCode::Up => { if *selected > 0 { *selected -= 1; } }
-                    KeyCode::Down => { if *selected + 1 < cycles.len() { *selected += 1; } }
+                    KeyCode::Down => { if *selected + 1 < num_options { *selected += 1; } }
                     KeyCode::Enter => {
-                        let cycle = cycles[*selected];
-                        let name = name.clone();
-                        self.input_mode = InputMode::SelectPropellant {
-                            name,
-                            cycle,
-                            selected: 0,
-                        };
+                        if *selected < cycles.len() {
+                            let cycle = cycles[*selected];
+                            let name = name.clone();
+                            self.input_mode = InputMode::SelectPropellant {
+                                name,
+                                cycle,
+                                selected: 0,
+                            };
+                        } else {
+                            // Solid Rocket Motor — skip propellant selection
+                            let name = name.clone();
+                            self.input_mode = InputMode::SelectScale {
+                                name,
+                                cycle: EngineCycle::PressureFed,
+                                preset: PropellantPreset::Solid,
+                                scale: crate::engine_project::DEFAULT_SCALE,
+                                use_vacuum: false,
+                            };
+                        }
                     }
                     _ => {}
                 }
@@ -407,7 +508,7 @@ impl App {
                     .copied()
                     .collect();
                 match key {
-                    KeyCode::Esc => { self.input_mode = InputMode::Normal; }
+                    KeyCode::Esc => { self.exit_modal(); }
                     KeyCode::Up => { if *selected > 0 { *selected -= 1; } }
                     KeyCode::Down => { if *selected + 1 < presets.len() { *selected += 1; } }
                     KeyCode::Enter => {
@@ -426,7 +527,7 @@ impl App {
             }
             InputMode::SelectScale { name, cycle, preset, scale, use_vacuum } => {
                 match key {
-                    KeyCode::Esc => { self.input_mode = InputMode::Normal; }
+                    KeyCode::Esc => { self.exit_modal(); }
                     KeyCode::Up | KeyCode::Right => {
                         *scale = (*scale + crate::engine_project::SCALE_STEP)
                             .min(crate::engine_project::MAX_SCALE);
@@ -442,7 +543,7 @@ impl App {
                         let preset = *preset;
                         let scale = *scale;
                         let use_vacuum = *use_vacuum;
-                        self.input_mode = InputMode::Normal;
+                        self.exit_modal();
 
                         if let Some(evt) = self.game.player_company.start_engine_project(
                             name.clone(), cycle, preset, scale, use_vacuum,
@@ -459,13 +560,13 @@ impl App {
             InputMode::SelectThirdParty { selected } => {
                 let catalog_len = self.game.player_company.third_party_catalog.len();
                 match key {
-                    KeyCode::Esc => { self.input_mode = InputMode::Normal; }
+                    KeyCode::Esc => { self.exit_modal(); }
                     KeyCode::Up => { if *selected > 0 { *selected -= 1; } }
                     KeyCode::Down => { if *selected + 1 < catalog_len { *selected += 1; } }
                     KeyCode::Enter => {
                         let idx = *selected;
                         let date = self.game.date;
-                        self.input_mode = InputMode::Normal;
+                        self.exit_modal();
                         let seed_clone = self.game.seed.clone();
                         if let Some(evt) = self.game.player_company.contract_third_party(idx, date, &seed_clone) {
                             self.game.event_log.push(self.game.date, evt);
@@ -477,18 +578,15 @@ impl App {
             }
             InputMode::RocketName { buffer } => {
                 match key {
-                    KeyCode::Esc => { self.input_mode = InputMode::Normal; }
+                    KeyCode::Esc => { self.exit_modal(); }
                     KeyCode::Enter => {
                         if buffer.is_empty() {
                             self.status_message = Some("Name cannot be empty".into());
-                            self.input_mode = InputMode::Normal;
+                            self.exit_modal();
                         } else {
                             let name = buffer.clone();
-                            self.input_mode = InputMode::RocketSelectEngine {
-                                rocket_name: name,
-                                stage_groups: Vec::new(),
-                                next_stage_id: 1,
-                                selected: 0,
+                            self.input_mode = InputMode::RocketDesigner {
+                                state: Box::new(RocketDesignerState::new(name)),
                             };
                         }
                     }
@@ -497,128 +595,321 @@ impl App {
                     _ => {}
                 }
             }
-            InputMode::RocketSelectEngine { rocket_name, stage_groups, next_stage_id, selected } => {
-                // Build combined list: player engines (Testing) + contracted engines
-                let mut engines: Vec<(EngineSource, EngineDesign)> = Vec::new();
-                for ep in &self.game.player_company.engine_projects {
-                    if matches!(ep.status, EngineDesignStatus::Testing { .. }) {
-                        engines.push((EngineSource::PlayerDesign(ep.project_id), ep.design.clone()));
+            InputMode::RocketDesigner { .. }
+            | InputMode::RocketPickEngine { .. }
+            | InputMode::RocketPayloadInput { .. } => {
+                // Extract all data from the enum variant before calling handlers,
+                // to avoid holding a mutable borrow on self.input_mode.
+                let old_mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
+                match old_mode {
+                    InputMode::RocketDesigner { state } => {
+                        self.handle_rocket_designer_key(key, state);
                     }
-                }
-                for ce in &self.game.player_company.contracted_engines {
-                    engines.push((EngineSource::Contracted(ce.id), ce.design.clone()));
-                }
-                let num_engines = engines.len();
-                match key {
-                    KeyCode::Esc => { self.input_mode = InputMode::Normal; }
-                    KeyCode::Up => { if *selected > 0 { *selected -= 1; } }
-                    KeyCode::Down => { if *selected + 1 < num_engines { *selected += 1; } }
-                    KeyCode::Char('d') | KeyCode::Char('D') => {
-                        // Done adding stages — create the rocket project
-                        if stage_groups.is_empty() {
-                            self.status_message = Some("Must add at least one stage".into());
-                        } else {
-                            let rocket_name = rocket_name.clone();
-                            let stage_groups = stage_groups.clone();
-                            self.input_mode = InputMode::Normal;
-                            self.create_rocket_project(rocket_name, stage_groups);
-                        }
-                    }
-                    KeyCode::Enter => {
-                        if num_engines == 0 {
-                            self.status_message = Some("No completed engines available".into());
-                        } else {
-                            let (source, engine) = engines[*selected].clone();
-                            let rocket_name = rocket_name.clone();
-                            let stage_groups = stage_groups.clone();
-                            let next_stage_id = *next_stage_id;
-                            self.input_mode = InputMode::RocketConfigStage {
-                                rocket_name,
-                                stage_groups,
-                                next_stage_id,
-                                engine_source: source,
-                                engine,
-                                engine_count: 1,
-                                propellant_mass_kg: 10_000.0,
-                            };
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            InputMode::RocketConfigStage {
-                rocket_name, stage_groups, next_stage_id,
-                engine_source: _, engine, engine_count, propellant_mass_kg,
-            } => {
-                match key {
-                    KeyCode::Esc => {
-                        // Go back to engine selection
-                        let rocket_name = rocket_name.clone();
-                        let stage_groups = stage_groups.clone();
-                        let next_stage_id = *next_stage_id;
-                        self.input_mode = InputMode::RocketSelectEngine {
-                            rocket_name,
-                            stage_groups,
-                            next_stage_id,
-                            selected: 0,
-                        };
-                    }
-                    KeyCode::Up => {
-                        *propellant_mass_kg = (*propellant_mass_kg + 5_000.0).min(500_000.0);
-                    }
-                    KeyCode::Down => {
-                        *propellant_mass_kg = (*propellant_mass_kg - 5_000.0).max(1_000.0);
-                    }
-                    KeyCode::Right => {
-                        *engine_count = (*engine_count + 1).min(9);
-                    }
-                    KeyCode::Left => {
-                        *engine_count = (*engine_count).max(2) - 1;
-                    }
-                    KeyCode::Enter => {
-                        // Build the stage and add it as a new stage group
-                        let group_index = stage_groups.len();
-                        let is_first_group = group_index == 0;
-                        let propellant_mix: Vec<(crate::propellant::Propellant, f64)> =
-                            engine.propellant_mix.iter()
-                                .map(|f| (f.propellant, f.mass_fraction))
-                                .collect();
-                        let breakdown = structure::compute_structural_mass(
-                            *propellant_mass_kg,
-                            &propellant_mix,
-                            engine,
-                            *engine_count,
-                            is_first_group,
-                            true, // interstage for all except last (computed later)
+                    InputMode::RocketPickEngine { state, target_index, editing, selected } => {
+                        self.handle_rocket_pick_engine_key(
+                            key, state, target_index, editing, selected,
                         );
-
-                        let stage = Stage {
-                            id: StageId(*next_stage_id),
-                            name: format!("S{}", group_index + 1),
-                            engine: engine.clone(),
-                            engine_count: *engine_count,
-                            propellant_mass_kg: *propellant_mass_kg,
-                            structural_mass_kg: breakdown.total,
-                            fairing: None,
-                        };
-
-                        let mut stage_groups = stage_groups.clone();
-                        stage_groups.push(vec![stage]);
-                        let next_stage_id = *next_stage_id + 1;
-                        let rocket_name = rocket_name.clone();
-
-                        self.status_message = Some(format!("Stage {} added", group_index + 1));
-                        self.input_mode = InputMode::RocketSelectEngine {
-                            rocket_name,
-                            stage_groups,
-                            next_stage_id,
-                            selected: 0,
-                        };
                     }
-                    _ => {}
+                    InputMode::RocketPayloadInput { state, buffer } => {
+                        self.handle_rocket_payload_input_key(key, state, buffer);
+                    }
+                    _ => unreachable!(),
                 }
             }
         }
+    }
+
+    fn handle_rocket_designer_key(&mut self, key: KeyCode, mut state: Box<RocketDesignerState>) {
+        match key {
+            KeyCode::Up => {
+                state.selected_stage = state.selected_stage.saturating_sub(1);
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Down => {
+                if state.selected_stage + 1 < state.list_len() {
+                    state.selected_stage += 1;
+                }
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Enter => {
+                if state.on_add_slot() {
+                    // Same as 'a' — add stage at end
+                    self.input_mode = InputMode::RocketPickEngine {
+                        state,
+                        target_index: None,
+                        editing: false,
+                        selected: 0,
+                    };
+                } else {
+                    // Edit the selected stage
+                    self.input_mode = InputMode::RocketPickEngine {
+                        target_index: Some(state.selected_stage),
+                        editing: true,
+                        selected: 0,
+                        state,
+                    };
+                }
+            }
+            KeyCode::Left => {
+                // Decrease engine count on selected stage, scale propellant proportionally
+                if !state.on_add_slot() {
+                    let gi = state.selected_stage;
+                    if let Some(stage) = state.stage_groups[gi].first_mut() {
+                        if stage.engine_count > 1 {
+                            let old_count = stage.engine_count;
+                            stage.engine_count -= 1;
+                            stage.propellant_mass_kg *= stage.engine_count as f64 / old_count as f64;
+                            recompute_structural_masses(&mut state.stage_groups);
+                        }
+                    }
+                }
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Right => {
+                // Increase engine count on selected stage, scale propellant proportionally
+                if !state.on_add_slot() {
+                    let gi = state.selected_stage;
+                    if let Some(stage) = state.stage_groups[gi].first_mut() {
+                        if stage.engine_count < 9 {
+                            let old_count = stage.engine_count;
+                            stage.engine_count += 1;
+                            stage.propellant_mass_kg *= stage.engine_count as f64 / old_count as f64;
+                            recompute_structural_masses(&mut state.stage_groups);
+                        }
+                    }
+                }
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                // Increase propellant by thrust-scaled step
+                if !state.on_add_slot() {
+                    let gi = state.selected_stage;
+                    if let Some(stage) = state.stage_groups[gi].first_mut() {
+                        let step = propellant_step(&stage.engine, stage.engine_count);
+                        stage.propellant_mass_kg = (stage.propellant_mass_kg + step).min(2_000_000.0);
+                        recompute_structural_masses(&mut state.stage_groups);
+                    }
+                }
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Char('-') => {
+                // Decrease propellant by thrust-scaled step
+                if !state.on_add_slot() {
+                    let gi = state.selected_stage;
+                    if let Some(stage) = state.stage_groups[gi].first_mut() {
+                        let step = propellant_step(&stage.engine, stage.engine_count);
+                        stage.propellant_mass_kg = (stage.propellant_mass_kg - step).max(100.0);
+                        recompute_structural_masses(&mut state.stage_groups);
+                    }
+                }
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                // Add stage at end
+                self.input_mode = InputMode::RocketPickEngine {
+                    state,
+                    target_index: None,
+                    editing: false,
+                    selected: 0,
+                };
+            }
+            KeyCode::Char('i') | KeyCode::Char('I') => {
+                // Insert stage before selected
+                if !state.on_add_slot() {
+                    let idx = state.selected_stage;
+                    self.input_mode = InputMode::RocketPickEngine {
+                        state,
+                        target_index: Some(idx),
+                        editing: false,
+                        selected: 0,
+                    };
+                } else {
+                    self.input_mode = InputMode::RocketDesigner { state };
+                }
+            }
+            KeyCode::Char('x') | KeyCode::Char('X') => {
+                // Remove selected stage
+                if !state.on_add_slot() && !state.stage_groups.is_empty() {
+                    let idx = state.selected_stage;
+                    state.stage_groups.remove(idx);
+                    state.engine_sources.remove(idx);
+                    recompute_structural_masses(&mut state.stage_groups);
+                    if state.selected_stage >= state.stage_groups.len() && state.selected_stage > 0 {
+                        state.selected_stage -= 1;
+                    }
+                    self.status_message = Some(format!("Removed stage {}", idx + 1));
+                }
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                // Set payload
+                self.input_mode = InputMode::RocketPayloadInput {
+                    buffer: format!("{}", state.payload_kg as u64),
+                    state,
+                };
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') => {
+                // Cycle launch site
+                let ids = location::surface_location_ids();
+                let current_idx = ids.iter().position(|&id| id == state.launch_from).unwrap_or(0);
+                state.launch_from = ids[(current_idx + 1) % ids.len()];
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                // Done — finalize design
+                if state.stage_groups.is_empty() {
+                    self.status_message = Some("Must add at least one stage".into());
+                    self.input_mode = InputMode::RocketDesigner { state };
+                } else {
+                    let name = state.rocket_name.clone();
+                    let stage_groups = state.stage_groups.clone();
+                    self.exit_modal();
+                    self.create_rocket_project(name, stage_groups);
+                }
+            }
+            KeyCode::Esc => {
+                self.exit_modal();
+                self.status_message = Some("Rocket design cancelled".into());
+            }
+            _ => {
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+        }
+    }
+
+    fn handle_rocket_pick_engine_key(
+        &mut self,
+        key: KeyCode,
+        mut state: Box<RocketDesignerState>,
+        target_index: Option<usize>,
+        editing: bool,
+        mut selected: usize,
+    ) {
+        // Build combined engine list
+        let engines = self.available_engines();
+        let num_engines = engines.len();
+
+        match key {
+            KeyCode::Esc => {
+                // Back to designer
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Up => {
+                if selected > 0 { selected -= 1; }
+                self.input_mode = InputMode::RocketPickEngine {
+                    state, target_index, editing, selected,
+                };
+            }
+            KeyCode::Down => {
+                if selected + 1 < num_engines { selected += 1; }
+                self.input_mode = InputMode::RocketPickEngine {
+                    state, target_index, editing, selected,
+                };
+            }
+            KeyCode::Enter => {
+                if num_engines == 0 {
+                    self.status_message = Some("No engines available".into());
+                    self.input_mode = InputMode::RocketPickEngine {
+                        state, target_index, editing, selected,
+                    };
+                } else {
+                    let (source, engine) = engines[selected].clone();
+                    let engine_count = 1u32;
+                    // Initial propellant: ~120s burn time scaled to engine thrust
+                    let propellant_mass_kg = engine.mass_flow_rate() * engine_count as f64 * 120.0;
+
+                    let stage = Stage {
+                        id: StageId(state.next_stage_id),
+                        name: String::new(),
+                        engine: engine.clone(),
+                        engine_count,
+                        propellant_mass_kg,
+                        structural_mass_kg: 0.0,
+                        fairing: None,
+                    };
+                    state.next_stage_id += 1;
+
+                    match (editing, target_index) {
+                        (true, Some(i)) => {
+                            state.stage_groups[i] = vec![stage];
+                            state.engine_sources[i] = source;
+                            state.selected_stage = i;
+                        }
+                        (false, Some(i)) => {
+                            state.stage_groups.insert(i, vec![stage]);
+                            state.engine_sources.insert(i, source);
+                            state.selected_stage = i;
+                        }
+                        (false, None) => {
+                            state.stage_groups.push(vec![stage]);
+                            state.engine_sources.push(source);
+                            state.selected_stage = state.stage_groups.len() - 1;
+                        }
+                        _ => {}
+                    }
+
+                    // Rename stages and recompute structural masses
+                    for (gi, group) in state.stage_groups.iter_mut().enumerate() {
+                        for stage in group.iter_mut() {
+                            stage.name = format!("S{}", gi + 1);
+                        }
+                    }
+                    recompute_structural_masses(&mut state.stage_groups);
+
+                    self.input_mode = InputMode::RocketDesigner { state };
+                }
+            }
+            _ => {
+                self.input_mode = InputMode::RocketPickEngine {
+                    state, target_index, editing, selected,
+                };
+            }
+        }
+    }
+
+
+    fn handle_rocket_payload_input_key(
+        &mut self,
+        key: KeyCode,
+        mut state: Box<RocketDesignerState>,
+        mut buffer: String,
+    ) {
+        match key {
+            KeyCode::Esc => {
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Enter => {
+                if let Ok(val) = buffer.parse::<f64>() {
+                    state.payload_kg = val.max(0.0);
+                }
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Backspace => {
+                buffer.pop();
+                self.input_mode = InputMode::RocketPayloadInput { state, buffer };
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
+                buffer.push(c);
+                self.input_mode = InputMode::RocketPayloadInput { state, buffer };
+            }
+            _ => {
+                self.input_mode = InputMode::RocketPayloadInput { state, buffer };
+            }
+        }
+    }
+
+    /// Build the list of available engines (player Testing + contracted).
+    pub fn available_engines(&self) -> Vec<(EngineSource, EngineDesign)> {
+        let mut engines: Vec<(EngineSource, EngineDesign)> = Vec::new();
+        for ep in &self.game.player_company.engine_projects {
+            if matches!(ep.status, EngineDesignStatus::Testing { .. }) {
+                engines.push((EngineSource::PlayerDesign(ep.project_id), ep.design.clone()));
+            }
+        }
+        for ce in &self.game.player_company.contracted_engines {
+            engines.push((EngineSource::Contracted(ce.id), ce.design.clone()));
+        }
+        engines
     }
 
     fn handle_up(&mut self) {
