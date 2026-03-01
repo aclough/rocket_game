@@ -4,9 +4,12 @@ use crate::calendar::GameDate;
 use crate::engine::{EngineCycle, EngineId};
 use crate::engine_project::{EngineProject, EngineProjectId, PropellantPreset, WorkEvent};
 use crate::event::{EventLog, GameEvent};
+use crate::manufacturing::{Manufacturing, ManufacturingOrder};
 use crate::rocket::RocketDesign;
+use crate::rocket_project::{RocketProject, RocketProjectId, RocketWorkEvent};
 use crate::seed::GameSeed;
-use crate::team::{EngineeringTeam, TeamId, TEAM_HIRING_COST};
+use crate::team::{EngineeringTeam, ManufacturingTeam, TeamId, TEAM_HIRING_COST,
+    MANUFACTURING_HIRING_COST};
 use crate::third_party::{self, ThirdPartyEngine};
 
 /// Game simulation speed.
@@ -57,10 +60,14 @@ pub struct Company {
     pub next_engine_id: u64,
     pub next_project_id: u64,
     pub next_flaw_id: u64,
+    pub next_rocket_project_id: u64,
     pub teams: Vec<EngineeringTeam>,
+    pub manufacturing_teams: Vec<ManufacturingTeam>,
     pub engine_projects: Vec<EngineProject>,
+    pub rocket_projects: Vec<RocketProject>,
     pub third_party_catalog: Vec<ThirdPartyEngine>,
     pub rocket_designs: Vec<RocketDesign>,
+    pub manufacturing: Manufacturing,
 }
 
 impl Company {
@@ -73,10 +80,14 @@ impl Company {
             next_engine_id: 1,
             next_project_id: 1,
             next_flaw_id: 1,
+            next_rocket_project_id: 1,
             teams: Vec::new(),
+            manufacturing_teams: Vec::new(),
             engine_projects: Vec::new(),
+            rocket_projects: Vec::new(),
             third_party_catalog: catalog,
             rocket_designs: Vec::new(),
+            manufacturing: Manufacturing::new(),
         }
     }
 
@@ -95,17 +106,38 @@ impl Company {
         self.teams.len()
     }
 
-    /// Number of teams not assigned to any project.
+    /// Number of engineering teams not assigned to any project.
     pub fn unassigned_team_count(&self) -> u32 {
         let assigned: u32 = self.engine_projects.iter()
             .map(|p| p.teams_assigned)
-            .sum();
+            .sum::<u32>()
+            + self.rocket_projects.iter()
+                .map(|p| p.teams_assigned)
+                .sum::<u32>();
         (self.teams.len() as u32).saturating_sub(assigned)
     }
 
-    /// Total monthly salary cost for all teams.
+    /// Number of manufacturing teams not assigned to any order.
+    pub fn unassigned_manufacturing_team_count(&self) -> u32 {
+        let assigned = self.manufacturing.total_teams_assigned();
+        (self.manufacturing_teams.len() as u32).saturating_sub(assigned)
+    }
+
+    /// Total monthly salary cost for all teams (engineering + manufacturing).
     pub fn monthly_salary_cost(&self) -> f64 {
-        self.teams.iter().map(|t| t.monthly_salary).sum()
+        let eng: f64 = self.teams.iter().map(|t| t.monthly_salary).sum();
+        let mfg: f64 = self.manufacturing_teams.iter().map(|t| t.monthly_salary).sum();
+        eng + mfg
+    }
+
+    /// Hire a manufacturing team.
+    pub fn hire_manufacturing_team(&mut self, name: String) -> Option<GameEvent> {
+        self.money -= MANUFACTURING_HIRING_COST;
+        let id = TeamId(self.next_team_id);
+        self.next_team_id += 1;
+        let team = ManufacturingTeam::new(id, name.clone());
+        self.manufacturing_teams.push(team);
+        Some(GameEvent::ManufacturingTeamHired { name })
     }
 
     /// Start a new engine design project. Returns the event if successful.
@@ -154,6 +186,189 @@ impl Company {
         }
         project.teams_assigned -= 1;
         true
+    }
+
+    /// Start a new rocket design project. Returns the event if successful.
+    pub fn start_rocket_project(&mut self, design: RocketDesign) -> Option<GameEvent> {
+        let project_id = RocketProjectId(self.next_rocket_project_id);
+        self.next_rocket_project_id += 1;
+        let name = design.name.clone();
+        let project = RocketProject::new(project_id, design);
+        self.rocket_projects.push(project);
+        Some(GameEvent::RocketDesignStarted { rocket_name: name })
+    }
+
+    /// Add an engineering team to a rocket project. Returns true if successful.
+    pub fn add_team_to_rocket_project(&mut self, project_index: usize) -> bool {
+        if self.unassigned_team_count() == 0 || project_index >= self.rocket_projects.len() {
+            return false;
+        }
+        self.rocket_projects[project_index].teams_assigned += 1;
+        true
+    }
+
+    /// Remove an engineering team from a rocket project. Returns true if successful.
+    pub fn remove_team_from_rocket_project(&mut self, project_index: usize) -> bool {
+        if project_index >= self.rocket_projects.len() {
+            return false;
+        }
+        if self.rocket_projects[project_index].teams_assigned == 0 {
+            return false;
+        }
+        self.rocket_projects[project_index].teams_assigned -= 1;
+        true
+    }
+
+    /// Add a manufacturing team to a manufacturing order. Returns true if successful.
+    pub fn add_team_to_manufacturing_order(&mut self, order_index: usize) -> bool {
+        let available = self.unassigned_manufacturing_team_count();
+        self.manufacturing.add_team_to_order(order_index, available)
+    }
+
+    /// Remove a manufacturing team from a manufacturing order. Returns true if successful.
+    pub fn remove_team_from_manufacturing_order(&mut self, order_index: usize) -> bool {
+        self.manufacturing.remove_team_from_order(order_index)
+    }
+
+    /// Order construction of a rocket. Auto-queues engine, stage, and integration orders.
+    /// Returns the total material cost and event, or None if the rocket project isn't complete.
+    pub fn order_rocket_build(&mut self, rocket_project_index: usize) -> Option<(f64, GameEvent)> {
+        if rocket_project_index >= self.rocket_projects.len() {
+            return None;
+        }
+        let rp = &self.rocket_projects[rocket_project_index];
+        if !matches!(rp.status, crate::rocket_project::RocketDesignStatus::Complete) {
+            return None;
+        }
+
+        let rocket_name = rp.design.name.clone();
+        let rocket_project_id = rp.project_id;
+        let mut total_cost = 0.0;
+
+        // Queue engine build orders for each engine needed
+        for (gi, group) in rp.design.stage_groups.iter().enumerate() {
+            for (si, stage) in group.iter().enumerate() {
+                for _e in 0..stage.engine_count {
+                    // Find the engine project for this engine
+                    if let Some(ep) = self.engine_projects.iter()
+                        .find(|ep| ep.design.id == stage.engine.id)
+                    {
+                        let order_id = self.manufacturing.next_order_id();
+                        let order = ManufacturingOrder::new_engine(
+                            order_id,
+                            ep.project_id,
+                            stage.engine.id,
+                            stage.engine.name.clone(),
+                            stage.engine.mass_kg,
+                            ep.complexity,
+                            ep.preset,
+                            0, // TODO: track prior builds per design
+                        );
+                        total_cost += order.material_cost;
+                        self.manufacturing.orders.push(order);
+                    }
+                }
+
+                // Queue stage build order
+                let order_id = self.manufacturing.next_order_id();
+                let stage_name = format!("{} {}-{}", rocket_name, gi, si);
+                let order = ManufacturingOrder::new_stage(
+                    order_id,
+                    rocket_project_id,
+                    gi, si,
+                    stage_name,
+                    stage.structural_mass_kg,
+                    0,
+                );
+                total_cost += order.material_cost;
+                self.manufacturing.orders.push(order);
+            }
+        }
+
+        // Queue integration order
+        let total_stages: u32 = rp.design.stage_groups.iter()
+            .map(|g| g.len() as u32)
+            .sum();
+        let order_id = self.manufacturing.next_order_id();
+        let integration_order = ManufacturingOrder::new_integration(
+            order_id,
+            rocket_project_id,
+            rocket_name.clone(),
+            total_stages,
+            0,
+        );
+        total_cost += integration_order.material_cost;
+        self.manufacturing.orders.push(integration_order);
+
+        // Deduct costs
+        self.money -= total_cost;
+
+        Some((total_cost, GameEvent::RocketBuildOrdered {
+            rocket_name,
+            total_cost,
+        }))
+    }
+
+    /// Try to unblock stage and integration orders that have their prerequisites ready.
+    pub fn try_unblock_manufacturing_orders(&mut self) {
+        for order in &mut self.manufacturing.orders {
+            if !order.waiting_for_prerequisites {
+                continue;
+            }
+            match &order.order_type {
+                crate::manufacturing::ManufacturingOrderType::Stage {
+                    rocket_project_id, group_index, stage_index, ..
+                } => {
+                    // Stage needs engines for this stage
+                    if let Some(rp) = self.rocket_projects.iter()
+                        .find(|rp| rp.project_id == *rocket_project_id)
+                    {
+                        if let Some(stage) = rp.design.stage_groups
+                            .get(*group_index)
+                            .and_then(|g| g.get(*stage_index))
+                        {
+                            // Check if enough engines are in inventory
+                            let ep = self.engine_projects.iter()
+                                .find(|ep| ep.design.id == stage.engine.id);
+                            if let Some(ep) = ep {
+                                let available = self.manufacturing.inventory.engine_count(ep.project_id);
+                                if available >= stage.engine_count as usize {
+                                    order.waiting_for_prerequisites = false;
+                                    // Consume engines from inventory
+                                    for _ in 0..stage.engine_count {
+                                        self.manufacturing.inventory.take_engine(ep.project_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::manufacturing::ManufacturingOrderType::RocketIntegration {
+                    rocket_project_id, ..
+                } => {
+                    // Integration needs all stages
+                    if let Some(rp) = self.rocket_projects.iter()
+                        .find(|rp| rp.project_id == *rocket_project_id)
+                    {
+                        let all_stages_ready = rp.design.stage_groups.iter().enumerate().all(|(gi, group)| {
+                            group.iter().enumerate().all(|(si, _stage)| {
+                                self.manufacturing.inventory.stage_count(*rocket_project_id, gi, si) >= 1
+                            })
+                        });
+                        if all_stages_ready {
+                            order.waiting_for_prerequisites = false;
+                            // Consume stages from inventory
+                            for (gi, group) in rp.design.stage_groups.iter().enumerate() {
+                                for (si, _stage) in group.iter().enumerate() {
+                                    self.manufacturing.inventory.take_stage(*rocket_project_id, gi, si);
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Purchase a third-party engine from the catalog.
@@ -217,24 +432,45 @@ impl GameState {
 
         self.date = self.date.next_day();
 
-        // Process daily work on engine projects
-        let rng = &mut self.seed.contingent_rng;
-        let next_flaw_id = &mut self.player_company.next_flaw_id;
-        for project in &mut self.player_company.engine_projects {
-            let engine_name = project.design.name.clone();
-            let work_events = project.apply_daily_work(rng, next_flaw_id);
-            for we in work_events {
-                let evt = match we {
-                    WorkEvent::DesignComplete { flaw_count } =>
-                        GameEvent::EngineDesignComplete { engine_name: engine_name.clone(), flaw_count },
-                    WorkEvent::TestingCycleComplete => continue,
-                    WorkEvent::FlawDiscovered { flaw_description } =>
-                        GameEvent::FlawDiscovered { engine_name: engine_name.clone(), flaw_description },
-                    WorkEvent::RevisionComplete =>
-                        GameEvent::RevisionComplete { engine_name: engine_name.clone() },
-                };
-                self.event_log.push(self.date, evt.clone());
-                events.push(evt);
+        // Process daily work on engine and rocket projects
+        {
+            let rng = &mut self.seed.contingent_rng;
+            let next_flaw_id = &mut self.player_company.next_flaw_id;
+
+            for project in &mut self.player_company.engine_projects {
+                let engine_name = project.design.name.clone();
+                let work_events = project.apply_daily_work(rng, next_flaw_id);
+                for we in work_events {
+                    let evt = match we {
+                        WorkEvent::DesignComplete { flaw_count } =>
+                            GameEvent::EngineDesignComplete { engine_name: engine_name.clone(), flaw_count },
+                        WorkEvent::TestingCycleComplete => continue,
+                        WorkEvent::FlawDiscovered { flaw_description } =>
+                            GameEvent::FlawDiscovered { engine_name: engine_name.clone(), flaw_description },
+                        WorkEvent::RevisionComplete =>
+                            GameEvent::RevisionComplete { engine_name: engine_name.clone() },
+                    };
+                    self.event_log.push(self.date, evt.clone());
+                    events.push(evt);
+                }
+            }
+
+            for project in &mut self.player_company.rocket_projects {
+                let rocket_name = project.design.name.clone();
+                let work_events = project.apply_daily_work(rng, next_flaw_id);
+                for we in work_events {
+                    let evt = match we {
+                        RocketWorkEvent::DesignComplete { flaw_count } =>
+                            GameEvent::RocketDesignComplete { rocket_name: rocket_name.clone(), flaw_count },
+                        RocketWorkEvent::TestingCycleComplete => continue,
+                        RocketWorkEvent::FlawDiscovered { flaw_description } =>
+                            GameEvent::RocketFlawDiscovered { rocket_name: rocket_name.clone(), flaw_description },
+                        RocketWorkEvent::RevisionComplete =>
+                            GameEvent::RocketRevisionComplete { rocket_name: rocket_name.clone() },
+                    };
+                    self.event_log.push(self.date, evt.clone());
+                    events.push(evt);
+                }
             }
         }
 
@@ -261,7 +497,25 @@ impl GameState {
             }
         }
 
-        // Future: process manufacturing, flights, research, contracts
+        // Process manufacturing
+        let mfg_events = self.player_company.manufacturing.advance_day();
+        for me in mfg_events {
+            let evt = match me {
+                crate::manufacturing::ManufacturingEvent::EngineBuilt { engine_name, .. } =>
+                    GameEvent::EngineBuilt { engine_name },
+                crate::manufacturing::ManufacturingEvent::StageBuilt { stage_name, .. } =>
+                    GameEvent::StageBuilt { stage_name },
+                crate::manufacturing::ManufacturingEvent::RocketIntegrated { rocket_name, .. } =>
+                    GameEvent::RocketIntegrated { rocket_name },
+                crate::manufacturing::ManufacturingEvent::FloorSpaceComplete { units } =>
+                    GameEvent::FloorSpaceComplete { units },
+            };
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+        }
+
+        // Try to unblock manufacturing orders that now have prerequisites
+        self.player_company.try_unblock_manufacturing_orders();
 
         events
     }

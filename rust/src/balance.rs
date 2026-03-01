@@ -61,6 +61,59 @@ pub fn design_work_required(complexity: u32) -> f64 {
     base_days * (complexity as f64 / 5.0)
 }
 
+/// Rocket integration complexity based on design characteristics.
+/// Factors: number of stages, unique engine types, parallel stages.
+/// Range: ~3-8.
+pub fn rocket_complexity(
+    total_stages: u32,
+    unique_engine_types: u32,
+    max_parallel_stages: u32,
+) -> u32 {
+    let base = 3u32;
+    let stage_factor = total_stages.saturating_sub(1); // each extra stage adds 1
+    let engine_variety = unique_engine_types.saturating_sub(1); // each extra type adds 1
+    let parallel_factor = if max_parallel_stages > 1 { 1 } else { 0 }; // boosters add 1
+
+    (base + stage_factor + engine_variety + parallel_factor).min(8)
+}
+
+/// Work required in days for rocket design.
+/// base_days * (complexity / 5), shorter base than engines.
+pub fn rocket_design_work_required(complexity: u32) -> f64 {
+    let base_days = 60.0;
+    base_days * (complexity as f64 / 5.0)
+}
+
+/// Work required in days for engine manufacturing.
+/// Function of engine complexity: base_days * (complexity / 5).
+pub fn engine_build_work(complexity: u32) -> f64 {
+    let base_days = 90.0;
+    base_days * (complexity as f64 / 5.0)
+}
+
+/// Work required in days for stage manufacturing.
+/// Based on stage mass.
+pub fn stage_build_work(stage_mass_kg: f64) -> f64 {
+    let base_days = 60.0;
+    base_days * (stage_mass_kg / 10_000.0_f64).powf(0.75)
+}
+
+/// Work required for rocket integration.
+/// Light job: 20 base + 30 per stage.
+pub fn rocket_integration_work(total_stages: u32) -> f64 {
+    20.0 + 30.0 * total_stages as f64
+}
+
+/// Learning curve cost multiplier for repeated builds.
+/// ~90% learning curve: each doubling of production cuts cost by 10%.
+pub fn learning_curve_multiplier(total_built: u32) -> f64 {
+    if total_built == 0 {
+        1.0
+    } else {
+        (total_built as f64).powf(-0.15)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,5 +209,63 @@ mod tests {
         assert!((design_work_required(6) - 144.0).abs() < 0.01);
         // complexity 9 → 120 * 1.8 = 216
         assert!((design_work_required(9) - 216.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_rocket_complexity_simple() {
+        // 2 stages, 1 engine type, no parallel = 3 + 1 + 0 + 0 = 4
+        assert_eq!(rocket_complexity(2, 1, 1), 4);
+    }
+
+    #[test]
+    fn test_rocket_complexity_with_boosters() {
+        // 3 stages, 2 engine types, parallel boosters = 3 + 2 + 1 + 1 = 7
+        assert_eq!(rocket_complexity(3, 2, 2), 7);
+    }
+
+    #[test]
+    fn test_rocket_complexity_capped() {
+        // Even extreme rockets cap at 8
+        assert_eq!(rocket_complexity(6, 4, 3), 8);
+    }
+
+    #[test]
+    fn test_rocket_complexity_minimum() {
+        // Single stage, 1 engine type, no parallel = 3
+        assert_eq!(rocket_complexity(1, 1, 1), 3);
+    }
+
+    #[test]
+    fn test_rocket_design_work() {
+        // complexity 5 → 60 * 1.0 = 60
+        assert!((rocket_design_work_required(5) - 60.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_engine_build_work() {
+        // complexity 6 → 90 * 1.2 = 108
+        assert!((engine_build_work(6) - 108.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_stage_build_work() {
+        // 10000 kg → 60 * 1.0 = 60
+        assert!((stage_build_work(10_000.0) - 60.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_integration_work() {
+        // 2 stages → 20 + 60 = 80
+        assert!((rocket_integration_work(2) - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_learning_curve() {
+        assert!((learning_curve_multiplier(1) - 1.0).abs() < 0.01);
+        // 10th build should be cheaper
+        let tenth = learning_curve_multiplier(10);
+        assert!(tenth < 1.0 && tenth > 0.5, "10th build multiplier: {}", tenth);
+        // Monotonically decreasing
+        assert!(learning_curve_multiplier(20) < learning_curve_multiplier(10));
     }
 }

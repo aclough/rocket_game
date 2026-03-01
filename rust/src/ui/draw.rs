@@ -2,9 +2,10 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 
 use crate::engine::EngineCycle;
-use crate::engine_project::{self, EngineDesignStatus, PropellantPreset};
+use crate::engine_project::{self, EngineDesignStatus, EngineProjectId, PropellantPreset};
 use crate::event::EventImportance;
 use crate::flaw::FlawConsequence;
+use crate::structure;
 use crate::ui::{App, FocusedPane, InputMode, Tab};
 
 /// Draw the entire application frame.
@@ -104,6 +105,8 @@ fn draw_content(frame: &mut Frame, app: &App, area: Rect) {
         Tab::Overview => draw_overview(frame, app, area, border_style),
         Tab::Teams => draw_teams_tab(frame, app, area, border_style),
         Tab::Engines => draw_engines_tab(frame, app, area, border_style),
+        Tab::Rockets => draw_rockets_tab(frame, app, area, border_style),
+        Tab::Manufacturing => draw_manufacturing_tab(frame, app, area, border_style),
         Tab::Events => draw_events_tab(frame, app, area, border_style),
     }
 }
@@ -118,9 +121,12 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) 
         Line::from(""),
         Line::from(format!("  Money:    {}", format_money(game.player_company.money))),
         Line::from(""),
-        Line::from(format!("  Teams:           {}", game.player_company.team_count())),
+        Line::from(format!("  Eng. teams:      {}", game.player_company.team_count())),
+        Line::from(format!("  Mfg. teams:      {}", game.player_company.manufacturing_teams.len())),
         Line::from(format!("  Engine projects: {}", game.player_company.engine_projects.len())),
-        Line::from(format!("  Rocket designs:  {}", game.player_company.rocket_designs.len())),
+        Line::from(format!("  Rocket projects: {}", game.player_company.rocket_projects.len())),
+        Line::from(format!("  Mfg. orders:     {}", game.player_company.manufacturing.orders.len())),
+        Line::from(format!("  Rockets built:   {}", game.player_company.manufacturing.inventory.rockets.len())),
         Line::from(""),
         Line::from(format!("  Seed:  {}", game.seed.seed())),
     ];
@@ -137,31 +143,54 @@ fn draw_teams_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style)
     let company = &app.game.player_company;
     let mut lines = vec![
         Line::from(format!(
-            "  Engineering Teams ({})          Monthly cost: {}",
-            company.team_count(),
+            "  All Teams          Monthly cost: {}",
             format_money(company.monthly_salary_cost()),
         )),
         Line::from("  ─────────────────────────────────────────────"),
-        Line::from(format!("  Total teams:  {}", company.team_count())),
-        Line::from(format!("  Unassigned:   {}", company.unassigned_team_count())),
+        Line::from(format!("  Engineering:    {} ({} unassigned)",
+            company.team_count(), company.unassigned_team_count())),
+        Line::from(format!("  Manufacturing:  {} ({} unassigned)",
+            company.manufacturing_teams.len(),
+            company.unassigned_manufacturing_team_count())),
         Line::from(""),
     ];
 
-    // Show assignment breakdown
+    // Show engineering assignment breakdown
     for project in &company.engine_projects {
         if project.teams_assigned > 0 {
             lines.push(Line::from(format!(
-                "    {} teams on \"{}\"  (rate: {:.2}/day)",
+                "    {} eng. team(s) on \"{}\"  (rate: {:.2}/day)",
                 project.teams_assigned,
                 project.design.name,
                 crate::team::effective_work_rate(project.teams_assigned),
             )));
         }
     }
+    for project in &company.rocket_projects {
+        if project.teams_assigned > 0 {
+            lines.push(Line::from(format!(
+                "    {} eng. team(s) on \"{}\"  (rate: {:.2}/day)",
+                project.teams_assigned,
+                project.design.name,
+                crate::team::effective_work_rate(project.teams_assigned),
+            )));
+        }
+    }
+    for order in &company.manufacturing.orders {
+        if order.teams_assigned > 0 {
+            lines.push(Line::from(format!(
+                "    {} mfg. team(s) on {} \"{}\"  (rate: {:.2}/day)",
+                order.teams_assigned,
+                order.type_label(),
+                order.display_name(),
+                crate::team::manufacturing_work_rate(order.teams_assigned),
+            )));
+        }
+    }
 
     lines.push(Line::from(""));
     lines.push(Line::from(
-        Span::styled("  [H] Hire team ($150K)", Style::default().fg(Color::Cyan))
+        Span::styled("  [H] Hire eng. team ($150K)  [M] Hire mfg. team ($900K)", Style::default().fg(Color::Cyan))
     ));
 
     let block = Block::default()
@@ -291,6 +320,238 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(" Engines ");
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
+    let company = &app.game.player_company;
+    let mut lines = vec![
+        Line::from(format!("  Rocket Projects ({})", company.rocket_projects.len())),
+        Line::from("  ─────────────────────────────────────────────"),
+    ];
+
+    if company.rocket_projects.is_empty() {
+        lines.push(Line::from("  No rocket projects yet."));
+        lines.push(Line::from("  (Rocket designer coming soon — projects can be"));
+        lines.push(Line::from("   created via the game state for now.)"));
+    }
+
+    for (i, project) in company.rocket_projects.iter().enumerate() {
+        let selected = i == app.selected_item;
+        let marker = if selected { "▶" } else { " " };
+
+        let status_str = match &project.status {
+            crate::rocket_project::RocketDesignStatus::InDesign { work_completed, work_required } =>
+                format!("In Design [{:.0}/{:.0}]", work_completed, work_required),
+            crate::rocket_project::RocketDesignStatus::Testing { work_completed } =>
+                format!("Testing [{:.0}] {}", work_completed, project.testing_level()),
+            crate::rocket_project::RocketDesignStatus::Revising { remaining_indices, work_completed } =>
+                format!("Revising {} flaw(s) [{:.0}/30]", remaining_indices.len(), work_completed),
+            crate::rocket_project::RocketDesignStatus::Complete =>
+                "Complete".to_string(),
+        };
+
+        let total_stages: u32 = project.design.stage_groups.iter()
+            .map(|g| g.len() as u32).sum();
+        let total_engines: u32 = project.design.stage_groups.iter()
+            .flat_map(|g| g.iter())
+            .map(|s| s.engine_count)
+            .sum();
+
+        let style = if selected {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {} {} (Rev {})  {}",
+                marker, project.design.name, project.revision, status_str,
+            ),
+            style,
+        )));
+
+        if selected {
+            lines.push(Line::from(format!(
+                "      {} stages, {} engines    Teams: {}    Complexity: {}",
+                total_stages, total_engines, project.teams_assigned, project.complexity,
+            )));
+            lines.push(Line::from(format!(
+                "      Total mass: {:.0} kg    dV: {:.0} m/s (0 payload)",
+                project.design.total_mass_kg(),
+                project.design.total_delta_v(0.0),
+            )));
+
+            // Show payload table
+            let table = crate::rocket_project::payload_table(&project.design, "earth_surface");
+            if !table.is_empty() {
+                lines.push(Line::from("      Max payload:"));
+                for (dest, payload) in &table {
+                    lines.push(Line::from(format!(
+                        "        {:20} {:.0} kg", dest, payload,
+                    )));
+                }
+            }
+
+            // Show flaws
+            let discovered = project.discovered_flaw_count();
+            if discovered > 0 {
+                lines.push(Line::from(format!("      Flaws: {} discovered", discovered)));
+                for flaw in &project.flaws {
+                    if flaw.discovered {
+                        let consequence_str = match &flaw.consequence {
+                            crate::flaw::FlawConsequence::PerformanceDegradation(frac) =>
+                                format!("{:.0}% perf loss", frac * 100.0),
+                            crate::flaw::FlawConsequence::EngineLoss => "engine loss".to_string(),
+                            crate::flaw::FlawConsequence::StageLoss => "stage loss".to_string(),
+                        };
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "        ⚠ {}: {} ({:.0}%/flight)",
+                                flaw.description, consequence_str, flaw.activation_chance * 100.0,
+                            ),
+                            Style::default().fg(Color::Red),
+                        )));
+                    }
+                }
+            }
+            if matches!(project.status,
+                crate::rocket_project::RocketDesignStatus::Testing { .. }
+                | crate::rocket_project::RocketDesignStatus::Complete
+            ) {
+                lines.push(Line::from(Span::styled(
+                    "        ? Unknown flaws may remain",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+
+            // Inventory count
+            let built = company.manufacturing.inventory.rocket_count(project.project_id);
+            if built > 0 {
+                lines.push(Line::from(format!("      Built rockets: {}", built)));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    let mut controls = vec!["[N] New design"];
+    if !company.rocket_projects.is_empty() {
+        controls.extend_from_slice(&[
+            "[+] Add team", "[-] Remove team",
+            "[T] Test", "[R] Revise", "[C] Complete", "[O] Order build",
+        ]);
+    }
+    lines.push(Line::from(Span::styled(
+        format!("  {}", controls.join("  ")),
+        Style::default().fg(Color::Cyan),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(" Rockets ");
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
+    let company = &app.game.player_company;
+    let mfg = &company.manufacturing;
+    let mut lines = vec![
+        Line::from("  Manufacturing"),
+        Line::from("  ─────────────────────────────────────────────"),
+        Line::from(format!(
+            "  Floor space: {}/{} used    Mfg teams: {} ({} unassigned)",
+            mfg.floor_space_in_use(),
+            mfg.floor_space.total_units,
+            company.manufacturing_teams.len(),
+            company.unassigned_manufacturing_team_count(),
+        )),
+    ];
+
+    // Show floor space construction
+    for order in &mfg.floor_space.under_construction {
+        lines.push(Line::from(format!(
+            "    Building {} unit(s): {} days remaining",
+            order.units, order.days_remaining,
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from("  Orders:"));
+
+    if mfg.orders.is_empty() {
+        lines.push(Line::from("    No manufacturing orders."));
+    }
+
+    for (i, order) in mfg.orders.iter().enumerate() {
+        let selected = i == app.selected_item;
+        let marker = if selected { "▶" } else { " " };
+
+        let status_str = if order.waiting_for_prerequisites {
+            "Waiting".to_string()
+        } else {
+            format!("[{:.0}/{:.0}]  Teams: {}",
+                order.work_completed, order.work_required, order.teams_assigned)
+        };
+
+        let style = if selected {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        lines.push(Line::from(Span::styled(
+            format!(
+                "    {} [{}] {} \"{}\"  {}",
+                marker, i + 1, order.type_label(), order.display_name(), status_str,
+            ),
+            style,
+        )));
+    }
+
+    // Inventory summary
+    lines.push(Line::from(""));
+    lines.push(Line::from("  Inventory:"));
+    if mfg.inventory.engines.is_empty() && mfg.inventory.stages.is_empty() && mfg.inventory.rockets.is_empty() {
+        lines.push(Line::from("    (empty)"));
+    } else {
+        if !mfg.inventory.engines.is_empty() {
+            // Group engines by name
+            let mut engine_counts: Vec<(&str, usize)> = Vec::new();
+            for eng in &mfg.inventory.engines {
+                if let Some(entry) = engine_counts.iter_mut().find(|(n, _)| *n == eng.engine_name.as_str()) {
+                    entry.1 += 1;
+                } else {
+                    engine_counts.push((&eng.engine_name, 1));
+                }
+            }
+            for (name, count) in &engine_counts {
+                lines.push(Line::from(format!("    {} engines: {}", name, count)));
+            }
+        }
+        if !mfg.inventory.stages.is_empty() {
+            lines.push(Line::from(format!("    Stages: {}", mfg.inventory.stages.len())));
+        }
+        if !mfg.inventory.rockets.is_empty() {
+            for rocket in &mfg.inventory.rockets {
+                lines.push(Line::from(format!("    Rocket: {}", rocket.rocket_name)));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [B] Buy floor space ($5M)  [+] Add mfg team  [-] Remove mfg team",
+        Style::default().fg(Color::Cyan),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(" Manufacturing ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -504,6 +765,134 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
+        InputMode::RocketName { buffer } => {
+            let lines = vec![
+                Line::from(""),
+                Line::from("  Enter rocket name:"),
+                Line::from(""),
+                Line::from(format!("  > {}█", buffer)),
+            ];
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" New Rocket Design ")
+                .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::RocketSelectEngine { rocket_name, stage_groups, selected, .. } => {
+            let engines: Vec<(EngineProjectId, &crate::engine::EngineDesign)> =
+                app.game.player_company.engine_projects.iter()
+                    .filter(|ep| matches!(ep.status, EngineDesignStatus::Complete))
+                    .map(|ep| (ep.project_id, &ep.design))
+                    .collect();
+
+            let total_stages: usize = stage_groups.iter().map(|g| g.len()).sum();
+            let mut lines = vec![
+                Line::from(format!("  Rocket: {}    Stages added: {}", rocket_name, total_stages)),
+                Line::from(""),
+            ];
+
+            // Show existing stages
+            for (gi, group) in stage_groups.iter().enumerate() {
+                for stage in group {
+                    lines.push(Line::from(format!(
+                        "    Stage {}: {} x{}  {:.0}kg prop  {:.0}kg struct",
+                        gi + 1, stage.engine.name, stage.engine_count,
+                        stage.propellant_mass_kg, stage.structural_mass_kg,
+                    )));
+                }
+            }
+
+            if !stage_groups.is_empty() {
+                lines.push(Line::from(""));
+            }
+
+            lines.push(Line::from("  Select engine for next stage:"));
+            lines.push(Line::from(""));
+
+            if engines.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  No completed engines! Complete an engine project first.",
+                    Style::default().fg(Color::Red),
+                )));
+            }
+
+            for (i, (_ep_id, design)) in engines.iter().enumerate() {
+                let marker = if i == *selected { "▶" } else { " " };
+                let style = if i == *selected {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("  {} {}  {:.0}kN  {:.0}s  {:.0}kg",
+                        marker, design.name, design.thrust_n / 1000.0, design.isp_s, design.mass_kg),
+                    style,
+                )));
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [Enter] Select  [D] Done  [Esc] Cancel",
+                Style::default().fg(Color::Cyan),
+            )));
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Add Stage ")
+                .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::RocketConfigStage {
+            rocket_name, stage_groups, engine, engine_count, propellant_mass_kg, ..
+        } => {
+            let group_index = stage_groups.len();
+            let is_first = group_index == 0;
+            let propellant_mix: Vec<(crate::propellant::Propellant, f64)> =
+                engine.propellant_mix.iter()
+                    .map(|f| (f.propellant, f.mass_fraction))
+                    .collect();
+            let breakdown = structure::compute_structural_mass(
+                *propellant_mass_kg,
+                &propellant_mix,
+                engine,
+                *engine_count,
+                is_first,
+                true,
+            );
+
+            let lines = vec![
+                Line::from(format!("  Rocket: {}    Stage {}", rocket_name, group_index + 1)),
+                Line::from(""),
+                Line::from(format!("  Engine: {}  ({:.0}kN, {:.0}s)", engine.name, engine.thrust_n / 1000.0, engine.isp_s)),
+                Line::from(""),
+                Line::from(format!("  Engine count:   {}    [←→ to adjust]", engine_count)),
+                Line::from(format!("  Propellant:     {:.0} kg  [↑↓ to adjust, 5t steps]", propellant_mass_kg)),
+                Line::from(""),
+                Line::from(format!("  Structural mass: {:.0} kg", breakdown.total)),
+                Line::from(format!("    Tank: {:.0}  Thrust struct: {:.0}  Aero: {:.0}  Interstage: {:.0}",
+                    breakdown.tank_mass, breakdown.thrust_structure, breakdown.aero_shell, breakdown.interstage)),
+                Line::from(""),
+                Line::from(format!("  Total thrust:    {:.0} kN", engine.thrust_n * *engine_count as f64 / 1000.0)),
+                Line::from(format!("  Dry mass:        {:.0} kg",
+                    breakdown.total + engine.mass_kg * *engine_count as f64)),
+                Line::from(format!("  Wet mass:        {:.0} kg",
+                    breakdown.total + engine.mass_kg * *engine_count as f64 + propellant_mass_kg)),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  [Enter] Add stage  [Esc] Back",
+                    Style::default().fg(Color::Cyan),
+                )),
+            ];
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Configure Stage ")
+                .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
     }
 }
 
@@ -527,7 +916,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn format_money(amount: f64) -> String {
+pub fn format_money(amount: f64) -> String {
     if amount >= 1_000_000_000.0 {
         format!("${:.1}B", amount / 1_000_000_000.0)
     } else if amount >= 1_000_000.0 {

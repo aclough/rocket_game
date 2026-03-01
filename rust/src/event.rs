@@ -20,7 +20,19 @@ pub enum GameEvent {
     SalariesPaid { amount: f64 },
     InsufficientFunds { shortfall: f64 },
     EnginePurchased { engine_name: String, cost: f64 },
-    // Future phases: LaunchResult, ContractOffered, TechUnlocked, etc.
+    // Phase 3: Rocket design events
+    RocketDesignStarted { rocket_name: String },
+    RocketDesignComplete { rocket_name: String, flaw_count: u32 },
+    RocketFlawDiscovered { rocket_name: String, flaw_description: String },
+    RocketRevisionComplete { rocket_name: String },
+    // Phase 3: Manufacturing events
+    ManufacturingTeamHired { name: String },
+    EngineBuilt { engine_name: String },
+    StageBuilt { stage_name: String },
+    RocketIntegrated { rocket_name: String },
+    FloorSpaceComplete { units: u32 },
+    RocketBuildOrdered { rocket_name: String, total_cost: f64 },
+    // Future: LaunchResult, ContractOffered, TechUnlocked, etc.
 }
 
 impl fmt::Display for GameEvent {
@@ -51,6 +63,26 @@ impl fmt::Display for GameEvent {
                 write!(f, "Warning: ${:.0} in debt", shortfall),
             GameEvent::EnginePurchased { engine_name, cost } =>
                 write!(f, "Purchased {}: ${:.0}", engine_name, cost),
+            GameEvent::RocketDesignStarted { rocket_name } =>
+                write!(f, "Started rocket design: {}", rocket_name),
+            GameEvent::RocketDesignComplete { rocket_name, flaw_count } =>
+                write!(f, "Rocket design complete: {} ({} flaws)", rocket_name, flaw_count),
+            GameEvent::RocketFlawDiscovered { rocket_name, flaw_description } =>
+                write!(f, "Rocket flaw in {}: {}", rocket_name, flaw_description),
+            GameEvent::RocketRevisionComplete { rocket_name } =>
+                write!(f, "Rocket revision complete: {}", rocket_name),
+            GameEvent::ManufacturingTeamHired { name } =>
+                write!(f, "Hired manufacturing team: {}", name),
+            GameEvent::EngineBuilt { engine_name } =>
+                write!(f, "Engine built: {}", engine_name),
+            GameEvent::StageBuilt { stage_name } =>
+                write!(f, "Stage built: {}", stage_name),
+            GameEvent::RocketIntegrated { rocket_name } =>
+                write!(f, "Rocket ready: {}", rocket_name),
+            GameEvent::FloorSpaceComplete { units } =>
+                write!(f, "Floor space +{} units", units),
+            GameEvent::RocketBuildOrdered { rocket_name, total_cost } =>
+                write!(f, "Ordered build: {} (${:.0})", rocket_name, total_cost),
         }
     }
 }
@@ -78,7 +110,17 @@ impl GameEvent {
             | GameEvent::FlawDiscovered { .. }
             | GameEvent::RevisionComplete { .. }
             | GameEvent::InsufficientFunds { .. }
-            | GameEvent::EnginePurchased { .. } => EventImportance::Notable,
+            | GameEvent::EnginePurchased { .. }
+            | GameEvent::RocketDesignStarted { .. }
+            | GameEvent::RocketDesignComplete { .. }
+            | GameEvent::RocketFlawDiscovered { .. }
+            | GameEvent::RocketRevisionComplete { .. }
+            | GameEvent::ManufacturingTeamHired { .. }
+            | GameEvent::EngineBuilt { .. }
+            | GameEvent::StageBuilt { .. }
+            | GameEvent::RocketIntegrated { .. }
+            | GameEvent::FloorSpaceComplete { .. }
+            | GameEvent::RocketBuildOrdered { .. } => EventImportance::Notable,
         }
     }
 }
