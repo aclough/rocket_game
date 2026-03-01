@@ -5,6 +5,7 @@ use crate::balance;
 use crate::engine::{EngineDesign, EngineCycle, EngineId, PropellantFraction, G0};
 use crate::flaw::{self, Flaw, TESTING_CYCLE_WORK, FLAW_REVISION_WORK};
 use crate::propellant::Propellant;
+use crate::third_party::ContractedEngineId;
 
 /// A preset propellant combination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +188,13 @@ pub enum EngineDesignStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EngineProjectId(pub u64);
 
+/// Where an engine comes from — player-designed or contracted third-party.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EngineSource {
+    PlayerDesign(EngineProjectId),
+    Contracted(ContractedEngineId),
+}
+
 /// An engine design project with workflow state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineProject {
@@ -199,7 +207,6 @@ pub struct EngineProject {
     pub revision: u32,
     pub teams_assigned: u32,
     pub complexity: u32,
-    pub is_third_party: bool,
 }
 
 impl EngineProject {
@@ -248,7 +255,6 @@ impl EngineProject {
             revision: 0,
             teams_assigned: 0,
             complexity,
-            is_third_party: false,
         })
     }
 

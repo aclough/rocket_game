@@ -19,7 +19,7 @@ pub enum GameEvent {
     RevisionComplete { engine_name: String },
     SalariesPaid { amount: f64 },
     InsufficientFunds { shortfall: f64 },
-    EnginePurchased { engine_name: String, cost: f64 },
+    EngineContracted { engine_name: String },
     // Phase 3: Rocket design events
     RocketDesignStarted { rocket_name: String },
     RocketDesignComplete { rocket_name: String, flaw_count: u32 },
@@ -61,8 +61,8 @@ impl fmt::Display for GameEvent {
                 write!(f, "Salaries paid: ${:.0}", amount),
             GameEvent::InsufficientFunds { shortfall } =>
                 write!(f, "Warning: ${:.0} in debt", shortfall),
-            GameEvent::EnginePurchased { engine_name, cost } =>
-                write!(f, "Purchased {}: ${:.0}", engine_name, cost),
+            GameEvent::EngineContracted { engine_name } =>
+                write!(f, "Contracted engine: {}", engine_name),
             GameEvent::RocketDesignStarted { rocket_name } =>
                 write!(f, "Started rocket design: {}", rocket_name),
             GameEvent::RocketDesignComplete { rocket_name, flaw_count } =>
@@ -110,7 +110,7 @@ impl GameEvent {
             | GameEvent::FlawDiscovered { .. }
             | GameEvent::RevisionComplete { .. }
             | GameEvent::InsufficientFunds { .. }
-            | GameEvent::EnginePurchased { .. }
+            | GameEvent::EngineContracted { .. }
             | GameEvent::RocketDesignStarted { .. }
             | GameEvent::RocketDesignComplete { .. }
             | GameEvent::RocketFlawDiscovered { .. }

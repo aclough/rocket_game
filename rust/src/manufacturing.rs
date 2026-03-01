@@ -2,7 +2,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::balance;
 use crate::engine::EngineId;
-use crate::engine_project::EngineProjectId;
+use crate::engine_project::EngineSource;
 use crate::resources;
 use crate::rocket::RocketDesignId;
 use crate::rocket_project::RocketProjectId;
@@ -83,7 +83,7 @@ impl FloorSpace {
 pub enum ManufacturingOrderType {
     /// Build a single engine instance.
     Engine {
-        engine_project_id: EngineProjectId,
+        source: EngineSource,
         engine_id: EngineId,
         engine_name: String,
         engine_mass_kg: f64,
@@ -148,7 +148,7 @@ impl ManufacturingOrder {
     /// Create an engine build order.
     pub fn new_engine(
         id: ManufacturingOrderId,
-        engine_project_id: EngineProjectId,
+        source: EngineSource,
         engine_id: EngineId,
         engine_name: String,
         engine_mass_kg: f64,
@@ -163,7 +163,7 @@ impl ManufacturingOrder {
         ManufacturingOrder {
             id,
             order_type: ManufacturingOrderType::Engine {
-                engine_project_id,
+                source,
                 engine_id,
                 engine_name,
                 engine_mass_kg,
@@ -286,7 +286,7 @@ impl ManufacturingOrder {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InventoryEngine {
     pub item_id: InventoryItemId,
-    pub engine_project_id: EngineProjectId,
+    pub source: EngineSource,
     pub engine_id: EngineId,
     pub engine_name: String,
 }
@@ -327,10 +327,10 @@ impl Inventory {
         }
     }
 
-    /// Count engines matching a given engine project ID.
-    pub fn engine_count(&self, engine_project_id: EngineProjectId) -> usize {
+    /// Count engines matching a given engine source.
+    pub fn engine_count(&self, source: EngineSource) -> usize {
         self.engines.iter()
-            .filter(|e| e.engine_project_id == engine_project_id)
+            .filter(|e| e.source == source)
             .count()
     }
 
@@ -350,10 +350,10 @@ impl Inventory {
             .count()
     }
 
-    /// Remove one engine matching the given project ID. Returns the removed item.
-    pub fn take_engine(&mut self, engine_project_id: EngineProjectId) -> Option<InventoryEngine> {
+    /// Remove one engine matching the given source. Returns the removed item.
+    pub fn take_engine(&mut self, source: EngineSource) -> Option<InventoryEngine> {
         let idx = self.engines.iter()
-            .position(|e| e.engine_project_id == engine_project_id)?;
+            .position(|e| e.source == source)?;
         Some(self.engines.remove(idx))
     }
 
@@ -472,10 +472,10 @@ impl Manufacturing {
             let item_id = self.next_inventory_id();
 
             match &order.order_type {
-                ManufacturingOrderType::Engine { engine_project_id, engine_id, engine_name, .. } => {
+                ManufacturingOrderType::Engine { source, engine_id, engine_name, .. } => {
                     self.inventory.engines.push(InventoryEngine {
                         item_id,
-                        engine_project_id: *engine_project_id,
+                        source: *source,
                         engine_id: *engine_id,
                         engine_name: engine_name.clone(),
                     });
@@ -553,10 +553,10 @@ impl Manufacturing {
         }
     }
 
-    /// Count pending engine orders for a given engine project.
-    pub fn pending_engine_orders(&self, engine_project_id: EngineProjectId) -> u32 {
+    /// Count pending engine orders for a given engine source.
+    pub fn pending_engine_orders(&self, source: EngineSource) -> u32 {
         self.orders.iter()
-            .filter(|o| matches!(&o.order_type, ManufacturingOrderType::Engine { engine_project_id: id, .. } if *id == engine_project_id))
+            .filter(|o| matches!(&o.order_type, ManufacturingOrderType::Engine { source: s, .. } if *s == source))
             .count() as u32
     }
 
@@ -578,6 +578,11 @@ impl Manufacturing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine_project::EngineProjectId;
+
+    fn test_source() -> EngineSource {
+        EngineSource::PlayerDesign(EngineProjectId(1))
+    }
 
     #[test]
     fn test_floor_space_new() {
@@ -607,7 +612,7 @@ mod tests {
     fn test_manufacturing_order_engine() {
         let order = ManufacturingOrder::new_engine(
             ManufacturingOrderId(1),
-            EngineProjectId(1),
+            test_source(),
             EngineId(1),
             "Merlin".into(),
             500.0,
@@ -654,12 +659,12 @@ mod tests {
     #[test]
     fn test_learning_curve_reduces_cost() {
         let first = ManufacturingOrder::new_engine(
-            ManufacturingOrderId(1), EngineProjectId(1), EngineId(1),
+            ManufacturingOrderId(1), test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
         );
         let tenth = ManufacturingOrder::new_engine(
-            ManufacturingOrderId(2), EngineProjectId(1), EngineId(2),
+            ManufacturingOrderId(2), test_source(), EngineId(2),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 10,
         );
@@ -674,7 +679,7 @@ mod tests {
         let mut mfg = Manufacturing::new();
         let id = mfg.next_order_id();
         let mut order = ManufacturingOrder::new_engine(
-            id, EngineProjectId(1), EngineId(1),
+            id, test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
         );
@@ -694,7 +699,7 @@ mod tests {
 
         assert!(engine_built, "Engine should have been built within 500 days");
         assert_eq!(mfg.inventory.engines.len(), 1);
-        assert_eq!(mfg.inventory.engine_count(EngineProjectId(1)), 1);
+        assert_eq!(mfg.inventory.engine_count(test_source()), 1);
     }
 
     #[test]
@@ -702,21 +707,21 @@ mod tests {
         let mut inv = Inventory::new();
         inv.engines.push(InventoryEngine {
             item_id: InventoryItemId(1),
-            engine_project_id: EngineProjectId(1),
+            source: test_source(),
             engine_id: EngineId(1),
             engine_name: "Merlin".into(),
         });
         inv.engines.push(InventoryEngine {
             item_id: InventoryItemId(2),
-            engine_project_id: EngineProjectId(1),
+            source: test_source(),
             engine_id: EngineId(2),
             engine_name: "Merlin".into(),
         });
 
-        assert_eq!(inv.engine_count(EngineProjectId(1)), 2);
-        let taken = inv.take_engine(EngineProjectId(1));
+        assert_eq!(inv.engine_count(test_source()), 2);
+        let taken = inv.take_engine(test_source());
         assert!(taken.is_some());
-        assert_eq!(inv.engine_count(EngineProjectId(1)), 1);
+        assert_eq!(inv.engine_count(test_source()), 1);
     }
 
     #[test]
@@ -724,7 +729,7 @@ mod tests {
         let mut mfg = Manufacturing::new();
         let id = mfg.next_order_id();
         let mut order = ManufacturingOrder::new_engine(
-            id, EngineProjectId(1), EngineId(1),
+            id, test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
         );
@@ -789,7 +794,7 @@ mod tests {
     #[test]
     fn test_order_progress() {
         let mut order = ManufacturingOrder::new_engine(
-            ManufacturingOrderId(1), EngineProjectId(1), EngineId(1),
+            ManufacturingOrderId(1), test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
         );

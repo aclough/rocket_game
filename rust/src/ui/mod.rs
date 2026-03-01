@@ -12,7 +12,7 @@ use crossterm::terminal::{
 use ratatui::prelude::*;
 
 use crate::engine::{EngineCycle, EngineDesign};
-use crate::engine_project::{EngineDesignStatus, EngineProjectId, PropellantPreset};
+use crate::engine_project::{EngineDesignStatus, EngineSource, PropellantPreset};
 use crate::game_state::{GameSpeed, GameState};
 use crate::rocket_project::RocketDesignStatus;
 use crate::save;
@@ -92,7 +92,7 @@ pub enum InputMode {
         rocket_name: String,
         stage_groups: Vec<Vec<Stage>>,
         next_stage_id: u64,
-        engine_project_id: EngineProjectId,
+        engine_source: EngineSource,
         engine: EngineDesign,
         engine_count: u32,
         propellant_mass_kg: f64,
@@ -466,9 +466,10 @@ impl App {
                         let idx = *selected;
                         let date = self.game.date;
                         self.input_mode = InputMode::Normal;
-                        if let Some(evt) = self.game.player_company.purchase_third_party(idx, date) {
+                        let seed_clone = self.game.seed.clone();
+                        if let Some(evt) = self.game.player_company.contract_third_party(idx, date, &seed_clone) {
                             self.game.event_log.push(self.game.date, evt);
-                            self.status_message = Some("Engine purchased".into());
+                            self.status_message = Some("Engine contracted".into());
                         }
                     }
                     _ => {}
@@ -497,12 +498,16 @@ impl App {
                 }
             }
             InputMode::RocketSelectEngine { rocket_name, stage_groups, next_stage_id, selected } => {
-                // Collect engines list from completed projects without borrowing self
-                let engines: Vec<(EngineProjectId, EngineDesign)> =
-                    self.game.player_company.engine_projects.iter()
-                        .filter(|ep| matches!(ep.status, EngineDesignStatus::Testing { .. }))
-                        .map(|ep| (ep.project_id, ep.design.clone()))
-                        .collect();
+                // Build combined list: player engines (Testing) + contracted engines
+                let mut engines: Vec<(EngineSource, EngineDesign)> = Vec::new();
+                for ep in &self.game.player_company.engine_projects {
+                    if matches!(ep.status, EngineDesignStatus::Testing { .. }) {
+                        engines.push((EngineSource::PlayerDesign(ep.project_id), ep.design.clone()));
+                    }
+                }
+                for ce in &self.game.player_company.contracted_engines {
+                    engines.push((EngineSource::Contracted(ce.id), ce.design.clone()));
+                }
                 let num_engines = engines.len();
                 match key {
                     KeyCode::Esc => { self.input_mode = InputMode::Normal; }
@@ -523,7 +528,7 @@ impl App {
                         if num_engines == 0 {
                             self.status_message = Some("No completed engines available".into());
                         } else {
-                            let (ep_id, engine) = engines[*selected].clone();
+                            let (source, engine) = engines[*selected].clone();
                             let rocket_name = rocket_name.clone();
                             let stage_groups = stage_groups.clone();
                             let next_stage_id = *next_stage_id;
@@ -531,7 +536,7 @@ impl App {
                                 rocket_name,
                                 stage_groups,
                                 next_stage_id,
-                                engine_project_id: ep_id,
+                                engine_source: source,
                                 engine,
                                 engine_count: 1,
                                 propellant_mass_kg: 10_000.0,
@@ -543,7 +548,7 @@ impl App {
             }
             InputMode::RocketConfigStage {
                 rocket_name, stage_groups, next_stage_id,
-                engine_project_id: _, engine, engine_count, propellant_mass_kg,
+                engine_source: _, engine, engine_count, propellant_mass_kg,
             } => {
                 match key {
                     KeyCode::Esc => {

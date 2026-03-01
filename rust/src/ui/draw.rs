@@ -2,7 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 
 use crate::engine::EngineCycle;
-use crate::engine_project::{self, EngineDesignStatus, EngineProjectId, PropellantPreset};
+use crate::engine_project::{self, EngineDesignStatus, EngineSource, PropellantPreset};
 use crate::event::EventImportance;
 use crate::flaw::FlawConsequence;
 use crate::structure;
@@ -225,8 +225,6 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 format!("Revising {} flaw(s) [{:.0}/30]", remaining_indices.len(), work_completed),
         };
 
-        let third_party_tag = if project.is_third_party { " [3P]" } else { "" };
-
         let style = if selected {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else {
@@ -235,8 +233,8 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
 
         lines.push(Line::from(Span::styled(
             format!(
-                "  {} {} (Rev {}){:>20}{}",
-                marker, project.design.name, project.revision, status_str, third_party_tag,
+                "  {} {} (Rev {}){:>20}",
+                marker, project.design.name, project.revision, status_str,
             ),
             style,
         )));
@@ -304,8 +302,24 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         }
     }
 
+    // Contracted engines section
+    if !company.contracted_engines.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from("  Contracted Engines"));
+        lines.push(Line::from("  ─────────────────────────────────────────────"));
+        for ce in &company.contracted_engines {
+            lines.push(Line::from(format!(
+                "    {} [3P]  {:.0}kN  {:.0}s  {}/unit",
+                ce.design.name,
+                ce.design.thrust_n / 1000.0,
+                ce.design.isp_s,
+                format_money(ce.purchase_cost_per_unit),
+            )));
+        }
+    }
+
     lines.push(Line::from(""));
-    let mut controls = vec!["[N] New design", "[B] Buy 3rd-party"];
+    let mut controls = vec!["[N] New design", "[B] Contract 3rd-party"];
     if !company.engine_projects.is_empty() {
         controls.extend_from_slice(&["[+] Add team", "[-] Remove team", "[R] Revise"]);
     }
@@ -738,22 +752,21 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 } else {
                     Style::default()
                 };
-                let d = &entry.project.design;
                 lines.push(Line::from(Span::styled(
                     format!(
-                        "  {} {}  {:.0}kN  {:.0}s  {}",
+                        "  {} {}  {:.0}kN  {:.0}s  {}/unit",
                         marker,
-                        d.name,
-                        d.thrust_n / 1000.0,
-                        d.isp_s,
-                        format_money(entry.purchase_cost),
+                        entry.design.name,
+                        entry.design.thrust_n / 1000.0,
+                        entry.design.isp_s,
+                        format_money(entry.purchase_cost_per_unit),
                     ),
                     style,
                 )));
             }
             let block = Block::default()
                 .borders(Borders::ALL)
-                .title(" Buy Third-Party Engine ")
+                .title(" Contract Third-Party Engine ")
                 .style(Style::default().fg(Color::Yellow));
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
@@ -773,11 +786,16 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             frame.render_widget(paragraph, modal_area);
         }
         InputMode::RocketSelectEngine { rocket_name, stage_groups, selected, .. } => {
-            let engines: Vec<(EngineProjectId, &crate::engine::EngineDesign)> =
-                app.game.player_company.engine_projects.iter()
-                    .filter(|ep| matches!(ep.status, EngineDesignStatus::Testing { .. }))
-                    .map(|ep| (ep.project_id, &ep.design))
-                    .collect();
+            // Build combined engine list: player engines + contracted engines
+            let mut engines: Vec<(EngineSource, &crate::engine::EngineDesign, bool)> = Vec::new();
+            for ep in &app.game.player_company.engine_projects {
+                if matches!(ep.status, EngineDesignStatus::Testing { .. }) {
+                    engines.push((EngineSource::PlayerDesign(ep.project_id), &ep.design, false));
+                }
+            }
+            for ce in &app.game.player_company.contracted_engines {
+                engines.push((EngineSource::Contracted(ce.id), &ce.design, true));
+            }
 
             let total_stages: usize = stage_groups.iter().map(|g| g.len()).sum();
             let mut lines = vec![
@@ -805,21 +823,22 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
 
             if engines.is_empty() {
                 lines.push(Line::from(Span::styled(
-                    "  No engines ready! Design and test an engine first.",
+                    "  No engines ready! Design and test an engine first, or contract a 3rd-party engine.",
                     Style::default().fg(Color::Red),
                 )));
             }
 
-            for (i, (_ep_id, design)) in engines.iter().enumerate() {
+            for (i, (_source, design, is_3p)) in engines.iter().enumerate() {
                 let marker = if i == *selected { "▶" } else { " " };
+                let tag = if *is_3p { " [3P]" } else { "" };
                 let style = if i == *selected {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
                 lines.push(Line::from(Span::styled(
-                    format!("  {} {}  {:.0}kN  {:.0}s  {:.0}kg",
-                        marker, design.name, design.thrust_n / 1000.0, design.isp_s, design.mass_kg),
+                    format!("  {} {}{}  {:.0}kN  {:.0}s  {:.0}kg",
+                        marker, design.name, tag, design.thrust_n / 1000.0, design.isp_s, design.mass_kg),
                     style,
                 )));
             }

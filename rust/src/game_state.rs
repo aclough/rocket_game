@@ -2,15 +2,15 @@ use serde::{Serialize, Deserialize};
 
 use crate::calendar::GameDate;
 use crate::engine::{EngineCycle, EngineId};
-use crate::engine_project::{EngineProject, EngineProjectId, PropellantPreset, WorkEvent};
+use crate::engine_project::{EngineProject, EngineProjectId, EngineSource, PropellantPreset, WorkEvent};
 use crate::event::{EventLog, GameEvent};
-use crate::manufacturing::{Manufacturing, ManufacturingOrder};
+use crate::manufacturing::{Manufacturing, ManufacturingOrder, InventoryEngine};
 use crate::rocket::RocketDesign;
 use crate::rocket_project::{RocketProject, RocketProjectId, RocketWorkEvent};
 use crate::seed::GameSeed;
 use crate::team::{EngineeringTeam, ManufacturingTeam, TeamId, TEAM_HIRING_COST,
     MANUFACTURING_HIRING_COST};
-use crate::third_party::{self, ThirdPartyEngine};
+use crate::third_party::{self, ContractedEngine, ContractedEngineId, ThirdPartyEngine};
 
 /// Game simulation speed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,11 +61,13 @@ pub struct Company {
     pub next_project_id: u64,
     pub next_flaw_id: u64,
     pub next_rocket_project_id: u64,
+    pub next_contracted_engine_id: u64,
     pub teams: Vec<EngineeringTeam>,
     pub manufacturing_teams: Vec<ManufacturingTeam>,
     pub engine_projects: Vec<EngineProject>,
     pub rocket_projects: Vec<RocketProject>,
     pub third_party_catalog: Vec<ThirdPartyEngine>,
+    pub contracted_engines: Vec<ContractedEngine>,
     pub rocket_designs: Vec<RocketDesign>,
     pub manufacturing: Manufacturing,
 }
@@ -81,11 +83,13 @@ impl Company {
             next_project_id: 1,
             next_flaw_id: 1,
             next_rocket_project_id: 1,
+            next_contracted_engine_id: 1,
             teams: Vec::new(),
             manufacturing_teams: Vec::new(),
             engine_projects: Vec::new(),
             rocket_projects: Vec::new(),
             third_party_catalog: catalog,
+            contracted_engines: Vec::new(),
             rocket_designs: Vec::new(),
             manufacturing: Manufacturing::new(),
         }
@@ -167,11 +171,7 @@ impl Company {
         if self.unassigned_team_count() == 0 || project_index >= self.engine_projects.len() {
             return false;
         }
-        let project = &mut self.engine_projects[project_index];
-        if project.is_third_party {
-            return false; // can't assign teams to third-party engines
-        }
-        project.teams_assigned += 1;
+        self.engine_projects[project_index].teams_assigned += 1;
         true
     }
 
@@ -248,25 +248,45 @@ impl Company {
         // Queue engine build orders for each engine needed
         for (gi, group) in rp.design.stage_groups.iter().enumerate() {
             for (si, stage) in group.iter().enumerate() {
+                let source = self.engine_source_for_id(stage.engine.id);
                 for _e in 0..stage.engine_count {
-                    // Find the engine project for this engine
-                    if let Some(ep) = self.engine_projects.iter()
-                        .find(|ep| ep.design.id == stage.engine.id
-                            && matches!(ep.status, crate::engine_project::EngineDesignStatus::Testing { .. }))
-                    {
-                        let order_id = self.manufacturing.next_order_id();
-                        let order = ManufacturingOrder::new_engine(
-                            order_id,
-                            ep.project_id,
-                            stage.engine.id,
-                            stage.engine.name.clone(),
-                            stage.engine.mass_kg,
-                            ep.complexity,
-                            ep.preset,
-                            0, // TODO: track prior builds per design
-                        );
-                        total_cost += order.material_cost;
-                        self.manufacturing.orders.push(order);
+                    match source {
+                        Some(EngineSource::PlayerDesign(ep_id)) => {
+                            // Find the engine project for manufacturing details
+                            if let Some(ep) = self.engine_projects.iter()
+                                .find(|ep| ep.project_id == ep_id)
+                            {
+                                let order_id = self.manufacturing.next_order_id();
+                                let order = ManufacturingOrder::new_engine(
+                                    order_id,
+                                    EngineSource::PlayerDesign(ep_id),
+                                    stage.engine.id,
+                                    stage.engine.name.clone(),
+                                    stage.engine.mass_kg,
+                                    ep.complexity,
+                                    ep.preset,
+                                    0, // TODO: track prior builds per design
+                                );
+                                total_cost += order.material_cost;
+                                self.manufacturing.orders.push(order);
+                            }
+                        }
+                        Some(EngineSource::Contracted(ce_id)) => {
+                            // Contracted engine: charge per-unit cost, instant delivery
+                            if let Some(ce) = self.contracted_engines.iter()
+                                .find(|ce| ce.id == ce_id)
+                            {
+                                total_cost += ce.purchase_cost_per_unit;
+                                let item_id = self.manufacturing.next_inventory_id();
+                                self.manufacturing.inventory.engines.push(InventoryEngine {
+                                    item_id,
+                                    source: EngineSource::Contracted(ce_id),
+                                    engine_id: stage.engine.id,
+                                    engine_name: stage.engine.name.clone(),
+                                });
+                            }
+                        }
+                        None => {}
                     }
                 }
 
@@ -312,6 +332,17 @@ impl Company {
 
     /// Try to unblock stage and integration orders that have their prerequisites ready.
     pub fn try_unblock_manufacturing_orders(&mut self) {
+        // Helper: find engine source by engine id (inline to avoid borrow issues)
+        let find_source = |engine_id: EngineId, engine_projects: &[EngineProject], contracted_engines: &[ContractedEngine]| -> Option<EngineSource> {
+            if let Some(ep) = engine_projects.iter().find(|ep| ep.design.id == engine_id) {
+                return Some(EngineSource::PlayerDesign(ep.project_id));
+            }
+            if let Some(ce) = contracted_engines.iter().find(|ce| ce.design.id == engine_id) {
+                return Some(EngineSource::Contracted(ce.id));
+            }
+            None
+        };
+
         for order in &mut self.manufacturing.orders {
             if !order.waiting_for_prerequisites {
                 continue;
@@ -328,16 +359,14 @@ impl Company {
                             .get(*group_index)
                             .and_then(|g| g.get(*stage_index))
                         {
-                            // Check if enough engines are in inventory
-                            let ep = self.engine_projects.iter()
-                                .find(|ep| ep.design.id == stage.engine.id);
-                            if let Some(ep) = ep {
-                                let available = self.manufacturing.inventory.engine_count(ep.project_id);
+                            // Find engine source
+                            if let Some(source) = find_source(stage.engine.id, &self.engine_projects, &self.contracted_engines) {
+                                let available = self.manufacturing.inventory.engine_count(source);
                                 if available >= stage.engine_count as usize {
                                     order.waiting_for_prerequisites = false;
                                     // Consume engines from inventory
                                     for _ in 0..stage.engine_count {
-                                        self.manufacturing.inventory.take_engine(ep.project_id);
+                                        self.manufacturing.inventory.take_engine(source);
                                     }
                                 }
                             }
@@ -372,8 +401,9 @@ impl Company {
         }
     }
 
-    /// Purchase a third-party engine from the catalog.
-    pub fn purchase_third_party(&mut self, catalog_index: usize, current_date: GameDate) -> Option<GameEvent> {
+    /// Contract a third-party engine from the catalog.
+    /// No upfront cost — per-unit cost is charged when building rockets.
+    pub fn contract_third_party(&mut self, catalog_index: usize, current_date: GameDate, seed: &GameSeed) -> Option<GameEvent> {
         if catalog_index >= self.third_party_catalog.len() {
             return None;
         }
@@ -381,16 +411,45 @@ impl Company {
         if current_date < entry.available_from {
             return None;
         }
-        let cost = entry.purchase_cost;
-        let mut project = entry.project.clone();
-        // Give it a new project ID in the player's space
-        project.project_id = EngineProjectId(self.next_project_id);
-        self.next_project_id += 1;
-        let name = project.design.name.clone();
 
-        self.money -= cost;
-        self.engine_projects.push(project);
-        Some(GameEvent::EnginePurchased { engine_name: name, cost })
+        let id = ContractedEngineId(self.next_contracted_engine_id);
+        self.next_contracted_engine_id += 1;
+        let name = entry.design.name.clone();
+
+        let flaws = third_party::generate_third_party_flaws(
+            entry.complexity,
+            seed,
+            &name,
+            &mut self.next_flaw_id,
+        );
+
+        let contracted = ContractedEngine {
+            id,
+            design: entry.design.clone(),
+            preset: entry.preset,
+            purchase_cost_per_unit: entry.purchase_cost_per_unit,
+            flaws,
+            complexity: entry.complexity,
+        };
+        self.contracted_engines.push(contracted);
+        Some(GameEvent::EngineContracted { engine_name: name })
+    }
+
+    /// Look up the EngineSource for an engine by its EngineId.
+    pub fn engine_source_for_id(&self, engine_id: EngineId) -> Option<EngineSource> {
+        // Check player engine projects first
+        if let Some(ep) = self.engine_projects.iter()
+            .find(|ep| ep.design.id == engine_id)
+        {
+            return Some(EngineSource::PlayerDesign(ep.project_id));
+        }
+        // Check contracted engines
+        if let Some(ce) = self.contracted_engines.iter()
+            .find(|ce| ce.design.id == engine_id)
+        {
+            return Some(EngineSource::Contracted(ce.id));
+        }
+        None
     }
 }
 
@@ -714,36 +773,25 @@ mod tests {
     }
 
     #[test]
-    fn test_cant_assign_to_third_party() {
-        let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
-        gs.player_company.hire_team("Alpha".into());
-        // Purchase a third-party engine first
-        let date = gs.date;
-        gs.player_company.purchase_third_party(0, date);
-        // Find the third-party project
-        let tp_idx = gs.player_company.engine_projects.iter()
-            .position(|p| p.is_third_party)
-            .unwrap();
-        assert!(!gs.player_company.add_team_to_project(tp_idx));
-    }
-
-    #[test]
     fn test_third_party_catalog() {
         let gs = GameState::new("Test".into(), 200_000_000.0, 42);
         assert_eq!(gs.player_company.third_party_catalog.len(), 3);
     }
 
     #[test]
-    fn test_purchase_third_party() {
+    fn test_contract_third_party() {
         let mut gs = GameState::new("Test".into(), 200_000_000.0, 42);
         let initial_money = gs.player_company.money;
         let date = gs.date;
-        let cost = gs.player_company.third_party_catalog[0].purchase_cost;
+        let seed = gs.seed.clone();
 
-        let evt = gs.player_company.purchase_third_party(0, date);
+        let evt = gs.player_company.contract_third_party(0, date, &seed);
         assert!(evt.is_some());
-        assert_eq!(gs.player_company.engine_projects.len(), 1);
-        assert!((gs.player_company.money - (initial_money - cost)).abs() < 0.01);
+        assert_eq!(gs.player_company.contracted_engines.len(), 1);
+        // No money deducted for contracting
+        assert!((gs.player_company.money - initial_money).abs() < 0.01);
+        // Engine should not be added to engine_projects
+        assert_eq!(gs.player_company.engine_projects.len(), 0);
     }
 
     #[test]
