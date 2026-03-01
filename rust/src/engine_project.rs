@@ -181,7 +181,6 @@ pub enum EngineDesignStatus {
     /// Revising discovered flaws. Works through remaining_indices sequentially,
     /// removing each flaw when its revision completes.
     Revising { remaining_indices: Vec<usize>, work_completed: f64 },
-    Complete,
 }
 
 /// Unique identifier for an engine project.
@@ -310,20 +309,9 @@ impl EngineProject {
                     self.status = EngineDesignStatus::Testing { work_completed: leftover };
                 }
             }
-            EngineDesignStatus::Complete => {}
         }
 
         events
-    }
-
-    /// Start testing (transition from Complete back to Testing).
-    pub fn start_testing(&mut self) -> bool {
-        if matches!(self.status, EngineDesignStatus::Complete) {
-            self.status = EngineDesignStatus::Testing { work_completed: 0.0 };
-            true
-        } else {
-            false
-        }
     }
 
     /// Start revising all discovered flaws. Works through them sequentially.
@@ -346,16 +334,6 @@ impl EngineProject {
         true
     }
 
-    /// Mark the engine as complete (player decides to stop testing).
-    pub fn mark_complete(&mut self) -> bool {
-        if matches!(self.status, EngineDesignStatus::Testing { .. }) {
-            self.status = EngineDesignStatus::Complete;
-            true
-        } else {
-            false
-        }
-    }
-
     /// Number of discovered flaws.
     pub fn discovered_flaw_count(&self) -> usize {
         self.flaws.iter().filter(|f| f.discovered).count()
@@ -370,7 +348,6 @@ impl EngineProject {
     pub fn testing_level(&self) -> &'static str {
         let total_testing_work = match &self.status {
             EngineDesignStatus::Testing { work_completed } => *work_completed,
-            EngineDesignStatus::Complete => f64::INFINITY,
             _ => 0.0,
         };
         // Count completed cycles (approximate from total work spent in testing)
@@ -590,17 +567,6 @@ mod tests {
         assert_eq!(proj.flaws.len(), count_before - discovered_count);
         assert_eq!(proj.revision as usize, discovered_count);
         assert!(matches!(proj.status, EngineDesignStatus::Testing { .. }));
-    }
-
-    #[test]
-    fn test_mark_complete() {
-        let mut proj = create_test_project();
-        // Can't complete from InDesign
-        assert!(!proj.mark_complete());
-
-        proj.status = EngineDesignStatus::Testing { work_completed: 0.0 };
-        assert!(proj.mark_complete());
-        assert!(matches!(proj.status, EngineDesignStatus::Complete));
     }
 
     #[test]

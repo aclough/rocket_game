@@ -237,7 +237,7 @@ impl Company {
             return None;
         }
         let rp = &self.rocket_projects[rocket_project_index];
-        if !matches!(rp.status, crate::rocket_project::RocketDesignStatus::Complete) {
+        if !matches!(rp.status, crate::rocket_project::RocketDesignStatus::Testing { .. }) {
             return None;
         }
 
@@ -251,7 +251,8 @@ impl Company {
                 for _e in 0..stage.engine_count {
                     // Find the engine project for this engine
                     if let Some(ep) = self.engine_projects.iter()
-                        .find(|ep| ep.design.id == stage.engine.id)
+                        .find(|ep| ep.design.id == stage.engine.id
+                            && matches!(ep.status, crate::engine_project::EngineDesignStatus::Testing { .. }))
                     {
                         let order_id = self.manufacturing.next_order_id();
                         let order = ManufacturingOrder::new_engine(

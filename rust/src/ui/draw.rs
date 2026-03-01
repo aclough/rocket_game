@@ -223,8 +223,6 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 format!("Testing [{:.0}] {}", work_completed, project.testing_level()),
             EngineDesignStatus::Revising { remaining_indices, work_completed } =>
                 format!("Revising {} flaw(s) [{:.0}/30]", remaining_indices.len(), work_completed),
-            EngineDesignStatus::Complete =>
-                "Complete".to_string(),
         };
 
         let third_party_tag = if project.is_third_party { " [3P]" } else { "" };
@@ -297,7 +295,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                     }
                 }
             }
-            if matches!(project.status, EngineDesignStatus::Testing { .. } | EngineDesignStatus::Complete) {
+            if matches!(project.status, EngineDesignStatus::Testing { .. }) {
                 lines.push(Line::from(Span::styled(
                     "        ? Unknown flaws may remain",
                     Style::default().fg(Color::DarkGray),
@@ -309,7 +307,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     lines.push(Line::from(""));
     let mut controls = vec!["[N] New design", "[B] Buy 3rd-party"];
     if !company.engine_projects.is_empty() {
-        controls.extend_from_slice(&["[+] Add team", "[-] Remove team", "[T] Test", "[R] Revise", "[C] Complete"]);
+        controls.extend_from_slice(&["[+] Add team", "[-] Remove team", "[R] Revise"]);
     }
     lines.push(Line::from(Span::styled(
         format!("  {}", controls.join("  ")),
@@ -348,8 +346,6 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 format!("Testing [{:.0}] {}", work_completed, project.testing_level()),
             crate::rocket_project::RocketDesignStatus::Revising { remaining_indices, work_completed } =>
                 format!("Revising {} flaw(s) [{:.0}/30]", remaining_indices.len(), work_completed),
-            crate::rocket_project::RocketDesignStatus::Complete =>
-                "Complete".to_string(),
         };
 
         let total_stages: u32 = project.design.stage_groups.iter()
@@ -417,10 +413,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                     }
                 }
             }
-            if matches!(project.status,
-                crate::rocket_project::RocketDesignStatus::Testing { .. }
-                | crate::rocket_project::RocketDesignStatus::Complete
-            ) {
+            if matches!(project.status, crate::rocket_project::RocketDesignStatus::Testing { .. }) {
                 lines.push(Line::from(Span::styled(
                     "        ? Unknown flaws may remain",
                     Style::default().fg(Color::DarkGray),
@@ -440,7 +433,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     if !company.rocket_projects.is_empty() {
         controls.extend_from_slice(&[
             "[+] Add team", "[-] Remove team",
-            "[T] Test", "[R] Revise", "[C] Complete", "[O] Order build",
+            "[R] Revise", "[O] Order build",
         ]);
     }
     lines.push(Line::from(Span::styled(
@@ -782,7 +775,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
         InputMode::RocketSelectEngine { rocket_name, stage_groups, selected, .. } => {
             let engines: Vec<(EngineProjectId, &crate::engine::EngineDesign)> =
                 app.game.player_company.engine_projects.iter()
-                    .filter(|ep| matches!(ep.status, EngineDesignStatus::Complete))
+                    .filter(|ep| matches!(ep.status, EngineDesignStatus::Testing { .. }))
                     .map(|ep| (ep.project_id, &ep.design))
                     .collect();
 
@@ -812,7 +805,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
 
             if engines.is_empty() {
                 lines.push(Line::from(Span::styled(
-                    "  No completed engines! Complete an engine project first.",
+                    "  No engines ready! Design and test an engine first.",
                     Style::default().fg(Color::Red),
                 )));
             }

@@ -269,15 +269,6 @@ impl App {
                     self.status_message = Some("Team removed".into());
                 }
             }
-            KeyCode::Char('t') => {
-                // Start testing
-                if self.selected_item < self.game.player_company.engine_projects.len() {
-                    let project = &mut self.game.player_company.engine_projects[self.selected_item];
-                    if project.start_testing() {
-                        self.status_message = Some("Testing started".into());
-                    }
-                }
-            }
             KeyCode::Char('r') => {
                 // Revise all discovered flaws
                 if self.selected_item < self.game.player_company.engine_projects.len() {
@@ -288,15 +279,6 @@ impl App {
                             _ => 0,
                         };
                         self.status_message = Some(format!("Revising {} flaw(s)", count));
-                    }
-                }
-            }
-            KeyCode::Char('c') => {
-                // Mark complete
-                if self.selected_item < self.game.player_company.engine_projects.len() {
-                    let project = &mut self.game.player_company.engine_projects[self.selected_item];
-                    if project.mark_complete() {
-                        self.status_message = Some("Engine marked complete".into());
                     }
                 }
             }
@@ -322,14 +304,6 @@ impl App {
                     self.status_message = Some("Team removed".into());
                 }
             }
-            KeyCode::Char('t') => {
-                if self.selected_item < self.game.player_company.rocket_projects.len() {
-                    let project = &mut self.game.player_company.rocket_projects[self.selected_item];
-                    if project.start_testing() {
-                        self.status_message = Some("Testing started".into());
-                    }
-                }
-            }
             KeyCode::Char('r') => {
                 if self.selected_item < self.game.player_company.rocket_projects.len() {
                     let project = &mut self.game.player_company.rocket_projects[self.selected_item];
@@ -342,21 +316,13 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('c') => {
-                if self.selected_item < self.game.player_company.rocket_projects.len() {
-                    let project = &mut self.game.player_company.rocket_projects[self.selected_item];
-                    if project.mark_complete() {
-                        self.status_message = Some("Rocket design marked complete".into());
-                    }
-                }
-            }
             KeyCode::Char('o') => {
                 // Order rocket build
                 if let Some((cost, evt)) = self.game.player_company.order_rocket_build(self.selected_item) {
                     self.game.event_log.push(self.game.date, evt);
                     self.status_message = Some(format!("Build ordered ({})", crate::ui::draw::format_money(cost)));
                 } else {
-                    self.status_message = Some("Must be Complete to order build".into());
+                    self.status_message = Some("Must be in Testing to order build".into());
                 }
             }
             _ => {}
@@ -534,7 +500,7 @@ impl App {
                 // Collect engines list from completed projects without borrowing self
                 let engines: Vec<(EngineProjectId, EngineDesign)> =
                     self.game.player_company.engine_projects.iter()
-                        .filter(|ep| matches!(ep.status, EngineDesignStatus::Complete))
+                        .filter(|ep| matches!(ep.status, EngineDesignStatus::Testing { .. }))
                         .map(|ep| (ep.project_id, ep.design.clone()))
                         .collect();
                 let num_engines = engines.len();

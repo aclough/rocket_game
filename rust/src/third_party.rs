@@ -54,7 +54,7 @@ pub fn generate_starter_engines(seed: &GameSeed) -> Vec<ThirdPartyEngine> {
             design,
             preset: PropellantPreset::Solid,
             scale: 1.0,
-            status: EngineDesignStatus::Complete,
+            status: EngineDesignStatus::Testing { work_completed: 1_000_000.0 },
             flaws,
             revision: 0,
             teams_assigned: 0,
@@ -96,7 +96,7 @@ pub fn generate_starter_engines(seed: &GameSeed) -> Vec<ThirdPartyEngine> {
             design,
             preset: PropellantPreset::Kerolox,
             scale: 1.0,
-            status: EngineDesignStatus::Complete,
+            status: EngineDesignStatus::Testing { work_completed: 1_000_000.0 },
             flaws,
             revision: 0,
             teams_assigned: 0,
@@ -138,7 +138,7 @@ pub fn generate_starter_engines(seed: &GameSeed) -> Vec<ThirdPartyEngine> {
             design,
             preset: PropellantPreset::Hypergolic,
             scale: 1.0,
-            status: EngineDesignStatus::Complete,
+            status: EngineDesignStatus::Testing { work_completed: 1_000_000.0 },
             flaws,
             revision: 0,
             teams_assigned: 0,
@@ -211,7 +211,7 @@ mod tests {
             assert_eq!(e.available_from, start);
             assert!(e.purchase_cost > 0.0);
             assert!(e.project.is_third_party);
-            assert!(matches!(e.project.status, EngineDesignStatus::Complete));
+            assert!(matches!(e.project.status, EngineDesignStatus::Testing { .. }));
         }
 
         // Verify types

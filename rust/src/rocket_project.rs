@@ -18,7 +18,6 @@ pub enum RocketDesignStatus {
     InDesign { work_completed: f64, work_required: f64 },
     Testing { work_completed: f64 },
     Revising { remaining_indices: Vec<usize>, work_completed: f64 },
-    Complete,
 }
 
 /// A rocket design project with workflow state.
@@ -116,20 +115,9 @@ impl RocketProject {
                     self.status = RocketDesignStatus::Testing { work_completed: leftover };
                 }
             }
-            RocketDesignStatus::Complete => {}
         }
 
         events
-    }
-
-    /// Start testing (transition from Complete back to Testing).
-    pub fn start_testing(&mut self) -> bool {
-        if matches!(self.status, RocketDesignStatus::Complete) {
-            self.status = RocketDesignStatus::Testing { work_completed: 0.0 };
-            true
-        } else {
-            false
-        }
     }
 
     /// Start revising all discovered flaws.
@@ -152,16 +140,6 @@ impl RocketProject {
         true
     }
 
-    /// Mark the rocket design as complete.
-    pub fn mark_complete(&mut self) -> bool {
-        if matches!(self.status, RocketDesignStatus::Testing { .. }) {
-            self.status = RocketDesignStatus::Complete;
-            true
-        } else {
-            false
-        }
-    }
-
     /// Number of discovered flaws.
     pub fn discovered_flaw_count(&self) -> usize {
         self.flaws.iter().filter(|f| f.discovered).count()
@@ -171,7 +149,6 @@ impl RocketProject {
     pub fn testing_level(&self) -> &'static str {
         let total_testing_work = match &self.status {
             RocketDesignStatus::Testing { work_completed } => *work_completed,
-            RocketDesignStatus::Complete => f64::INFINITY,
             _ => 0.0,
         };
         let cycles = (total_testing_work / TESTING_CYCLE_WORK) as u32;
