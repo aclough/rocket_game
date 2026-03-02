@@ -61,9 +61,10 @@ impl Tab {
 pub struct RocketDesignerState {
     pub rocket_name: String,
     pub stage_groups: Vec<Vec<Stage>>,
-    pub engine_sources: Vec<EngineSource>,
+    pub engine_sources: Vec<Vec<EngineSource>>,
     pub next_stage_id: u64,
-    pub selected_stage: usize,
+    pub selected_group: usize,
+    pub selected_inner: usize,
     pub payload_kg: f64,
     pub launch_from: &'static str,
 }
@@ -75,20 +76,62 @@ impl RocketDesignerState {
             stage_groups: Vec::new(),
             engine_sources: Vec::new(),
             next_stage_id: 1,
-            selected_stage: 0,
+            selected_group: 0,
+            selected_inner: 0,
             payload_kg: 1000.0,
             launch_from: "earth_surface",
         }
     }
 
-    /// Number of items in the stage list (stages + "add stage" slot at bottom).
-    fn list_len(&self) -> usize {
-        self.stage_groups.len() + 1 // +1 for the "add stage" slot
+    /// Total number of individual stages across all groups.
+    fn total_stages(&self) -> usize {
+        self.stage_groups.iter().map(|g| g.len()).sum()
     }
 
     /// Whether the selection cursor is on the "add stage" slot.
     fn on_add_slot(&self) -> bool {
-        self.selected_stage >= self.stage_groups.len()
+        self.selected_group >= self.stage_groups.len()
+    }
+
+    /// Flat index of the current selection (0-based across all inner stages).
+    fn flat_index(&self) -> usize {
+        let mut idx = 0;
+        for gi in 0..self.selected_group.min(self.stage_groups.len()) {
+            idx += self.stage_groups[gi].len();
+        }
+        if !self.on_add_slot() {
+            idx += self.selected_inner;
+        }
+        idx
+    }
+
+    /// Set selection from a flat index. If flat >= total_stages(), selects add slot.
+    fn select_flat(&mut self, flat: usize) {
+        let total = self.total_stages();
+        if flat >= total {
+            self.selected_group = self.stage_groups.len();
+            self.selected_inner = 0;
+            return;
+        }
+        let mut remaining = flat;
+        for (gi, group) in self.stage_groups.iter().enumerate() {
+            if remaining < group.len() {
+                self.selected_group = gi;
+                self.selected_inner = remaining;
+                return;
+            }
+            remaining -= group.len();
+        }
+    }
+
+    /// Generate stage name for a stage at (group_index, inner_index).
+    fn stage_name(group_index: usize, inner_index: usize, group_len: usize) -> String {
+        if group_len == 1 {
+            format!("S{}", group_index + 1)
+        } else {
+            let suffix = (b'a' + inner_index as u8) as char;
+            format!("S{}{}", group_index + 1, suffix)
+        }
     }
 }
 
@@ -152,8 +195,10 @@ pub enum InputMode {
     /// Picking an engine for a new or replacement stage.
     RocketPickEngine {
         state: Box<RocketDesignerState>,
-        target_index: Option<usize>,
+        target_index: Option<usize>,   // group index
+        inner_index: Option<usize>,    // inner stage index (for editing specific stage)
         editing: bool,
+        booster: bool,                 // adding parallel stage to existing group
         selected: usize,
     },
     /// Typing a payload mass (kg).
@@ -605,9 +650,9 @@ impl App {
                     InputMode::RocketDesigner { state } => {
                         self.handle_rocket_designer_key(key, state);
                     }
-                    InputMode::RocketPickEngine { state, target_index, editing, selected } => {
+                    InputMode::RocketPickEngine { state, target_index, inner_index, editing, booster, selected } => {
                         self.handle_rocket_pick_engine_key(
-                            key, state, target_index, editing, selected,
+                            key, state, target_index, inner_index, editing, booster, selected,
                         );
                     }
                     InputMode::RocketPayloadInput { state, buffer } => {
@@ -622,12 +667,16 @@ impl App {
     fn handle_rocket_designer_key(&mut self, key: KeyCode, mut state: Box<RocketDesignerState>) {
         match key {
             KeyCode::Up => {
-                state.selected_stage = state.selected_stage.saturating_sub(1);
+                let flat = state.flat_index();
+                if flat > 0 {
+                    state.select_flat(flat - 1);
+                }
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Down => {
-                if state.selected_stage + 1 < state.list_len() {
-                    state.selected_stage += 1;
+                let flat = state.flat_index();
+                if flat < state.total_stages() {
+                    state.select_flat(flat + 1);
                 }
                 self.input_mode = InputMode::RocketDesigner { state };
             }
@@ -637,45 +686,51 @@ impl App {
                     self.input_mode = InputMode::RocketPickEngine {
                         state,
                         target_index: None,
+                        inner_index: None,
                         editing: false,
+                        booster: false,
                         selected: 0,
                     };
                 } else {
-                    // Edit the selected stage
+                    // Edit the selected inner stage
+                    let gi = state.selected_group;
+                    let si = state.selected_inner;
                     self.input_mode = InputMode::RocketPickEngine {
-                        target_index: Some(state.selected_stage),
+                        target_index: Some(gi),
+                        inner_index: Some(si),
                         editing: true,
+                        booster: false,
                         selected: 0,
                         state,
                     };
                 }
             }
             KeyCode::Left => {
-                // Decrease engine count on selected stage, scale propellant proportionally
+                // Decrease engine count on selected inner stage
                 if !state.on_add_slot() {
-                    let gi = state.selected_stage;
-                    if let Some(stage) = state.stage_groups[gi].first_mut() {
-                        if stage.engine_count > 1 {
-                            let old_count = stage.engine_count;
-                            stage.engine_count -= 1;
-                            stage.propellant_mass_kg *= stage.engine_count as f64 / old_count as f64;
-                            recompute_structural_masses(&mut state.stage_groups);
-                        }
+                    let gi = state.selected_group;
+                    let si = state.selected_inner;
+                    let stage = &mut state.stage_groups[gi][si];
+                    if stage.engine_count > 1 {
+                        let old_count = stage.engine_count;
+                        stage.engine_count -= 1;
+                        stage.propellant_mass_kg *= stage.engine_count as f64 / old_count as f64;
+                        recompute_structural_masses(&mut state.stage_groups);
                     }
                 }
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Right => {
-                // Increase engine count on selected stage, scale propellant proportionally
+                // Increase engine count on selected inner stage
                 if !state.on_add_slot() {
-                    let gi = state.selected_stage;
-                    if let Some(stage) = state.stage_groups[gi].first_mut() {
-                        if stage.engine_count < 9 {
-                            let old_count = stage.engine_count;
-                            stage.engine_count += 1;
-                            stage.propellant_mass_kg *= stage.engine_count as f64 / old_count as f64;
-                            recompute_structural_masses(&mut state.stage_groups);
-                        }
+                    let gi = state.selected_group;
+                    let si = state.selected_inner;
+                    let stage = &mut state.stage_groups[gi][si];
+                    if stage.engine_count < 9 {
+                        let old_count = stage.engine_count;
+                        stage.engine_count += 1;
+                        stage.propellant_mass_kg *= stage.engine_count as f64 / old_count as f64;
+                        recompute_structural_masses(&mut state.stage_groups);
                     }
                 }
                 self.input_mode = InputMode::RocketDesigner { state };
@@ -683,44 +738,64 @@ impl App {
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 // Increase propellant by thrust-scaled step
                 if !state.on_add_slot() {
-                    let gi = state.selected_stage;
-                    if let Some(stage) = state.stage_groups[gi].first_mut() {
-                        let step = propellant_step(&stage.engine, stage.engine_count);
-                        stage.propellant_mass_kg = (stage.propellant_mass_kg + step).min(2_000_000.0);
-                        recompute_structural_masses(&mut state.stage_groups);
-                    }
+                    let gi = state.selected_group;
+                    let si = state.selected_inner;
+                    let stage = &mut state.stage_groups[gi][si];
+                    let step = propellant_step(&stage.engine, stage.engine_count);
+                    stage.propellant_mass_kg = (stage.propellant_mass_kg + step).min(2_000_000.0);
+                    recompute_structural_masses(&mut state.stage_groups);
                 }
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Char('-') => {
                 // Decrease propellant by thrust-scaled step
                 if !state.on_add_slot() {
-                    let gi = state.selected_stage;
-                    if let Some(stage) = state.stage_groups[gi].first_mut() {
-                        let step = propellant_step(&stage.engine, stage.engine_count);
-                        stage.propellant_mass_kg = (stage.propellant_mass_kg - step).max(100.0);
-                        recompute_structural_masses(&mut state.stage_groups);
-                    }
+                    let gi = state.selected_group;
+                    let si = state.selected_inner;
+                    let stage = &mut state.stage_groups[gi][si];
+                    let step = propellant_step(&stage.engine, stage.engine_count);
+                    stage.propellant_mass_kg = (stage.propellant_mass_kg - step).max(100.0);
+                    recompute_structural_masses(&mut state.stage_groups);
                 }
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
-                // Add stage at end
+                // Add stage at end (new group)
                 self.input_mode = InputMode::RocketPickEngine {
                     state,
                     target_index: None,
+                    inner_index: None,
                     editing: false,
+                    booster: false,
                     selected: 0,
                 };
             }
             KeyCode::Char('i') | KeyCode::Char('I') => {
-                // Insert stage before selected
+                // Insert stage before selected group
                 if !state.on_add_slot() {
-                    let idx = state.selected_stage;
+                    let idx = state.selected_group;
                     self.input_mode = InputMode::RocketPickEngine {
                         state,
                         target_index: Some(idx),
+                        inner_index: None,
                         editing: false,
+                        booster: false,
+                        selected: 0,
+                    };
+                } else {
+                    self.input_mode = InputMode::RocketDesigner { state };
+                }
+            }
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                // Add booster (parallel stage) to current group
+                if !state.on_add_slot() {
+                    let gi = state.selected_group;
+                    self.input_mode = InputMode::RocketPickEngine {
+                        state,
+                        target_index: Some(gi),
+                        inner_index: None,
+                        editing: false,
+                        booster: true,
                         selected: 0,
                     };
                 } else {
@@ -728,16 +803,43 @@ impl App {
                 }
             }
             KeyCode::Char('x') | KeyCode::Char('X') => {
-                // Remove selected stage
+                // Remove selected inner stage
                 if !state.on_add_slot() && !state.stage_groups.is_empty() {
-                    let idx = state.selected_stage;
-                    state.stage_groups.remove(idx);
-                    state.engine_sources.remove(idx);
-                    recompute_structural_masses(&mut state.stage_groups);
-                    if state.selected_stage >= state.stage_groups.len() && state.selected_stage > 0 {
-                        state.selected_stage -= 1;
+                    let gi = state.selected_group;
+                    let si = state.selected_inner;
+                    if state.stage_groups[gi].len() == 1 {
+                        // Remove entire group
+                        state.stage_groups.remove(gi);
+                        state.engine_sources.remove(gi);
+                        // Rename remaining stages
+                        for (gj, group) in state.stage_groups.iter_mut().enumerate() {
+                            let glen = group.len();
+                            for (sj, stage) in group.iter_mut().enumerate() {
+                                stage.name = RocketDesignerState::stage_name(gj, sj, glen);
+                            }
+                        }
+                        recompute_structural_masses(&mut state.stage_groups);
+                        // Adjust selection
+                        if state.selected_group >= state.stage_groups.len() && state.selected_group > 0 {
+                            state.selected_group -= 1;
+                        }
+                        state.selected_inner = 0;
+                        self.status_message = Some(format!("Removed stage group {}", gi + 1));
+                    } else {
+                        // Remove just the inner stage
+                        state.stage_groups[gi].remove(si);
+                        state.engine_sources[gi].remove(si);
+                        // Rename stages in this group
+                        let glen = state.stage_groups[gi].len();
+                        for (sj, stage) in state.stage_groups[gi].iter_mut().enumerate() {
+                            stage.name = RocketDesignerState::stage_name(gi, sj, glen);
+                        }
+                        recompute_structural_masses(&mut state.stage_groups);
+                        if state.selected_inner >= state.stage_groups[gi].len() {
+                            state.selected_inner = state.stage_groups[gi].len() - 1;
+                        }
+                        self.status_message = Some("Removed booster stage".into());
                     }
-                    self.status_message = Some(format!("Removed stage {}", idx + 1));
                 }
                 self.input_mode = InputMode::RocketDesigner { state };
             }
@@ -782,7 +884,9 @@ impl App {
         key: KeyCode,
         mut state: Box<RocketDesignerState>,
         target_index: Option<usize>,
+        inner_index: Option<usize>,
         editing: bool,
+        booster: bool,
         mut selected: usize,
     ) {
         // Build combined engine list
@@ -797,20 +901,20 @@ impl App {
             KeyCode::Up => {
                 if selected > 0 { selected -= 1; }
                 self.input_mode = InputMode::RocketPickEngine {
-                    state, target_index, editing, selected,
+                    state, target_index, inner_index, editing, booster, selected,
                 };
             }
             KeyCode::Down => {
                 if selected + 1 < num_engines { selected += 1; }
                 self.input_mode = InputMode::RocketPickEngine {
-                    state, target_index, editing, selected,
+                    state, target_index, inner_index, editing, booster, selected,
                 };
             }
             KeyCode::Enter => {
                 if num_engines == 0 {
                     self.status_message = Some("No engines available".into());
                     self.input_mode = InputMode::RocketPickEngine {
-                        state, target_index, editing, selected,
+                        state, target_index, inner_index, editing, booster, selected,
                     };
                 } else {
                     let (source, engine) = engines[selected].clone();
@@ -829,29 +933,43 @@ impl App {
                     };
                     state.next_stage_id += 1;
 
-                    match (editing, target_index) {
-                        (true, Some(i)) => {
-                            state.stage_groups[i] = vec![stage];
-                            state.engine_sources[i] = source;
-                            state.selected_stage = i;
+                    match (editing, booster, inner_index, target_index) {
+                        // Edit a specific inner stage
+                        (true, _, Some(ii), Some(gi)) => {
+                            state.stage_groups[gi][ii] = stage;
+                            state.engine_sources[gi][ii] = source;
+                            state.selected_group = gi;
+                            state.selected_inner = ii;
                         }
-                        (false, Some(i)) => {
-                            state.stage_groups.insert(i, vec![stage]);
-                            state.engine_sources.insert(i, source);
-                            state.selected_stage = i;
+                        // Add booster (parallel stage) to existing group
+                        (false, true, _, Some(gi)) => {
+                            state.stage_groups[gi].push(stage);
+                            state.engine_sources[gi].push(source);
+                            state.selected_group = gi;
+                            state.selected_inner = state.stage_groups[gi].len() - 1;
                         }
-                        (false, None) => {
+                        // Insert new group before gi
+                        (false, false, _, Some(gi)) => {
+                            state.stage_groups.insert(gi, vec![stage]);
+                            state.engine_sources.insert(gi, vec![source]);
+                            state.selected_group = gi;
+                            state.selected_inner = 0;
+                        }
+                        // Append new group at end
+                        (false, false, _, None) => {
                             state.stage_groups.push(vec![stage]);
-                            state.engine_sources.push(source);
-                            state.selected_stage = state.stage_groups.len() - 1;
+                            state.engine_sources.push(vec![source]);
+                            state.selected_group = state.stage_groups.len() - 1;
+                            state.selected_inner = 0;
                         }
                         _ => {}
                     }
 
-                    // Rename stages and recompute structural masses
+                    // Rename all stages and recompute structural masses
                     for (gi, group) in state.stage_groups.iter_mut().enumerate() {
-                        for stage in group.iter_mut() {
-                            stage.name = format!("S{}", gi + 1);
+                        let glen = group.len();
+                        for (si, stage) in group.iter_mut().enumerate() {
+                            stage.name = RocketDesignerState::stage_name(gi, si, glen);
                         }
                     }
                     recompute_structural_masses(&mut state.stage_groups);
@@ -861,7 +979,7 @@ impl App {
             }
             _ => {
                 self.input_mode = InputMode::RocketPickEngine {
-                    state, target_index, editing, selected,
+                    state, target_index, inner_index, editing, booster, selected,
                 };
             }
         }

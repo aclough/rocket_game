@@ -649,7 +649,7 @@ fn draw_rocket_designer_full(frame: &mut Frame, app: &App, state: &RocketDesigne
     let help_text = if let Some(ref msg) = app.status_message {
         format!(" {} ", msg)
     } else {
-        " [Enter] Edit  [←→] Engines  [+/-] Prop  [A] Add  [I] Ins  [X] Rem  [P] Payload  [L] Site  [D] Done  [Esc] Cancel ".to_string()
+        " [Enter] Edit  [←→] Engines  [+/-] Prop  [A] Add  [I] Ins  [B] Booster  [X] Rem  [P] Payload  [L] Site  [D] Done  [Esc] Cancel ".to_string()
     };
     let style = if app.status_message.is_some() {
         Style::default().fg(Color::Green)
@@ -706,11 +706,13 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
 
     // Stage rows
     for (gi, group) in state.stage_groups.iter().enumerate() {
-        let selected = gi == state.selected_stage;
-        let marker = if selected { "▶" } else { " " };
+        let group_len = group.len();
 
-        for stage in group {
-            let tag = match &state.engine_sources.get(gi) {
+        for (si, stage) in group.iter().enumerate() {
+            let selected = gi == state.selected_group && si == state.selected_inner;
+            let marker = if selected { "▶" } else { " " };
+
+            let tag = match state.engine_sources.get(gi).and_then(|g| g.get(si)) {
                 Some(EngineSource::Contracted(_)) => "[3P]",
                 _ => "",
             };
@@ -722,15 +724,21 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
                 if mfr > 0.0 { stage.propellant_mass_kg / mfr } else { 0.0 }
             };
 
-            let stat_str = if let Some(s) = stats.get(gi) {
-                format!(
-                    "{:>5.0}s  {:>5.1}  {:>6.0}  {:>8.0}  {:>5.2}",
-                    burn_time_s,
-                    s.mass_ratio,
-                    s.delta_v_effective,
-                    s.delta_v_vacuum,
-                    s.twr,
-                )
+            // Stats only shown on the last inner stage of a group
+            let is_last_in_group = si + 1 == group_len;
+            let stat_str = if is_last_in_group {
+                if let Some(s) = stats.get(gi) {
+                    format!(
+                        "{:>5.0}s  {:>5.1}  {:>6.0}  {:>8.0}  {:>5.2}",
+                        burn_time_s,
+                        s.mass_ratio,
+                        s.delta_v_effective,
+                        s.delta_v_vacuum,
+                        s.twr,
+                    )
+                } else {
+                    format!("{:>5.0}s", burn_time_s)
+                }
             } else {
                 format!("{:>5.0}s", burn_time_s)
             };
@@ -741,11 +749,17 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
                 Style::default()
             };
 
+            // Stage name: S1 for single-stage groups, S1a/S1b for multi-stage
+            let stage_label = RocketDesignerState::stage_name(gi, si, group_len);
+            // Indent inner stages (not first in multi-stage group)
+            let indent = if group_len > 1 && si > 0 { "  " } else { "" };
+
             lines.push(Line::from(Span::styled(
                 format!(
-                    " {} S{}  {:<14} x{}  {:>6.1}t  {}",
+                    " {} {}{:<4} {:<14} x{}  {:>6.1}t  {}",
                     marker,
-                    gi + 1,
+                    indent,
+                    stage_label,
                     engine_label,
                     stage.engine_count,
                     stage.propellant_mass_kg / 1000.0,
@@ -754,20 +768,22 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
                 style,
             )));
 
-            // Show losses sub-line
-            if let Some(s) = stats.get(gi) {
-                let mut loss_parts = Vec::new();
-                if s.gravity_loss >= 0.5 {
-                    loss_parts.push(format!("grav: -{:.0}", s.gravity_loss));
-                }
-                if s.aero_drag_loss >= 0.5 {
-                    loss_parts.push(format!("aero: -{:.0}", s.aero_drag_loss));
-                }
-                if !loss_parts.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        format!("                 ({})", loss_parts.join("  ")),
-                        Style::default().fg(Color::DarkGray),
-                    )));
+            // Show losses sub-line after the last inner stage of a group
+            if is_last_in_group {
+                if let Some(s) = stats.get(gi) {
+                    let mut loss_parts = Vec::new();
+                    if s.gravity_loss >= 0.5 {
+                        loss_parts.push(format!("grav: -{:.0}", s.gravity_loss));
+                    }
+                    if s.aero_drag_loss >= 0.5 {
+                        loss_parts.push(format!("aero: -{:.0}", s.aero_drag_loss));
+                    }
+                    if !loss_parts.is_empty() {
+                        lines.push(Line::from(Span::styled(
+                            format!("                 ({})", loss_parts.join("  ")),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
                 }
             }
         }
