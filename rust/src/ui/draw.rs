@@ -406,7 +406,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 lines.push(Line::from("      Max payload:"));
                 for (dest, payload) in &table {
                     lines.push(Line::from(format!(
-                        "        {:20} {:.0} kg", dest, payload,
+                        "        {:20} {:>8}", dest, format_mass(*payload),
                     )));
                 }
             }
@@ -688,14 +688,9 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
         Vec::new()
     };
 
-    // Header and rows use a shared formatting function for alignment.
-    // Row prefix: " M S#  " (7 chars: space, marker, space, S, digit, 2 spaces)
-    // Header prefix: "   #   " (7 chars to match)
-    // Header widths must match row: " M S#  {:<14} x#  {:>6.1}t  {:>5.0}s  {:>5.1}  {:>6.0}  {:>8.0}  {:>5.2}"
-    // The 't' and 's' suffixes in the row eat one char, so header cols are 1 wider
     lines.push(Line::from(Span::styled(
         format!(
-            "   #   {:<14} {:>2}  {:>6} {:>6}  {:>5}  {:>6}  {:>8}  {:>5}",
+            "   #   {:<14} {:>2}  {:>7} {:>6}  {:>5}  {:>6}  {:>8}  {:>5}",
             "Engine", " N", "Prop", "Burn", "MR", "Eff dV", "Vac dV", "TWR",
         ),
         Style::default().add_modifier(Modifier::BOLD),
@@ -707,6 +702,8 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
     // Stage rows
     for (gi, group) in state.stage_groups.iter().enumerate() {
         let group_len = group.len();
+        // Indentation prefix for multi-stage groups (boosters)
+        let group_indent = if group_len > 1 { "  " } else { "" };
 
         for (si, stage) in group.iter().enumerate() {
             let selected = gi == state.selected_group && si == state.selected_inner;
@@ -751,18 +748,22 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
 
             // Stage name: S1 for single-stage groups, S1a/S1b for multi-stage
             let stage_label = RocketDesignerState::stage_name(gi, si, group_len);
-            // Indent inner stages (not first in multi-stage group)
-            let indent = if group_len > 1 && si > 0 { "  " } else { "" };
+            // Indent inner stages (not first in multi-stage group),
+            // but keep total width of indent+label constant at 4 chars
+            let label_col = if group_len > 1 && si > 0 {
+                format!("  {:<2}", stage_label)
+            } else {
+                format!("{:<4}", stage_label)
+            };
 
             lines.push(Line::from(Span::styled(
                 format!(
-                    " {} {}{:<4} {:<14} x{}  {:>6.1}t  {}",
+                    " {} {} {:<14} x{}  {:>7}  {}",
                     marker,
-                    indent,
-                    stage_label,
+                    label_col,
                     engine_label,
                     stage.engine_count,
-                    stage.propellant_mass_kg / 1000.0,
+                    format_mass(stage.propellant_mass_kg),
                     stat_str,
                 ),
                 style,
@@ -780,7 +781,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
                     }
                     if !loss_parts.is_empty() {
                         lines.push(Line::from(Span::styled(
-                            format!("                 ({})", loss_parts.join("  ")),
+                            format!("{}                 ({})", group_indent, loss_parts.join("  ")),
                             Style::default().fg(Color::DarkGray),
                         )));
                     }
@@ -815,8 +816,8 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
             total_dv_effective, total_dv_vacuum,
         )));
         lines.push(Line::from(format!(
-            "  Total mass: {:.0} kg",
-            total_mass,
+            "  Total mass: {}",
+            format_mass(total_mass),
         )));
         lines.push(Line::from(""));
 
@@ -829,7 +830,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
             )));
             for (dest, payload) in &table {
                 lines.push(Line::from(format!(
-                    "    {:24} {:>8.0} kg", dest, payload,
+                    "    {:24} {:>8}", dest, format_mass(*payload),
                 )));
             }
         }
@@ -1100,6 +1101,15 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+/// Format a mass in kg, switching to tons if >= 1000 kg.
+fn format_mass(kg: f64) -> String {
+    if kg >= 1000.0 {
+        format!("{:.1}t", kg / 1000.0)
+    } else {
+        format!("{:.0}kg", kg)
+    }
 }
 
 pub fn format_money(amount: f64) -> String {

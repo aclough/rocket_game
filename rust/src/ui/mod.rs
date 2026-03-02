@@ -135,6 +135,12 @@ impl RocketDesignerState {
     }
 }
 
+/// Whether an engine uses solid propellant (propellant is not adjustable).
+fn is_solid_engine(engine: &EngineDesign) -> bool {
+    engine.propellant_mix.len() == 1
+        && engine.propellant_mix[0].propellant == crate::propellant::Propellant::SolidMix
+}
+
 /// Compute thrust-scaled propellant step size for inline adjustments.
 /// ~10s of burn time, rounded to nearest 100 kg, min 100 kg.
 fn propellant_step(engine: &EngineDesign, engine_count: u32) -> f64 {
@@ -665,6 +671,8 @@ impl App {
     }
 
     fn handle_rocket_designer_key(&mut self, key: KeyCode, mut state: Box<RocketDesignerState>) {
+        // Clear status message on any keypress in designer
+        self.status_message = None;
         match key {
             KeyCode::Up => {
                 let flat = state.flat_index();
@@ -736,26 +744,34 @@ impl App {
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
-                // Increase propellant by thrust-scaled step
+                // Increase propellant by thrust-scaled step (not for solid engines)
                 if !state.on_add_slot() {
                     let gi = state.selected_group;
                     let si = state.selected_inner;
                     let stage = &mut state.stage_groups[gi][si];
-                    let step = propellant_step(&stage.engine, stage.engine_count);
-                    stage.propellant_mass_kg = (stage.propellant_mass_kg + step).min(2_000_000.0);
-                    recompute_structural_masses(&mut state.stage_groups);
+                    if is_solid_engine(&stage.engine) {
+                        self.status_message = Some("Solid propellant is not adjustable".into());
+                    } else {
+                        let step = propellant_step(&stage.engine, stage.engine_count);
+                        stage.propellant_mass_kg = (stage.propellant_mass_kg + step).min(2_000_000.0);
+                        recompute_structural_masses(&mut state.stage_groups);
+                    }
                 }
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Char('-') => {
-                // Decrease propellant by thrust-scaled step
+                // Decrease propellant by thrust-scaled step (not for solid engines)
                 if !state.on_add_slot() {
                     let gi = state.selected_group;
                     let si = state.selected_inner;
                     let stage = &mut state.stage_groups[gi][si];
-                    let step = propellant_step(&stage.engine, stage.engine_count);
-                    stage.propellant_mass_kg = (stage.propellant_mass_kg - step).max(100.0);
-                    recompute_structural_masses(&mut state.stage_groups);
+                    if is_solid_engine(&stage.engine) {
+                        self.status_message = Some("Solid propellant is not adjustable".into());
+                    } else {
+                        let step = propellant_step(&stage.engine, stage.engine_count);
+                        stage.propellant_mass_kg = (stage.propellant_mass_kg - step).max(100.0);
+                        recompute_structural_masses(&mut state.stage_groups);
+                    }
                 }
                 self.input_mode = InputMode::RocketDesigner { state };
             }
