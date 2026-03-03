@@ -330,7 +330,13 @@ impl Company {
 
                 // Queue stage build order
                 let order_id = self.manufacturing.next_order_id();
-                let stage_name = format!("{} {}-{}", rocket_name, gi, si);
+                let stage_label = if group.len() == 1 {
+                    format!("{}", gi + 1)
+                } else {
+                    let suffix = (b'a' + si as u8) as char;
+                    format!("{}{}", gi + 1, suffix)
+                };
+                let stage_name = format!("{} S{}", rocket_name, stage_label);
                 let order = ManufacturingOrder::new_stage(
                     order_id,
                     rocket_project_id,

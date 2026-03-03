@@ -1,8 +1,4 @@
-[] Finance should show runway
 [] Move contents of rust to top directory
-[] Contract list has money with two $s
-[] Don't say "Unknown flaws may remain"
-[] Only show active repulations providing bonuses or penalties
 [] A random seed should be chosen at startup intead of having the player pick
 [] Progress bars for research and construction, with different colors for different tasks
 [] Color contracts based on whether we have a rocket that can handle them.

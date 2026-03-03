@@ -311,12 +311,6 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                     }
                 }
             }
-            if matches!(project.status, EngineDesignStatus::Testing { .. }) {
-                lines.push(Line::from(Span::styled(
-                    "        ? Unknown flaws may remain",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
         }
     }
 
@@ -442,12 +436,6 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                         )));
                     }
                 }
-            }
-            if matches!(project.status, crate::rocket_project::RocketDesignStatus::Testing { .. }) {
-                lines.push(Line::from(Span::styled(
-                    "        ? Unknown flaws may remain",
-                    Style::default().fg(Color::DarkGray),
-                )));
             }
 
             // Inventory count
@@ -611,7 +599,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
                 Style::default()
             };
             lines.push(Line::from(Span::styled(
-                format!("{}{}  →{}  {:.0} kg  ${}  by {}",
+                format!("{}{}  →{}  {:.0} kg  {}  by {}",
                     marker, c.name, dest_name,
                     c.payload_kg, format_money(c.payment), c.deadline),
                 style,
@@ -641,7 +629,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
                 Style::default().fg(Color::Green)
             };
             lines.push(Line::from(Span::styled(
-                format!("{}{}  →{}  {:.0} kg  ${}  by {}",
+                format!("{}{}  →{}  {:.0} kg  {}  by {}",
                     marker, c.name, dest_name,
                     c.payload_kg, format_money(c.payment), c.deadline),
                 style,
@@ -735,24 +723,46 @@ fn draw_finance_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     let company = &game.player_company;
     let financials = &company.monthly_financials;
 
+    let salary = company.monthly_salary_cost();
+    let runway = if salary > 0.0 && company.money > 0.0 {
+        format!("{:.0} months", company.money / salary)
+    } else if salary <= 0.0 {
+        "∞".to_string()
+    } else {
+        "0 months".to_string()
+    };
+
     let mut lines = vec![
         Line::from(format!("  Balance: {}", format_money(company.money))),
-        Line::from(format!("  Monthly Salary: {}", format_money(company.monthly_salary_cost()))),
+        Line::from(format!("  Monthly Salary: {}", format_money(salary))),
+        Line::from(format!("  Runway: {}", runway)),
         Line::from(format!("  Reputation: {:.0}", company.reputation.total())),
         Line::from(""),
     ];
 
-    // Reputation breakdown
-    lines.push(Line::from(Span::styled(
-        "  ── Reputation Breakdown ──",
-        Style::default().fg(Color::DarkGray),
-    )));
+    // Reputation breakdown — only show non-zero factors
     let rep = &company.reputation;
-    lines.push(Line::from(format!("  Success:      {:+.1}", rep.success_factor)));
-    lines.push(Line::from(format!("  Lost Payload: {:+.1}", rep.lost_payload_factor)));
-    lines.push(Line::from(format!("  Drought:      {:+.1}", rep.drought_factor)));
-    lines.push(Line::from(format!("  Expiry:       {:+.1}", rep.expiry_factor)));
-    lines.push(Line::from(""));
+    let factors: Vec<(&str, f64)> = vec![
+        ("Success", rep.success_factor),
+        ("Lost Payload", rep.lost_payload_factor),
+        ("Drought", rep.drought_factor),
+        ("Expiry", rep.expiry_factor),
+    ];
+    let active_factors: Vec<_> = factors.iter().filter(|(_, v)| v.abs() > 0.05).collect();
+    if !active_factors.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  ── Reputation Factors ──",
+            Style::default().fg(Color::DarkGray),
+        )));
+        for &(name, value) in &active_factors {
+            let color = if *value > 0.0 { Color::Green } else { Color::Red };
+            lines.push(Line::from(Span::styled(
+                format!("  {:<14} {:+.1}", name, value),
+                Style::default().fg(color),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
 
     // Monthly financials
     lines.push(Line::from(Span::styled(
