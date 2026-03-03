@@ -35,13 +35,17 @@ pub enum Tab {
     Engines,
     Rockets,
     Manufacturing,
+    Contracts,
+    Launches,
+    Finance,
     Events,
 }
 
 impl Tab {
     pub const ALL: &[Tab] = &[
         Tab::Overview, Tab::Teams, Tab::Engines,
-        Tab::Rockets, Tab::Manufacturing, Tab::Events,
+        Tab::Rockets, Tab::Manufacturing, Tab::Contracts,
+        Tab::Launches, Tab::Finance, Tab::Events,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -51,8 +55,17 @@ impl Tab {
             Tab::Engines => "Engines",
             Tab::Rockets => "Rockets",
             Tab::Manufacturing => "Mfg",
+            Tab::Contracts => "Contracts",
+            Tab::Launches => "Launches",
+            Tab::Finance => "Finance",
             Tab::Events => "Events",
         }
+    }
+
+    /// Whether this tab uses a list-style selection (vs scrollable content).
+    pub fn is_list_tab(&self) -> bool {
+        matches!(self, Tab::Engines | Tab::Rockets | Tab::Manufacturing
+            | Tab::Contracts | Tab::Launches)
     }
 }
 
@@ -212,6 +225,15 @@ pub enum InputMode {
         state: Box<RocketDesignerState>,
         buffer: String,
     },
+    /// Selecting contract for a launch (or test launch).
+    LaunchSelectContract {
+        rocket_item_id: crate::manufacturing::InventoryItemId,
+        selected: usize,  // 0..N = contracts, N = test launch
+    },
+    /// Showing launch result.
+    LaunchResult {
+        record: crate::launch::LaunchRecord,
+    },
 }
 
 /// Application state wrapping the game and UI concerns.
@@ -335,7 +357,6 @@ impl App {
 
             KeyCode::Up => self.handle_up(),
             KeyCode::Down => self.handle_down(),
-            KeyCode::Enter => {}
 
             // Tab-specific action keys work regardless of focused pane
             _ => {
@@ -350,6 +371,8 @@ impl App {
             Tab::Engines => self.handle_engines_key(key),
             Tab::Rockets => self.handle_rockets_key(key),
             Tab::Manufacturing => self.handle_manufacturing_key(key),
+            Tab::Contracts => self.handle_contracts_key(key),
+            Tab::Launches => self.handle_launches_key(key),
             _ => {}
         }
     }
@@ -487,6 +510,54 @@ impl App {
                 if self.game.player_company.remove_team_from_manufacturing_order(self.selected_item) {
                     self.status_message = Some("Mfg team removed".into());
                 }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_contracts_key(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Char('a') | KeyCode::Enter => {
+                // Accept the selected contract (if it's in the available section)
+                let avail_len = self.game.available_contracts.len();
+                if self.selected_item < avail_len {
+                    if let Some(evt) = self.game.accept_contract(self.selected_item) {
+                        self.status_message = Some(format!("{}", evt));
+                    }
+                } else {
+                    self.status_message = Some("Already accepted".into());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_launches_key(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Char('l') | KeyCode::Enter => {
+                // Launch the selected rocket
+                let rockets = &self.game.player_company.manufacturing.inventory.rockets;
+                if self.selected_item >= rockets.len() {
+                    self.status_message = Some("No rocket selected".into());
+                    return;
+                }
+                let rocket = &rockets[self.selected_item];
+                let item_id = rocket.item_id;
+                let project_id = rocket.rocket_project_id;
+
+                // Find the rocket project to get its design
+                let rp = self.game.player_company.rocket_projects.iter()
+                    .find(|rp| rp.project_id == project_id);
+                if rp.is_none() {
+                    self.status_message = Some("Rocket project not found".into());
+                    return;
+                }
+
+                // Enter launch modal — pick contract or test launch
+                self.enter_modal(InputMode::LaunchSelectContract {
+                    rocket_item_id: item_id,
+                    selected: 0,
+                });
             }
             _ => {}
         }
@@ -665,6 +736,65 @@ impl App {
                         self.handle_rocket_payload_input_key(key, state, buffer);
                     }
                     _ => unreachable!(),
+                }
+            }
+            InputMode::LaunchSelectContract { rocket_item_id, selected } => {
+                let rocket_item_id = *rocket_item_id;
+                let selected = *selected;
+                let num_contracts = self.game.player_company.active_contracts.len();
+                let total_options = num_contracts + 1; // +1 for test launch
+                match key {
+                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Up => {
+                        if selected > 0 {
+                            if let InputMode::LaunchSelectContract { selected: s, .. } = &mut self.input_mode {
+                                *s -= 1;
+                            }
+                        }
+                    }
+                    KeyCode::Down => {
+                        if selected + 1 < total_options {
+                            if let InputMode::LaunchSelectContract { selected: s, .. } = &mut self.input_mode {
+                                *s += 1;
+                            }
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if selected < num_contracts {
+                            // Launch for this contract
+                            let contract = &self.game.player_company.active_contracts[selected];
+                            let destination = contract.destination.clone();
+                            let payload_kg = contract.payload_kg;
+                            if let Some((_events, record)) = self.game.launch_rocket(
+                                rocket_item_id, Some(selected), &destination, payload_kg,
+                            ) {
+                                self.input_mode = InputMode::LaunchResult { record };
+                            } else {
+                                self.status_message = Some("Launch failed (rocket not found)".into());
+                                self.exit_modal();
+                            }
+                        } else {
+                            // Test launch to LEO with 0 payload
+                            if let Some((_events, record)) = self.game.launch_rocket(
+                                rocket_item_id, None, "leo", 0.0,
+                            ) {
+                                self.input_mode = InputMode::LaunchResult { record };
+                            } else {
+                                self.status_message = Some("Launch failed (rocket not found)".into());
+                                self.exit_modal();
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::LaunchResult { .. } => {
+                // Any key dismisses the result
+                match key {
+                    KeyCode::Enter | KeyCode::Esc | KeyCode::Char(_) => {
+                        self.exit_modal();
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1057,7 +1187,7 @@ impl App {
             }
             FocusedPane::Content => {
                 match self.current_tab() {
-                    Tab::Engines | Tab::Rockets | Tab::Manufacturing => {
+                    tab if tab.is_list_tab() => {
                         self.selected_item = self.selected_item.saturating_sub(1);
                     }
                     _ => {
@@ -1093,6 +1223,20 @@ impl App {
                     }
                     Tab::Manufacturing => {
                         let max = self.game.player_company.manufacturing.orders.len().saturating_sub(1);
+                        if self.selected_item < max {
+                            self.selected_item += 1;
+                        }
+                    }
+                    Tab::Contracts => {
+                        let avail = self.game.available_contracts.len();
+                        let accepted = self.game.player_company.active_contracts.len();
+                        let max = (avail + accepted).saturating_sub(1);
+                        if self.selected_item < max {
+                            self.selected_item += 1;
+                        }
+                    }
+                    Tab::Launches => {
+                        let max = self.game.player_company.manufacturing.inventory.rockets.len().saturating_sub(1);
                         if self.selected_item < max {
                             self.selected_item += 1;
                         }

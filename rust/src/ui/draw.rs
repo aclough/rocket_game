@@ -1,10 +1,12 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 
+use crate::contract;
 use crate::engine::EngineCycle;
 use crate::engine_project::{self, EngineDesignStatus, EngineSource, PropellantPreset};
 use crate::event::EventImportance;
 use crate::flaw::FlawConsequence;
+use crate::launch::LaunchOutcome;
 use crate::location::DELTA_V_MAP;
 use crate::rocket;
 use crate::rocket_project;
@@ -115,6 +117,9 @@ fn draw_content(frame: &mut Frame, app: &App, area: Rect) {
         Tab::Engines => draw_engines_tab(frame, app, area, border_style),
         Tab::Rockets => draw_rockets_tab(frame, app, area, border_style),
         Tab::Manufacturing => draw_manufacturing_tab(frame, app, area, border_style),
+        Tab::Contracts => draw_contracts_tab(frame, app, area, border_style),
+        Tab::Launches => draw_launches_tab(frame, app, area, border_style),
+        Tab::Finance => draw_finance_tab(frame, app, area, border_style),
         Tab::Events => draw_events_tab(frame, app, area, border_style),
     }
 }
@@ -135,6 +140,11 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) 
         Line::from(format!("  Rocket projects: {}", game.player_company.rocket_projects.len())),
         Line::from(format!("  Mfg. orders:     {}", game.player_company.manufacturing.orders.len())),
         Line::from(format!("  Rockets built:   {}", game.player_company.manufacturing.inventory.rockets.len())),
+        Line::from(format!("  Contracts:       {} available, {} accepted",
+            game.available_contracts.len(),
+            game.player_company.active_contracts.len())),
+        Line::from(format!("  Launches:        {}", game.player_company.launch_history.len())),
+        Line::from(format!("  Reputation:      {:.0}", game.player_company.reputation.total())),
         Line::from(""),
         Line::from(format!("  Seed:  {}", game.seed.seed())),
     ];
@@ -565,6 +575,215 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(" Manufacturing ");
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
+    let game = &app.game;
+    let available = &game.available_contracts;
+    let accepted = &game.player_company.active_contracts;
+    let rep = game.player_company.reputation.total();
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("  Reputation: {:.0}", rep),
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(""),
+    ];
+
+    // Available contracts section
+    lines.push(Line::from(Span::styled(
+        "  ── Available Contracts ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    if available.is_empty() {
+        lines.push(Line::from("  (none available — wait for next month)"));
+    } else {
+        for (i, c) in available.iter().enumerate() {
+            let marker = if i == app.selected_item { "▶ " } else { "  " };
+            let dest_name = contract::destination_display_name(&c.destination);
+            let style = if i == app.selected_item {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(
+                format!("{}{}  →{}  {:.0} kg  ${}  by {}",
+                    marker, c.name, dest_name,
+                    c.payload_kg, format_money(c.payment), c.deadline),
+                style,
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+
+    // Accepted contracts section
+    lines.push(Line::from(Span::styled(
+        "  ── Accepted Contracts ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    if accepted.is_empty() {
+        lines.push(Line::from("  (none accepted)"));
+    } else {
+        let offset = available.len();
+        for (i, c) in accepted.iter().enumerate() {
+            let idx = offset + i;
+            let marker = if idx == app.selected_item { "▶ " } else { "  " };
+            let dest_name = contract::destination_display_name(&c.destination);
+            let style = if idx == app.selected_item {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Green)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("{}{}  →{}  {:.0} kg  ${}  by {}",
+                    marker, c.name, dest_name,
+                    c.payload_kg, format_money(c.payment), c.deadline),
+                style,
+            )));
+        }
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(" Contracts  [A] Accept ");
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
+    let game = &app.game;
+    let rockets = &game.player_company.manufacturing.inventory.rockets;
+
+    let mut lines = vec![];
+
+    // Show inventory rockets ready for launch
+    lines.push(Line::from(Span::styled(
+        "  ── Ready Rockets ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    if rockets.is_empty() {
+        lines.push(Line::from("  (no rockets in inventory)"));
+    } else {
+        for (i, r) in rockets.iter().enumerate() {
+            let marker = if i == app.selected_item { "▶ " } else { "  " };
+            let style = if i == app.selected_item {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+
+            // Find the design to show payload capacity
+            let payload_info = game.player_company.rocket_projects.iter()
+                .find(|rp| rp.project_id == r.rocket_project_id)
+                .map(|rp| {
+                    let leo = rocket_project::max_payload_to(&rp.design, "earth_surface", "leo");
+                    format!("  LEO: {}", format_mass(leo))
+                })
+                .unwrap_or_default();
+
+            lines.push(Line::from(Span::styled(
+                format!("{}{}{}", marker, r.rocket_name, payload_info),
+                style,
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+
+    // Recent launch history
+    lines.push(Line::from(Span::styled(
+        "  ── Launch History ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let history = &game.player_company.launch_history;
+    if history.is_empty() {
+        lines.push(Line::from("  (no launches yet)"));
+    } else {
+        for record in history.iter().rev().take(15) {
+            let dest_name = contract::destination_display_name(&record.destination);
+            let outcome_str = match &record.outcome {
+                LaunchOutcome::Success => Span::styled("SUCCESS", Style::default().fg(Color::Green)),
+                LaunchOutcome::PartialFailure { .. } => Span::styled("PARTIAL", Style::default().fg(Color::Yellow)),
+                LaunchOutcome::Failure { .. } => Span::styled("FAILURE", Style::default().fg(Color::Red)),
+            };
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {} {} →{} ", record.launch_date, record.rocket_name, dest_name)),
+                outcome_str,
+            ]));
+        }
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(" Launches  [L] Launch ");
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_finance_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
+    let game = &app.game;
+    let company = &game.player_company;
+    let financials = &company.monthly_financials;
+
+    let mut lines = vec![
+        Line::from(format!("  Balance: {}", format_money(company.money))),
+        Line::from(format!("  Monthly Salary: {}", format_money(company.monthly_salary_cost()))),
+        Line::from(format!("  Reputation: {:.0}", company.reputation.total())),
+        Line::from(""),
+    ];
+
+    // Reputation breakdown
+    lines.push(Line::from(Span::styled(
+        "  ── Reputation Breakdown ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+    let rep = &company.reputation;
+    lines.push(Line::from(format!("  Success:      {:+.1}", rep.success_factor)));
+    lines.push(Line::from(format!("  Lost Payload: {:+.1}", rep.lost_payload_factor)));
+    lines.push(Line::from(format!("  Drought:      {:+.1}", rep.drought_factor)));
+    lines.push(Line::from(format!("  Expiry:       {:+.1}", rep.expiry_factor)));
+    lines.push(Line::from(""));
+
+    // Monthly financials
+    lines.push(Line::from(Span::styled(
+        "  ── Monthly Financials ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from("  Month         Income       Expenses     Net"));
+    lines.push(Line::from("  ─────────────────────────────────────────────"));
+
+    if financials.is_empty() {
+        lines.push(Line::from("  (no data yet)"));
+    } else {
+        for f in financials.iter().rev() {
+            let net = f.income - f.expenses;
+            let net_style = if net >= 0.0 { Color::Green } else { Color::Red };
+            let month_name = crate::calendar::GameDate::new(f.year, f.month, 1);
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {:<14} {:>12} {:>12} ",
+                    format!("{}", month_name.month_name()),
+                    format_money(f.income),
+                    format_money(f.expenses),
+                )),
+                Span::styled(format!("{:>12}", format_money_signed(net)), Style::default().fg(net_style)),
+            ]));
+        }
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(" Finance ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -1028,6 +1247,99 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
+        InputMode::LaunchSelectContract { selected, .. } => {
+            let contracts = &app.game.player_company.active_contracts;
+            let total_options = contracts.len() + 1;
+            let mut lines = vec![
+                Line::from(""),
+                Line::from("  Select mission:"),
+                Line::from(""),
+            ];
+            for (i, c) in contracts.iter().enumerate() {
+                let marker = if i == *selected { " ▶ " } else { "   " };
+                let dest_name = contract::destination_display_name(&c.destination);
+                let style = if i == *selected {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("{}{} → {} ({:.0} kg, {})",
+                        marker, c.name, dest_name, c.payload_kg, format_money(c.payment)),
+                    style,
+                )));
+            }
+            // Test launch option
+            let test_idx = contracts.len();
+            let marker = if test_idx == *selected { " ▶ " } else { "   " };
+            let style = if test_idx == *selected {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("{}Test Launch (LEO, no payload)", marker),
+                style,
+            )));
+            let _ = total_options; // suppress unused warning
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Launch Mission ")
+                .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::LaunchResult { record } => {
+            let mut lines = vec![
+                Line::from(""),
+            ];
+            let outcome_line = match &record.outcome {
+                LaunchOutcome::Success => Line::from(Span::styled(
+                    "  LAUNCH SUCCESS",
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                )),
+                LaunchOutcome::PartialFailure { reason } => Line::from(Span::styled(
+                    format!("  PARTIAL FAILURE: {}", reason),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )),
+                LaunchOutcome::Failure { reason } => Line::from(Span::styled(
+                    format!("  LAUNCH FAILURE: {}", reason),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )),
+            };
+            lines.push(outcome_line);
+            lines.push(Line::from(""));
+            let dest_name = contract::destination_display_name(&record.destination);
+            lines.push(Line::from(format!("  {} → {}", record.rocket_name, dest_name)));
+            if record.payload_kg > 0.0 {
+                lines.push(Line::from(format!("  Payload: {}", format_mass(record.payload_kg))));
+            }
+            lines.push(Line::from(""));
+
+            if !record.flaws_activated.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  Flaws activated:",
+                    Style::default().fg(Color::Red),
+                )));
+                for flaw in &record.flaws_activated {
+                    lines.push(Line::from(format!("    {} ({}): {}",
+                        flaw.engine_name, flaw.consequence, flaw.flaw_description)));
+                }
+                lines.push(Line::from(""));
+            }
+
+            lines.push(Line::from(Span::styled(
+                "  Press any key to continue",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Launch Result ")
+                .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
     }
 }
 
@@ -1109,6 +1421,14 @@ fn format_mass(kg: f64) -> String {
         format!("{:.1}t", kg / 1000.0)
     } else {
         format!("{:.0}kg", kg)
+    }
+}
+
+fn format_money_signed(amount: f64) -> String {
+    if amount >= 0.0 {
+        format!("+{}", format_money(amount))
+    } else {
+        format_money(amount)
     }
 }
 

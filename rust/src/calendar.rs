@@ -65,6 +65,15 @@ impl GameDate {
         count
     }
 
+    /// Advance by N days.
+    pub fn add_days(self, n: u32) -> Self {
+        let mut d = self;
+        for _ in 0..n {
+            d = d.next_day();
+        }
+        d
+    }
+
     /// Short month name.
     pub fn month_name(&self) -> &'static str {
         MONTH_NAMES[(self.month - 1) as usize]

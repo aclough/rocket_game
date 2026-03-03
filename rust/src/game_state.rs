@@ -1,10 +1,15 @@
+use std::collections::VecDeque;
+
 use serde::{Serialize, Deserialize};
 
 use crate::calendar::GameDate;
+use crate::contract::{self, Contract, ContractId};
 use crate::engine::{EngineCycle, EngineId};
 use crate::engine_project::{EngineProject, EngineProjectId, EngineSource, PropellantPreset, WorkEvent};
 use crate::event::{EventLog, GameEvent};
 use crate::manufacturing::{Manufacturing, ManufacturingOrder, InventoryEngine};
+use crate::launch::{self, LaunchRecord, LaunchOutcome};
+use crate::reputation::Reputation;
 use crate::rocket::RocketDesign;
 use crate::rocket_project::{RocketProject, RocketProjectId, RocketWorkEvent};
 use crate::seed::GameSeed;
@@ -51,6 +56,15 @@ impl GameSpeed {
     }
 }
 
+/// Monthly income/expense record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonthlyFinancials {
+    pub year: u32,
+    pub month: u32,
+    pub income: f64,
+    pub expenses: f64,
+}
+
 /// A player's rocket company.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Company {
@@ -73,6 +87,21 @@ pub struct Company {
     /// Flag to avoid repeatedly pausing when manufacturing is idle.
     #[serde(default)]
     pub notified_manufacturing_idle: bool,
+    /// Contracts accepted by the player.
+    #[serde(default)]
+    pub active_contracts: Vec<Contract>,
+    /// Reputation tracker.
+    #[serde(default)]
+    pub reputation: Reputation,
+    /// Launch history.
+    #[serde(default)]
+    pub launch_history: Vec<LaunchRecord>,
+    /// Monthly financial records (rolling 12 months).
+    #[serde(default)]
+    pub monthly_financials: VecDeque<MonthlyFinancials>,
+    /// Date of last launch (for drought tracking).
+    #[serde(default)]
+    pub last_launch_date: Option<GameDate>,
 }
 
 impl Company {
@@ -96,6 +125,11 @@ impl Company {
             rocket_designs: Vec::new(),
             manufacturing: Manufacturing::new(),
             notified_manufacturing_idle: false,
+            active_contracts: Vec::new(),
+            reputation: Reputation::new(),
+            launch_history: Vec::new(),
+            monthly_financials: VecDeque::new(),
+            last_launch_date: None,
         }
     }
 
@@ -315,9 +349,11 @@ impl Company {
             .map(|g| g.len() as u32)
             .sum();
         let order_id = self.manufacturing.next_order_id();
+        let design_id = rp.design.id;
         let integration_order = ManufacturingOrder::new_integration(
             order_id,
             rocket_project_id,
+            design_id,
             rocket_name.clone(),
             total_stages,
             0,
@@ -595,7 +631,15 @@ pub struct GameState {
     pub speed: GameSpeed,
     /// Last non-paused speed, for restoring on unpause.
     pub previous_speed: GameSpeed,
+    /// Available contracts on the market (not player-owned).
+    #[serde(default)]
+    pub available_contracts: Vec<Contract>,
+    /// Next contract ID counter.
+    #[serde(default = "default_next_contract_id")]
+    pub next_contract_id: u64,
 }
+
+fn default_next_contract_id() -> u64 { 1 }
 
 impl GameState {
     pub fn new(company_name: String, starting_money: f64, seed_value: u64) -> Self {
@@ -612,6 +656,8 @@ impl GameState {
             seed,
             speed: GameSpeed::Paused,
             previous_speed: GameSpeed::Normal,
+            available_contracts: Vec::new(),
+            next_contract_id: 1,
         }
     }
 
@@ -672,6 +718,8 @@ impl GameState {
             let salary = self.player_company.monthly_salary_cost();
             if salary > 0.0 {
                 self.player_company.money -= salary;
+                // Track expense
+                self.record_expense(salary);
                 let evt = GameEvent::SalariesPaid { amount: salary };
                 self.event_log.push(self.date, evt.clone());
                 events.push(evt);
@@ -682,6 +730,43 @@ impl GameState {
                     };
                     self.event_log.push(self.date, evt.clone());
                     events.push(evt);
+                }
+            }
+
+            // Generate monthly contract
+            let rep = self.player_company.reputation.total();
+            let query = format!("contracts_{}_{}", self.date.year, self.date.month);
+            let mut rng = self.seed.world_query(&query);
+            let contract_id = ContractId(self.next_contract_id);
+            self.next_contract_id += 1;
+            if let Some(c) = contract::generate_monthly_contract(
+                &mut rng, contract_id, self.date, rep,
+            ) {
+                let evt = GameEvent::ContractsRefreshed { count: 1 };
+                self.event_log.push(self.date, evt.clone());
+                events.push(evt);
+                self.available_contracts.push(c);
+            }
+
+            // Start new month in financials
+            self.ensure_current_month_financials();
+        }
+
+        // Expire contracts past deadline
+        self.expire_contracts(&mut events);
+
+        // Track launch drought (yearly check)
+        if self.date.is_first_of_month() && self.date.month == 1 && self.date.day == 1 {
+            if let Some(last) = self.player_company.last_launch_date {
+                let days_since = last.days_until(&self.date);
+                if days_since >= 365 {
+                    self.player_company.reputation.on_year_without_launch();
+                }
+            } else if self.date != self.start_date {
+                // Never launched and at least a year has passed
+                let days_since_start = self.start_date.days_until(&self.date);
+                if days_since_start >= 365 {
+                    self.player_company.reputation.on_year_without_launch();
                 }
             }
         }
@@ -748,6 +833,276 @@ impl GameState {
             self.previous_speed = speed;
         }
         self.speed = speed;
+    }
+
+    /// Ensure the current month has an entry in the financials buffer.
+    fn ensure_current_month_financials(&mut self) {
+        let year = self.date.year;
+        let month = self.date.month;
+        let already = self.player_company.monthly_financials.iter()
+            .any(|f| f.year == year && f.month == month);
+        if !already {
+            self.player_company.monthly_financials.push_back(MonthlyFinancials {
+                year,
+                month,
+                income: 0.0,
+                expenses: 0.0,
+            });
+            // Keep rolling 12-month window
+            while self.player_company.monthly_financials.len() > 12 {
+                self.player_company.monthly_financials.pop_front();
+            }
+        }
+    }
+
+    /// Record an expense in the current month's financials.
+    fn record_expense(&mut self, amount: f64) {
+        self.ensure_current_month_financials();
+        let year = self.date.year;
+        let month = self.date.month;
+        if let Some(f) = self.player_company.monthly_financials.iter_mut()
+            .find(|f| f.year == year && f.month == month)
+        {
+            f.expenses += amount;
+        }
+    }
+
+    /// Record income in the current month's financials.
+    fn record_income(&mut self, amount: f64) {
+        self.ensure_current_month_financials();
+        let year = self.date.year;
+        let month = self.date.month;
+        if let Some(f) = self.player_company.monthly_financials.iter_mut()
+            .find(|f| f.year == year && f.month == month)
+        {
+            f.income += amount;
+        }
+    }
+
+    /// Expire contracts past their deadline and update reputation.
+    fn expire_contracts(&mut self, events: &mut Vec<GameEvent>) {
+        // Check available contracts
+        let mut expired_available = Vec::new();
+        for (i, c) in self.available_contracts.iter().enumerate() {
+            if self.date > c.deadline {
+                expired_available.push(i);
+            }
+        }
+        for i in expired_available.into_iter().rev() {
+            self.available_contracts.remove(i);
+        }
+
+        // Check accepted contracts on the company
+        let mut expired_accepted = Vec::new();
+        for (i, c) in self.player_company.active_contracts.iter().enumerate() {
+            if self.date > c.deadline {
+                expired_accepted.push((i, c.name.clone()));
+            }
+        }
+        for (i, name) in expired_accepted.into_iter().rev() {
+            self.player_company.active_contracts.remove(i);
+            self.player_company.reputation.on_contract_expired();
+            let evt = GameEvent::ContractExpired { contract_name: name };
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+        }
+    }
+
+    /// Accept a contract from the available market.
+    pub fn accept_contract(&mut self, index: usize) -> Option<GameEvent> {
+        if index >= self.available_contracts.len() {
+            return None;
+        }
+        let mut c = self.available_contracts.remove(index);
+        let name = c.name.clone();
+        c.status = contract::ContractStatus::Accepted;
+        self.player_company.active_contracts.push(c);
+        let evt = GameEvent::ContractAccepted { contract_name: name };
+        self.event_log.push(self.date, evt.clone());
+        Some(evt)
+    }
+
+    /// Launch a rocket for a contract (or test launch if contract_index is None).
+    /// `rocket_item_id` identifies the InventoryRocket to consume.
+    /// `contract_index` is the index into player_company.active_contracts (None for test launch).
+    /// Returns the events generated and the launch record.
+    pub fn launch_rocket(
+        &mut self,
+        rocket_item_id: crate::manufacturing::InventoryItemId,
+        contract_index: Option<usize>,
+        destination: &str,
+        payload_kg: f64,
+    ) -> Option<(Vec<GameEvent>, LaunchRecord)> {
+        // Take the rocket from inventory
+        let inv_rocket = self.player_company.manufacturing.inventory.take_rocket(rocket_item_id)?;
+
+        // Find the rocket project for this rocket
+        let rp = self.player_company.rocket_projects.iter()
+            .find(|rp| rp.project_id == inv_rocket.rocket_project_id)?;
+
+        // Simulate the launch
+        let sim = launch::simulate_launch(
+            &rp.design,
+            destination,
+            payload_kg,
+            &self.player_company.engine_projects,
+            rp,
+            &self.player_company.contracted_engines,
+            &mut self.seed.contingent_rng,
+        );
+
+        let mut events = Vec::new();
+
+        // Mark activated flaws as discovered on engine projects
+        for (engine_id, indices) in &sim.engine_flaw_discoveries {
+            if let Some(ep) = self.player_company.engine_projects.iter_mut()
+                .find(|ep| ep.design.id == *engine_id)
+            {
+                for &idx in indices {
+                    if idx < ep.flaws.len() {
+                        ep.flaws[idx].discovered = true;
+                        let evt = GameEvent::FlawDiscovered {
+                            engine_name: ep.design.name.clone(),
+                            flaw_description: ep.flaws[idx].description.clone(),
+                        };
+                        self.event_log.push(self.date, evt.clone());
+                        events.push(evt);
+                    }
+                }
+            }
+        }
+
+        // Mark activated flaws as discovered on contracted engines
+        for (source, indices) in &sim.contracted_flaw_discoveries {
+            if let EngineSource::Contracted(ce_id) = source {
+                if let Some(ce) = self.player_company.contracted_engines.iter_mut()
+                    .find(|ce| ce.id == *ce_id)
+                {
+                    for &idx in indices {
+                        if idx < ce.flaws.len() {
+                            ce.flaws[idx].discovered = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Mark activated flaws as discovered on rocket project
+        {
+            // Re-find as mutable
+            if let Some(rp_mut) = self.player_company.rocket_projects.iter_mut()
+                .find(|rp| rp.project_id == inv_rocket.rocket_project_id)
+            {
+                for &idx in &sim.rocket_flaw_discoveries {
+                    if idx < rp_mut.flaws.len() {
+                        rp_mut.flaws[idx].discovered = true;
+                        let evt = GameEvent::RocketFlawDiscovered {
+                            rocket_name: rp_mut.design.name.clone(),
+                            flaw_description: rp_mut.flaws[idx].description.clone(),
+                        };
+                        self.event_log.push(self.date, evt.clone());
+                        events.push(evt);
+                    }
+                }
+            }
+        }
+
+        // Determine contract info
+        let contract_id = contract_index.and_then(|ci| {
+            self.player_company.active_contracts.get(ci).map(|c| c.id)
+        });
+        let contract_name = contract_index.and_then(|ci| {
+            self.player_company.active_contracts.get(ci).map(|c| c.name.clone())
+        });
+
+        // Apply results based on outcome
+        let launch_evt = match &sim.outcome {
+            LaunchOutcome::Success => {
+                self.player_company.reputation.on_launch_success();
+
+                if let Some(ci) = contract_index {
+                    let payment = self.player_company.active_contracts[ci].payment;
+                    self.player_company.money += payment;
+                    self.record_income(payment);
+                    self.player_company.reputation.on_contract_launch();
+
+                    let pay_evt = GameEvent::PaymentReceived {
+                        amount: payment,
+                        contract_name: contract_name.clone().unwrap_or_default(),
+                    };
+                    self.event_log.push(self.date, pay_evt.clone());
+                    events.push(pay_evt);
+
+                    // Mark contract completed and remove
+                    self.player_company.active_contracts.remove(ci);
+                }
+
+                GameEvent::LaunchSuccess {
+                    rocket_name: inv_rocket.rocket_name.clone(),
+                    destination: destination.to_string(),
+                }
+            }
+            LaunchOutcome::PartialFailure { reason } => {
+                self.player_company.reputation.on_launch_partial_failure();
+
+                if let Some(ci) = contract_index {
+                    // 50% payment
+                    let payment = self.player_company.active_contracts[ci].payment * 0.5;
+                    self.player_company.money += payment;
+                    self.record_income(payment);
+                    self.player_company.reputation.on_contract_launch();
+
+                    let pay_evt = GameEvent::PaymentReceived {
+                        amount: payment,
+                        contract_name: contract_name.clone().unwrap_or_default(),
+                    };
+                    self.event_log.push(self.date, pay_evt.clone());
+                    events.push(pay_evt);
+
+                    self.player_company.active_contracts.remove(ci);
+                }
+
+                GameEvent::LaunchPartialFailure {
+                    rocket_name: inv_rocket.rocket_name.clone(),
+                    reason: reason.clone(),
+                }
+            }
+            LaunchOutcome::Failure { reason } => {
+                self.player_company.reputation.on_launch_failure();
+
+                if let Some(ci) = contract_index {
+                    // No payment, contract failed
+                    self.player_company.active_contracts.remove(ci);
+                }
+
+                GameEvent::LaunchFailure {
+                    rocket_name: inv_rocket.rocket_name.clone(),
+                    reason: reason.clone(),
+                }
+            }
+        };
+
+        self.event_log.push(self.date, launch_evt.clone());
+        events.push(launch_evt);
+
+        // Update launch tracking
+        self.player_company.last_launch_date = Some(self.date);
+
+        let record = LaunchRecord {
+            launch_date: self.date,
+            rocket_name: inv_rocket.rocket_name,
+            contract_id,
+            destination: destination.to_string(),
+            payload_kg,
+            outcome: sim.outcome,
+            flaws_activated: sim.flaws_activated,
+        };
+        self.player_company.launch_history.push(record.clone());
+
+        // Pause the game for the player to see the result
+        self.speed = GameSpeed::Paused;
+
+        Some((events, record))
     }
 }
 

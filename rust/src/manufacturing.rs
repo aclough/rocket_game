@@ -100,6 +100,7 @@ pub enum ManufacturingOrderType {
     /// Final integration of a rocket.
     RocketIntegration {
         rocket_project_id: RocketProjectId,
+        design_id: RocketDesignId,
         rocket_name: String,
         total_stages: u32,
     },
@@ -229,6 +230,7 @@ impl ManufacturingOrder {
     pub fn new_integration(
         id: ManufacturingOrderId,
         rocket_project_id: RocketProjectId,
+        design_id: RocketDesignId,
         rocket_name: String,
         total_stages: u32,
         prior_builds: u32,
@@ -241,6 +243,7 @@ impl ManufacturingOrder {
             id,
             order_type: ManufacturingOrderType::RocketIntegration {
                 rocket_project_id,
+                design_id,
                 rocket_name,
                 total_stages,
             },
@@ -376,6 +379,12 @@ impl Inventory {
                 && s.stage_index == stage_index)?;
         Some(self.stages.remove(idx))
     }
+
+    /// Remove one rocket by item_id. Returns the removed item.
+    pub fn take_rocket(&mut self, item_id: InventoryItemId) -> Option<InventoryRocket> {
+        let idx = self.rockets.iter().position(|r| r.item_id == item_id)?;
+        Some(self.rockets.remove(idx))
+    }
 }
 
 // ── Manufacturing state ──
@@ -510,13 +519,11 @@ impl Manufacturing {
                         stage_name: stage_name.clone(),
                     });
                 }
-                ManufacturingOrderType::RocketIntegration { rocket_project_id, rocket_name, .. } => {
-                    // Note: design_id will be set by the caller when creating the inventory rocket
-                    // For now we use a placeholder — the Company layer handles this
+                ManufacturingOrderType::RocketIntegration { rocket_project_id, design_id, rocket_name, .. } => {
                     self.inventory.rockets.push(InventoryRocket {
                         item_id,
                         rocket_project_id: *rocket_project_id,
-                        design_id: RocketDesignId(0), // placeholder, set by Company
+                        design_id: *design_id,
                         rocket_name: rocket_name.clone(),
                     });
                     events.push(ManufacturingEvent::RocketIntegrated {
@@ -657,6 +664,7 @@ mod tests {
         let order = ManufacturingOrder::new_integration(
             ManufacturingOrderId(3),
             RocketProjectId(1),
+            RocketDesignId(1),
             "Falcon".into(),
             2,
             0,

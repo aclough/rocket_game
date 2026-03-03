@@ -33,7 +33,14 @@ pub enum GameEvent {
     FloorSpaceComplete { units: u32 },
     RocketBuildOrdered { rocket_name: String, total_cost: f64 },
     ManufacturingIdle,
-    // Future: LaunchResult, ContractOffered, TechUnlocked, etc.
+    // Phase 4: Contracts & launches
+    ContractsRefreshed { count: u32 },
+    ContractAccepted { contract_name: String },
+    ContractExpired { contract_name: String },
+    LaunchSuccess { rocket_name: String, destination: String },
+    LaunchPartialFailure { rocket_name: String, reason: String },
+    LaunchFailure { rocket_name: String, reason: String },
+    PaymentReceived { amount: f64, contract_name: String },
 }
 
 impl fmt::Display for GameEvent {
@@ -86,6 +93,20 @@ impl fmt::Display for GameEvent {
                 write!(f, "Ordered build: {} (${:.0})", rocket_name, total_cost),
             GameEvent::ManufacturingIdle =>
                 write!(f, "Manufacturing teams idle — no orders to work on"),
+            GameEvent::ContractsRefreshed { count } =>
+                write!(f, "{} new contract(s) available", count),
+            GameEvent::ContractAccepted { contract_name } =>
+                write!(f, "Accepted contract: {}", contract_name),
+            GameEvent::ContractExpired { contract_name } =>
+                write!(f, "Contract expired: {}", contract_name),
+            GameEvent::LaunchSuccess { rocket_name, destination } =>
+                write!(f, "Launch success: {} to {}", rocket_name, destination),
+            GameEvent::LaunchPartialFailure { rocket_name, reason } =>
+                write!(f, "Launch partial failure: {} ({})", rocket_name, reason),
+            GameEvent::LaunchFailure { rocket_name, reason } =>
+                write!(f, "Launch failed: {} ({})", rocket_name, reason),
+            GameEvent::PaymentReceived { amount, contract_name } =>
+                write!(f, "Payment received: ${:.0} for {}", amount, contract_name),
         }
     }
 }
@@ -124,7 +145,14 @@ impl GameEvent {
             | GameEvent::RocketIntegrated { .. }
             | GameEvent::FloorSpaceComplete { .. }
             | GameEvent::RocketBuildOrdered { .. }
-            | GameEvent::ManufacturingIdle => EventImportance::Notable,
+            | GameEvent::ManufacturingIdle
+            | GameEvent::ContractsRefreshed { .. }
+            | GameEvent::ContractAccepted { .. }
+            | GameEvent::ContractExpired { .. }
+            | GameEvent::LaunchSuccess { .. }
+            | GameEvent::LaunchPartialFailure { .. }
+            | GameEvent::LaunchFailure { .. }
+            | GameEvent::PaymentReceived { .. } => EventImportance::Notable,
         }
     }
 }
