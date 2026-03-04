@@ -32,6 +32,8 @@ After a major change provide the user with a list of things to test in the Godot
 
 # Completion
 
+Always check with the user before commiting a change.
+
 When a feature is good and is approved for check in to git also check TODO.txt to see if it is listed there.  If so
 remove it.
 
