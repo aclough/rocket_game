@@ -1,5 +1,3 @@
-[] Progress bars for research and construction, with different colors for different tasks
-[] Color contracts based on whether we have a rocket that can handle them.
 [] Add option to construct to always have at least N.
 [] Automation of bidding on contracts for any that const less than marginal cost + selected profit margin.
 [] Start with 1 engineering team

@@ -1,15 +1,17 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph};
 
-use crate::contract;
+use crate::contract::{self, Contract};
 use crate::engine::EngineCycle;
 use crate::engine_project::{self, EngineDesignStatus, EngineSource, PropellantPreset};
+use crate::game_state::Company;
+use crate::manufacturing::ManufacturingOrderType;
+use crate::rocket_project;
 use crate::event::EventImportance;
 use crate::flaw::FlawConsequence;
 use crate::launch::LaunchOutcome;
 use crate::location::DELTA_V_MAP;
 use crate::rocket;
-use crate::rocket_project;
 use crate::ui::{App, FocusedPane, InputMode, RocketDesignerState, Tab};
 
 /// Draw the entire application frame.
@@ -225,6 +227,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         Line::from(format!("  Engine Projects ({})", company.engine_projects.len())),
         Line::from("  ─────────────────────────────────────────────"),
     ];
+    let mut gauges: Vec<GaugeInfo> = Vec::new();
 
     if company.engine_projects.is_empty() {
         lines.push(Line::from("  No engine projects yet. Press [N] to start a new design."));
@@ -235,13 +238,47 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         let marker = if selected { "▶" } else { " " };
 
         let status_str = match &project.status {
-            EngineDesignStatus::InDesign { work_completed, work_required } =>
-                format!("In Design [{:.0}/{:.0}]", work_completed, work_required),
-            EngineDesignStatus::Testing { work_completed } =>
-                format!("Testing [{:.0}] {}", work_completed, project.testing_level()),
-            EngineDesignStatus::Revising { remaining_indices, work_completed } =>
-                format!("Revising {} flaw(s) [{:.0}/30]", remaining_indices.len(), work_completed),
+            EngineDesignStatus::InDesign { .. } => "In Design".to_string(),
+            EngineDesignStatus::Testing { .. } =>
+                format!("Testing  {}", project.testing_level()),
+            EngineDesignStatus::Revising { remaining_indices, .. } =>
+                format!("Revising {} flaw(s)", remaining_indices.len()),
         };
+
+        let line_text = format!(
+            "  {} {} (Rev {})  {}",
+            marker, project.design.name, project.revision, status_str,
+        );
+        let text_width = line_text.len() as u16;
+
+        // Track gauge data for this line
+        let line_idx = lines.len();
+        match &project.status {
+            EngineDesignStatus::InDesign { work_completed, work_required } => {
+                let ratio = work_completed / work_required;
+                gauges.push(GaugeInfo {
+                    line_index: line_idx, ratio,
+                    label: format!("{:.0}/{:.0}", work_completed, work_required),
+                    fill_color: Color::Rgb(0, 140, 140), text_width, right_aligned: false,
+                });
+            }
+            EngineDesignStatus::Testing { work_completed } => {
+                let ratio = work_completed / 30.0;
+                gauges.push(GaugeInfo {
+                    line_index: line_idx, ratio,
+                    label: format!("{:.0}/30", work_completed),
+                    fill_color: Color::Green, text_width, right_aligned: false,
+                });
+            }
+            EngineDesignStatus::Revising { work_completed, .. } => {
+                let ratio = work_completed / 30.0;
+                gauges.push(GaugeInfo {
+                    line_index: line_idx, ratio,
+                    label: format!("{:.0}/30", work_completed),
+                    fill_color: Color::Rgb(180, 130, 0), text_width, right_aligned: false,
+                });
+            }
+        }
 
         let style = if selected {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
@@ -249,13 +286,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             Style::default()
         };
 
-        lines.push(Line::from(Span::styled(
-            format!(
-                "  {} {} (Rev {}){:>20}",
-                marker, project.design.name, project.revision, status_str,
-            ),
-            style,
-        )));
+        lines.push(Line::from(Span::styled(line_text, style)));
 
         // Show details for selected project
         if selected {
@@ -346,6 +377,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         .title(" Engines ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
+    render_gauges(frame, area, &gauges);
 }
 
 fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
@@ -354,6 +386,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         Line::from(format!("  Rocket Projects ({})", company.rocket_projects.len())),
         Line::from("  ─────────────────────────────────────────────"),
     ];
+    let mut gauges: Vec<GaugeInfo> = Vec::new();
 
     if company.rocket_projects.is_empty() {
         lines.push(Line::from("  No rocket projects yet. Press [N] to start a new design."));
@@ -364,13 +397,48 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         let marker = if selected { "▶" } else { " " };
 
         let status_str = match &project.status {
-            crate::rocket_project::RocketDesignStatus::InDesign { work_completed, work_required } =>
-                format!("In Design [{:.0}/{:.0}]", work_completed, work_required),
-            crate::rocket_project::RocketDesignStatus::Testing { work_completed } =>
-                format!("Testing [{:.0}] {}", work_completed, project.testing_level()),
-            crate::rocket_project::RocketDesignStatus::Revising { remaining_indices, work_completed } =>
-                format!("Revising {} flaw(s) [{:.0}/30]", remaining_indices.len(), work_completed),
+            rocket_project::RocketDesignStatus::InDesign { .. } =>
+                "In Design".to_string(),
+            rocket_project::RocketDesignStatus::Testing { .. } =>
+                format!("Testing  {}", project.testing_level()),
+            rocket_project::RocketDesignStatus::Revising { remaining_indices, .. } =>
+                format!("Revising {} flaw(s)", remaining_indices.len()),
         };
+
+        let line_text = format!(
+            "  {} {} (Rev {})  {}",
+            marker, project.design.name, project.revision, status_str,
+        );
+        let text_width = line_text.len() as u16;
+
+        // Track gauge data for this line
+        let line_idx = lines.len();
+        match &project.status {
+            rocket_project::RocketDesignStatus::InDesign { work_completed, work_required } => {
+                let ratio = work_completed / work_required;
+                gauges.push(GaugeInfo {
+                    line_index: line_idx, ratio,
+                    label: format!("{:.0}/{:.0}", work_completed, work_required),
+                    fill_color: Color::Rgb(0, 140, 140), text_width, right_aligned: false,
+                });
+            }
+            rocket_project::RocketDesignStatus::Testing { work_completed } => {
+                let ratio = work_completed / 30.0;
+                gauges.push(GaugeInfo {
+                    line_index: line_idx, ratio,
+                    label: format!("{:.0}/30", work_completed),
+                    fill_color: Color::Green, text_width, right_aligned: false,
+                });
+            }
+            rocket_project::RocketDesignStatus::Revising { work_completed, .. } => {
+                let ratio = work_completed / 30.0;
+                gauges.push(GaugeInfo {
+                    line_index: line_idx, ratio,
+                    label: format!("{:.0}/30", work_completed),
+                    fill_color: Color::Rgb(180, 130, 0), text_width, right_aligned: false,
+                });
+            }
+        }
 
         let total_stages: u32 = project.design.stage_groups.iter()
             .map(|g| g.len() as u32).sum();
@@ -385,13 +453,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             Style::default()
         };
 
-        lines.push(Line::from(Span::styled(
-            format!(
-                "  {} {} (Rev {})  {}",
-                marker, project.design.name, project.revision, status_str,
-            ),
-            style,
-        )));
+        lines.push(Line::from(Span::styled(line_text, style)));
 
         if selected {
             lines.push(Line::from(format!(
@@ -465,6 +527,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         .title(" Rockets ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
+    render_gauges(frame, area, &gauges);
 }
 
 fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
@@ -481,13 +544,21 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
             company.unassigned_manufacturing_team_count(),
         )),
     ];
+    let mut gauges: Vec<GaugeInfo> = Vec::new();
 
     // Show floor space construction
     for order in &mfg.floor_space.under_construction {
-        lines.push(Line::from(format!(
-            "    Building {} unit(s): {} days remaining",
-            order.units, order.days_remaining,
-        )));
+        let line_text = format!("    Building {} unit(s)", order.units);
+        let text_width = line_text.len() as u16;
+        let line_idx = lines.len();
+        let ratio = (crate::manufacturing::FLOOR_SPACE_BUILD_DAYS - order.days_remaining) as f64
+            / crate::manufacturing::FLOOR_SPACE_BUILD_DAYS as f64;
+        gauges.push(GaugeInfo {
+            line_index: line_idx, ratio,
+            label: format!("{}d left", order.days_remaining),
+            fill_color: Color::Green, text_width, right_aligned: true,
+        });
+        lines.push(Line::from(line_text));
     }
 
     lines.push(Line::from(""));
@@ -502,11 +573,32 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
         let marker = if selected { "▶" } else { " " };
 
         let status_str = if order.waiting_for_prerequisites {
-            "Waiting".to_string()
+            format!("Waiting  Teams: {}", order.teams_assigned)
         } else {
-            format!("[{:.0}/{:.0}]  Teams: {}",
-                order.work_completed, order.work_required, order.teams_assigned)
+            format!("Teams: {}", order.teams_assigned)
         };
+
+        let line_text = format!(
+            "    {} [{}] {} \"{}\"  {}",
+            marker, i + 1, order.type_label(), order.display_name(), status_str,
+        );
+        let text_width = line_text.len() as u16;
+
+        // Add gauge for active (non-waiting) orders
+        if !order.waiting_for_prerequisites {
+            let line_idx = lines.len();
+            let fill_color = match &order.order_type {
+                ManufacturingOrderType::Engine { .. } => Color::Cyan,
+                ManufacturingOrderType::Stage { .. } => Color::Blue,
+                ManufacturingOrderType::RocketIntegration { .. } => Color::Magenta,
+            };
+            gauges.push(GaugeInfo {
+                line_index: line_idx,
+                ratio: order.progress(),
+                label: format!("{:.0}/{:.0}", order.work_completed, order.work_required),
+                fill_color, text_width, right_aligned: true,
+            });
+        }
 
         let style = if selected {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
@@ -514,13 +606,7 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
             Style::default()
         };
 
-        lines.push(Line::from(Span::styled(
-            format!(
-                "    {} [{}] {} \"{}\"  {}",
-                marker, i + 1, order.type_label(), order.display_name(), status_str,
-            ),
-            style,
-        )));
+        lines.push(Line::from(Span::styled(line_text, style)));
     }
 
     // Inventory summary
@@ -565,6 +651,37 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
         .title(" Manufacturing ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
+    render_gauges(frame, area, &gauges);
+}
+
+/// How ready the player is to fulfill a contract.
+enum ContractReadiness {
+    /// A built rocket in inventory can deliver the payload.
+    Ready,
+    /// A capable design exists but no rocket is built yet.
+    NeedsBuild,
+    /// No design (Testing or later) can deliver the required payload.
+    Impossible,
+}
+
+fn check_contract_readiness(contract: &Contract, company: &Company) -> ContractReadiness {
+    for project in &company.rocket_projects {
+        // Only consider designs that are past InDesign (Testing, Revising, or Complete equivalent)
+        if matches!(project.status, rocket_project::RocketDesignStatus::InDesign { .. }) {
+            continue;
+        }
+        let max_payload = rocket_project::max_payload_to(
+            &project.design, "earth_surface", &contract.destination,
+        );
+        if max_payload >= contract.payload_kg {
+            if company.manufacturing.inventory.rocket_count(project.project_id) > 0 {
+                return ContractReadiness::Ready;
+            } else {
+                return ContractReadiness::NeedsBuild;
+            }
+        }
+    }
+    ContractReadiness::Impossible
 }
 
 fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
@@ -596,7 +713,11 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
             let style = if i == app.selected_item {
                 Style::default().fg(Color::Yellow)
             } else {
-                Style::default()
+                match check_contract_readiness(c, &game.player_company) {
+                    ContractReadiness::Ready => Style::default(),
+                    ContractReadiness::NeedsBuild => Style::default().fg(Color::Yellow),
+                    ContractReadiness::Impossible => Style::default().fg(Color::Red),
+                }
             };
             lines.push(Line::from(Span::styled(
                 format!("{}{}  →{}  {:.0} kg  {}  by {}",
@@ -626,7 +747,11 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
             let style = if idx == app.selected_item {
                 Style::default().fg(Color::Yellow)
             } else {
-                Style::default().fg(Color::Green)
+                match check_contract_readiness(c, &game.player_company) {
+                    ContractReadiness::Ready => Style::default().fg(Color::Green),
+                    ContractReadiness::NeedsBuild => Style::default().fg(Color::Yellow),
+                    ContractReadiness::Impossible => Style::default().fg(Color::Red),
+                }
             };
             lines.push(Line::from(Span::styled(
                 format!("{}{}  →{}  {:.0} kg  {}  by {}",
@@ -1504,4 +1629,76 @@ fn format_money_signed(amount: f64) -> String {
 
 pub fn format_money(amount: f64) -> String {
     crate::resources::format_money(amount)
+}
+
+/// Minimum gauge width.
+const MIN_GAUGE_WIDTH: u16 = 12;
+/// Fixed gauge width for right-aligned gauges.
+const RIGHT_GAUGE_WIDTH: u16 = 20;
+
+/// A progress gauge to overlay on a line.
+struct GaugeInfo {
+    line_index: usize,
+    ratio: f64,
+    label: String,
+    fill_color: Color,
+    /// Column where the text on this line ends (for positioning gauge after text).
+    text_width: u16,
+    /// If true, use fixed-width right-aligned positioning instead of text-adjacent.
+    right_aligned: bool,
+}
+
+
+/// Render Gauge overlays on top of a paragraph block.
+/// `area` is the outer Rect of the containing block (with borders).
+fn render_gauges(
+    frame: &mut Frame,
+    area: Rect,
+    gauges: &[GaugeInfo],
+) {
+    // Content area inside the block borders
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+
+    for gauge_info in gauges {
+        let gauge_y = inner.y + gauge_info.line_index as u16;
+        if gauge_y >= inner.bottom() {
+            continue; // clipped
+        }
+
+        let (gauge_x, gauge_width) = if gauge_info.right_aligned {
+            if inner.width < RIGHT_GAUGE_WIDTH + 2 {
+                continue;
+            }
+            let x = inner.right().saturating_sub(RIGHT_GAUGE_WIDTH);
+            (x, RIGHT_GAUGE_WIDTH)
+        } else {
+            // Position gauge after text with a 1-char gap
+            let x = inner.x + gauge_info.text_width + 1;
+            let w = inner.right().saturating_sub(x);
+            if w < MIN_GAUGE_WIDTH {
+                continue;
+            }
+            (x, w)
+        };
+
+        let gauge_area = Rect {
+            x: gauge_x,
+            y: gauge_y,
+            width: gauge_width,
+            height: 1,
+        };
+        let gauge = Gauge::default()
+            .ratio(gauge_info.ratio.clamp(0.0, 1.0))
+            .label(Span::styled(
+                gauge_info.label.clone(),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ))
+            .gauge_style(Style::default().fg(gauge_info.fill_color).bg(Color::DarkGray));
+        frame.render_widget(gauge, gauge_area);
+    }
 }
