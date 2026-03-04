@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use serde::{Serialize, Deserialize};
 
@@ -10,11 +10,11 @@ use crate::event::{EventLog, GameEvent};
 use crate::manufacturing::{Manufacturing, ManufacturingOrder, InventoryEngine};
 use crate::launch::{self, LaunchRecord, LaunchOutcome};
 use crate::reputation::Reputation;
-use crate::rocket::RocketDesign;
+use crate::rocket::{RocketDesign, RocketDesignId};
 use crate::rocket_project::{RocketProject, RocketProjectId, RocketWorkEvent};
 use crate::seed::GameSeed;
 use crate::team::{EngineeringTeam, ManufacturingTeam, TeamId, TEAM_HIRING_COST,
-    MANUFACTURING_HIRING_COST};
+    MANUFACTURING_HIRING_COST, ENGINEERING_MONTHLY_SALARY};
 use crate::third_party::{self, ContractedEngine, ContractedEngineId, ThirdPartyEngine};
 
 /// Game simulation speed.
@@ -102,6 +102,15 @@ pub struct Company {
     /// Date of last launch (for drought tracking).
     #[serde(default)]
     pub last_launch_date: Option<GameDate>,
+    /// How many engines have been built per engine project (for learning curve).
+    #[serde(default)]
+    pub engine_build_counts: HashMap<EngineProjectId, u32>,
+    /// How many rockets have been built per design (for learning curve).
+    #[serde(default)]
+    pub rocket_build_counts: HashMap<RocketDesignId, u32>,
+    /// Build cost history per rocket design (for avg/marginal cost).
+    #[serde(default)]
+    pub rocket_cost_history: HashMap<RocketDesignId, Vec<f64>>,
 }
 
 impl Company {
@@ -130,6 +139,9 @@ impl Company {
             launch_history: Vec::new(),
             monthly_financials: VecDeque::new(),
             last_launch_date: None,
+            engine_build_counts: HashMap::new(),
+            rocket_build_counts: HashMap::new(),
+            rocket_cost_history: HashMap::new(),
         }
     }
 
@@ -281,7 +293,11 @@ impl Company {
 
         let rocket_name = rp.design.name.clone();
         let rocket_project_id = rp.project_id;
+        let design_id = rp.design.id;
         let mut total_cost = 0.0;
+
+        // Get current build count for this rocket design (for learning curve)
+        let rocket_prior = *self.rocket_build_counts.get(&design_id).unwrap_or(&0);
 
         // Queue engine build orders for each engine needed
         for (gi, group) in rp.design.stage_groups.iter().enumerate() {
@@ -294,6 +310,7 @@ impl Company {
                             if let Some(ep) = self.engine_projects.iter()
                                 .find(|ep| ep.project_id == ep_id)
                             {
+                                let engine_prior = *self.engine_build_counts.get(&ep_id).unwrap_or(&0);
                                 let order_id = self.manufacturing.next_order_id();
                                 let order = ManufacturingOrder::new_engine(
                                     order_id,
@@ -303,10 +320,11 @@ impl Company {
                                     stage.engine.mass_kg,
                                     ep.complexity,
                                     ep.preset,
-                                    0, // TODO: track prior builds per design
+                                    engine_prior,
                                 );
                                 total_cost += order.material_cost;
                                 self.manufacturing.orders.push(order);
+                                *self.engine_build_counts.entry(ep_id).or_insert(0) += 1;
                             }
                         }
                         Some(EngineSource::Contracted(ce_id)) => {
@@ -321,6 +339,7 @@ impl Company {
                                     source: EngineSource::Contracted(ce_id),
                                     engine_id: stage.engine.id,
                                     engine_name: stage.engine.name.clone(),
+                                    build_cost: ce.purchase_cost_per_unit,
                                 });
                             }
                         }
@@ -343,7 +362,7 @@ impl Company {
                     gi, si,
                     stage_name,
                     stage.structural_mass_kg,
-                    0,
+                    rocket_prior,
                 );
                 total_cost += order.material_cost;
                 self.manufacturing.orders.push(order);
@@ -355,17 +374,19 @@ impl Company {
             .map(|g| g.len() as u32)
             .sum();
         let order_id = self.manufacturing.next_order_id();
-        let design_id = rp.design.id;
         let integration_order = ManufacturingOrder::new_integration(
             order_id,
             rocket_project_id,
             design_id,
             rocket_name.clone(),
             total_stages,
-            0,
+            rocket_prior,
         );
         total_cost += integration_order.material_cost;
         self.manufacturing.orders.push(integration_order);
+
+        // Increment rocket build count
+        *self.rocket_build_counts.entry(design_id).or_insert(0) += 1;
 
         // Deduct costs
         self.money -= total_cost;
@@ -413,9 +434,11 @@ impl Company {
                                 let available = self.manufacturing.inventory.engine_count(source);
                                 if available >= stage.engine_count as usize {
                                     order.waiting_for_prerequisites = false;
-                                    // Consume engines from inventory
+                                    // Consume engines from inventory, accumulating their build cost
                                     for _ in 0..stage.engine_count {
-                                        self.manufacturing.inventory.take_engine(source);
+                                        if let Some(eng) = self.manufacturing.inventory.take_engine(source) {
+                                            order.material_cost += eng.build_cost;
+                                        }
                                     }
                                 }
                             }
@@ -436,10 +459,12 @@ impl Company {
                         });
                         if all_stages_ready {
                             order.waiting_for_prerequisites = false;
-                            // Consume stages from inventory
+                            // Consume stages from inventory, accumulating their build cost
                             for (gi, group) in rp.design.stage_groups.iter().enumerate() {
                                 for (si, _stage) in group.iter().enumerate() {
-                                    self.manufacturing.inventory.take_stage(*rocket_project_id, gi, si);
+                                    if let Some(stg) = self.manufacturing.inventory.take_stage(*rocket_project_id, gi, si) {
+                                        order.material_cost += stg.build_cost;
+                                    }
                                 }
                             }
                         }
@@ -713,6 +738,19 @@ impl GameState {
                     events.push(evt);
                 }
             }
+
+            // Accumulate NRE (engineering salary) on active projects
+            let daily_salary = ENGINEERING_MONTHLY_SALARY / 30.0;
+            for project in &mut self.player_company.engine_projects {
+                if project.teams_assigned > 0 {
+                    project.nre_cost += project.teams_assigned as f64 * daily_salary;
+                }
+            }
+            for project in &mut self.player_company.rocket_projects {
+                if project.teams_assigned > 0 {
+                    project.nre_cost += project.teams_assigned as f64 * daily_salary;
+                }
+            }
         }
 
         if self.date.is_first_of_month() {
@@ -785,8 +823,13 @@ impl GameState {
                     GameEvent::EngineBuilt { engine_name },
                 crate::manufacturing::ManufacturingEvent::StageBuilt { stage_name, .. } =>
                     GameEvent::StageBuilt { stage_name },
-                crate::manufacturing::ManufacturingEvent::RocketIntegrated { rocket_name, .. } =>
-                    GameEvent::RocketIntegrated { rocket_name },
+                crate::manufacturing::ManufacturingEvent::RocketIntegrated { rocket_name, design_id, build_cost, .. } => {
+                    self.player_company.rocket_cost_history
+                        .entry(design_id)
+                        .or_default()
+                        .push(build_cost);
+                    GameEvent::RocketIntegrated { rocket_name }
+                }
                 crate::manufacturing::ManufacturingEvent::FloorSpaceComplete { units } =>
                     GameEvent::FloorSpaceComplete { units },
             };

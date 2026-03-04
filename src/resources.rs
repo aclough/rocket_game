@@ -204,6 +204,29 @@ pub fn rocket_integration_cost() -> f64 {
     rocket_integration_bom().material_cost(ROCKET_INTEGRATION_MASS_KG)
 }
 
+/// Format a dollar amount for display (e.g. "$1.5M", "$300K").
+pub fn format_money(amount: f64) -> String {
+    if amount >= 1_000_000_000.0 {
+        format!("${:.1}B", amount / 1_000_000_000.0)
+    } else if amount >= 1_000_000.0 {
+        format!("${:.1}M", amount / 1_000_000.0)
+    } else if amount >= 1_000.0 {
+        format!("${:.0}K", amount / 1_000.0)
+    } else if amount < 0.0 {
+        if amount <= -1_000_000_000.0 {
+            format!("-${:.1}B", (-amount) / 1_000_000_000.0)
+        } else if amount <= -1_000_000.0 {
+            format!("-${:.1}M", (-amount) / 1_000_000.0)
+        } else if amount <= -1_000.0 {
+            format!("-${:.0}K", (-amount) / 1_000.0)
+        } else {
+            format!("-${:.0}", -amount)
+        }
+    } else {
+        format!("${:.0}", amount)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

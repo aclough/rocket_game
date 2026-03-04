@@ -90,7 +90,7 @@ impl fmt::Display for GameEvent {
             GameEvent::FloorSpaceComplete { units } =>
                 write!(f, "Floor space +{} units", units),
             GameEvent::RocketBuildOrdered { rocket_name, total_cost } =>
-                write!(f, "Ordered build: {} (${:.0})", rocket_name, total_cost),
+                write!(f, "Ordered build: {} ({})", rocket_name, crate::resources::format_money(*total_cost)),
             GameEvent::ManufacturingIdle =>
                 write!(f, "Manufacturing teams idle — no orders to work on"),
             GameEvent::ContractsRefreshed { count } =>

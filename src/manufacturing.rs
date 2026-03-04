@@ -149,7 +149,9 @@ pub enum ManufacturingEvent {
     RocketIntegrated {
         order_id: ManufacturingOrderId,
         rocket_project_id: RocketProjectId,
+        design_id: RocketDesignId,
         rocket_name: String,
+        build_cost: f64,
     },
     FloorSpaceComplete {
         units: u32,
@@ -303,6 +305,9 @@ pub struct InventoryEngine {
     pub source: EngineSource,
     pub engine_id: EngineId,
     pub engine_name: String,
+    /// Manufacturing cost of this engine.
+    #[serde(default)]
+    pub build_cost: f64,
 }
 
 /// A built stage in inventory.
@@ -313,6 +318,9 @@ pub struct InventoryStage {
     pub group_index: usize,
     pub stage_index: usize,
     pub stage_name: String,
+    /// Manufacturing cost of this stage (including consumed engine costs).
+    #[serde(default)]
+    pub build_cost: f64,
 }
 
 /// An integrated rocket ready for launch.
@@ -322,6 +330,9 @@ pub struct InventoryRocket {
     pub rocket_project_id: RocketProjectId,
     pub design_id: RocketDesignId,
     pub rocket_name: String,
+    /// Total build cost (sum of all stage costs + integration cost).
+    #[serde(default)]
+    pub build_cost: f64,
 }
 
 /// Inventory of manufactured items.
@@ -498,6 +509,7 @@ impl Manufacturing {
                         source: *source,
                         engine_id: *engine_id,
                         engine_name: engine_name.clone(),
+                        build_cost: order.material_cost,
                     });
                     events.push(ManufacturingEvent::EngineBuilt {
                         order_id: order.id,
@@ -512,6 +524,7 @@ impl Manufacturing {
                         group_index: *group_index,
                         stage_index: *stage_index,
                         stage_name: stage_name.clone(),
+                        build_cost: order.material_cost,
                     });
                     events.push(ManufacturingEvent::StageBuilt {
                         order_id: order.id,
@@ -520,16 +533,20 @@ impl Manufacturing {
                     });
                 }
                 ManufacturingOrderType::RocketIntegration { rocket_project_id, design_id, rocket_name, .. } => {
+                    let total_build_cost = order.material_cost;
                     self.inventory.rockets.push(InventoryRocket {
                         item_id,
                         rocket_project_id: *rocket_project_id,
                         design_id: *design_id,
                         rocket_name: rocket_name.clone(),
+                        build_cost: total_build_cost,
                     });
                     events.push(ManufacturingEvent::RocketIntegrated {
                         order_id: order.id,
                         rocket_project_id: *rocket_project_id,
+                        design_id: *design_id,
                         rocket_name: rocket_name.clone(),
+                        build_cost: total_build_cost,
                     });
                 }
             }
@@ -729,12 +746,14 @@ mod tests {
             source: test_source(),
             engine_id: EngineId(1),
             engine_name: "Merlin".into(),
+            build_cost: 0.0,
         });
         inv.engines.push(InventoryEngine {
             item_id: InventoryItemId(2),
             source: test_source(),
             engine_id: EngineId(2),
             engine_name: "Merlin".into(),
+            build_cost: 0.0,
         });
 
         assert_eq!(inv.engine_count(test_source()), 2);

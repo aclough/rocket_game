@@ -207,6 +207,9 @@ pub struct EngineProject {
     pub revision: u32,
     pub teams_assigned: u32,
     pub complexity: u32,
+    /// Cumulative engineering salary spent on this project (NRE).
+    #[serde(default)]
+    pub nre_cost: f64,
 }
 
 impl EngineProject {
@@ -255,6 +258,7 @@ impl EngineProject {
             revision: 0,
             teams_assigned: 0,
             complexity,
+            nre_cost: 0.0,
         })
     }
 
