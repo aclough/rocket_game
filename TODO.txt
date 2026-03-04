@@ -1,8 +1,7 @@
-[] Move contents of rust to top directory
+[] The numbers in "Ordered build Falcon" seem wrong.
 [] A random seed should be chosen at startup intead of having the player pick
 [] Progress bars for research and construction, with different colors for different tasks
 [] Color contracts based on whether we have a rocket that can handle them.
-[] For stage labeling in manufacturing it should be just 1 if its the only stage in the first stage group and 1a 1b if there's more than one in that group
 [] Track average and marginal cost per rocket type in Finance tab
 [] Opening screen to load saved games or start with a new company?
 [] Add option to construct to always have at least N.
