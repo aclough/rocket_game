@@ -1,8 +1,28 @@
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::game_state::GameState;
+
+/// List saved games as (company_name, full_path), sorted by modification time (newest first).
+pub fn list_saves() -> Vec<(String, PathBuf)> {
+    let dir = save_dir();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut saves: Vec<(String, PathBuf, std::time::SystemTime)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_stem()?.to_string_lossy().to_string();
+            let mtime = e.metadata().ok()?.modified().ok()?;
+            Some((name, path, mtime))
+        })
+        .collect();
+    saves.sort_by(|a, b| b.2.cmp(&a.2)); // newest first
+    saves.into_iter().map(|(name, path, _)| (name, path)).collect()
+}
 
 /// Save game state to a JSON file.
 pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
