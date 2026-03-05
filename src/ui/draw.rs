@@ -405,9 +405,15 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 format!("Revising {} flaw(s)", remaining_indices.len()),
         };
 
+        let auto_target = company.auto_build_targets.get(&project.project_id).copied().unwrap_or(0);
+        let auto_suffix = if !selected && auto_target > 0 {
+            format!("  [A:{}]", auto_target)
+        } else {
+            String::new()
+        };
         let line_text = format!(
-            "  {} {} (Rev {})  {}",
-            marker, project.design.name, project.revision, status_str,
+            "  {} {} (Rev {})  {}{}",
+            marker, project.design.name, project.revision, status_str, auto_suffix,
         );
         let text_width = line_text.len() as u16;
 
@@ -505,6 +511,14 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             if built > 0 {
                 lines.push(Line::from(format!("      Built rockets: {}", built)));
             }
+
+            // Auto-build target
+            let auto_target = company.auto_build_targets.get(&project.project_id).copied().unwrap_or(0);
+            if auto_target > 0 {
+                lines.push(Line::from(format!("      Auto-build: {}", auto_target)));
+            } else {
+                lines.push(Line::from("      Auto-build: off"));
+            }
         }
     }
 
@@ -513,7 +527,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     if !company.rocket_projects.is_empty() {
         controls.extend_from_slice(&[
             "[+] Add team", "[-] Remove team",
-            "[R] Revise", "[O] Order build",
+            "[R] Revise", "[O] Order build", "[M] Auto-build",
         ]);
     }
     lines.push(Line::from(Span::styled(

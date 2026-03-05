@@ -85,7 +85,8 @@ mod tests {
         assert_eq!(loaded.date, state.date);
         assert_eq!(loaded.start_date, state.start_date);
         assert_eq!(loaded.player_company.name, "TestCorp");
-        assert_eq!(loaded.player_company.money, 200_000_000.0);
+        // Starting money minus initial team hiring cost
+        assert!((loaded.player_company.money - state.player_company.money).abs() < 0.01);
         assert_eq!(loaded.seed.seed(), 42);
         assert_eq!(loaded.event_log.len(), state.event_log.len());
 

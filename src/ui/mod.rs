@@ -485,6 +485,27 @@ impl App {
                     self.status_message = Some("Must be in Testing to order build".into());
                 }
             }
+            KeyCode::Char('m') => {
+                // Cycle auto-build target: 0 → 1 → 2 → 3 → 0
+                if self.selected_item < self.game.player_company.rocket_projects.len() {
+                    let project = &self.game.player_company.rocket_projects[self.selected_item];
+                    if matches!(project.status, RocketDesignStatus::Testing { .. }) {
+                        let pid = project.project_id;
+                        let current = self.game.player_company.auto_build_targets
+                            .get(&pid).copied().unwrap_or(0);
+                        let next = if current >= 3 { 0 } else { current + 1 };
+                        if next == 0 {
+                            self.game.player_company.auto_build_targets.remove(&pid);
+                            self.status_message = Some("Auto-build: off".into());
+                        } else {
+                            self.game.player_company.auto_build_targets.insert(pid, next);
+                            self.status_message = Some(format!("Auto-build: {}", next));
+                        }
+                    } else {
+                        self.status_message = Some("Must be in Testing to set auto-build".into());
+                    }
+                }
+            }
             _ => {}
         }
     }

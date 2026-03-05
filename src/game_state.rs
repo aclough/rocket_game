@@ -111,12 +111,15 @@ pub struct Company {
     /// Build cost history per rocket design (for avg/marginal cost).
     #[serde(default)]
     pub rocket_cost_history: HashMap<RocketDesignId, Vec<f64>>,
+    /// Auto-build targets: maintain at least N rockets in inventory per project.
+    #[serde(default)]
+    pub auto_build_targets: HashMap<RocketProjectId, u32>,
 }
 
 impl Company {
     pub fn new(name: String, starting_money: f64, seed: &GameSeed) -> Self {
         let catalog = third_party::generate_starter_engines(seed);
-        Company {
+        let mut company = Company {
             name,
             money: starting_money,
             next_team_id: 1,
@@ -142,7 +145,11 @@ impl Company {
             engine_build_counts: HashMap::new(),
             rocket_build_counts: HashMap::new(),
             rocket_cost_history: HashMap::new(),
-        }
+            auto_build_targets: HashMap::new(),
+        };
+        // Start with one engineering team
+        company.hire_team("Team 1".into());
+        company
     }
 
     /// Hire a new engineering team. Returns the event if successful.
@@ -398,6 +405,34 @@ impl Company {
             rocket_name,
             total_cost,
         }))
+    }
+
+    /// Automatically order rocket builds to maintain auto_build_targets inventory levels.
+    fn auto_reorder_rockets(&mut self) -> Vec<GameEvent> {
+        let mut events = Vec::new();
+        let targets: Vec<(RocketProjectId, u32)> = self.auto_build_targets.iter()
+            .map(|(&pid, &count)| (pid, count))
+            .collect();
+
+        for (project_id, min_count) in targets {
+            // Find the project index
+            let index = match self.rocket_projects.iter().position(|rp| rp.project_id == project_id) {
+                Some(i) => i,
+                None => continue,
+            };
+            // Only auto-build for projects in Testing status
+            if !matches!(self.rocket_projects[index].status, crate::rocket_project::RocketDesignStatus::Testing { .. }) {
+                continue;
+            }
+            let current = self.manufacturing.inventory.rocket_count(project_id) as u32
+                + self.manufacturing.pending_integration_orders(project_id);
+            for _ in current..min_count {
+                if let Some((_cost, evt)) = self.order_rocket_build(index) {
+                    events.push(evt);
+                }
+            }
+        }
+        events
     }
 
     /// Try to unblock stage and integration orders that have their prerequisites ready.
@@ -840,6 +875,13 @@ impl GameState {
         // Try to unblock manufacturing orders that now have prerequisites
         self.player_company.try_unblock_manufacturing_orders();
 
+        // Auto-reorder rockets to maintain inventory targets
+        let auto_events = self.player_company.auto_reorder_rockets();
+        for evt in auto_events {
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+        }
+
         // Auto-assign idle manufacturing teams to least-staffed orders
         self.player_company.auto_assign_idle_manufacturing_teams();
 
@@ -1164,11 +1206,14 @@ mod tests {
         let gs = GameState::new("SpaceCorp".into(), 200_000_000.0, 42);
         assert_eq!(gs.date, GameDate::default_start());
         assert_eq!(gs.player_company.name, "SpaceCorp");
-        assert_eq!(gs.player_company.money, 200_000_000.0);
+        // Starting money minus one engineering team hiring cost ($150K)
+        assert_eq!(gs.player_company.money, 200_000_000.0 - TEAM_HIRING_COST);
         assert_eq!(gs.speed, GameSpeed::Paused);
         assert_eq!(gs.elapsed_days(), 0);
         // Should have GameStarted event
         assert_eq!(gs.event_log.len(), 1);
+        // Should start with 1 engineering team
+        assert_eq!(gs.player_company.team_count(), 1);
     }
 
     #[test]
@@ -1190,7 +1235,7 @@ mod tests {
         }
         assert_eq!(gs.date, GameDate::new(2001, 2, 1));
         // Last tick should have produced MonthStart
-        let recent = gs.event_log.recent(3);
+        let recent = gs.event_log.recent(10);
         assert!(recent.iter().any(|(_, e)| matches!(e, GameEvent::MonthStart)));
     }
 
@@ -1252,37 +1297,42 @@ mod tests {
     #[test]
     fn test_hire_team() {
         let mut gs = GameState::new("Test".into(), 1_000_000.0, 1);
-        assert_eq!(gs.player_company.team_count(), 0);
-        gs.player_company.hire_team("Alpha".into());
+        // Starts with 1 team (from Company::new)
         assert_eq!(gs.player_company.team_count(), 1);
-        assert_eq!(gs.player_company.money, 1_000_000.0 - 150_000.0);
+        gs.player_company.hire_team("Alpha".into());
+        assert_eq!(gs.player_company.team_count(), 2);
+        // Starting money minus 2 hiring costs (initial team + Alpha)
+        assert_eq!(gs.player_company.money, 1_000_000.0 - 2.0 * TEAM_HIRING_COST);
     }
 
     #[test]
     fn test_salary_deduction() {
         let mut gs = GameState::new("Test".into(), 1_000_000.0, 1);
         gs.player_company.hire_team("Alpha".into());
+        // Now has 2 teams (1 initial + Alpha), paid 2 hiring costs
 
         // Advance to Feb 1 (31 days)
         for _ in 0..31 {
             gs.advance_day();
         }
-        // Should have paid 1 month salary
-        let expected = 1_000_000.0 - 150_000.0 - 150_000.0; // hiring + first month
+        // Should have paid 2 hiring costs + 2 team salaries for 1 month
+        let expected = 1_000_000.0 - 2.0 * TEAM_HIRING_COST - 2.0 * ENGINEERING_MONTHLY_SALARY;
         assert!((gs.player_company.money - expected).abs() < 0.01);
     }
 
     #[test]
     fn test_negative_money_allowed() {
         let mut gs = GameState::new("Test".into(), 100_000.0, 1);
-        gs.player_company.hire_team("Alpha".into()); // -150K, now -50K
+        // Starts with 1 team (hiring cost $150K), money = 100K - 150K = -50K
         assert!(gs.player_company.money < 0.0);
+        gs.player_company.hire_team("Alpha".into()); // another -150K
+        assert!(gs.player_company.money < -150_000.0);
         // Should still work, just go negative
         for _ in 0..31 {
             gs.advance_day();
         }
-        // Should have deducted another salary on top
-        assert!(gs.player_company.money < -50_000.0);
+        // Should have deducted 2 salaries on top
+        assert!(gs.player_company.money < -200_000.0);
     }
 
     #[test]
@@ -1302,6 +1352,7 @@ mod tests {
     #[test]
     fn test_team_assignment() {
         let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+        // Starts with 1 team, hire another
         gs.player_company.hire_team("Alpha".into());
         gs.player_company.start_engine_project(
             "Kestrel".into(),
@@ -1311,6 +1362,8 @@ mod tests {
             true,
         );
 
+        assert_eq!(gs.player_company.unassigned_team_count(), 2);
+        assert!(gs.player_company.add_team_to_project(0));
         assert_eq!(gs.player_company.unassigned_team_count(), 1);
         assert!(gs.player_company.add_team_to_project(0));
         assert_eq!(gs.player_company.unassigned_team_count(), 0);
