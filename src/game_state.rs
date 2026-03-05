@@ -407,6 +407,44 @@ impl Company {
         }))
     }
 
+    /// Order a standalone engine build for a player-designed engine project.
+    pub fn order_engine_build(&mut self, engine_project_index: usize) -> Option<(f64, GameEvent)> {
+        if engine_project_index >= self.engine_projects.len() {
+            return None;
+        }
+        let ep = &self.engine_projects[engine_project_index];
+        if !matches!(ep.status, crate::engine_project::EngineDesignStatus::Testing { .. }) {
+            return None;
+        }
+
+        let engine_name = ep.design.name.clone();
+        let ep_id = ep.project_id;
+        let engine_id = ep.design.id;
+        let mass_kg = ep.design.mass_kg;
+        let complexity = ep.complexity;
+        let preset = ep.preset;
+        let engine_prior = *self.engine_build_counts.get(&ep_id).unwrap_or(&0);
+
+        let order_id = self.manufacturing.next_order_id();
+        let order = ManufacturingOrder::new_engine(
+            order_id,
+            EngineSource::PlayerDesign(ep_id),
+            engine_id,
+            engine_name.clone(),
+            mass_kg,
+            complexity,
+            preset,
+            engine_prior,
+        );
+        let cost = order.material_cost;
+        self.manufacturing.orders.push(order);
+        *self.engine_build_counts.entry(ep_id).or_insert(0) += 1;
+        self.money -= cost;
+        self.notified_manufacturing_idle = false;
+
+        Some((cost, GameEvent::EngineBuildOrdered { engine_name }))
+    }
+
     /// Automatically order rocket builds to maintain auto_build_targets inventory levels.
     fn auto_reorder_rockets(&mut self) -> Vec<GameEvent> {
         let mut events = Vec::new();

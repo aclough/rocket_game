@@ -427,6 +427,15 @@ impl App {
                     self.status_message = Some("Team removed".into());
                 }
             }
+            KeyCode::Char('o') => {
+                // Order standalone engine build
+                if let Some((cost, evt)) = self.game.player_company.order_engine_build(self.selected_item) {
+                    self.game.event_log.push(self.game.date, evt);
+                    self.status_message = Some(format!("Engine build ordered ({})", crate::ui::draw::format_money(cost)));
+                } else {
+                    self.status_message = Some("Must be in Testing to order build".into());
+                }
+            }
             KeyCode::Char('r') => {
                 // Revise all discovered flaws
                 if self.selected_item < self.game.player_company.engine_projects.len() {

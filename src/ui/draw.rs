@@ -317,6 +317,13 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 project.scale,
             )));
 
+            // Show inventory count for engines in Testing or later
+            if matches!(project.status, EngineDesignStatus::Testing { .. }) {
+                let source = EngineSource::PlayerDesign(project.project_id);
+                let count = company.manufacturing.inventory.engine_count(source);
+                lines.push(Line::from(format!("      Built engines: {}", count)));
+            }
+
             // Show flaws if any discovered
             let discovered = project.discovered_flaw_count();
             if discovered > 0 {
@@ -364,7 +371,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     lines.push(Line::from(""));
     let mut controls = vec!["[N] New design", "[B] Contract 3rd-party"];
     if !company.engine_projects.is_empty() {
-        controls.extend_from_slice(&["[+] Add team", "[-] Remove team", "[R] Revise"]);
+        controls.extend_from_slice(&["[+] Add team", "[-] Remove team", "[R] Revise", "[O] Order build"]);
     }
     lines.push(Line::from(Span::styled(
         format!("  {}", controls.join("  ")),
