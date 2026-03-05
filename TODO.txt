@@ -1,8 +1,7 @@
-[] Automation of bidding on contracts for any that const less than marginal cost + selected profit margin.
-[] Use 'e' to hire engineering teams to match manufacturing
-[] Incriment rev of designs only once when we enter a revision cycle, even if we fix multiple flaws.
 [] Let us order rocket engines.
+[] Use 'e' to hire engineering teams to match manufacturing
 [] Add option to hire manufacturing teams in the manufacturing screen
 [] Add option to hire engineering teams in the engineering screens
 [] Display known flaws on contracted engines after they show up in flight
+[] Automation of bidding on contracts for any that const less than marginal cost + selected profit margin.
 

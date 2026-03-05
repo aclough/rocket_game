@@ -106,7 +106,6 @@ impl RocketProject {
                     *work_completed -= FLAW_REVISION_WORK;
                     let fi = remaining_indices.remove(0);
                     self.flaws.remove(fi);
-                    self.revision += 1;
                     events.push(RocketWorkEvent::RevisionComplete);
                     for idx in remaining_indices.iter_mut() {
                         if *idx > fi {
@@ -137,6 +136,7 @@ impl RocketProject {
         if discovered_indices.is_empty() {
             return false;
         }
+        self.revision += 1;
         self.status = RocketDesignStatus::Revising {
             remaining_indices: discovered_indices,
             work_completed: 0.0,
@@ -379,7 +379,8 @@ mod tests {
         }
 
         assert_eq!(proj.flaws.len(), 0);
-        assert_eq!(proj.revision, 2);
+        // Revision increments once per revision cycle, not per flaw
+        assert_eq!(proj.revision, 1);
         assert!(matches!(proj.status, RocketDesignStatus::Testing { .. }));
     }
 

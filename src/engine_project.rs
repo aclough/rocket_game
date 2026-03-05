@@ -305,7 +305,6 @@ impl EngineProject {
                     // avoid shifting issues — indices are stored descending)
                     let fi = remaining_indices.remove(0);
                     self.flaws.remove(fi);
-                    self.revision += 1;
                     events.push(WorkEvent::RevisionComplete);
                     // Adjust remaining indices since we removed a flaw
                     for idx in remaining_indices.iter_mut() {
@@ -337,6 +336,7 @@ impl EngineProject {
         if discovered_indices.is_empty() {
             return false;
         }
+        self.revision += 1;
         self.status = EngineDesignStatus::Revising {
             remaining_indices: discovered_indices,
             work_completed: 0.0,
@@ -575,7 +575,8 @@ mod tests {
         }
 
         assert_eq!(proj.flaws.len(), count_before - discovered_count);
-        assert_eq!(proj.revision as usize, discovered_count);
+        // Revision increments once per revision cycle, not per flaw
+        assert_eq!(proj.revision, 1);
         assert!(matches!(proj.status, EngineDesignStatus::Testing { .. }));
     }
 
