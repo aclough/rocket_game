@@ -9,7 +9,7 @@ See 'Rocket_Tycoon.md' for what the final game will be like.
 Ask clarifying questions when the architecture or parameters are unclear.
 
 For plans always save them as markdown files in the main directory for me to go over offline.  I will make comments as
-USER:.  You can them answer questions as CLAUDE until everything is worked out.
+USER:.  You can ask or them answer questions as CLAUDE until everything is worked out.
 
 # Implementation Approach
 
@@ -35,7 +35,7 @@ After a major change provide the user with a list of things to test in the Godot
 Always check with the user before commiting a change.
 
 When a feature is good and is approved for check in to git also check TODO.txt to see if it is listed there.  If so
-remove it.
+remove it.  Don't update the TODO.txt until just before you go to make a commit.
 
 # Common Pitfalls
 
