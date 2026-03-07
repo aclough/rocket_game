@@ -42,6 +42,9 @@ pub enum GameEvent {
     LaunchFailure { rocket_name: String, reason: String },
     PaymentReceived { amount: f64, contract_name: String },
     EngineBuildOrdered { engine_name: String },
+    // Phase 5: Flight events
+    FlightDeparted { rocket_name: String, destination: String },
+    FlightArrived { rocket_name: String, destination: String },
 }
 
 impl fmt::Display for GameEvent {
@@ -110,6 +113,10 @@ impl fmt::Display for GameEvent {
                 write!(f, "Payment received: ${:.0} for {}", amount, contract_name),
             GameEvent::EngineBuildOrdered { engine_name } =>
                 write!(f, "Ordered engine build: {}", engine_name),
+            GameEvent::FlightDeparted { rocket_name, destination } =>
+                write!(f, "Flight departed: {} → {}", rocket_name, destination),
+            GameEvent::FlightArrived { rocket_name, destination } =>
+                write!(f, "Flight arrived: {} at {}", rocket_name, destination),
         }
     }
 }
@@ -156,7 +163,9 @@ impl GameEvent {
             | GameEvent::LaunchPartialFailure { .. }
             | GameEvent::LaunchFailure { .. }
             | GameEvent::PaymentReceived { .. }
-            | GameEvent::EngineBuildOrdered { .. } => EventImportance::Notable,
+            | GameEvent::EngineBuildOrdered { .. }
+            | GameEvent::FlightDeparted { .. }
+            | GameEvent::FlightArrived { .. } => EventImportance::Notable,
         }
     }
 }

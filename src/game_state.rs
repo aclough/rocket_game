@@ -6,6 +6,7 @@ use crate::calendar::GameDate;
 use crate::contract::{self, Contract, ContractId};
 use crate::engine::{EngineCycle, EngineId};
 use crate::engine_project::{EngineProject, EngineProjectId, EngineSource, PropellantPreset, WorkEvent};
+use crate::flight::{Flight, FlightId, FlightStatus, Payload};
 use crate::event::{EventLog, GameEvent};
 use crate::manufacturing::{Manufacturing, ManufacturingOrder, InventoryEngine};
 use crate::launch::{self, LaunchRecord, LaunchOutcome};
@@ -741,9 +742,16 @@ pub struct GameState {
     /// Next contract ID counter.
     #[serde(default = "default_next_contract_id")]
     pub next_contract_id: u64,
+    /// Flights currently in transit.
+    #[serde(default)]
+    pub active_flights: Vec<Flight>,
+    /// Next flight ID counter.
+    #[serde(default = "default_next_flight_id")]
+    pub next_flight_id: u64,
 }
 
 fn default_next_contract_id() -> u64 { 1 }
+fn default_next_flight_id() -> u64 { 1 }
 
 impl GameState {
     pub fn new(company_name: String, starting_money: f64, seed_value: u64) -> Self {
@@ -762,6 +770,8 @@ impl GameState {
             previous_speed: GameSpeed::Normal,
             available_contracts: Vec::new(),
             next_contract_id: 1,
+            active_flights: Vec::new(),
+            next_flight_id: 1,
         }
     }
 
@@ -923,6 +933,13 @@ impl GameState {
         // Auto-assign idle manufacturing teams to least-staffed orders
         self.player_company.auto_assign_idle_manufacturing_teams();
 
+        // Advance flights in transit
+        let flight_events = self.advance_flights();
+        for evt in flight_events {
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+        }
+
         // Pause on transition to idle manufacturing
         if !self.player_company.manufacturing_teams.is_empty()
             && !self.player_company.has_actionable_manufacturing_orders()
@@ -1054,14 +1071,15 @@ impl GameState {
     /// Launch a rocket for a contract (or test launch if contract_index is None).
     /// `rocket_item_id` identifies the InventoryRocket to consume.
     /// `contract_index` is the index into player_company.active_contracts (None for test launch).
-    /// Returns the events generated and the launch record.
+    /// Returns the events generated. On catastrophic failure, also returns a LaunchRecord.
+    /// On success/partial success, the rocket enters transit and resolves on arrival.
     pub fn launch_rocket(
         &mut self,
         rocket_item_id: crate::manufacturing::InventoryItemId,
         contract_index: Option<usize>,
         destination: &str,
         payload_kg: f64,
-    ) -> Option<(Vec<GameEvent>, LaunchRecord)> {
+    ) -> Option<(Vec<GameEvent>, Option<LaunchRecord>)> {
         // Take the rocket from inventory
         let inv_rocket = self.player_company.manufacturing.inventory.take_rocket(rocket_item_id)?;
 
@@ -1069,7 +1087,7 @@ impl GameState {
         let rp = self.player_company.rocket_projects.iter()
             .find(|rp| rp.project_id == inv_rocket.rocket_project_id)?;
 
-        // Simulate the launch
+        // Simulate flaw activation at launch
         let sim = launch::simulate_launch(
             &rp.design,
             destination,
@@ -1117,121 +1135,255 @@ impl GameState {
         }
 
         // Mark activated flaws as discovered on rocket project
+        if let Some(rp_mut) = self.player_company.rocket_projects.iter_mut()
+            .find(|rp| rp.project_id == inv_rocket.rocket_project_id)
         {
-            // Re-find as mutable
-            if let Some(rp_mut) = self.player_company.rocket_projects.iter_mut()
-                .find(|rp| rp.project_id == inv_rocket.rocket_project_id)
-            {
-                for &idx in &sim.rocket_flaw_discoveries {
-                    if idx < rp_mut.flaws.len() {
-                        rp_mut.flaws[idx].discovered = true;
-                        let evt = GameEvent::RocketFlawDiscovered {
-                            rocket_name: rp_mut.design.name.clone(),
-                            flaw_description: rp_mut.flaws[idx].description.clone(),
-                        };
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
-                    }
+            for &idx in &sim.rocket_flaw_discoveries {
+                if idx < rp_mut.flaws.len() {
+                    rp_mut.flaws[idx].discovered = true;
+                    let evt = GameEvent::RocketFlawDiscovered {
+                        rocket_name: rp_mut.design.name.clone(),
+                        flaw_description: rp_mut.flaws[idx].description.clone(),
+                    };
+                    self.event_log.push(self.date, evt.clone());
+                    events.push(evt);
                 }
             }
         }
 
-        // Determine contract info
-        let contract_id = contract_index.and_then(|ci| {
-            self.player_company.active_contracts.get(ci).map(|c| c.id)
-        });
-        let contract_name = contract_index.and_then(|ci| {
-            self.player_company.active_contracts.get(ci).map(|c| c.name.clone())
-        });
-
-        // Apply results based on outcome
-        let launch_evt = match &sim.outcome {
-            LaunchOutcome::Success => {
-                self.player_company.reputation.on_launch_success();
-
-                if let Some(ci) = contract_index {
-                    let payment = self.player_company.active_contracts[ci].payment;
-                    self.player_company.money += payment;
-                    self.record_income(payment);
-                    self.player_company.reputation.on_contract_launch();
-
-                    let pay_evt = GameEvent::PaymentReceived {
-                        amount: payment,
-                        contract_name: contract_name.clone().unwrap_or_default(),
-                    };
-                    self.event_log.push(self.date, pay_evt.clone());
-                    events.push(pay_evt);
-
-                    // Mark contract completed and remove
-                    self.player_company.active_contracts.remove(ci);
-                }
-
-                GameEvent::LaunchSuccess {
-                    rocket_name: inv_rocket.rocket_name.clone(),
-                    destination: destination.to_string(),
-                }
-            }
-            LaunchOutcome::PartialFailure { reason } => {
-                self.player_company.reputation.on_launch_partial_failure();
-
-                if let Some(ci) = contract_index {
-                    // 50% payment
-                    let payment = self.player_company.active_contracts[ci].payment * 0.5;
-                    self.player_company.money += payment;
-                    self.record_income(payment);
-                    self.player_company.reputation.on_contract_launch();
-
-                    let pay_evt = GameEvent::PaymentReceived {
-                        amount: payment,
-                        contract_name: contract_name.clone().unwrap_or_default(),
-                    };
-                    self.event_log.push(self.date, pay_evt.clone());
-                    events.push(pay_evt);
-
-                    self.player_company.active_contracts.remove(ci);
-                }
-
-                GameEvent::LaunchPartialFailure {
-                    rocket_name: inv_rocket.rocket_name.clone(),
-                    reason: reason.clone(),
-                }
-            }
-            LaunchOutcome::Failure { reason } => {
-                self.player_company.reputation.on_launch_failure();
-
-                if let Some(ci) = contract_index {
-                    // No payment, contract failed
-                    self.player_company.active_contracts.remove(ci);
-                }
-
-                GameEvent::LaunchFailure {
-                    rocket_name: inv_rocket.rocket_name.clone(),
-                    reason: reason.clone(),
-                }
-            }
-        };
-
-        self.event_log.push(self.date, launch_evt.clone());
-        events.push(launch_evt);
-
         // Update launch tracking
         self.player_company.last_launch_date = Some(self.date);
 
-        let record = LaunchRecord {
-            launch_date: self.date,
-            rocket_name: inv_rocket.rocket_name,
-            contract_id,
-            destination: destination.to_string(),
-            payload_kg,
-            outcome: sim.outcome,
-            flaws_activated: sim.flaws_activated,
-        };
-        self.player_company.launch_history.push(record.clone());
+        // Catastrophic failure at launch — resolve immediately
+        if matches!(sim.outcome, LaunchOutcome::Failure { .. }) {
+            let contract_id = contract_index.and_then(|ci| {
+                self.player_company.active_contracts.get(ci).map(|c| c.id)
+            });
 
-        // Pause the game for the player to see the result
+            self.player_company.reputation.on_launch_failure();
+
+            if let Some(ci) = contract_index {
+                self.player_company.active_contracts.remove(ci);
+            }
+
+            let reason = match &sim.outcome {
+                LaunchOutcome::Failure { reason } => reason.clone(),
+                _ => unreachable!(),
+            };
+            let evt = GameEvent::LaunchFailure {
+                rocket_name: inv_rocket.rocket_name.clone(),
+                reason: reason.clone(),
+            };
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+
+            let record = LaunchRecord {
+                launch_date: self.date,
+                rocket_name: inv_rocket.rocket_name,
+                contract_id,
+                destination: destination.to_string(),
+                payload_kg,
+                outcome: sim.outcome,
+                flaws_activated: sim.flaws_activated,
+            };
+            self.player_company.launch_history.push(record.clone());
+            self.speed = GameSpeed::Paused;
+            return Some((events, Some(record)));
+        }
+
+        // Success or partial failure — create a flight in transit
+        let rocket_mass = sim.degraded_design.total_mass_kg() + payload_kg;
+        let first_group_thrust = sim.degraded_design.group_thrust_n(0);
+
+        let path = crate::location::DELTA_V_MAP
+            .shortest_path("earth_surface", destination, rocket_mass);
+        let route = match path {
+            Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust),
+            None => vec![],
+        };
+
+        // Build payloads
+        let payloads = if let Some(ci) = contract_index {
+            let contract_id = self.player_company.active_contracts[ci].id;
+            vec![Payload::ContractDelivery { contract_id, payload_kg }]
+        } else {
+            vec![Payload::TestMass { mass_kg: payload_kg }]
+        };
+
+        let flight_id = FlightId(self.next_flight_id);
+        self.next_flight_id += 1;
+
+        let leg_days = route.first().map(|l| l.total_days()).unwrap_or(0);
+
+        let dest_display = crate::contract::destination_display_name(destination);
+
+        let flight = Flight {
+            id: flight_id,
+            rocket_name: inv_rocket.rocket_name.clone(),
+            rocket_project_id: inv_rocket.rocket_project_id,
+            design: sim.degraded_design,
+            payloads,
+            current_location: "earth_surface".to_string(),
+            route,
+            current_leg: 0,
+            leg_days_remaining: leg_days,
+            status: FlightStatus::InTransit,
+            flaws_activated: sim.flaws_activated,
+            launch_date: self.date,
+        };
+
+        self.active_flights.push(flight);
+
+        let evt = GameEvent::FlightDeparted {
+            rocket_name: inv_rocket.rocket_name,
+            destination: dest_display.to_string(),
+        };
+        self.event_log.push(self.date, evt.clone());
+        events.push(evt);
+
         self.speed = GameSpeed::Paused;
 
-        Some((events, record))
+        Some((events, None))
+    }
+
+    /// Process daily flight advancement. Returns events generated.
+    fn advance_flights(&mut self) -> Vec<GameEvent> {
+        let mut events = Vec::new();
+        let mut arrived_indices = Vec::new();
+
+        for (i, flight) in self.active_flights.iter_mut().enumerate() {
+            if !matches!(flight.status, FlightStatus::InTransit) {
+                continue;
+            }
+
+            if flight.leg_days_remaining > 0 {
+                flight.leg_days_remaining -= 1;
+            }
+
+            if flight.leg_days_remaining == 0 {
+                // Leg complete — update location
+                if let Some(leg) = flight.route.get(flight.current_leg) {
+                    flight.current_location = leg.to.clone();
+                }
+
+                // Advance to next leg
+                flight.current_leg += 1;
+                if flight.current_leg < flight.route.len() {
+                    flight.leg_days_remaining = flight.route[flight.current_leg].total_days();
+                } else {
+                    // All legs complete
+                    flight.status = FlightStatus::Arrived;
+                    arrived_indices.push(i);
+                }
+            }
+        }
+
+        // Resolve arrived flights (process in reverse to preserve indices)
+        for &i in arrived_indices.iter().rev() {
+            let flight = self.active_flights.remove(i);
+            let arrival_events = self.resolve_arrived_flight(flight);
+            events.extend(arrival_events);
+        }
+
+        events
+    }
+
+    /// Resolve a flight that has arrived at its destination.
+    fn resolve_arrived_flight(&mut self, flight: Flight) -> Vec<GameEvent> {
+        let mut events = Vec::new();
+        let destination = flight.destination().to_string();
+        let dest_display = crate::contract::destination_display_name(&destination);
+        let total_payload_kg = flight.total_payload_kg();
+
+        let evt = GameEvent::FlightArrived {
+            rocket_name: flight.rocket_name.clone(),
+            destination: dest_display.to_string(),
+        };
+        self.event_log.push(self.date, evt.clone());
+        events.push(evt);
+
+        // Determine outcome based on launch sim result (stored in flight)
+        // If the flight arrived, it's either Success or PartialFailure
+        let is_partial = !flight.flaws_activated.is_empty();
+
+        if is_partial {
+            self.player_company.reputation.on_launch_partial_failure();
+        } else {
+            self.player_company.reputation.on_launch_success();
+        }
+
+        // Process each payload
+        let mut contract_id_for_record = None;
+        for payload in &flight.payloads {
+            match payload {
+                Payload::ContractDelivery { contract_id, .. } => {
+                    contract_id_for_record = Some(*contract_id);
+
+                    // Find and remove the contract, pay the player
+                    if let Some(ci) = self.player_company.active_contracts.iter()
+                        .position(|c| c.id == *contract_id)
+                    {
+                        let contract = &self.player_company.active_contracts[ci];
+                        let payment = if is_partial {
+                            contract.payment * 0.5
+                        } else {
+                            contract.payment
+                        };
+                        let contract_name = contract.name.clone();
+                        self.player_company.money += payment;
+                        self.record_income(payment);
+                        self.player_company.reputation.on_contract_launch();
+
+                        let pay_evt = GameEvent::PaymentReceived {
+                            amount: payment,
+                            contract_name,
+                        };
+                        self.event_log.push(self.date, pay_evt.clone());
+                        events.push(pay_evt);
+
+                        self.player_company.active_contracts.remove(ci);
+                    }
+                }
+                Payload::TestMass { .. } => {
+                    // No payment for test launches
+                }
+            }
+        }
+
+        // Generate outcome event
+        let outcome = if is_partial {
+            let reason = flight.flaws_activated.first()
+                .map(|f| f.flaw_description.clone())
+                .unwrap_or_else(|| "degraded performance".to_string());
+            let evt = GameEvent::LaunchPartialFailure {
+                rocket_name: flight.rocket_name.clone(),
+                reason: reason.clone(),
+            };
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+            LaunchOutcome::PartialFailure { reason }
+        } else {
+            let evt = GameEvent::LaunchSuccess {
+                rocket_name: flight.rocket_name.clone(),
+                destination: dest_display.to_string(),
+            };
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+            LaunchOutcome::Success
+        };
+
+        let record = LaunchRecord {
+            launch_date: flight.launch_date,
+            rocket_name: flight.rocket_name,
+            contract_id: contract_id_for_record,
+            destination,
+            payload_kg: total_payload_kg,
+            outcome,
+            flaws_activated: flight.flaws_activated,
+        };
+        self.player_company.launch_history.push(record);
+
+        events
     }
 }
 

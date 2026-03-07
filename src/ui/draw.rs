@@ -850,6 +850,30 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
 
     lines.push(Line::from(""));
 
+    // In-flight rockets
+    lines.push(Line::from(Span::styled(
+        "  ── In Flight ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let flights = &game.active_flights;
+    if flights.is_empty() {
+        lines.push(Line::from("  (no flights in transit)"));
+    } else {
+        for flight in flights.iter() {
+            let dest_name = contract::destination_display_name(flight.destination());
+            let eta = flight.eta_days();
+            let eta_str = if eta == 1 { "1 day".to_string() } else { format!("{} days", eta) };
+            lines.push(Line::from(vec![
+                Span::styled("  ● ", Style::default().fg(Color::Cyan)),
+                Span::raw(format!("{} → {}  ", flight.rocket_name, dest_name)),
+                Span::styled(format!("ETA: {}", eta_str), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+
     // Recent launch history
     lines.push(Line::from(Span::styled(
         "  ── Launch History ──",
@@ -1481,9 +1505,19 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
-        InputMode::LaunchSelectContract { selected, .. } => {
+        InputMode::LaunchSelectContract { rocket_item_id, selected } => {
             let contracts = &app.game.player_company.active_contracts;
             let total_options = contracts.len() + 1;
+
+            // Look up rocket design for ETA computation
+            let rocket_design = app.game.player_company.manufacturing.inventory.rockets.iter()
+                .find(|r| r.item_id == *rocket_item_id)
+                .and_then(|r| {
+                    app.game.player_company.rocket_projects.iter()
+                        .find(|rp| rp.project_id == r.rocket_project_id)
+                })
+                .map(|rp| &rp.design);
+
             let mut lines = vec![
                 Line::from(""),
                 Line::from("  Select mission:"),
@@ -1497,11 +1531,34 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 } else {
                     Style::default()
                 };
-                lines.push(Line::from(Span::styled(
+
+                // Compute transit time estimate
+                let transit_info = rocket_design.and_then(|design| {
+                    let mass = design.total_mass_kg() + c.payload_kg;
+                    let thrust = design.group_thrust_n(0);
+                    let path = DELTA_V_MAP.shortest_path("earth_surface", &c.destination, mass)?;
+                    let route = crate::flight::build_route(&path.0, mass, thrust);
+                    let days: u32 = route.iter().map(|l| l.total_days()).sum();
+                    Some((days, app.game.date.days_until(&c.deadline)))
+                });
+
+                let mut spans = vec![Span::styled(
                     format!("{}{} → {} ({:.0} kg, {})",
                         marker, c.name, dest_name, c.payload_kg, format_money(c.payment)),
                     style,
-                )));
+                )];
+
+                if let Some((transit_days, days_to_deadline)) = transit_info {
+                    let eta_str = format!("  ~{}d", transit_days);
+                    if transit_days > days_to_deadline {
+                        spans.push(Span::styled(eta_str, Style::default().fg(Color::Red)));
+                        spans.push(Span::styled(" LATE!", Style::default().fg(Color::Red)));
+                    } else {
+                        spans.push(Span::styled(eta_str, Style::default().fg(Color::DarkGray)));
+                    }
+                }
+
+                lines.push(Line::from(spans));
             }
             // Test launch option
             let test_idx = contracts.len();

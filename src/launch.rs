@@ -43,6 +43,8 @@ pub enum LaunchOutcome {
 pub struct LaunchSimResult {
     pub outcome: LaunchOutcome,
     pub flaws_activated: Vec<FlawActivation>,
+    /// The design after flaw degradation (what's actually flying).
+    pub degraded_design: RocketDesign,
     /// Indices of flaws to mark as discovered on engine projects.
     pub engine_flaw_discoveries: Vec<(EngineId, Vec<usize>)>,
     /// Indices of flaws to mark as discovered on rocket projects.
@@ -192,6 +194,7 @@ pub fn simulate_launch(
     LaunchSimResult {
         outcome,
         flaws_activated: activations,
+        degraded_design: degraded,
         engine_flaw_discoveries,
         rocket_flaw_discoveries,
         contracted_flaw_discoveries,

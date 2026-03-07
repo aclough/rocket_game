@@ -822,7 +822,12 @@ impl App {
                             if let Some((_events, record)) = self.game.launch_rocket(
                                 rocket_item_id, Some(selected), &destination, payload_kg,
                             ) {
-                                self.input_mode = InputMode::LaunchResult { record };
+                                if let Some(record) = record {
+                                    self.input_mode = InputMode::LaunchResult { record };
+                                } else {
+                                    self.status_message = Some("Flight departed — in transit".into());
+                                    self.exit_modal();
+                                }
                             } else {
                                 self.status_message = Some("Launch failed (rocket not found)".into());
                                 self.exit_modal();
@@ -832,7 +837,12 @@ impl App {
                             if let Some((_events, record)) = self.game.launch_rocket(
                                 rocket_item_id, None, "leo", 0.0,
                             ) {
-                                self.input_mode = InputMode::LaunchResult { record };
+                                if let Some(record) = record {
+                                    self.input_mode = InputMode::LaunchResult { record };
+                                } else {
+                                    self.status_message = Some("Flight departed — in transit".into());
+                                    self.exit_modal();
+                                }
                             } else {
                                 self.status_message = Some("Launch failed (rocket not found)".into());
                                 self.exit_modal();

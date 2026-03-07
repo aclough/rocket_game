@@ -18,6 +18,7 @@ pub mod third_party;
 pub mod contract;
 pub mod reputation;
 pub mod launch;
+pub mod flight;
 pub mod game_state;
 pub mod save;
 pub mod ui;
