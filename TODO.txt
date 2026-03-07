@@ -1,3 +1,2 @@
-[] Display known flaws on contracted engines after they show up in flight
 [] Automation of bidding on contracts for any that const less than marginal cost + selected profit margin.
 [] Track revision number on inventory items (engines/rockets) so older builds carry pre-revision flaws.

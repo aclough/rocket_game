@@ -365,6 +365,24 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 ce.design.isp_s,
                 format_money(ce.purchase_cost_per_unit),
             )));
+            // Show discovered flaws
+            for flaw in &ce.flaws {
+                if flaw.discovered {
+                    let consequence_str = match &flaw.consequence {
+                        FlawConsequence::PerformanceDegradation(frac) =>
+                            format!("{:.0}% perf loss", frac * 100.0),
+                        FlawConsequence::EngineLoss => "engine loss".to_string(),
+                        FlawConsequence::StageLoss => "stage loss".to_string(),
+                    };
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "        ⚠ {}: {} ({:.0}%/flight)",
+                            flaw.description, consequence_str, flaw.activation_chance * 100.0,
+                        ),
+                        Style::default().fg(Color::Red),
+                    )));
+                }
+            }
         }
     }
 
