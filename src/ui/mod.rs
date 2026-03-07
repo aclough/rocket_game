@@ -379,7 +379,7 @@ impl App {
 
     fn handle_teams_key(&mut self, key: KeyCode) {
         match key {
-            KeyCode::Char('h') => {
+            KeyCode::Char('e') => {
                 let team_num = self.game.player_company.team_count() + 1;
                 let name = format!("Team {}", team_num);
                 if let Some(evt) = self.game.player_company.hire_team(name.clone()) {
@@ -449,6 +449,14 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('e') => {
+                let team_num = self.game.player_company.team_count() + 1;
+                let name = format!("Team {}", team_num);
+                if let Some(evt) = self.game.player_company.hire_team(name.clone()) {
+                    self.game.event_log.push(self.game.date, evt);
+                    self.status_message = Some(format!("Hired {}", name));
+                }
+            }
             _ => {}
         }
     }
@@ -483,6 +491,14 @@ impl App {
                         };
                         self.status_message = Some(format!("Revising {} flaw(s)", count));
                     }
+                }
+            }
+            KeyCode::Char('e') => {
+                let team_num = self.game.player_company.team_count() + 1;
+                let name = format!("Team {}", team_num);
+                if let Some(evt) = self.game.player_company.hire_team(name.clone()) {
+                    self.game.event_log.push(self.game.date, evt);
+                    self.status_message = Some(format!("Hired {}", name));
                 }
             }
             KeyCode::Char('o') => {
@@ -539,6 +555,14 @@ impl App {
             KeyCode::Char('-') => {
                 if self.game.player_company.remove_team_from_manufacturing_order(self.selected_item) {
                     self.status_message = Some("Mfg team removed".into());
+                }
+            }
+            KeyCode::Char('m') => {
+                let team_num = self.game.player_company.manufacturing_teams.len() + 1;
+                let name = format!("Mfg Team {}", team_num);
+                if let Some(evt) = self.game.player_company.hire_manufacturing_team(name.clone()) {
+                    self.game.event_log.push(self.game.date, evt);
+                    self.status_message = Some(format!("Hired {}", name));
                 }
             }
             _ => {}

@@ -1,6 +1,3 @@
-[] Use 'e' to hire engineering teams to match manufacturing
-[] Add option to hire manufacturing teams in the manufacturing screen
-[] Add option to hire engineering teams in the engineering screens
 [] Display known flaws on contracted engines after they show up in flight
 [] Automation of bidding on contracts for any that const less than marginal cost + selected profit margin.
 [] Track revision number on inventory items (engines/rockets) so older builds carry pre-revision flaws.

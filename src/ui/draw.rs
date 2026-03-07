@@ -210,7 +210,7 @@ fn draw_teams_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style)
 
     lines.push(Line::from(""));
     lines.push(Line::from(
-        Span::styled("  [H] Hire eng. team ($150K)  [M] Hire mfg. team ($900K)", Style::default().fg(Color::Cyan))
+        Span::styled("  [E] Hire eng. team ($150K)  [M] Hire mfg. team ($900K)", Style::default().fg(Color::Cyan))
     ));
 
     let block = Block::default()
@@ -371,7 +371,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     lines.push(Line::from(""));
     let mut controls = vec!["[N] New design", "[B] Contract 3rd-party"];
     if !company.engine_projects.is_empty() {
-        controls.extend_from_slice(&["[+] Add team", "[-] Remove team", "[R] Revise", "[O] Order build"]);
+        controls.extend_from_slice(&["[+] Add team", "[-] Remove team", "[R] Revise", "[O] Order build", "[E] Hire eng team"]);
     }
     lines.push(Line::from(Span::styled(
         format!("  {}", controls.join("  ")),
@@ -534,7 +534,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     if !company.rocket_projects.is_empty() {
         controls.extend_from_slice(&[
             "[+] Add team", "[-] Remove team",
-            "[R] Revise", "[O] Order build", "[M] Auto-build",
+            "[R] Revise", "[O] Order build", "[M] Auto-build", "[E] Hire eng team",
         ]);
     }
     lines.push(Line::from(Span::styled(
@@ -662,7 +662,7 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  [B] Buy floor space ($5M)  [+] Add mfg team  [-] Remove mfg team",
+        "  [B] Buy floor space ($5M)  [+] Add mfg team  [-] Remove mfg team  [M] Hire mfg team",
         Style::default().fg(Color::Cyan),
     )));
 
