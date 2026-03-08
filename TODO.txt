@@ -1,3 +1,4 @@
+[] In plan mode let the user choose the payload size and starting location.
 [] Trigger staging/engine flaws between FlightLegs when stages are exhausted and jettisoned
 [] Add ability to put multiple payloads on a rocket.
 [] Get rid of Teams tab
