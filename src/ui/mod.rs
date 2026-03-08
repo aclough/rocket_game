@@ -14,7 +14,7 @@ use ratatui::prelude::*;
 use crate::engine::{EngineCycle, EngineDesign};
 use crate::engine_project::{EngineDesignStatus, EngineSource, PropellantPreset};
 use crate::game_state::{GameSpeed, GameState};
-use crate::location;
+use crate::location::{self, DELTA_V_MAP};
 use crate::rocket_project::RocketDesignStatus;
 use crate::save;
 use crate::stage::{Stage, StageId};
@@ -246,6 +246,10 @@ pub enum InputMode {
         remaining_dv: f64,
         selected: usize,
     },
+    /// Delta-v planner setup — choose design, payload, start location.
+    PlannerSetup {
+        state: Box<PlannerSetupState>,
+    },
     /// Delta-v planner.
     DvPlanner {
         state: Box<DvPlannerState>,
@@ -264,6 +268,27 @@ pub enum PlanAction {
 pub enum PlannerSource {
     Design { project_index: usize },
     Spacecraft { spacecraft_index: usize },
+}
+
+/// Which field is active in the planner setup.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PlannerSetupField {
+    Design,
+    Payload,
+    Location,
+}
+
+/// State for the planner setup modal.
+#[derive(Debug, Clone)]
+pub struct PlannerSetupState {
+    /// Indices of rocket projects that are in Testing status.
+    pub eligible_projects: Vec<usize>,
+    pub selected_project: usize,
+    /// All locations from the delta-v map.
+    pub locations: Vec<(&'static str, &'static str)>, // (id, display_name)
+    pub selected_location: usize,
+    pub payload_buffer: String,
+    pub active_field: PlannerSetupField,
 }
 
 /// State for the delta-v planner modal.
@@ -664,35 +689,31 @@ impl App {
                 });
             }
             KeyCode::Char('p') => {
-                // Open delta-v planner
-                // Find the first completed rocket project
-                let rp = self.game.player_company.rocket_projects.iter().enumerate()
-                    .find(|(_, rp)| matches!(rp.status, RocketDesignStatus::Testing { .. }));
-                if let Some((pi, rp)) = rp {
-                    let payload_kg = 0.0;
-                    let start = "earth_surface";
-                    let rocket = rp.design.instantiate(
-                        crate::rocket::RocketId(0), start, payload_kg,
-                    );
-                    let remaining_dv = rocket.remaining_delta_v(&rp.design);
-                    let rocket_mass = rp.design.total_mass_kg() + payload_kg;
-                    let destinations = reachable_destinations(start, remaining_dv, rocket_mass);
-                    self.enter_modal(InputMode::DvPlanner {
-                        state: Box::new(DvPlannerState {
-                            source: PlannerSource::Design { project_index: pi },
-                            rocket,
-                            design: rp.design.clone(),
-                            current_location: start.to_string(),
-                            actions: vec![],
-                            snapshots: vec![],
-                            destinations,
-                            selected: 0,
-                            payload_kg,
-                        }),
-                    });
-                } else {
+                // Open delta-v planner setup
+                let eligible: Vec<usize> = self.game.player_company.rocket_projects.iter()
+                    .enumerate()
+                    .filter(|(_, rp)| matches!(rp.status, RocketDesignStatus::Testing { .. }))
+                    .map(|(i, _)| i)
+                    .collect();
+                if eligible.is_empty() {
                     self.status_message = Some("No rocket design available".into());
+                    return;
                 }
+                let locations: Vec<(&'static str, &'static str)> = DELTA_V_MAP.locations().iter()
+                    .map(|loc| (loc.id, loc.display_name))
+                    .collect();
+                // Default to earth_surface
+                let default_loc = locations.iter().position(|(id, _)| *id == "earth_surface").unwrap_or(0);
+                self.enter_modal(InputMode::PlannerSetup {
+                    state: Box::new(PlannerSetupState {
+                        eligible_projects: eligible,
+                        selected_project: 0,
+                        locations,
+                        selected_location: default_loc,
+                        payload_buffer: "0".into(),
+                        active_field: PlannerSetupField::Design,
+                    }),
+                });
             }
             KeyCode::Char('l') | KeyCode::Enter | KeyCode::Char('u') => {
                 let persist = key == KeyCode::Char('u');
@@ -1035,6 +1056,83 @@ impl App {
                             self.status_message = Some("Spacecraft flight departed".into());
                             self.exit_modal();
                         }
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::PlannerSetup { state } => {
+                match key {
+                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Tab => {
+                        state.active_field = match state.active_field {
+                            PlannerSetupField::Design => PlannerSetupField::Payload,
+                            PlannerSetupField::Payload => PlannerSetupField::Location,
+                            PlannerSetupField::Location => PlannerSetupField::Design,
+                        };
+                    }
+                    KeyCode::Up => {
+                        match state.active_field {
+                            PlannerSetupField::Design => {
+                                if state.selected_project > 0 {
+                                    state.selected_project -= 1;
+                                }
+                            }
+                            PlannerSetupField::Location => {
+                                if state.selected_location > 0 {
+                                    state.selected_location -= 1;
+                                }
+                            }
+                            PlannerSetupField::Payload => {}
+                        }
+                    }
+                    KeyCode::Down => {
+                        match state.active_field {
+                            PlannerSetupField::Design => {
+                                if state.selected_project + 1 < state.eligible_projects.len() {
+                                    state.selected_project += 1;
+                                }
+                            }
+                            PlannerSetupField::Location => {
+                                if state.selected_location + 1 < state.locations.len() {
+                                    state.selected_location += 1;
+                                }
+                            }
+                            PlannerSetupField::Payload => {}
+                        }
+                    }
+                    KeyCode::Char(c) if state.active_field == PlannerSetupField::Payload => {
+                        if c.is_ascii_digit() || c == '.' {
+                            state.payload_buffer.push(c);
+                        }
+                    }
+                    KeyCode::Backspace if state.active_field == PlannerSetupField::Payload => {
+                        state.payload_buffer.pop();
+                    }
+                    KeyCode::Enter => {
+                        // Launch the planner with chosen parameters
+                        let pi = state.eligible_projects[state.selected_project];
+                        let rp = &self.game.player_company.rocket_projects[pi];
+                        let payload_kg: f64 = state.payload_buffer.parse().unwrap_or(0.0);
+                        let (start_id, _) = state.locations[state.selected_location];
+                        let rocket = rp.design.instantiate(
+                            crate::rocket::RocketId(0), start_id, payload_kg,
+                        );
+                        let remaining_dv = rocket.remaining_delta_v(&rp.design);
+                        let rocket_mass = rp.design.total_mass_kg() + payload_kg;
+                        let destinations = reachable_destinations(start_id, remaining_dv, rocket_mass);
+                        self.input_mode = InputMode::DvPlanner {
+                            state: Box::new(DvPlannerState {
+                                source: PlannerSource::Design { project_index: pi },
+                                rocket,
+                                design: rp.design.clone(),
+                                current_location: start_id.to_string(),
+                                actions: vec![],
+                                snapshots: vec![],
+                                destinations,
+                                selected: 0,
+                                payload_kg,
+                            }),
+                        };
                     }
                     _ => {}
                 }

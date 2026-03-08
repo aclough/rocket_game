@@ -1656,6 +1656,89 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
+        InputMode::PlannerSetup { state } => {
+            use crate::ui::{PlannerSetupField};
+            let mut lines = vec![
+                Line::from(""),
+                Line::from("  Δv Planner Setup"),
+                Line::from(""),
+            ];
+
+            // Design field
+            let design_label = if state.active_field == PlannerSetupField::Design {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled("  Rocket Design:", design_label)));
+            for (i, &pi) in state.eligible_projects.iter().enumerate() {
+                let rp = &app.game.player_company.rocket_projects[pi];
+                let marker = if i == state.selected_project { " ▶ " } else { "   " };
+                let style = if i == state.selected_project && state.active_field == PlannerSetupField::Design {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("  {}{}", marker, rp.design.name),
+                    style,
+                )));
+            }
+            lines.push(Line::from(""));
+
+            // Payload field
+            let payload_label = if state.active_field == PlannerSetupField::Payload {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let cursor = if state.active_field == PlannerSetupField::Payload { "▏" } else { "" };
+            lines.push(Line::from(vec![
+                Span::styled("  Payload (kg): ", payload_label),
+                Span::styled(
+                    format!("{}{}", state.payload_buffer, cursor),
+                    if state.active_field == PlannerSetupField::Payload {
+                        Style::default().fg(Color::White)
+                    } else {
+                        Style::default()
+                    },
+                ),
+            ]));
+            lines.push(Line::from(""));
+
+            // Location field
+            let loc_label = if state.active_field == PlannerSetupField::Location {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled("  Start Location:", loc_label)));
+            for (i, (_, display_name)) in state.locations.iter().enumerate() {
+                let marker = if i == state.selected_location { " ▶ " } else { "   " };
+                let style = if i == state.selected_location && state.active_field == PlannerSetupField::Location {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("  {}{}", marker, display_name),
+                    style,
+                )));
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [Tab] Switch field  [Enter] Start  [Esc] Cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Δv Planner Setup ")
+                .style(Style::default().fg(Color::Cyan));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
         InputMode::DvPlanner { state } => {
             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
             let loc_name = contract::destination_display_name(&state.current_location);
