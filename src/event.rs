@@ -45,6 +45,7 @@ pub enum GameEvent {
     // Phase 5: Flight events
     FlightDeparted { rocket_name: String, destination: String },
     FlightArrived { rocket_name: String, destination: String },
+    SpacecraftStranded { rocket_name: String, location: String },
 }
 
 impl fmt::Display for GameEvent {
@@ -117,6 +118,8 @@ impl fmt::Display for GameEvent {
                 write!(f, "Flight departed: {} → {}", rocket_name, destination),
             GameEvent::FlightArrived { rocket_name, destination } =>
                 write!(f, "Flight arrived: {} at {}", rocket_name, destination),
+            GameEvent::SpacecraftStranded { rocket_name, location } =>
+                write!(f, "Spacecraft stranded: {} at {}", rocket_name, location),
         }
     }
 }
@@ -165,7 +168,8 @@ impl GameEvent {
             | GameEvent::PaymentReceived { .. }
             | GameEvent::EngineBuildOrdered { .. }
             | GameEvent::FlightDeparted { .. }
-            | GameEvent::FlightArrived { .. } => EventImportance::Notable,
+            | GameEvent::FlightArrived { .. }
+            | GameEvent::SpacecraftStranded { .. } => EventImportance::Notable,
         }
     }
 }

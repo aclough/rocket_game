@@ -864,10 +864,35 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
             let dest_name = contract::destination_display_name(flight.destination());
             let eta = flight.eta_days();
             let eta_str = if eta == 1 { "1 day".to_string() } else { format!("{} days", eta) };
+            let remaining_dv = flight.rocket.remaining_delta_v(&flight.design);
             lines.push(Line::from(vec![
                 Span::styled("  ● ", Style::default().fg(Color::Cyan)),
                 Span::raw(format!("{} → {}  ", flight.rocket_name, dest_name)),
-                Span::styled(format!("ETA: {}", eta_str), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("ETA: {}  ", eta_str), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("Δv: {:.0} m/s", remaining_dv), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+
+    // Spacecraft in orbit/on surface
+    lines.push(Line::from(Span::styled(
+        "  ── Spacecraft ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let spacecraft = &game.spacecraft;
+    if spacecraft.is_empty() {
+        lines.push(Line::from("  (no spacecraft)"));
+    } else {
+        for sc in spacecraft.iter() {
+            let loc_name = contract::destination_display_name(&sc.location);
+            let dv = sc.remaining_delta_v();
+            lines.push(Line::from(vec![
+                Span::styled("  ◆ ", Style::default().fg(Color::Green)),
+                Span::raw(format!("{} @ {}  ", sc.name, loc_name)),
+                Span::styled(format!("Δv: {:.0} m/s", dv), Style::default().fg(Color::DarkGray)),
             ]));
         }
     }
@@ -901,7 +926,7 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(" Launches  [L] Launch ");
+        .title(" Launches [L]aunch [U]ndisposable [F]ly [P]lan ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -1505,7 +1530,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
-        InputMode::LaunchSelectContract { rocket_item_id, selected } => {
+        InputMode::LaunchSelectContract { rocket_item_id, selected, .. } => {
             let contracts = &app.game.player_company.active_contracts;
             let total_options = contracts.len() + 1;
 
@@ -1628,6 +1653,159 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .title(" Launch Result ")
                 .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::DvPlanner { state } => {
+            let remaining_dv = state.rocket.remaining_delta_v(&state.design);
+            let loc_name = contract::destination_display_name(&state.current_location);
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw("  Location: "),
+                    Span::styled(loc_name, Style::default().fg(Color::Cyan)),
+                    Span::raw(format!("    Δv: {:.0} m/s", remaining_dv)),
+                    Span::raw(format!("    Payload: {:.0} kg", state.payload_kg)),
+                ]),
+                Line::from(""),
+            ];
+
+            // Show planned route so far
+            if !state.actions.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  Route:",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                for action in &state.actions {
+                    match action {
+                        crate::ui::PlanAction::Leg { to_display, dv_cost, .. } => {
+                            lines.push(Line::from(format!(
+                                "    → {} (Δv: {:.0})", to_display, dv_cost,
+                            )));
+                        }
+                        crate::ui::PlanAction::DropPayload { mass_dropped } => {
+                            lines.push(Line::from(Span::styled(
+                                format!("    ✦ Drop payload ({:.0} kg)", mass_dropped),
+                                Style::default().fg(Color::Yellow),
+                            )));
+                        }
+                    }
+                }
+                lines.push(Line::from(""));
+            }
+
+            // Destinations
+            lines.push(Line::from(Span::styled(
+                "  Destinations:",
+                Style::default().fg(Color::DarkGray),
+            )));
+            if state.destinations.is_empty() {
+                lines.push(Line::from("  (no reachable destinations)"));
+            } else {
+                for (i, (_, display_name, dv_cost)) in state.destinations.iter().enumerate() {
+                    let marker = if i == state.selected { " ▶ " } else { "   " };
+                    let style = if i == state.selected {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default()
+                    };
+                    let dv_after = remaining_dv - dv_cost;
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{}{}", marker, display_name), style),
+                        Span::styled(
+                            format!("  Δv: {:.0}  rem: {:.0}", dv_cost, dv_after),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+            }
+
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [Enter] Go  [D] Drop payload  [U] Undo  [Esc] Close",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Δv Planner ")
+                .style(Style::default().fg(Color::Cyan));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::FlySelectSpacecraft { selected } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from("  Select spacecraft:"),
+                Line::from(""),
+            ];
+            for (i, sc) in app.game.spacecraft.iter().enumerate() {
+                let marker = if i == *selected { " ▶ " } else { "   " };
+                let style = if i == *selected {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
+                let dv = sc.remaining_delta_v();
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{}{}", marker, sc.name), style),
+                    Span::styled(
+                        format!("  @ {}  Δv: {:.0} m/s", sc.location, dv),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [Enter] Select  [Esc] Cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Fly Spacecraft ")
+                .style(Style::default().fg(Color::Cyan));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::FlySelectDestination { destinations, remaining_dv, selected, .. } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(format!("  Remaining Δv: {:.0} m/s", remaining_dv)),
+                Line::from(""),
+                Line::from("  Select destination:"),
+                Line::from(""),
+            ];
+            for (i, (_, display_name, dv_cost)) in destinations.iter().enumerate() {
+                let marker = if i == *selected { " ▶ " } else { "   " };
+                let style = if i == *selected {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
+                let dv_after = remaining_dv - dv_cost;
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{}{}", marker, display_name),
+                        style,
+                    ),
+                    Span::styled(
+                        format!("  Δv: {:.0}  ", dv_cost),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!("remaining: {:.0}", dv_after),
+                        if dv_after < 500.0 {
+                            Style::default().fg(Color::Red)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
+                ]));
+            }
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Fly Spacecraft ")
+                .style(Style::default().fg(Color::Cyan));
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }

@@ -11,7 +11,7 @@ use crate::event::{EventLog, GameEvent};
 use crate::manufacturing::{Manufacturing, ManufacturingOrder, InventoryEngine};
 use crate::launch::{self, LaunchRecord, LaunchOutcome};
 use crate::reputation::Reputation;
-use crate::rocket::{RocketDesign, RocketDesignId};
+use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
 use crate::rocket_project::{RocketProject, RocketProjectId, RocketWorkEvent};
 use crate::seed::GameSeed;
 use crate::team::{EngineeringTeam, ManufacturingTeam, TeamId, TEAM_HIRING_COST,
@@ -64,6 +64,27 @@ pub struct MonthlyFinancials {
     pub month: u32,
     pub income: f64,
     pub expenses: f64,
+}
+
+/// Unique identifier for a spacecraft.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SpacecraftId(pub u64);
+
+/// A persisted rocket at a location (arrived after a flight).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Spacecraft {
+    pub id: SpacecraftId,
+    pub name: String,
+    pub rocket: crate::rocket::Rocket,
+    pub design: RocketDesign,
+    pub location: String,
+}
+
+impl Spacecraft {
+    /// Remaining delta-v with no payload.
+    pub fn remaining_delta_v(&self) -> f64 {
+        self.rocket.remaining_delta_v(&self.design)
+    }
 }
 
 /// A player's rocket company.
@@ -748,10 +769,17 @@ pub struct GameState {
     /// Next flight ID counter.
     #[serde(default = "default_next_flight_id")]
     pub next_flight_id: u64,
+    /// Next rocket instance ID counter.
+    #[serde(default = "default_next_rocket_id")]
+    pub next_rocket_id: u64,
+    /// Spacecraft persisted after arrival.
+    #[serde(default)]
+    pub spacecraft: Vec<Spacecraft>,
 }
 
 fn default_next_contract_id() -> u64 { 1 }
 fn default_next_flight_id() -> u64 { 1 }
+fn default_next_rocket_id() -> u64 { 1 }
 
 impl GameState {
     pub fn new(company_name: String, starting_money: f64, seed_value: u64) -> Self {
@@ -772,6 +800,8 @@ impl GameState {
             next_contract_id: 1,
             active_flights: Vec::new(),
             next_flight_id: 1,
+            next_rocket_id: 1,
+            spacecraft: Vec::new(),
         }
     }
 
@@ -1079,6 +1109,7 @@ impl GameState {
         contract_index: Option<usize>,
         destination: &str,
         payload_kg: f64,
+        persist: bool,
     ) -> Option<(Vec<GameEvent>, Option<LaunchRecord>)> {
         // Take the rocket from inventory
         let inv_rocket = self.player_company.manufacturing.inventory.take_rocket(rocket_item_id)?;
@@ -1213,6 +1244,13 @@ impl GameState {
         let flight_id = FlightId(self.next_flight_id);
         self.next_flight_id += 1;
 
+        // Instantiate a Rocket with per-stage propellant tracking
+        let rocket_instance_id = RocketId(self.next_rocket_id);
+        self.next_rocket_id += 1;
+        let rocket_instance = sim.degraded_design.instantiate(
+            rocket_instance_id, "earth_surface", payload_kg,
+        );
+
         let leg_days = route.first().map(|l| l.total_days()).unwrap_or(0);
 
         let dest_display = crate::contract::destination_display_name(destination);
@@ -1222,6 +1260,7 @@ impl GameState {
             rocket_name: inv_rocket.rocket_name.clone(),
             rocket_project_id: inv_rocket.rocket_project_id,
             design: sim.degraded_design,
+            rocket: rocket_instance,
             payloads,
             current_location: "earth_surface".to_string(),
             route,
@@ -1230,6 +1269,7 @@ impl GameState {
             status: FlightStatus::InTransit,
             flaws_activated: sim.flaws_activated,
             launch_date: self.date,
+            persist,
         };
 
         self.active_flights.push(flight);
@@ -1250,6 +1290,7 @@ impl GameState {
     fn advance_flights(&mut self) -> Vec<GameEvent> {
         let mut events = Vec::new();
         let mut arrived_indices = Vec::new();
+        let mut stranded_indices = Vec::new();
 
         for (i, flight) in self.active_flights.iter_mut().enumerate() {
             if !matches!(flight.status, FlightStatus::InTransit) {
@@ -1261,9 +1302,20 @@ impl GameState {
             }
 
             if flight.leg_days_remaining == 0 {
-                // Leg complete — update location
+                // Leg complete — consume propellant for this leg
                 if let Some(leg) = flight.route.get(flight.current_leg) {
+                    let dv_cost = leg.delta_v_cost;
+                    let dv_achieved = flight.rocket.burn_sequential(&flight.design, dv_cost);
+
                     flight.current_location = leg.to.clone();
+                    flight.rocket.location = leg.to.clone();
+
+                    // Check if burn fell significantly short
+                    if dv_achieved < dv_cost * 0.95 {
+                        flight.status = FlightStatus::Stranded;
+                        stranded_indices.push(i);
+                        continue;
+                    }
                 }
 
                 // Advance to next leg
@@ -1278,11 +1330,31 @@ impl GameState {
             }
         }
 
-        // Resolve arrived flights (process in reverse to preserve indices)
-        for &i in arrived_indices.iter().rev() {
+        // Resolve stranded and arrived flights (process in reverse to preserve indices)
+        // Combine and sort in reverse order so we can remove safely
+        let mut remove_indices: Vec<(usize, bool)> = Vec::new(); // (index, is_arrived)
+        for &i in &stranded_indices {
+            remove_indices.push((i, false));
+        }
+        for &i in &arrived_indices {
+            remove_indices.push((i, true));
+        }
+        remove_indices.sort_by(|a, b| b.0.cmp(&a.0));
+
+        for (i, is_arrived) in remove_indices {
             let flight = self.active_flights.remove(i);
-            let arrival_events = self.resolve_arrived_flight(flight);
-            events.extend(arrival_events);
+            if is_arrived {
+                let arrival_events = self.resolve_arrived_flight(flight);
+                events.extend(arrival_events);
+            } else {
+                let location = crate::contract::destination_display_name(&flight.current_location);
+                let evt = GameEvent::SpacecraftStranded {
+                    rocket_name: flight.rocket_name.clone(),
+                    location: location.to_string(),
+                };
+                self.event_log.push(self.date, evt.clone());
+                events.push(evt);
+            }
         }
 
         events
@@ -1372,9 +1444,16 @@ impl GameState {
             LaunchOutcome::Success
         };
 
+        // Persist as spacecraft if requested
+        let persist = flight.persist;
+        let rocket_instance = flight.rocket;
+        let design_clone = flight.design;
+        let rocket_name = flight.rocket_name;
+        let dest_for_spacecraft = destination.clone();
+
         let record = LaunchRecord {
             launch_date: flight.launch_date,
-            rocket_name: flight.rocket_name,
+            rocket_name: rocket_name.clone(),
             contract_id: contract_id_for_record,
             destination,
             payload_kg: total_payload_kg,
@@ -1383,7 +1462,67 @@ impl GameState {
         };
         self.player_company.launch_history.push(record);
 
+        if persist {
+            let sc_id = SpacecraftId(self.next_rocket_id);
+            self.next_rocket_id += 1;
+            self.spacecraft.push(Spacecraft {
+                id: sc_id,
+                name: rocket_name,
+                rocket: rocket_instance,
+                design: design_clone,
+                location: dest_for_spacecraft,
+            });
+        }
+
         events
+    }
+
+    /// Send a spacecraft on a new flight to a destination.
+    pub fn fly_spacecraft(&mut self, spacecraft_index: usize, destination: &str) {
+        if spacecraft_index >= self.spacecraft.len() {
+            return;
+        }
+        let sc = self.spacecraft.remove(spacecraft_index);
+        let rocket_mass = sc.design.total_mass_kg() + sc.rocket.payload_mass_kg;
+        let first_group_thrust = sc.design.group_thrust_n(0);
+
+        let path = crate::location::DELTA_V_MAP
+            .shortest_path(&sc.location, destination, rocket_mass);
+        let route = match path {
+            Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust),
+            None => vec![],
+        };
+
+        let flight_id = FlightId(self.next_flight_id);
+        self.next_flight_id += 1;
+
+        let leg_days = route.first().map(|l| l.total_days()).unwrap_or(0);
+        let dest_display = crate::contract::destination_display_name(destination);
+
+        let flight = Flight {
+            id: flight_id,
+            rocket_name: sc.name.clone(),
+            rocket_project_id: crate::rocket_project::RocketProjectId(0), // no project for spacecraft flights
+            design: sc.design,
+            rocket: sc.rocket,
+            payloads: vec![],
+            current_location: sc.location,
+            route,
+            current_leg: 0,
+            leg_days_remaining: leg_days,
+            status: FlightStatus::InTransit,
+            flaws_activated: vec![],
+            launch_date: self.date,
+            persist: true, // spacecraft flights always persist
+        };
+
+        self.active_flights.push(flight);
+
+        let evt = GameEvent::FlightDeparted {
+            rocket_name: sc.name,
+            destination: dest_display.to_string(),
+        };
+        self.event_log.push(self.date, evt);
     }
 }
 

@@ -38,7 +38,7 @@ pub struct StageState {
 pub struct Rocket {
     pub id: RocketId,
     pub design_id: RocketDesignId,
-    pub location: &'static str,
+    pub location: String,
     pub payload_mass_kg: f64,
     pub stage_states: Vec<Vec<StageState>>,
 }
@@ -119,7 +119,7 @@ impl RocketDesign {
     }
 
     /// Create a Rocket instance from this design at a given location with a payload.
-    pub fn instantiate(&self, rocket_id: RocketId, location: &'static str, payload_mass_kg: f64) -> Rocket {
+    pub fn instantiate(&self, rocket_id: RocketId, location: &str, payload_mass_kg: f64) -> Rocket {
         let stage_states = self.stage_groups.iter()
             .map(|group| {
                 group.iter().map(|stage| StageState {
@@ -132,7 +132,7 @@ impl RocketDesign {
         Rocket {
             id: rocket_id,
             design_id: self.id,
-            location,
+            location: location.to_string(),
             payload_mass_kg,
             stage_states,
         }
@@ -293,6 +293,159 @@ impl Rocket {
         }
 
         total
+    }
+
+    /// Burn through stage groups sequentially to achieve target delta-v.
+    /// Burns the lowest attached group first; when exhausted, jettisons it and
+    /// continues with the next group. Returns actual delta-v achieved.
+    pub fn burn_sequential(&mut self, design: &RocketDesign, target_dv: f64) -> f64 {
+        let mut dv_remaining = target_dv;
+        let mut dv_achieved = 0.0;
+        let n = self.stage_states.len();
+
+        for gi in 0..n {
+            if dv_remaining <= 0.0 {
+                break;
+            }
+
+            // Check if this group has any attached stages with propellant
+            let has_fuel = self.stage_states[gi].iter()
+                .any(|ss| ss.attached && ss.propellant_remaining_kg > 0.0);
+            if !has_fuel {
+                continue;
+            }
+
+            // Compute how much dv this group can provide
+            let group_dv = self.group_remaining_delta_v(design, gi);
+            if group_dv <= 0.0 {
+                continue;
+            }
+
+            if group_dv >= dv_remaining {
+                // This group can satisfy the remaining target — partial burn
+                let burned = self.burn_group(design, gi, dv_remaining);
+                dv_achieved += burned;
+                dv_remaining -= burned;
+            } else {
+                // Exhaust this entire group, then jettison
+                let burned = self.burn_group(design, gi, group_dv);
+                dv_achieved += burned;
+                dv_remaining -= burned;
+
+                // Jettison all stages in this group
+                for si in 0..self.stage_states[gi].len() {
+                    self.jettison_stage(gi, si);
+                }
+            }
+        }
+
+        dv_achieved
+    }
+
+    /// Compute remaining delta-v for a single group given current propellant state.
+    fn group_remaining_delta_v(&self, design: &RocketDesign, gi: usize) -> f64 {
+        let n = self.stage_states.len();
+        let payload_above: f64 = (gi + 1..n).map(|gj| {
+            design.stage_groups[gj].iter().zip(self.stage_states[gj].iter())
+                .filter(|(_, ss)| ss.attached)
+                .map(|(s, ss)| s.dry_mass_kg() + ss.propellant_remaining_kg)
+                .sum::<f64>()
+        }).sum::<f64>() + self.payload_mass_kg;
+
+        let active_stages: Vec<Stage> = design.stage_groups[gi].iter()
+            .zip(self.stage_states[gi].iter())
+            .filter(|(_, ss)| ss.attached && ss.propellant_remaining_kg > 0.0)
+            .map(|(s, ss)| {
+                let mut s = s.clone();
+                s.propellant_mass_kg = ss.propellant_remaining_kg;
+                s
+            })
+            .collect();
+
+        if active_stages.len() == 1 {
+            active_stages[0].delta_v(payload_above)
+        } else if active_stages.len() > 1 {
+            phased_parallel_delta_v(&active_stages, payload_above)
+        } else {
+            0.0
+        }
+    }
+
+    /// Burn a specific group for a target delta-v, consuming propellant proportionally
+    /// across all active stages in the group. Returns actual dv achieved.
+    fn burn_group(&mut self, design: &RocketDesign, gi: usize, target_dv: f64) -> f64 {
+        let n = self.stage_states.len();
+
+        // Compute payload above this group
+        let payload_above: f64 = (gi + 1..n).map(|gj| {
+            design.stage_groups[gj].iter().zip(self.stage_states[gj].iter())
+                .filter(|(_, ss)| ss.attached)
+                .map(|(s, ss)| s.dry_mass_kg() + ss.propellant_remaining_kg)
+                .sum::<f64>()
+        }).sum::<f64>() + self.payload_mass_kg;
+
+        // Get active stages in this group
+        let active_indices: Vec<usize> = self.stage_states[gi].iter()
+            .enumerate()
+            .filter(|(_, ss)| ss.attached && ss.propellant_remaining_kg > 0.0)
+            .map(|(i, _)| i)
+            .collect();
+
+        if active_indices.is_empty() {
+            return 0.0;
+        }
+
+        // Compute effective exhaust velocity for the group
+        let total_thrust: f64 = active_indices.iter()
+            .map(|&si| {
+                let stage = &design.stage_groups[gi][si];
+                stage.total_thrust_n()
+            })
+            .sum();
+        let total_flow: f64 = active_indices.iter()
+            .map(|&si| {
+                let stage = &design.stage_groups[gi][si];
+                stage.engine.mass_flow_rate() * stage.engine_count as f64
+            })
+            .sum();
+        let ve = if total_flow > 0.0 { total_thrust / total_flow } else { return 0.0 };
+
+        // Total initial mass
+        let group_mass: f64 = active_indices.iter()
+            .map(|&si| {
+                design.stage_groups[gi][si].dry_mass_kg()
+                    + self.stage_states[gi][si].propellant_remaining_kg
+            })
+            .sum();
+        let m0 = group_mass + payload_above;
+
+        // Compute propellant needed for target_dv
+        let mf_target = m0 / (target_dv / ve).exp();
+        let prop_needed = m0 - mf_target;
+
+        // Total propellant available
+        let total_prop: f64 = active_indices.iter()
+            .map(|&si| self.stage_states[gi][si].propellant_remaining_kg)
+            .sum();
+
+        let prop_used = prop_needed.min(total_prop).max(0.0);
+
+        // Distribute consumed propellant proportionally by mass flow rate
+        for &si in &active_indices {
+            let stage = &design.stage_groups[gi][si];
+            let flow = stage.engine.mass_flow_rate() * stage.engine_count as f64;
+            let fraction = if total_flow > 0.0 { flow / total_flow } else { 0.0 };
+            let consumed = prop_used * fraction;
+            self.stage_states[gi][si].propellant_remaining_kg =
+                (self.stage_states[gi][si].propellant_remaining_kg - consumed).max(0.0);
+        }
+
+        // Compute actual dv achieved
+        let mf_actual = m0 - prop_used;
+        if mf_actual <= 0.0 {
+            return 0.0;
+        }
+        ve * (m0 / mf_actual).ln()
     }
 
     /// Mass of all attached stages except the one at (group, index), plus their propellant.
@@ -949,5 +1102,107 @@ mod tests {
         };
         let stats = compute_stage_stats(&design, 1_000.0, "earth_surface");
         assert!(stats.is_empty());
+    }
+
+    // ==========================================
+    // burn_sequential tests
+    // ==========================================
+
+    #[test]
+    fn test_burn_sequential_single_group() {
+        let engine = kerolox_engine(1, 500_000.0, 250.0, 300.0);
+        let s1 = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: engine.clone(), engine_count: 1,
+            propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
+            fairing: None,
+        };
+
+        let design = RocketDesign {
+            id: RocketDesignId(1),
+            name: "Test".into(),
+            stage_groups: vec![vec![s1]],
+        };
+
+        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
+        let initial_dv = rocket.remaining_delta_v(&design);
+
+        let burned = rocket.burn_sequential(&design, 1_000.0);
+        assert!((burned - 1_000.0).abs() < 1.0, "Should burn ~1000 m/s, got {}", burned);
+
+        let after_dv = rocket.remaining_delta_v(&design);
+        assert!(after_dv < initial_dv);
+        assert!((initial_dv - after_dv - 1_000.0).abs() < 50.0);
+    }
+
+    #[test]
+    fn test_burn_sequential_two_groups_crosses_staging() {
+        let engine1 = kerolox_engine(1, 1_000_000.0, 500.0, 280.0);
+        let engine2 = kerolox_engine(2, 200_000.0, 100.0, 340.0);
+
+        let s1 = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: engine1, engine_count: 1,
+            propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0,
+            fairing: None,
+        };
+        let s2 = Stage {
+            id: StageId(2), name: "S2".into(),
+            engine: engine2, engine_count: 1,
+            propellant_mass_kg: 10_000.0, structural_mass_kg: 500.0,
+            fairing: None,
+        };
+
+        let design = RocketDesign {
+            id: RocketDesignId(1),
+            name: "TwoStager".into(),
+            stage_groups: vec![vec![s1], vec![s2]],
+        };
+
+        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
+        let total_dv = rocket.remaining_delta_v(&design);
+
+        // Burn for more than the first stage can provide — should cross into second stage
+        let s1_dv = rocket.group_remaining_delta_v(&design, 0);
+        let target = s1_dv + 500.0; // need some from S2
+
+        let burned = rocket.burn_sequential(&design, target);
+        assert!((burned - target).abs() < 50.0,
+            "Should burn ~{} m/s, got {}", target, burned);
+
+        // First stage should be jettisoned
+        assert!(!rocket.stage_states[0][0].attached,
+            "S1 should be jettisoned after exhaustion");
+
+        // Should have some dv left in S2
+        let remaining = rocket.remaining_delta_v(&design);
+        assert!(remaining > 0.0, "Should have dv remaining in S2");
+        assert!((total_dv - burned - remaining).abs() < 100.0,
+            "total={}, burned={}, remaining={}", total_dv, burned, remaining);
+    }
+
+    #[test]
+    fn test_burn_sequential_exceeds_total_dv() {
+        let engine = kerolox_engine(1, 500_000.0, 250.0, 300.0);
+        let s1 = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: engine.clone(), engine_count: 1,
+            propellant_mass_kg: 10_000.0, structural_mass_kg: 1_000.0,
+            fairing: None,
+        };
+
+        let design = RocketDesign {
+            id: RocketDesignId(1),
+            name: "Test".into(),
+            stage_groups: vec![vec![s1]],
+        };
+
+        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
+        let total_dv = rocket.remaining_delta_v(&design);
+
+        // Ask for way more than available
+        let burned = rocket.burn_sequential(&design, total_dv + 5_000.0);
+        assert!((burned - total_dv).abs() < 50.0,
+            "Should only burn total available dv={}, got {}", total_dv, burned);
     }
 }

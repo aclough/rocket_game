@@ -229,11 +229,57 @@ pub enum InputMode {
     LaunchSelectContract {
         rocket_item_id: crate::manufacturing::InventoryItemId,
         selected: usize,  // 0..N = contracts, N = test launch
+        persist: bool,    // whether to create a spacecraft on arrival
     },
     /// Showing launch result.
     LaunchResult {
         record: crate::launch::LaunchRecord,
     },
+    /// Selecting which spacecraft to fly.
+    FlySelectSpacecraft {
+        selected: usize,
+    },
+    /// Selecting destination for a spacecraft flight.
+    FlySelectDestination {
+        spacecraft_index: usize,
+        destinations: Vec<(String, String, f64)>, // (location_id, display_name, dv_cost)
+        remaining_dv: f64,
+        selected: usize,
+    },
+    /// Delta-v planner.
+    DvPlanner {
+        state: Box<DvPlannerState>,
+    },
+}
+
+/// An action in the delta-v planner.
+#[derive(Debug, Clone)]
+pub enum PlanAction {
+    Leg { from: String, to: String, to_display: String, dv_cost: f64 },
+    DropPayload { mass_dropped: f64 },
+}
+
+/// Source for the delta-v planner.
+#[derive(Debug, Clone)]
+pub enum PlannerSource {
+    Design { project_index: usize },
+    Spacecraft { spacecraft_index: usize },
+}
+
+/// State for the delta-v planner modal.
+#[derive(Debug, Clone)]
+pub struct DvPlannerState {
+    pub source: PlannerSource,
+    pub rocket: crate::rocket::Rocket,
+    pub design: crate::rocket::RocketDesign,
+    pub current_location: String,
+    pub actions: Vec<PlanAction>,
+    /// Rocket snapshots before each action (for undo).
+    pub snapshots: Vec<(crate::rocket::Rocket, f64)>, // (rocket_state, payload_at_that_point)
+    /// Reachable destinations from current location.
+    pub destinations: Vec<(String, String, f64)>, // (id, display, dv_cost)
+    pub selected: usize,
+    pub payload_kg: f64,
 }
 
 /// Application state wrapping the game and UI concerns.
@@ -249,6 +295,25 @@ pub struct App {
     pub selected_item: usize,
     /// Speed before entering a modal, so we can restore on exit.
     pub pre_modal_speed: Option<GameSpeed>,
+}
+
+fn reachable_destinations(
+    from: &str, remaining_dv: f64, rocket_mass: f64,
+) -> Vec<(String, String, f64)> {
+    let map = &crate::location::DELTA_V_MAP;
+    let mut dests = Vec::new();
+    for loc in map.locations() {
+        if loc.id == from {
+            continue;
+        }
+        if let Some((_, dv)) = map.shortest_path(from, loc.id, rocket_mass) {
+            if dv <= remaining_dv {
+                dests.push((loc.id.to_string(), loc.display_name.to_string(), dv));
+            }
+        }
+    }
+    dests.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+    dests
 }
 
 impl App {
@@ -588,7 +653,49 @@ impl App {
 
     fn handle_launches_key(&mut self, key: KeyCode) {
         match key {
-            KeyCode::Char('l') | KeyCode::Enter => {
+            KeyCode::Char('f') => {
+                // Fly a spacecraft to a new destination
+                if self.game.spacecraft.is_empty() {
+                    self.status_message = Some("No spacecraft available".into());
+                    return;
+                }
+                self.enter_modal(InputMode::FlySelectSpacecraft {
+                    selected: 0,
+                });
+            }
+            KeyCode::Char('p') => {
+                // Open delta-v planner
+                // Find the first completed rocket project
+                let rp = self.game.player_company.rocket_projects.iter().enumerate()
+                    .find(|(_, rp)| matches!(rp.status, RocketDesignStatus::Testing { .. }));
+                if let Some((pi, rp)) = rp {
+                    let payload_kg = 0.0;
+                    let start = "earth_surface";
+                    let rocket = rp.design.instantiate(
+                        crate::rocket::RocketId(0), start, payload_kg,
+                    );
+                    let remaining_dv = rocket.remaining_delta_v(&rp.design);
+                    let rocket_mass = rp.design.total_mass_kg() + payload_kg;
+                    let destinations = reachable_destinations(start, remaining_dv, rocket_mass);
+                    self.enter_modal(InputMode::DvPlanner {
+                        state: Box::new(DvPlannerState {
+                            source: PlannerSource::Design { project_index: pi },
+                            rocket,
+                            design: rp.design.clone(),
+                            current_location: start.to_string(),
+                            actions: vec![],
+                            snapshots: vec![],
+                            destinations,
+                            selected: 0,
+                            payload_kg,
+                        }),
+                    });
+                } else {
+                    self.status_message = Some("No rocket design available".into());
+                }
+            }
+            KeyCode::Char('l') | KeyCode::Enter | KeyCode::Char('u') => {
+                let persist = key == KeyCode::Char('u');
                 // Launch the selected rocket
                 let rockets = &self.game.player_company.manufacturing.inventory.rockets;
                 if self.selected_item >= rockets.len() {
@@ -611,6 +718,7 @@ impl App {
                 self.enter_modal(InputMode::LaunchSelectContract {
                     rocket_item_id: item_id,
                     selected: 0,
+                    persist,
                 });
             }
             _ => {}
@@ -792,9 +900,10 @@ impl App {
                     _ => unreachable!(),
                 }
             }
-            InputMode::LaunchSelectContract { rocket_item_id, selected } => {
+            InputMode::LaunchSelectContract { rocket_item_id, selected, persist } => {
                 let rocket_item_id = *rocket_item_id;
                 let selected = *selected;
+                let persist = *persist;
                 let num_contracts = self.game.player_company.active_contracts.len();
                 let total_options = num_contracts + 1; // +1 for test launch
                 match key {
@@ -820,7 +929,7 @@ impl App {
                             let destination = contract.destination.clone();
                             let payload_kg = contract.payload_kg;
                             if let Some((_events, record)) = self.game.launch_rocket(
-                                rocket_item_id, Some(selected), &destination, payload_kg,
+                                rocket_item_id, Some(selected), &destination, payload_kg, persist,
                             ) {
                                 if let Some(record) = record {
                                     self.input_mode = InputMode::LaunchResult { record };
@@ -835,7 +944,7 @@ impl App {
                         } else {
                             // Test launch to LEO with 0 payload
                             if let Some((_events, record)) = self.game.launch_rocket(
-                                rocket_item_id, None, "leo", 0.0,
+                                rocket_item_id, None, "leo", 0.0, persist,
                             ) {
                                 if let Some(record) = record {
                                     self.input_mode = InputMode::LaunchResult { record };
@@ -857,6 +966,162 @@ impl App {
                 match key {
                     KeyCode::Enter | KeyCode::Esc | KeyCode::Char(_) => {
                         self.exit_modal();
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::FlySelectSpacecraft { selected } => {
+                let selected = *selected;
+                let num_spacecraft = self.game.spacecraft.len();
+                match key {
+                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Up => {
+                        if selected > 0 {
+                            if let InputMode::FlySelectSpacecraft { selected: s } = &mut self.input_mode {
+                                *s -= 1;
+                            }
+                        }
+                    }
+                    KeyCode::Down => {
+                        if selected + 1 < num_spacecraft {
+                            if let InputMode::FlySelectSpacecraft { selected: s } = &mut self.input_mode {
+                                *s += 1;
+                            }
+                        }
+                    }
+                    KeyCode::Enter => {
+                        let sc = &self.game.spacecraft[selected];
+                        let remaining_dv = sc.remaining_delta_v();
+                        let rocket_mass = sc.rocket.payload_mass_kg + sc.design.total_mass_kg();
+                        let destinations = reachable_destinations(&sc.location, remaining_dv, rocket_mass);
+                        if destinations.is_empty() {
+                            self.status_message = Some("No reachable destinations for this spacecraft".into());
+                            return;
+                        }
+                        self.input_mode = InputMode::FlySelectDestination {
+                            spacecraft_index: selected,
+                            destinations,
+                            remaining_dv,
+                            selected: 0,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::FlySelectDestination { spacecraft_index, destinations, selected, .. } => {
+                let spacecraft_index = *spacecraft_index;
+                let selected = *selected;
+                let num_destinations = destinations.len();
+                match key {
+                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Up => {
+                        if selected > 0 {
+                            if let InputMode::FlySelectDestination { selected: s, .. } = &mut self.input_mode {
+                                *s -= 1;
+                            }
+                        }
+                    }
+                    KeyCode::Down => {
+                        if selected + 1 < num_destinations {
+                            if let InputMode::FlySelectDestination { selected: s, .. } = &mut self.input_mode {
+                                *s += 1;
+                            }
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if let InputMode::FlySelectDestination { destinations, .. } = &self.input_mode {
+                            let dest_id = destinations[selected].0.clone();
+                            self.game.fly_spacecraft(spacecraft_index, &dest_id);
+                            self.status_message = Some("Spacecraft flight departed".into());
+                            self.exit_modal();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::DvPlanner { state } => {
+                let num_dests = state.destinations.len();
+                match key {
+                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Up => {
+                        if state.selected > 0 {
+                            state.selected -= 1;
+                        }
+                    }
+                    KeyCode::Down => {
+                        if state.selected + 1 < num_dests {
+                            state.selected += 1;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        // Select destination — simulate the burn
+                        if state.selected < num_dests {
+                            let (dest_id, dest_display, dv_cost) =
+                                state.destinations[state.selected].clone();
+                            let from = state.current_location.clone();
+
+                            // Save snapshot for undo
+                            state.snapshots.push((state.rocket.clone(), state.payload_kg));
+
+                            // Burn propellant
+                            state.rocket.burn_sequential(&state.design, dv_cost);
+                            state.rocket.location = dest_id.clone();
+                            state.current_location = dest_id;
+
+                            state.actions.push(PlanAction::Leg {
+                                from,
+                                to: state.current_location.clone(),
+                                to_display: dest_display,
+                                dv_cost,
+                            });
+
+                            // Recompute destinations
+                            let remaining_dv = state.rocket.remaining_delta_v(&state.design);
+                            let rocket_mass = state.design.total_mass_kg() + state.payload_kg;
+                            state.destinations = reachable_destinations(
+                                &state.current_location, remaining_dv, rocket_mass,
+                            );
+                            state.selected = 0;
+                        }
+                    }
+                    KeyCode::Char('d') => {
+                        // Drop payload
+                        if state.payload_kg > 0.0 {
+                            let mass = state.payload_kg;
+                            state.snapshots.push((state.rocket.clone(), state.payload_kg));
+                            state.payload_kg = 0.0;
+                            state.rocket.payload_mass_kg = 0.0;
+                            state.actions.push(PlanAction::DropPayload { mass_dropped: mass });
+
+                            // Recompute destinations with new mass
+                            let remaining_dv = state.rocket.remaining_delta_v(&state.design);
+                            let rocket_mass = state.design.total_mass_kg();
+                            state.destinations = reachable_destinations(
+                                &state.current_location, remaining_dv, rocket_mass,
+                            );
+                            state.selected = state.selected.min(
+                                state.destinations.len().saturating_sub(1),
+                            );
+                        }
+                    }
+                    KeyCode::Char('u') => {
+                        // Undo last action
+                        if let Some((prev_rocket, prev_payload)) = state.snapshots.pop() {
+                            state.actions.pop();
+                            state.rocket = prev_rocket;
+                            state.payload_kg = prev_payload;
+                            state.rocket.payload_mass_kg = prev_payload;
+                            state.current_location = state.rocket.location.clone();
+
+                            let remaining_dv = state.rocket.remaining_delta_v(&state.design);
+                            let rocket_mass = state.design.total_mass_kg() + state.payload_kg;
+                            state.destinations = reachable_destinations(
+                                &state.current_location, remaining_dv, rocket_mass,
+                            );
+                            state.selected = state.selected.min(
+                                state.destinations.len().saturating_sub(1),
+                            );
+                        }
                     }
                     _ => {}
                 }

@@ -4,7 +4,7 @@ use crate::calendar::GameDate;
 use crate::contract::ContractId;
 use crate::launch::FlawActivation;
 use crate::location::DELTA_V_MAP;
-use crate::rocket::RocketDesign;
+use crate::rocket::{Rocket, RocketDesign};
 use crate::rocket_project::RocketProjectId;
 
 /// Unique identifier for a flight.
@@ -38,6 +38,7 @@ pub enum FlightStatus {
     InTransit,
     Arrived,
     Failed { reason: String },
+    Stranded,
 }
 
 /// A leg of a flight route through the location graph.
@@ -63,6 +64,8 @@ pub struct Flight {
     pub rocket_name: String,
     pub rocket_project_id: RocketProjectId,
     pub design: RocketDesign,
+    /// Runtime rocket instance with per-stage propellant tracking.
+    pub rocket: Rocket,
     pub payloads: Vec<Payload>,
     pub current_location: String,
     pub route: Vec<FlightLeg>,
@@ -71,6 +74,9 @@ pub struct Flight {
     pub status: FlightStatus,
     pub flaws_activated: Vec<FlawActivation>,
     pub launch_date: GameDate,
+    /// Whether to persist as a Spacecraft on arrival.
+    #[serde(default)]
+    pub persist: bool,
 }
 
 impl Flight {
@@ -165,15 +171,20 @@ mod tests {
 
     #[test]
     fn test_flight_eta() {
+        let design = crate::rocket::RocketDesign {
+            id: crate::rocket::RocketDesignId(1),
+            name: "Test".into(),
+            stage_groups: vec![],
+        };
+        let rocket = design.instantiate(
+            crate::rocket::RocketId(1), "earth_surface", 100.0,
+        );
         let flight = Flight {
             id: FlightId(1),
             rocket_name: "Test".into(),
             rocket_project_id: RocketProjectId(1),
-            design: crate::rocket::RocketDesign {
-                id: crate::rocket::RocketDesignId(1),
-                name: "Test".into(),
-                stage_groups: vec![],
-            },
+            design,
+            rocket,
             payloads: vec![Payload::TestMass { mass_kg: 100.0 }],
             current_location: "earth_surface".into(),
             route: vec![
@@ -191,6 +202,7 @@ mod tests {
             status: FlightStatus::InTransit,
             flaws_activated: vec![],
             launch_date: crate::calendar::GameDate::new(2001, 1, 1),
+            persist: false,
         };
         // On leg 0 with 1 day remaining + leg 1 has 0+1=1 day
         assert_eq!(flight.eta_days(), 2);
