@@ -77,6 +77,12 @@ pub struct Flight {
     /// Whether to persist as a Spacecraft on arrival.
     #[serde(default)]
     pub persist: bool,
+    /// Whether the launch sim determined a partial failure (degraded dv near required).
+    #[serde(default)]
+    pub launch_partial: bool,
+    /// Stage groups that have already had flaws rolled (to avoid rolling per-leg).
+    #[serde(default)]
+    pub flaw_rolled_groups: std::collections::HashSet<usize>,
 }
 
 impl Flight {
@@ -203,6 +209,8 @@ mod tests {
             flaws_activated: vec![],
             launch_date: crate::calendar::GameDate::new(2001, 1, 1),
             persist: false,
+            launch_partial: false,
+            flaw_rolled_groups: std::collections::HashSet::new(),
         };
         // On leg 0 with 1 day remaining + leg 1 has 0+1=1 day
         assert_eq!(flight.eta_days(), 2);

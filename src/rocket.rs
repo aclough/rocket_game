@@ -33,6 +33,16 @@ pub struct StageState {
     pub attached: bool,
 }
 
+/// Result of a sequential burn operation.
+#[derive(Debug, Clone)]
+pub struct BurnResult {
+    pub dv_achieved: f64,
+    /// Groups that consumed any propellant during this burn (includes jettisoned).
+    pub groups_burned: Vec<usize>,
+    /// Groups that were fully exhausted and jettisoned.
+    pub groups_jettisoned: Vec<usize>,
+}
+
 /// A physical rocket instance with runtime state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rocket {
@@ -297,10 +307,13 @@ impl Rocket {
 
     /// Burn through stage groups sequentially to achieve target delta-v.
     /// Burns the lowest attached group first; when exhausted, jettisons it and
-    /// continues with the next group. Returns actual delta-v achieved.
-    pub fn burn_sequential(&mut self, design: &RocketDesign, target_dv: f64) -> f64 {
+    /// continues with the next group. Returns actual delta-v achieved and
+    /// which groups were jettisoned.
+    pub fn burn_sequential(&mut self, design: &RocketDesign, target_dv: f64) -> BurnResult {
         let mut dv_remaining = target_dv;
         let mut dv_achieved = 0.0;
+        let mut groups_burned = Vec::new();
+        let mut groups_jettisoned = Vec::new();
         let n = self.stage_states.len();
 
         for gi in 0..n {
@@ -326,6 +339,7 @@ impl Rocket {
                 let burned = self.burn_group(design, gi, dv_remaining);
                 dv_achieved += burned;
                 dv_remaining -= burned;
+                groups_burned.push(gi);
             } else {
                 // Exhaust this entire group, then jettison
                 let burned = self.burn_group(design, gi, group_dv);
@@ -336,14 +350,16 @@ impl Rocket {
                 for si in 0..self.stage_states[gi].len() {
                     self.jettison_stage(gi, si);
                 }
+                groups_burned.push(gi);
+                groups_jettisoned.push(gi);
             }
         }
 
-        dv_achieved
+        BurnResult { dv_achieved, groups_burned, groups_jettisoned }
     }
 
     /// Compute remaining delta-v for a single group given current propellant state.
-    fn group_remaining_delta_v(&self, design: &RocketDesign, gi: usize) -> f64 {
+    pub fn group_remaining_delta_v(&self, design: &RocketDesign, gi: usize) -> f64 {
         let n = self.stage_states.len();
         let payload_above: f64 = (gi + 1..n).map(|gj| {
             design.stage_groups[gj].iter().zip(self.stage_states[gj].iter())
@@ -1127,8 +1143,9 @@ mod tests {
         let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
         let initial_dv = rocket.remaining_delta_v(&design);
 
-        let burned = rocket.burn_sequential(&design, 1_000.0);
-        assert!((burned - 1_000.0).abs() < 1.0, "Should burn ~1000 m/s, got {}", burned);
+        let result = rocket.burn_sequential(&design, 1_000.0);
+        assert!((result.dv_achieved - 1_000.0).abs() < 1.0, "Should burn ~1000 m/s, got {}", result.dv_achieved);
+        assert!(result.groups_jettisoned.is_empty());
 
         let after_dv = rocket.remaining_delta_v(&design);
         assert!(after_dv < initial_dv);
@@ -1166,9 +1183,10 @@ mod tests {
         let s1_dv = rocket.group_remaining_delta_v(&design, 0);
         let target = s1_dv + 500.0; // need some from S2
 
-        let burned = rocket.burn_sequential(&design, target);
-        assert!((burned - target).abs() < 50.0,
-            "Should burn ~{} m/s, got {}", target, burned);
+        let result = rocket.burn_sequential(&design, target);
+        assert!((result.dv_achieved - target).abs() < 50.0,
+            "Should burn ~{} m/s, got {}", target, result.dv_achieved);
+        assert_eq!(result.groups_jettisoned, vec![0]);
 
         // First stage should be jettisoned
         assert!(!rocket.stage_states[0][0].attached,
@@ -1177,8 +1195,8 @@ mod tests {
         // Should have some dv left in S2
         let remaining = rocket.remaining_delta_v(&design);
         assert!(remaining > 0.0, "Should have dv remaining in S2");
-        assert!((total_dv - burned - remaining).abs() < 100.0,
-            "total={}, burned={}, remaining={}", total_dv, burned, remaining);
+        assert!((total_dv - result.dv_achieved - remaining).abs() < 100.0,
+            "total={}, burned={}, remaining={}", total_dv, result.dv_achieved, remaining);
     }
 
     #[test]
@@ -1201,8 +1219,8 @@ mod tests {
         let total_dv = rocket.remaining_delta_v(&design);
 
         // Ask for way more than available
-        let burned = rocket.burn_sequential(&design, total_dv + 5_000.0);
-        assert!((burned - total_dv).abs() < 50.0,
-            "Should only burn total available dv={}, got {}", total_dv, burned);
+        let result = rocket.burn_sequential(&design, total_dv + 5_000.0);
+        assert!((result.dv_achieved - total_dv).abs() < 50.0,
+            "Should only burn total available dv={}, got {}", total_dv, result.dv_achieved);
     }
 }

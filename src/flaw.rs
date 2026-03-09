@@ -76,19 +76,18 @@ fn generate_single_flaw(id: FlawId, rng: &mut StdRng) -> Flaw {
     // Pick consequence type: weighted random
     // ~50% performance degradation, ~35% engine loss, ~15% stage loss
     let roll: f64 = rng.gen();
-    let (consequence, activation_range) = if roll < 0.50 {
-        // Performance degradation: 3-15% loss, higher activation chance
+    let consequence = if roll < 0.50 {
+        // Performance degradation: 3-15% loss
         let degradation = rng.gen_range(0.03..0.15);
-        (FlawConsequence::PerformanceDegradation(degradation), (0.05, 0.40))
+        FlawConsequence::PerformanceDegradation(degradation)
     } else if roll < 0.85 {
-        // Engine loss: moderate activation chance
-        (FlawConsequence::EngineLoss, (0.02, 0.25))
+        FlawConsequence::EngineLoss
     } else {
-        // Stage loss: lower activation chance (rarer but catastrophic)
-        (FlawConsequence::StageLoss, (0.01, 0.15))
+        FlawConsequence::StageLoss
     };
 
-    let activation_chance: f64 = rng.gen_range(activation_range.0..activation_range.1);
+    // Activation chance: random^2, skewed toward low values (mean ~0.33)
+    let activation_chance: f64 = rng.gen::<f64>().powi(2);
 
     // Discovery probability = uniform(0,1) * sqrt(activation_chance)
     let uniform_roll: f64 = rng.gen();
@@ -230,9 +229,23 @@ mod tests {
         let mut next_id = 0u64;
         let flaws = generate_flaws(9, &mut rng, &mut next_id);
         for flaw in &flaws {
-            assert!(flaw.activation_chance > 0.0, "activation_chance should be positive");
-            assert!(flaw.activation_chance < 1.0, "activation_chance should be < 1");
+            assert!(flaw.activation_chance >= 0.0, "activation_chance should be non-negative");
+            assert!(flaw.activation_chance <= 1.0, "activation_chance should be <= 1");
         }
+    }
+
+    #[test]
+    fn test_activation_chance_skewed_low() {
+        // With random^2, most values should be below 0.5
+        let mut rng = test_rng();
+        let mut next_id = 0u64;
+        let flaws = generate_flaws(100, &mut rng, &mut next_id);
+        let below_half = flaws.iter().filter(|f| f.activation_chance < 0.5).count();
+        assert!(
+            below_half as f64 / flaws.len() as f64 > 0.6,
+            "Most activation chances should be below 0.5 (got {}/{})",
+            below_half, flaws.len(),
+        );
     }
 
     #[test]

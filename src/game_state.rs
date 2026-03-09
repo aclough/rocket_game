@@ -1270,6 +1270,8 @@ impl GameState {
             flaws_activated: sim.flaws_activated,
             launch_date: self.date,
             persist,
+            launch_partial: matches!(sim.outcome, LaunchOutcome::PartialFailure { .. }),
+            flaw_rolled_groups: sim.flaw_rolled_groups,
         };
 
         self.active_flights.push(flight);
@@ -1288,9 +1290,58 @@ impl GameState {
 
     /// Process daily flight advancement. Returns events generated.
     fn advance_flights(&mut self) -> Vec<GameEvent> {
+        use rand::Rng;
+        use crate::engine::EngineId;
+        use crate::flaw::FlawConsequence;
+        use crate::engine_project::EngineSource;
+
         let mut events = Vec::new();
         let mut arrived_indices = Vec::new();
         let mut stranded_indices = Vec::new();
+
+        // Snapshot engine flaws keyed by engine_id for lookup during flight iteration.
+        // Each entry: (engine_id, engine_name, flaw_index_in_project, flaw_data, source)
+        struct FlawRef {
+            engine_id: EngineId,
+            engine_name: String,
+            activation_chance: f64,
+            consequence: FlawConsequence,
+            description: String,
+            source: EngineSource,
+            flaw_index: usize,
+        }
+        let mut flaw_table: Vec<FlawRef> = Vec::new();
+        for ep in &self.player_company.engine_projects {
+            let source = EngineSource::PlayerDesign(ep.project_id);
+            for (fi, flaw) in ep.flaws.iter().enumerate() {
+                flaw_table.push(FlawRef {
+                    engine_id: ep.design.id,
+                    engine_name: ep.design.name.clone(),
+                    activation_chance: flaw.activation_chance,
+                    consequence: flaw.consequence.clone(),
+                    description: flaw.description.clone(),
+                    source,
+                    flaw_index: fi,
+                });
+            }
+        }
+        for ce in &self.player_company.contracted_engines {
+            let source = EngineSource::Contracted(ce.id);
+            for (fi, flaw) in ce.flaws.iter().enumerate() {
+                flaw_table.push(FlawRef {
+                    engine_id: ce.design.id,
+                    engine_name: ce.design.name.clone(),
+                    activation_chance: flaw.activation_chance,
+                    consequence: flaw.consequence.clone(),
+                    description: flaw.description.clone(),
+                    source,
+                    flaw_index: fi,
+                });
+            }
+        }
+
+        // Track flaw discoveries to apply after the flight loop
+        let mut flaw_discoveries: Vec<(EngineSource, usize, String)> = Vec::new();
 
         for (i, flight) in self.active_flights.iter_mut().enumerate() {
             if !matches!(flight.status, FlightStatus::InTransit) {
@@ -1305,13 +1356,86 @@ impl GameState {
                 // Leg complete — consume propellant for this leg
                 if let Some(leg) = flight.route.get(flight.current_leg) {
                     let dv_cost = leg.delta_v_cost;
-                    let dv_achieved = flight.rocket.burn_sequential(&flight.design, dv_cost);
+                    let burn_result = flight.rocket.burn_sequential(&flight.design, dv_cost);
 
                     flight.current_location = leg.to.clone();
                     flight.rocket.location = leg.to.clone();
 
-                    // Check if burn fell significantly short
-                    if dv_achieved < dv_cost * 0.95 {
+                    // Roll mid-flight flaws for groups that burned propellant
+                    // (must happen before stranding check — stage was used even if burn fell short)
+                    // Filter to groups not yet rolled for flaws
+                    let new_burned: Vec<usize> = burn_result.groups_burned.iter()
+                        .copied()
+                        .filter(|gi| !flight.flaw_rolled_groups.contains(gi))
+                        .collect();
+                    if !new_burned.is_empty() {
+                        for &gi in &new_burned {
+                            flight.flaw_rolled_groups.insert(gi);
+                        }
+                        // Collect (group_index, stage_index, engine_id, engine_count) from newly-burned stages
+                        let mut burned_stages: Vec<(usize, usize, EngineId, u32)> = Vec::new();
+                        for &gi in &new_burned {
+                            if let Some(group) = flight.design.stage_groups.get(gi) {
+                                for (si, stage) in group.iter().enumerate() {
+                                    burned_stages.push((gi, si, stage.engine.id, stage.engine_count));
+                                }
+                            }
+                        }
+
+                        // Roll flaws for each engine used in burned groups
+                        for &(gi, si, engine_id, engine_count) in &burned_stages {
+                            for flaw_ref in &flaw_table {
+                                if flaw_ref.engine_id != engine_id {
+                                    continue;
+                                }
+                                let effective_p = 1.0 - (1.0 - flaw_ref.activation_chance)
+                                    .powi(engine_count as i32);
+                                if self.seed.contingent_rng.gen::<f64>() < effective_p {
+                                    flight.flaws_activated.push(crate::launch::FlawActivation {
+                                        flaw_description: flaw_ref.description.clone(),
+                                        consequence: flaw_ref.consequence.clone(),
+                                        engine_name: flaw_ref.engine_name.clone(),
+                                    });
+
+                                    // Apply consequence to the stage that has the flaw
+                                    crate::launch::apply_consequence_to_stage(
+                                        &mut flight.design,
+                                        &flaw_ref.consequence,
+                                        gi,
+                                        si,
+                                    );
+
+                                    let evt = GameEvent::MidFlightFlawActivated {
+                                        rocket_name: flight.rocket_name.clone(),
+                                        flaw_description: flaw_ref.description.clone(),
+                                        consequence: flaw_ref.consequence.to_string(),
+                                    };
+                                    events.push(evt);
+
+                                    flaw_discoveries.push((
+                                        flaw_ref.source,
+                                        flaw_ref.flaw_index,
+                                        flaw_ref.engine_name.clone(),
+                                    ));
+                                }
+                            }
+                        }
+
+                        // After flaw application, recheck remaining dv for stranding
+                        let remaining_dv = flight.rocket.remaining_delta_v(&flight.design);
+                        let remaining_route_dv: f64 = flight.route.iter()
+                            .skip(flight.current_leg + 1)
+                            .map(|leg| leg.delta_v_cost)
+                            .sum();
+                        if remaining_route_dv > 0.0 && remaining_dv < remaining_route_dv * 0.5 {
+                            flight.status = FlightStatus::Stranded;
+                            stranded_indices.push(i);
+                            continue;
+                        }
+                    }
+
+                    // Check if burn fell significantly short — strand the flight
+                    if burn_result.dv_achieved < dv_cost * 0.95 {
                         flight.status = FlightStatus::Stranded;
                         stranded_indices.push(i);
                         continue;
@@ -1326,6 +1450,35 @@ impl GameState {
                     // All legs complete
                     flight.status = FlightStatus::Arrived;
                     arrived_indices.push(i);
+                }
+            }
+        }
+
+        // Apply flaw discoveries to engine/rocket projects
+        for (source, flaw_index, _engine_name) in &flaw_discoveries {
+            match source {
+                EngineSource::PlayerDesign(project_id) => {
+                    if let Some(ep) = self.player_company.engine_projects.iter_mut()
+                        .find(|ep| ep.project_id == *project_id)
+                    {
+                        if *flaw_index < ep.flaws.len() && !ep.flaws[*flaw_index].discovered {
+                            ep.flaws[*flaw_index].discovered = true;
+                            let evt = GameEvent::FlawDiscovered {
+                                engine_name: ep.design.name.clone(),
+                                flaw_description: ep.flaws[*flaw_index].description.clone(),
+                            };
+                            events.push(evt);
+                        }
+                    }
+                }
+                EngineSource::Contracted(ce_id) => {
+                    if let Some(ce) = self.player_company.contracted_engines.iter_mut()
+                        .find(|ce| ce.id == *ce_id)
+                    {
+                        if *flaw_index < ce.flaws.len() {
+                            ce.flaws[*flaw_index].discovered = true;
+                        }
+                    }
                 }
             }
         }
@@ -1352,7 +1505,6 @@ impl GameState {
                     rocket_name: flight.rocket_name.clone(),
                     location: location.to_string(),
                 };
-                self.event_log.push(self.date, evt.clone());
                 events.push(evt);
             }
         }
@@ -1371,12 +1523,10 @@ impl GameState {
             rocket_name: flight.rocket_name.clone(),
             destination: dest_display.to_string(),
         };
-        self.event_log.push(self.date, evt.clone());
         events.push(evt);
 
         // Determine outcome based on launch sim result (stored in flight)
-        // If the flight arrived, it's either Success or PartialFailure
-        let is_partial = !flight.flaws_activated.is_empty();
+        let is_partial = flight.launch_partial;
 
         if is_partial {
             self.player_company.reputation.on_launch_partial_failure();
@@ -1410,7 +1560,6 @@ impl GameState {
                             amount: payment,
                             contract_name,
                         };
-                        self.event_log.push(self.date, pay_evt.clone());
                         events.push(pay_evt);
 
                         self.player_company.active_contracts.remove(ci);
@@ -1431,7 +1580,6 @@ impl GameState {
                 rocket_name: flight.rocket_name.clone(),
                 reason: reason.clone(),
             };
-            self.event_log.push(self.date, evt.clone());
             events.push(evt);
             LaunchOutcome::PartialFailure { reason }
         } else {
@@ -1439,7 +1587,6 @@ impl GameState {
                 rocket_name: flight.rocket_name.clone(),
                 destination: dest_display.to_string(),
             };
-            self.event_log.push(self.date, evt.clone());
             events.push(evt);
             LaunchOutcome::Success
         };
@@ -1514,6 +1661,8 @@ impl GameState {
             flaws_activated: vec![],
             launch_date: self.date,
             persist: true, // spacecraft flights always persist
+            launch_partial: false,
+            flaw_rolled_groups: std::collections::HashSet::new(),
         };
 
         self.active_flights.push(flight);
@@ -1632,6 +1781,324 @@ mod tests {
         assert_eq!(gs.player_company.team_count(), 2);
         // Starting money minus 2 hiring costs (initial team + Alpha)
         assert_eq!(gs.player_company.money, 1_000_000.0 - 2.0 * TEAM_HIRING_COST);
+    }
+
+    /// Build a 3-stage rocket design with two different engines.
+    /// Stages 1 & 2 use engine_id=1, stage 3 uses engine_id=2.
+    /// With 0 payload, stages 1+2 provide enough dv for LEO; stage 3 provides dv for LEO→GTO.
+    fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::EngineProject>) {
+        use crate::engine::{EngineDesign, EngineId, EngineCycle, PropellantFraction};
+        use crate::propellant::Propellant;
+        use crate::stage::{Stage, StageId};
+        use crate::flaw::{Flaw, FlawId, FlawConsequence};
+        use crate::engine_project::{EngineProject, EngineProjectId, EngineDesignStatus, PropellantPreset};
+
+        let engine1 = EngineDesign {
+            id: EngineId(101),
+            name: "Lifter".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 2_000_000.0,
+            isp_s: 300.0,
+            exit_pressure_pa: 100_000.0,
+            needs_atmosphere: false,
+            mass_kg: 1500.0,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.6 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
+            ],
+        };
+
+        let engine2 = EngineDesign {
+            id: EngineId(102),
+            name: "Upper".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 100_000.0,
+            isp_s: 350.0,
+            exit_pressure_pa: 100_000.0,
+            needs_atmosphere: false,
+            mass_kg: 200.0,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.6 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
+            ],
+        };
+
+        let stage1 = Stage {
+            id: StageId(1),
+            name: "S1".into(),
+            engine: engine1.clone(),
+            engine_count: 3,
+            propellant_mass_kg: 200_000.0,
+            structural_mass_kg: 5000.0,
+            fairing: None,
+        };
+        let stage2 = Stage {
+            id: StageId(2),
+            name: "S2".into(),
+            engine: engine1.clone(),
+            engine_count: 1,
+            propellant_mass_kg: 30_000.0,
+            structural_mass_kg: 1000.0,
+            fairing: None,
+        };
+        // Stage 3 sized so that LEO→GTO (2440 m/s) + GTO→GEO (1500 m/s) = 3940 m/s
+        // exceeds its dv, ensuring it gets exhausted and jettisoned mid-flight.
+        // With 1000 kg prop, 300 dry, 200 engine = 500 dry, ve=3433: dv ≈ 3433*ln(1500/500) = 3773 m/s
+        let stage3 = Stage {
+            id: StageId(3),
+            name: "S3".into(),
+            engine: engine2.clone(),
+            engine_count: 1,
+            propellant_mass_kg: 1000.0,
+            structural_mass_kg: 300.0,
+            fairing: None,
+        };
+
+        let design = RocketDesign {
+            id: crate::rocket::RocketDesignId(1),
+            name: "TestThreeStage".into(),
+            stage_groups: vec![
+                vec![stage1],
+                vec![stage2],
+                vec![stage3],
+            ],
+        };
+
+        // Engine projects with guaranteed flaws
+        let flaw1 = Flaw {
+            id: FlawId(1),
+            description: "Lifter turbopump vibration".into(),
+            consequence: FlawConsequence::PerformanceDegradation(0.01),
+            activation_chance: 1.0,
+            discovery_probability: 1.0,
+            discovered: false,
+        };
+        let flaw2 = Flaw {
+            id: FlawId(2),
+            description: "Upper injector erosion".into(),
+            consequence: FlawConsequence::PerformanceDegradation(0.01),
+            activation_chance: 1.0,
+            discovery_probability: 1.0,
+            discovered: false,
+        };
+
+        let ep1 = EngineProject {
+            project_id: EngineProjectId(1),
+            design: engine1,
+            preset: PropellantPreset::Kerolox,
+            scale: 1.0,
+            status: EngineDesignStatus::Testing {
+                work_completed: 100.0,
+            },
+            flaws: vec![flaw1],
+            revision: 0,
+            teams_assigned: 0,
+            complexity: 6,
+            nre_cost: 0.0,
+        };
+        let ep2 = EngineProject {
+            project_id: EngineProjectId(2),
+            design: engine2,
+            preset: PropellantPreset::Kerolox,
+            scale: 1.0,
+            status: EngineDesignStatus::Testing {
+                work_completed: 100.0,
+            },
+            flaws: vec![flaw2],
+            revision: 0,
+            teams_assigned: 0,
+            complexity: 6,
+            nre_cost: 0.0,
+        };
+
+        (design, vec![ep1, ep2])
+    }
+
+    #[test]
+    fn test_flaw_scoping_by_stage_usage() {
+        use rand::SeedableRng;
+        use crate::engine::EngineId;
+        use crate::rocket_project::{RocketProject, RocketProjectId};
+
+        let (design, engine_projects) = make_three_stage_design();
+
+        // Verify stages 1+2 can reach LEO with 0 payload
+        let dv_12 = {
+            let two_stage = RocketDesign {
+                id: design.id,
+                name: design.name.clone(),
+                stage_groups: vec![
+                    design.stage_groups[0].clone(),
+                    design.stage_groups[1].clone(),
+                ],
+            };
+            two_stage.total_delta_v(0.0)
+        };
+        let total_dv = design.total_delta_v(0.0);
+        assert!(dv_12 > 9400.0,
+            "Stages 1+2 should provide enough dv for LEO, got {:.0}", dv_12);
+        assert!(total_dv > dv_12 + 2000.0,
+            "Stage 3 should add significant dv, got total {:.0} vs 1+2={:.0}", total_dv, dv_12);
+
+        // --- Part 1: Launch to LEO, only stages 1+2 flaws should fire ---
+        let rp = RocketProject::new(RocketProjectId(1), design.clone());
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let sim = crate::launch::simulate_launch(
+            &design, "leo", 0.0,
+            &engine_projects, &rp, &[], &mut rng,
+        );
+
+        assert!(matches!(sim.outcome, crate::launch::LaunchOutcome::Success),
+            "Launch to LEO should succeed, got {:?}", sim.outcome);
+        // Only group 0 (stage 1) flaws should fire at launch.
+        // Stage 2 (group 1) and stage 3 (group 2) flaws are deferred to mid-flight.
+        assert_eq!(sim.flaws_activated.len(), 1,
+            "Only group 0 flaw should fire at launch, got {:?}", sim.flaws_activated);
+        assert_eq!(sim.flaws_activated[0].flaw_description, "Lifter turbopump vibration");
+        assert_eq!(sim.flaw_rolled_groups.len(), 1);
+        assert!(sim.flaw_rolled_groups.contains(&0));
+
+        // --- Part 2: Create a spacecraft at LEO and fly to GTO ---
+        let mut gs = GameState::new("Test".into(), 200_000_000.0, 42);
+        gs.player_company.engine_projects = engine_projects;
+        // Reset flaw discovery for the fly phase
+        for ep in &mut gs.player_company.engine_projects {
+            for flaw in &mut ep.flaws {
+                flaw.discovered = false;
+            }
+        }
+
+        // Instantiate the rocket from the degraded design (as launch_rocket would)
+        let rocket = sim.degraded_design.instantiate(
+            crate::rocket::RocketId(1), "leo", 0.0,
+        );
+
+        // Simulate that stages 1+2 are jettisoned (as they would be after LEO insertion)
+        let mut rocket = rocket;
+        for si in 0..rocket.stage_states[0].len() {
+            rocket.jettison_stage(0, si);
+        }
+        for si in 0..rocket.stage_states[1].len() {
+            rocket.jettison_stage(1, si);
+        }
+
+        // Verify we're on stage 3 (group index 2)
+        let current_group = (0..sim.degraded_design.stage_groups.len())
+            .find(|&gi| rocket.stage_states.get(gi)
+                .map(|ss| ss.iter().any(|s| s.attached))
+                .unwrap_or(false));
+        assert_eq!(current_group, Some(2), "Should be on stage 3 (group index 2)");
+
+        // Add as spacecraft
+        let sc = Spacecraft {
+            id: SpacecraftId(1),
+            name: "TestCraft".into(),
+            rocket,
+            design: sim.degraded_design,
+            location: "leo".into(),
+        };
+        gs.spacecraft.push(sc);
+
+        // Fly spacecraft to GEO (LEO→GTO→GEO, 3940 m/s total, exceeds stage 3 dv)
+        // Stage 3 will be exhausted and jettisoned mid-flight, triggering flaw roll.
+        gs.fly_spacecraft(0, "geo");
+        assert_eq!(gs.active_flights.len(), 1, "Should have one active flight");
+        assert!(gs.spacecraft.is_empty(), "Spacecraft should be consumed");
+
+        // Advance days until the flight completes (arrives or strands)
+        for _ in 0..30 {
+            gs.advance_day();
+            if gs.active_flights.is_empty() {
+                break;
+            }
+        }
+
+        // Flight should have completed (stranded after stage exhaustion is OK)
+        assert!(gs.active_flights.is_empty(),
+            "Flight should have completed, still have {} active", gs.active_flights.len());
+
+        // Check that the Upper engine flaw was discovered mid-flight
+        let ep2 = gs.player_company.engine_projects.iter()
+            .find(|ep| ep.design.id == EngineId(102))
+            .expect("Should find engine project 102");
+        assert!(ep2.flaws[0].discovered,
+            "Upper engine flaw should be discovered after stage 3 jettison");
+
+        // Check the event log for the mid-flight flaw activation
+        let flaw_events: Vec<_> = gs.event_log.iter()
+            .filter(|(_, e)| matches!(e, GameEvent::MidFlightFlawActivated { .. }))
+            .collect();
+        assert_eq!(flaw_events.len(), 1,
+            "Should have exactly one mid-flight flaw event, got {}", flaw_events.len());
+    }
+
+    #[test]
+    fn test_spacecraft_has_remaining_dv_after_leo_launch() {
+        use crate::rocket_project::{RocketProject, RocketProjectId};
+
+        let (design, engine_projects) = make_three_stage_design();
+
+        let mut gs = GameState::new("Test".into(), 200_000_000.0, 42);
+        gs.player_company.engine_projects = engine_projects;
+
+        // Simulate launch to get degraded design
+        let rp = RocketProject::new(RocketProjectId(1), design.clone());
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(99);
+        let sim = crate::launch::simulate_launch(
+            &design, "leo", 0.0,
+            &gs.player_company.engine_projects, &rp, &[], &mut rng,
+        );
+
+        // Build route and instantiate rocket
+        let rocket_mass = sim.degraded_design.total_mass_kg();
+        let thrust = sim.degraded_design.group_thrust_n(0);
+        let path = crate::location::DELTA_V_MAP
+            .shortest_path("earth_surface", "leo", rocket_mass);
+        let route = match path {
+            Some((p, _)) => crate::flight::build_route(&p, rocket_mass, thrust),
+            None => vec![],
+        };
+        let rocket = sim.degraded_design.instantiate(
+            crate::rocket::RocketId(1), "earth_surface", 0.0,
+        );
+        let leg_days = route.first().map(|l| l.total_days()).unwrap_or(0);
+
+        let flight = crate::flight::Flight {
+            id: crate::flight::FlightId(1),
+            rocket_name: "TestRocket".into(),
+            rocket_project_id: RocketProjectId(1),
+            design: sim.degraded_design,
+            rocket,
+            payloads: vec![],
+            current_location: "earth_surface".into(),
+            route,
+            current_leg: 0,
+            leg_days_remaining: leg_days,
+            status: crate::flight::FlightStatus::InTransit,
+            flaws_activated: sim.flaws_activated,
+            launch_date: gs.date,
+            persist: true,
+            launch_partial: false,
+            flaw_rolled_groups: sim.flaw_rolled_groups,
+        };
+
+        gs.active_flights.push(flight);
+
+        // Advance days until flight arrives
+        for _ in 0..10 {
+            gs.advance_day();
+            if gs.active_flights.is_empty() { break; }
+        }
+
+        assert!(gs.active_flights.is_empty(), "Flight should have arrived");
+        assert_eq!(gs.spacecraft.len(), 1, "Should have a spacecraft");
+
+        let sc = &gs.spacecraft[0];
+        let remaining = sc.remaining_delta_v();
+        assert!(remaining > 1000.0,
+            "Spacecraft should have significant remaining dv, got {:.0}", remaining);
     }
 
     #[test]

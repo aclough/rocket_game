@@ -46,6 +46,7 @@ pub enum GameEvent {
     FlightDeparted { rocket_name: String, destination: String },
     FlightArrived { rocket_name: String, destination: String },
     SpacecraftStranded { rocket_name: String, location: String },
+    MidFlightFlawActivated { rocket_name: String, flaw_description: String, consequence: String },
 }
 
 impl fmt::Display for GameEvent {
@@ -120,6 +121,8 @@ impl fmt::Display for GameEvent {
                 write!(f, "Flight arrived: {} at {}", rocket_name, destination),
             GameEvent::SpacecraftStranded { rocket_name, location } =>
                 write!(f, "Spacecraft stranded: {} at {}", rocket_name, location),
+            GameEvent::MidFlightFlawActivated { rocket_name, flaw_description, consequence } =>
+                write!(f, "In-flight flaw on {}: {} ({})", rocket_name, flaw_description, consequence),
         }
     }
 }
@@ -169,7 +172,8 @@ impl GameEvent {
             | GameEvent::EngineBuildOrdered { .. }
             | GameEvent::FlightDeparted { .. }
             | GameEvent::FlightArrived { .. }
-            | GameEvent::SpacecraftStranded { .. } => EventImportance::Notable,
+            | GameEvent::SpacecraftStranded { .. }
+            | GameEvent::MidFlightFlawActivated { .. } => EventImportance::Notable,
         }
     }
 }

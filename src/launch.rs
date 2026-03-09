@@ -51,6 +51,8 @@ pub struct LaunchSimResult {
     pub rocket_flaw_discoveries: Vec<usize>,
     /// Indices of flaws to mark as discovered on contracted engines.
     pub contracted_flaw_discoveries: Vec<(EngineSource, Vec<usize>)>,
+    /// Which stage groups had flaws rolled during the launch sim.
+    pub flaw_rolled_groups: std::collections::HashSet<usize>,
 }
 
 /// Simulate a launch. This does not modify any state — it returns a result
@@ -75,29 +77,46 @@ pub fn simulate_launch(
     let mut rocket_flaw_discoveries: Vec<usize> = Vec::new();
     let mut contracted_flaw_discoveries: Vec<(EngineSource, Vec<usize>)> = Vec::new();
 
+    // Compute required delta-v for the destination
+    let rocket_mass = design.total_mass_kg();
+    let required_dv = crate::location::DELTA_V_MAP
+        .shortest_path("earth_surface", destination, rocket_mass)
+        .map(|(_, dv)| dv)
+        .unwrap_or(f64::INFINITY);
+
+    // Only roll flaws for the first stage group (group 0) at launch.
+    // Upper stage flaws are rolled mid-flight when those stages actually fire.
+    let groups_needed: usize = if design.stage_groups.is_empty() { 0 } else { 1 };
+
     // Clone the design so we can degrade it
     let mut degraded = design.clone();
 
-    // Roll engine project flaws
-    for group in &design.stage_groups {
-        for stage in group {
+    // Roll engine project flaws only for groups that will actually fire
+    for (gi, group) in design.stage_groups.iter().enumerate() {
+        if gi >= groups_needed {
+            break;
+        }
+        for (si, stage) in group.iter().enumerate() {
             // Find the engine project for this stage's engine
             if let Some(ep) = engine_projects.iter()
                 .find(|ep| ep.design.id == stage.engine.id)
             {
                 let mut discovered_indices = Vec::new();
                 for (fi, flaw) in ep.flaws.iter().enumerate() {
-                    if rng.gen::<f64>() < flaw.activation_chance {
+                    // Scale activation by engine count: 1 - (1-p)^n
+                    let effective_p = 1.0 - (1.0 - flaw.activation_chance)
+                        .powi(stage.engine_count as i32);
+                    if rng.gen::<f64>() < effective_p {
                         activations.push(FlawActivation {
                             flaw_description: flaw.description.clone(),
                             consequence: flaw.consequence.clone(),
                             engine_name: stage.engine.name.clone(),
                         });
                         discovered_indices.push(fi);
-                        apply_consequence_to_design(
+                        apply_consequence_to_stage(
                             &mut degraded,
                             &flaw.consequence,
-                            stage.engine.id,
+                            gi, si,
                         );
                     }
                 }
@@ -112,17 +131,19 @@ pub fn simulate_launch(
             {
                 let mut discovered_indices = Vec::new();
                 for (fi, flaw) in ce.flaws.iter().enumerate() {
-                    if rng.gen::<f64>() < flaw.activation_chance {
+                    let effective_p = 1.0 - (1.0 - flaw.activation_chance)
+                        .powi(stage.engine_count as i32);
+                    if rng.gen::<f64>() < effective_p {
                         activations.push(FlawActivation {
                             flaw_description: flaw.description.clone(),
                             consequence: flaw.consequence.clone(),
                             engine_name: stage.engine.name.clone(),
                         });
                         discovered_indices.push(fi);
-                        apply_consequence_to_design(
+                        apply_consequence_to_stage(
                             &mut degraded,
                             &flaw.consequence,
-                            stage.engine.id,
+                            gi, si,
                         );
                     }
                 }
@@ -136,13 +157,12 @@ pub fn simulate_launch(
         }
     }
 
-    // Roll rocket project flaws — these affect a random stage group
+    // Roll rocket project flaws — only target groups that will fire
     for (fi, flaw) in rocket_project.flaws.iter().enumerate() {
         if rng.gen::<f64>() < flaw.activation_chance {
-            // Pick a random stage group for the consequence
-            let group_count = degraded.stage_groups.len();
-            if group_count > 0 {
-                let gi = rng.gen_range(0..group_count);
+            // Pick a random stage group among those that will fire
+            if groups_needed > 0 {
+                let gi = rng.gen_range(0..groups_needed);
                 let engine_name = degraded.stage_groups.get(gi)
                     .and_then(|g| g.first())
                     .map(|s| s.engine.name.clone())
@@ -152,7 +172,11 @@ pub fn simulate_launch(
                     consequence: flaw.consequence.clone(),
                     engine_name,
                 });
-                apply_rocket_consequence(&mut degraded, &flaw.consequence, gi);
+                // Pick a random stage within the group
+                let si = if !degraded.stage_groups[gi].is_empty() {
+                    rng.gen_range(0..degraded.stage_groups[gi].len())
+                } else { 0 };
+                apply_consequence_to_stage(&mut degraded, &flaw.consequence, gi, si);
             }
             rocket_flaw_discoveries.push(fi);
         }
@@ -160,13 +184,6 @@ pub fn simulate_launch(
 
     // Compute degraded delta-v
     let degraded_dv = degraded.total_delta_v(payload_kg);
-
-    // Get required delta-v for destination
-    let rocket_mass = design.total_mass_kg();
-    let required_dv = crate::location::DELTA_V_MAP
-        .shortest_path("earth_surface", destination, rocket_mass)
-        .map(|(_, dv)| dv)
-        .unwrap_or(f64::INFINITY);
 
     // Determine outcome
     let outcome = if degraded_dv >= required_dv {
@@ -198,80 +215,49 @@ pub fn simulate_launch(
         engine_flaw_discoveries,
         rocket_flaw_discoveries,
         contracted_flaw_discoveries,
+        flaw_rolled_groups: (0..groups_needed).collect(),
     }
 }
 
-/// Apply a flaw consequence to a cloned design (engine-level flaw).
-fn apply_consequence_to_design(
-    design: &mut RocketDesign,
-    consequence: &FlawConsequence,
-    engine_id: EngineId,
-) {
-    match consequence {
-        FlawConsequence::PerformanceDegradation(frac) => {
-            // Reduce thrust and Isp of the affected engine
-            for group in &mut design.stage_groups {
-                for stage in group {
-                    if stage.engine.id == engine_id {
-                        stage.engine.thrust_n *= 1.0 - frac;
-                        stage.engine.isp_s *= 1.0 - frac;
-                    }
-                }
-            }
-        }
-        FlawConsequence::EngineLoss => {
-            // Remove one engine from the affected stage
-            for group in &mut design.stage_groups {
-                for stage in group {
-                    if stage.engine.id == engine_id && stage.engine_count > 0 {
-                        stage.engine_count -= 1;
-                        // If engine_count drops to 0, effectively stage is lost
-                        // (thrust = 0, no delta-v contribution)
-                        return; // only lose one engine per flaw
-                    }
-                }
-            }
-        }
-        FlawConsequence::StageLoss => {
-            // Remove all stages with this engine from their group
-            for group in &mut design.stage_groups {
-                group.retain(|s| s.engine.id != engine_id);
-            }
-            // Remove empty groups
-            design.stage_groups.retain(|g| !g.is_empty());
-        }
-    }
-}
-
-/// Apply a rocket-level flaw consequence to a specific stage group.
-fn apply_rocket_consequence(
+/// Apply a flaw consequence to a specific stage in a cloned design.
+/// PerformanceDegradation and EngineLoss are scoped to the specific stage.
+/// StageLoss removes the entire stage from its group.
+pub fn apply_consequence_to_stage(
     design: &mut RocketDesign,
     consequence: &FlawConsequence,
     group_index: usize,
+    stage_index: usize,
 ) {
     if group_index >= design.stage_groups.len() {
         return;
     }
+    let group = &mut design.stage_groups[group_index];
+    if stage_index >= group.len() {
+        return;
+    }
     match consequence {
         FlawConsequence::PerformanceDegradation(frac) => {
-            for stage in &mut design.stage_groups[group_index] {
-                stage.engine.thrust_n *= 1.0 - frac;
-                stage.engine.isp_s *= 1.0 - frac;
-            }
+            // Reduce thrust and Isp only on this specific stage
+            group[stage_index].engine.thrust_n *= 1.0 - frac;
+            group[stage_index].engine.isp_s *= 1.0 - frac;
         }
         FlawConsequence::EngineLoss => {
-            // Lose one engine from the first stage in the group
-            if let Some(stage) = design.stage_groups[group_index].first_mut() {
-                if stage.engine_count > 0 {
-                    stage.engine_count -= 1;
-                }
+            // Remove one engine from this specific stage
+            if group[stage_index].engine_count > 0 {
+                group[stage_index].engine_count -= 1;
             }
         }
         FlawConsequence::StageLoss => {
-            design.stage_groups.remove(group_index);
+            // Disable the stage by zeroing engines and performance.
+            // We don't remove from the group to keep indices in sync with Rocket's stage_states.
+            group[stage_index].engine_count = 0;
+            group[stage_index].engine.thrust_n = 0.0;
+            group[stage_index].engine.isp_s = 0.0;
+            group[stage_index].propellant_mass_kg = 0.0;
         }
     }
 }
+
 
 #[cfg(test)]
 mod tests {

@@ -1162,7 +1162,7 @@ impl App {
                             state.snapshots.push((state.rocket.clone(), state.payload_kg));
 
                             // Burn propellant
-                            state.rocket.burn_sequential(&state.design, dv_cost);
+                            let _ = state.rocket.burn_sequential(&state.design, dv_cost);
                             state.rocket.location = dest_id.clone();
                             state.current_location = dest_id;
 

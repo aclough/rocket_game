@@ -889,11 +889,28 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
         for sc in spacecraft.iter() {
             let loc_name = contract::destination_display_name(&sc.location);
             let dv = sc.remaining_delta_v();
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled("  ◆ ", Style::default().fg(Color::Green)),
                 Span::raw(format!("{} @ {}  ", sc.name, loc_name)),
                 Span::styled(format!("Δv: {:.0} m/s", dv), Style::default().fg(Color::DarkGray)),
-            ]));
+            ];
+            // Show current stage group if not on the final one
+            let total_groups = sc.design.stage_groups.len();
+            if total_groups > 1 {
+                let current_group = (0..total_groups)
+                    .find(|&gi| sc.rocket.stage_states.get(gi)
+                        .map(|ss| ss.iter().any(|s| s.attached))
+                        .unwrap_or(false));
+                if let Some(gi) = current_group {
+                    if gi + 1 < total_groups {
+                        spans.push(Span::styled(
+                            format!("  Stage {}/{}", gi + 1, total_groups),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                }
+            }
+            lines.push(Line::from(spans));
         }
     }
 
