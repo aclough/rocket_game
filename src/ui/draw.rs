@@ -115,7 +115,6 @@ fn draw_content(frame: &mut Frame, app: &App, area: Rect) {
 
     match app.current_tab() {
         Tab::Overview => draw_overview(frame, app, area, border_style),
-        Tab::Teams => draw_teams_tab(frame, app, area, border_style),
         Tab::Engines => draw_engines_tab(frame, app, area, border_style),
         Tab::Rockets => draw_rockets_tab(frame, app, area, border_style),
         Tab::Manufacturing => draw_manufacturing_tab(frame, app, area, border_style),
@@ -155,68 +154,6 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) 
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(" Overview ");
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
-}
-
-fn draw_teams_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
-    let company = &app.game.player_company;
-    let mut lines = vec![
-        Line::from(format!(
-            "  All Teams          Monthly cost: {}",
-            format_money(company.monthly_salary_cost()),
-        )),
-        Line::from("  ─────────────────────────────────────────────"),
-        Line::from(format!("  Engineering:    {} ({} unassigned)",
-            company.team_count(), company.unassigned_team_count())),
-        Line::from(format!("  Manufacturing:  {} ({} unassigned)",
-            company.manufacturing_teams.len(),
-            company.unassigned_manufacturing_team_count())),
-        Line::from(""),
-    ];
-
-    // Show engineering assignment breakdown
-    for project in &company.engine_projects {
-        if project.teams_assigned > 0 {
-            lines.push(Line::from(format!(
-                "    {} eng. team(s) on \"{}\"  (rate: {:.2}/day)",
-                project.teams_assigned,
-                project.design.name,
-                crate::team::effective_work_rate(project.teams_assigned),
-            )));
-        }
-    }
-    for project in &company.rocket_projects {
-        if project.teams_assigned > 0 {
-            lines.push(Line::from(format!(
-                "    {} eng. team(s) on \"{}\"  (rate: {:.2}/day)",
-                project.teams_assigned,
-                project.design.name,
-                crate::team::effective_work_rate(project.teams_assigned),
-            )));
-        }
-    }
-    for order in &company.manufacturing.orders {
-        if order.teams_assigned > 0 {
-            lines.push(Line::from(format!(
-                "    {} mfg. team(s) on {} \"{}\"  (rate: {:.2}/day)",
-                order.teams_assigned,
-                order.type_label(),
-                order.display_name(),
-                crate::team::manufacturing_work_rate(order.teams_assigned),
-            )));
-        }
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(
-        Span::styled("  [E] Hire eng. team ($150K)  [M] Hire mfg. team ($900K)", Style::default().fg(Color::Cyan))
-    ));
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(" Teams ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }

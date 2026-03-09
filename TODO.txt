@@ -1,5 +1,4 @@
 [] Add ability to put multiple payloads on a rocket.
-[] Get rid of Teams tab
 [] Add flight endurance related flaws that can trigger as day advances
 [] Add consumables and propellant boiloff.
     [] Including electrical power via batteries, solar panels, etc.

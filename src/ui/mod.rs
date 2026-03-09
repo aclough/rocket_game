@@ -31,7 +31,6 @@ pub enum FocusedPane {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Overview,
-    Teams,
     Engines,
     Rockets,
     Manufacturing,
@@ -43,7 +42,7 @@ pub enum Tab {
 
 impl Tab {
     pub const ALL: &[Tab] = &[
-        Tab::Overview, Tab::Teams, Tab::Engines,
+        Tab::Overview, Tab::Engines,
         Tab::Rockets, Tab::Manufacturing, Tab::Contracts,
         Tab::Launches, Tab::Finance, Tab::Events,
     ];
@@ -51,7 +50,6 @@ impl Tab {
     pub fn name(&self) -> &'static str {
         match self {
             Tab::Overview => "Overview",
-            Tab::Teams => "Teams",
             Tab::Engines => "Engines",
             Tab::Rockets => "Rockets",
             Tab::Manufacturing => "Mfg",
@@ -457,34 +455,11 @@ impl App {
 
     fn handle_tab_key(&mut self, key: KeyCode) {
         match self.current_tab() {
-            Tab::Teams => self.handle_teams_key(key),
             Tab::Engines => self.handle_engines_key(key),
             Tab::Rockets => self.handle_rockets_key(key),
             Tab::Manufacturing => self.handle_manufacturing_key(key),
             Tab::Contracts => self.handle_contracts_key(key),
             Tab::Launches => self.handle_launches_key(key),
-            _ => {}
-        }
-    }
-
-    fn handle_teams_key(&mut self, key: KeyCode) {
-        match key {
-            KeyCode::Char('e') => {
-                let team_num = self.game.player_company.team_count() + 1;
-                let name = format!("Team {}", team_num);
-                if let Some(evt) = self.game.player_company.hire_team(name.clone()) {
-                    self.game.event_log.push(self.game.date, evt);
-                    self.status_message = Some(format!("Hired {}", name));
-                }
-            }
-            KeyCode::Char('m') => {
-                let team_num = self.game.player_company.manufacturing_teams.len() + 1;
-                let name = format!("Mfg Team {}", team_num);
-                if let Some(evt) = self.game.player_company.hire_manufacturing_team(name.clone()) {
-                    self.game.event_log.push(self.game.date, evt);
-                    self.status_message = Some(format!("Hired {}", name));
-                }
-            }
             _ => {}
         }
     }
