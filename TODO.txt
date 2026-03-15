@@ -1,4 +1,3 @@
-[] Add a pentalty for using a vacuum optimized engine as a first stage booster.
 [] Add ability to put multiple payloads on a rocket.
 [] Add flight endurance related flaws that can trigger as the day advances
 [] Add consumables and propellant boiloff.

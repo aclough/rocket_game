@@ -202,6 +202,7 @@ pub enum InputMode {
         preset: PropellantPreset,
         scale: f64,
         use_vacuum: bool,
+        vacuum_only: bool,
     },
     /// Selecting from third-party catalog.
     SelectThirdParty { selected: usize },
@@ -775,6 +776,7 @@ impl App {
                                 preset: PropellantPreset::Solid,
                                 scale: crate::engine_project::DEFAULT_SCALE,
                                 use_vacuum: false,
+                                vacuum_only: false,
                             };
                         }
                     }
@@ -794,18 +796,21 @@ impl App {
                     KeyCode::Enter => {
                         let preset = presets[*selected];
                         let name = name.clone();
+                        // Expander cycles are always vacuum-optimized
+                        let vacuum_only = cycle == EngineCycle::Expander;
                         self.input_mode = InputMode::SelectScale {
                             name,
                             cycle,
                             preset,
                             scale: crate::engine_project::DEFAULT_SCALE,
                             use_vacuum: true,
+                            vacuum_only,
                         };
                     }
                     _ => {}
                 }
             }
-            InputMode::SelectScale { name, cycle, preset, scale, use_vacuum } => {
+            InputMode::SelectScale { name, cycle, preset, scale, use_vacuum, vacuum_only } => {
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
                     KeyCode::Up | KeyCode::Right => {
@@ -816,7 +821,7 @@ impl App {
                         *scale = (*scale - crate::engine_project::SCALE_STEP)
                             .max(crate::engine_project::MIN_SCALE);
                     }
-                    KeyCode::Char('v') => { *use_vacuum = !*use_vacuum; }
+                    KeyCode::Char('v') if !*vacuum_only => { *use_vacuum = !*use_vacuum; }
                     KeyCode::Enter => {
                         let name = name.clone();
                         let cycle = *cycle;
@@ -1136,8 +1141,12 @@ impl App {
                             // Save snapshot for undo
                             state.snapshots.push((state.rocket.clone(), state.payload_kg));
 
-                            // Burn propellant
-                            let _ = state.rocket.burn_sequential(&state.design, dv_cost);
+                            // Burn propellant (account for atmospheric Isp penalty)
+                            let ambient = crate::location::DELTA_V_MAP
+                                .surface_properties(&from)
+                                .filter(|p| p.has_atmosphere)
+                                .map_or(0.0, |p| p.ambient_pressure_pa);
+                            let _ = state.rocket.burn_sequential(&state.design, dv_cost, ambient);
                             state.rocket.location = dest_id.clone();
                             state.current_location = dest_id;
 

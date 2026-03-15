@@ -1235,10 +1235,40 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
                     if s.aero_drag_loss >= 0.5 {
                         loss_parts.push(format!("aero: -{:.0}", s.aero_drag_loss));
                     }
+                    if s.overexpansion_loss >= 0.5 {
+                        loss_parts.push(format!("nozzle: -{:.0}", s.overexpansion_loss));
+                    }
                     if !loss_parts.is_empty() {
                         lines.push(Line::from(Span::styled(
                             format!("{}                 ({})", group_indent, loss_parts.join("  ")),
                             Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                }
+
+                // Overexpansion warning for first stage group launching from atmosphere
+                if gi == 0 && state.launch_from == "earth_surface" {
+                    let ambient = 101_325.0_f64;
+                    let isp_frac = stage.engine.isp_fraction_at(ambient);
+                    let risk = stage.engine.overexpansion_destruction_risk(ambient);
+                    if risk > 0.0 {
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "        ⚠ Flow separation risk: {:.0}%/engine, Isp penalty: {:.0}%  (exit {:.0} kPa)",
+                                risk * 100.0,
+                                (1.0 - isp_frac) * 100.0,
+                                stage.engine.exit_pressure_pa / 1000.0,
+                            ),
+                            Style::default().fg(Color::Red),
+                        )));
+                    } else if isp_frac < 0.95 {
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "        Isp penalty: {:.0}%  (exit {:.0} kPa at sea level)",
+                                (1.0 - isp_frac) * 100.0,
+                                stage.engine.exit_pressure_pa / 1000.0,
+                            ),
+                            Style::default().fg(Color::Yellow),
                         )));
                     }
                 }
@@ -1389,7 +1419,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
-        InputMode::SelectScale { name, cycle, preset, scale, use_vacuum } => {
+        InputMode::SelectScale { name, cycle, preset, scale, use_vacuum, vacuum_only } => {
             let baseline = engine_project::engine_baseline(*cycle, *preset);
             let mut lines = vec![
                 Line::from(format!("  Design: {}  {:?}  {}", name, cycle, preset.name())),
@@ -1399,6 +1429,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 let thrust = b.thrust_n * scale;
                 let mass = b.mass_kg * scale;
                 let isp = if *use_vacuum { b.isp_vac_s } else { b.isp_sl_s };
+                let exit_p = if *use_vacuum { b.exit_pressure_vac_pa } else { b.exit_pressure_sl_pa };
                 lines.push(Line::from(format!("  Scale: {:.2}x  [↑↓ to adjust]", scale)));
                 lines.push(Line::from(""));
                 lines.push(Line::from(format!("  Thrust: {:.0} kN", thrust / 1000.0)));
@@ -1408,11 +1439,25 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     isp,
                     if *use_vacuum { "vacuum" } else { "sea level" },
                 )));
+                lines.push(Line::from(format!("  Exit P: {:.0} kPa", exit_p / 1000.0)));
+                if *use_vacuum && !*vacuum_only {
+                    lines.push(Line::from(Span::styled(
+                        "  ⚠ Low exit pressure — risk of flow separation at sea level",
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
                 lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "  [V] Toggle vacuum/sea-level  [Enter] Confirm",
-                    Style::default().fg(Color::Cyan),
-                )));
+                if *vacuum_only {
+                    lines.push(Line::from(Span::styled(
+                        "  Vacuum only (expander cycle)  [Enter] Confirm",
+                        Style::default().fg(Color::Cyan),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "  [V] Toggle vacuum/sea-level  [Enter] Confirm",
+                        Style::default().fg(Color::Cyan),
+                    )));
+                }
             }
             let block = Block::default()
                 .borders(Borders::ALL)

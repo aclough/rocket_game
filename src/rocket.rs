@@ -309,7 +309,7 @@ impl Rocket {
     /// Burns the lowest attached group first; when exhausted, jettisons it and
     /// continues with the next group. Returns actual delta-v achieved and
     /// which groups were jettisoned.
-    pub fn burn_sequential(&mut self, design: &RocketDesign, target_dv: f64) -> BurnResult {
+    pub fn burn_sequential(&mut self, design: &RocketDesign, target_dv: f64, ambient_pressure_pa: f64) -> BurnResult {
         let mut dv_remaining = target_dv;
         let mut dv_achieved = 0.0;
         let mut groups_burned = Vec::new();
@@ -336,13 +336,13 @@ impl Rocket {
 
             if group_dv >= dv_remaining {
                 // This group can satisfy the remaining target — partial burn
-                let burned = self.burn_group(design, gi, dv_remaining);
+                let burned = self.burn_group(design, gi, dv_remaining, ambient_pressure_pa);
                 dv_achieved += burned;
                 dv_remaining -= burned;
                 groups_burned.push(gi);
             } else {
                 // Exhaust this entire group, then jettison
-                let burned = self.burn_group(design, gi, group_dv);
+                let burned = self.burn_group(design, gi, group_dv, ambient_pressure_pa);
                 dv_achieved += burned;
                 dv_remaining -= burned;
 
@@ -389,7 +389,7 @@ impl Rocket {
 
     /// Burn a specific group for a target delta-v, consuming propellant proportionally
     /// across all active stages in the group. Returns actual dv achieved.
-    fn burn_group(&mut self, design: &RocketDesign, gi: usize, target_dv: f64) -> f64 {
+    fn burn_group(&mut self, design: &RocketDesign, gi: usize, target_dv: f64, ambient_pressure_pa: f64) -> f64 {
         let n = self.stage_states.len();
 
         // Compute payload above this group
@@ -411,11 +411,13 @@ impl Rocket {
             return 0.0;
         }
 
-        // Compute effective exhaust velocity for the group
+        // Compute effective exhaust velocity for the group, accounting for
+        // overexpansion Isp penalty when burning in atmosphere.
         let total_thrust: f64 = active_indices.iter()
             .map(|&si| {
                 let stage = &design.stage_groups[gi][si];
-                stage.total_thrust_n()
+                let isp_frac = stage.engine.isp_fraction_at(ambient_pressure_pa);
+                stage.total_thrust_n() * isp_frac
             })
             .sum();
         let total_flow: f64 = active_indices.iter()
@@ -492,7 +494,9 @@ pub struct StageGroupStats {
     pub gravity_loss: f64,
     /// Atmospheric drag loss (first stage only, m/s)
     pub aero_drag_loss: f64,
-    /// Effective delta-v: vacuum - gravity - aero
+    /// Overexpansion Isp loss (first stage in atmosphere, m/s)
+    pub overexpansion_loss: f64,
+    /// Effective delta-v: vacuum - gravity - aero - overexpansion
     pub delta_v_effective: f64,
     /// Thrust-to-weight ratio at ignition
     pub twr: f64,
@@ -516,6 +520,7 @@ pub fn compute_stage_stats(
     let surface_props = DELTA_V_MAP.surface_properties(launch_from);
     let surface_g = surface_props.map_or(9.81, |p| p.gravity_m_s2);
     let has_atmosphere = surface_props.map_or(false, |p| p.has_atmosphere);
+    let ambient_pressure = surface_props.map_or(0.0, |p| p.ambient_pressure_pa);
 
     // Collect per-group params for gravity sim: (thrust_n, mass_flow_kg_s, propellant_kg)
     let mut stage_params: Vec<(f64, f64, f64)> = Vec::with_capacity(n);
@@ -566,13 +571,36 @@ pub fn compute_stage_stats(
 
         let grav_loss = gravity_losses[gi];
         let aero_loss = if gi == 0 { first_stage_aero } else { 0.0 };
-        let delta_v_effective = (delta_v_vacuum - grav_loss - aero_loss).max(0.0);
+
+        // Overexpansion Isp penalty for first stage group in atmosphere
+        let overexpansion_loss = if gi == 0 && has_atmosphere && ambient_pressure > 0.0 {
+            // Weighted average Isp fraction across all engines in the group
+            let total_flow_frac: f64 = group.iter()
+                .map(|s| s.engine.mass_flow_rate() * s.engine_count as f64)
+                .sum();
+            if total_flow_frac > 0.0 {
+                let weighted_isp_frac: f64 = group.iter()
+                    .map(|s| {
+                        let flow = s.engine.mass_flow_rate() * s.engine_count as f64;
+                        s.engine.isp_fraction_at(ambient_pressure) * flow
+                    })
+                    .sum::<f64>() / total_flow_frac;
+                delta_v_vacuum * (1.0 - weighted_isp_frac)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        let delta_v_effective = (delta_v_vacuum - grav_loss - aero_loss - overexpansion_loss).max(0.0);
 
         results.push(StageGroupStats {
             mass_ratio,
             delta_v_vacuum,
             gravity_loss: grav_loss,
             aero_drag_loss: aero_loss,
+            overexpansion_loss,
             delta_v_effective,
             twr,
             burn_time_s: burn_time,
@@ -1143,7 +1171,7 @@ mod tests {
         let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
         let initial_dv = rocket.remaining_delta_v(&design);
 
-        let result = rocket.burn_sequential(&design, 1_000.0);
+        let result = rocket.burn_sequential(&design, 1_000.0, 0.0);
         assert!((result.dv_achieved - 1_000.0).abs() < 1.0, "Should burn ~1000 m/s, got {}", result.dv_achieved);
         assert!(result.groups_jettisoned.is_empty());
 
@@ -1183,7 +1211,7 @@ mod tests {
         let s1_dv = rocket.group_remaining_delta_v(&design, 0);
         let target = s1_dv + 500.0; // need some from S2
 
-        let result = rocket.burn_sequential(&design, target);
+        let result = rocket.burn_sequential(&design, target, 0.0);
         assert!((result.dv_achieved - target).abs() < 50.0,
             "Should burn ~{} m/s, got {}", target, result.dv_achieved);
         assert_eq!(result.groups_jettisoned, vec![0]);
@@ -1219,7 +1247,7 @@ mod tests {
         let total_dv = rocket.remaining_delta_v(&design);
 
         // Ask for way more than available
-        let result = rocket.burn_sequential(&design, total_dv + 5_000.0);
+        let result = rocket.burn_sequential(&design, total_dv + 5_000.0, 0.0);
         assert!((result.dv_achieved - total_dv).abs() < 50.0,
             "Should only burn total available dv={}, got {}", total_dv, result.dv_achieved);
     }

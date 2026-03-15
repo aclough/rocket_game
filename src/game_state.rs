@@ -1356,10 +1356,48 @@ impl GameState {
                 // Leg complete — consume propellant for this leg
                 if let Some(leg) = flight.route.get(flight.current_leg) {
                     let dv_cost = leg.delta_v_cost;
-                    let burn_result = flight.rocket.burn_sequential(&flight.design, dv_cost);
+                    let ambient = leg.ambient_pressure_pa;
+                    let burn_result = flight.rocket.burn_sequential(&flight.design, dv_cost, ambient);
 
                     flight.current_location = leg.to.clone();
                     flight.rocket.location = leg.to.clone();
+
+                    // Check overexpansion destruction for atmospheric legs
+                    if ambient > 0.0 {
+                        for &gi in &burn_result.groups_burned {
+                            if let Some(group) = flight.design.stage_groups.get_mut(gi) {
+                                for stage in group.iter_mut() {
+                                    let risk = stage.engine.overexpansion_destruction_risk(ambient);
+                                    if risk <= 0.0 { continue; }
+                                    let mut engines_lost = 0u32;
+                                    for _ in 0..stage.engine_count {
+                                        if self.seed.contingent_rng.gen::<f64>() < risk {
+                                            engines_lost += 1;
+                                        }
+                                    }
+                                    if engines_lost > 0 {
+                                        if engines_lost >= stage.engine_count {
+                                            stage.engine_count = 0;
+                                            stage.engine.thrust_n = 0.0;
+                                            stage.engine.isp_s = 0.0;
+                                            stage.propellant_mass_kg = 0.0;
+                                        } else {
+                                            stage.engine_count -= engines_lost;
+                                        }
+                                        let evt = GameEvent::MidFlightFlawActivated {
+                                            rocket_name: flight.rocket_name.clone(),
+                                            flaw_description: format!(
+                                                "{} engine(s) destroyed by flow separation",
+                                                engines_lost,
+                                            ),
+                                            consequence: "Engine destruction".to_string(),
+                                        };
+                                        events.push(evt);
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // Roll mid-flight flaws for groups that burned propellant
                     // (must happen before stranding check — stage was used even if burn fell short)

@@ -96,8 +96,12 @@ pub struct EngineBaseline {
     pub isp_vac_s: f64,
     /// Specific impulse in seconds (sea level, if applicable).
     pub isp_sl_s: f64,
-    /// Exit pressure in Pa.
-    pub exit_pressure_pa: f64,
+    /// Exit pressure in Pa when optimized for vacuum.
+    pub exit_pressure_vac_pa: f64,
+    /// Exit pressure in Pa when optimized for sea level.
+    pub exit_pressure_sl_pa: f64,
+    /// If true, this engine can only be built in vacuum configuration.
+    pub vacuum_only: bool,
 }
 
 /// Get the baseline engine parameters for a (cycle, propellant) combination.
@@ -159,12 +163,21 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
     let thrust = base_thrust * thrust_mult;
     let mass = thrust / (twr * G0);
 
+    // Exit pressure depends on optimization:
+    // Sea-level: ~80 kPa (near-optimal at 101 kPa ambient)
+    // Vacuum: ~7 kPa (large nozzle, optimized for space)
+    // Expander cycles always vacuum (low chamber pressure)
+    let exit_pressure_sl = 80_000.0;
+    let exit_pressure_vac = 7_000.0;
+
     Some(EngineBaseline {
         thrust_n: thrust,
         mass_kg: mass,
         isp_vac_s: base_isp_vac * isp_mult,
         isp_sl_s: base_isp_sl * isp_mult,
-        exit_pressure_pa: 30_000.0, // simplified default
+        exit_pressure_vac_pa: exit_pressure_vac,
+        exit_pressure_sl_pa: exit_pressure_sl,
+        vacuum_only: cycle == EngineCycle::Expander,
     })
 }
 
@@ -231,7 +244,10 @@ impl EngineProject {
 
         let thrust = baseline.thrust_n * scale;
         let mass = baseline.mass_kg * scale;
-        let isp = if use_vacuum_isp { baseline.isp_vac_s } else { baseline.isp_sl_s };
+        // Expander cycles are always vacuum-optimized
+        let use_vacuum = if baseline.vacuum_only { true } else { use_vacuum_isp };
+        let isp = if use_vacuum { baseline.isp_vac_s } else { baseline.isp_sl_s };
+        let exit_pressure = if use_vacuum { baseline.exit_pressure_vac_pa } else { baseline.exit_pressure_sl_pa };
 
         let design = EngineDesign {
             id: engine_id,
@@ -240,8 +256,8 @@ impl EngineProject {
             thrust_n: thrust,
             mass_kg: mass,
             isp_s: isp,
-            exit_pressure_pa: baseline.exit_pressure_pa,
-            needs_atmosphere: !use_vacuum_isp,
+            exit_pressure_pa: exit_pressure,
+            needs_atmosphere: !use_vacuum,
             propellant_mix: preset.propellant_mix(),
         };
 

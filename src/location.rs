@@ -9,6 +9,8 @@ pub struct SurfaceProperties {
     pub radius_m: f64,
     pub has_atmosphere: bool,
     pub atmosphere_density: f64,
+    /// Ambient pressure at the surface in Pascals (e.g. 101_325 for Earth).
+    pub ambient_pressure_pa: f64,
 }
 
 impl SurfaceProperties {
@@ -124,6 +126,7 @@ impl DeltaVMap {
                     radius_m: 6_371_000.0,
                     has_atmosphere: true,
                     atmosphere_density: 1.225,
+                    ambient_pressure_pa: 101_325.0,
                 }),
                 parent_body: "earth",
             },
@@ -199,6 +202,7 @@ impl DeltaVMap {
                     radius_m: 1_737_000.0,
                     has_atmosphere: false,
                     atmosphere_density: 0.0,
+                    ambient_pressure_pa: 0.0,
                 }),
                 parent_body: "moon",
             },

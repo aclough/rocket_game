@@ -182,6 +182,69 @@ pub fn simulate_launch(
         }
     }
 
+    // Check overexpansion destruction risk for first stage group
+    // (burning at sea level, 101325 Pa)
+    let ambient = 101_325.0_f64;
+    if groups_needed > 0 {
+        for (_si, stage) in degraded.stage_groups[0].iter_mut().enumerate() {
+            let risk = stage.engine.overexpansion_destruction_risk(ambient);
+            if risk > 0.0 {
+                // Roll independently for each engine
+                let mut engines_lost = 0u32;
+                for _ in 0..stage.engine_count {
+                    if rng.gen::<f64>() < risk {
+                        engines_lost += 1;
+                    }
+                }
+                if engines_lost > 0 {
+                    let engine_name = stage.engine.name.clone();
+                    if engines_lost >= stage.engine_count {
+                        // Total loss — zero the stage
+                        activations.push(FlawActivation {
+                            flaw_description: format!(
+                                "All {} engine(s) destroyed by flow separation (exit {:.0} kPa at {:.0} kPa ambient)",
+                                stage.engine_count,
+                                stage.engine.exit_pressure_pa / 1000.0,
+                                ambient / 1000.0,
+                            ),
+                            consequence: FlawConsequence::StageLoss,
+                            engine_name,
+                        });
+                        stage.engine_count = 0;
+                        stage.engine.thrust_n = 0.0;
+                        stage.engine.isp_s = 0.0;
+                        stage.propellant_mass_kg = 0.0;
+                    } else {
+                        // Partial loss — reduce engine count and thrust proportionally
+                        let surviving = stage.engine_count - engines_lost;
+                        activations.push(FlawActivation {
+                            flaw_description: format!(
+                                "{} of {} engine(s) destroyed by flow separation (exit {:.0} kPa at {:.0} kPa ambient)",
+                                engines_lost, stage.engine_count,
+                                stage.engine.exit_pressure_pa / 1000.0,
+                                ambient / 1000.0,
+                            ),
+                            consequence: FlawConsequence::EngineLoss,
+                            engine_name,
+                        });
+                        stage.engine_count = surviving;
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply Isp penalty for overexpansion on first stage group (sea level)
+    if !degraded.stage_groups.is_empty() {
+        for stage in degraded.stage_groups[0].iter_mut() {
+            let frac = stage.engine.isp_fraction_at(ambient);
+            if frac < 1.0 {
+                stage.engine.isp_s *= frac;
+                stage.engine.thrust_n *= frac;
+            }
+        }
+    }
+
     // Compute degraded delta-v
     let degraded_dv = degraded.total_delta_v(payload_kg);
 
