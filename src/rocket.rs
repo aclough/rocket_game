@@ -315,6 +315,9 @@ impl Rocket {
         let mut groups_burned = Vec::new();
         let mut groups_jettisoned = Vec::new();
         let n = self.stage_states.len();
+        // Only the first group that burns gets the atmospheric Isp penalty;
+        // upper stages fire at high altitude where atmosphere is negligible.
+        let mut first_burn = true;
 
         for gi in 0..n {
             if dv_remaining <= 0.0 {
@@ -334,15 +337,18 @@ impl Rocket {
                 continue;
             }
 
+            let ambient = if first_burn { ambient_pressure_pa } else { 0.0 };
+            first_burn = false;
+
             if group_dv >= dv_remaining {
                 // This group can satisfy the remaining target — partial burn
-                let burned = self.burn_group(design, gi, dv_remaining, ambient_pressure_pa);
+                let burned = self.burn_group(design, gi, dv_remaining, ambient);
                 dv_achieved += burned;
                 dv_remaining -= burned;
                 groups_burned.push(gi);
             } else {
-                // Exhaust this entire group, then jettison
-                let burned = self.burn_group(design, gi, group_dv, ambient_pressure_pa);
+                // Exhaust this entire group — burn all propellant
+                let burned = self.burn_group(design, gi, f64::INFINITY, ambient);
                 dv_achieved += burned;
                 dv_remaining -= burned;
 

@@ -1362,9 +1362,19 @@ impl GameState {
                     flight.current_location = leg.to.clone();
                     flight.rocket.location = leg.to.clone();
 
-                    // Check overexpansion destruction for atmospheric legs
+                    // Check overexpansion destruction for atmospheric legs.
+                    // Only the first burned group is at sea level; upper groups
+                    // fire at high altitude. Also skip groups already checked at launch.
                     if ambient > 0.0 {
+                        let first_burned = burn_result.groups_burned.first().copied();
                         for &gi in &burn_result.groups_burned {
+                            // Only the first burned group faces atmospheric pressure
+                            if Some(gi) != first_burned {
+                                continue;
+                            }
+                            if flight.flaw_rolled_groups.contains(&gi) {
+                                continue; // already checked during launch sim
+                            }
                             if let Some(group) = flight.design.stage_groups.get_mut(gi) {
                                 for stage in group.iter_mut() {
                                     let risk = stage.engine.overexpansion_destruction_risk(ambient);
