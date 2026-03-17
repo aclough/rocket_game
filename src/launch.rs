@@ -332,7 +332,7 @@ mod tests {
     use crate::stage::{Stage, StageId};
     use crate::engine_project::{EngineProject, EngineProjectId, PropellantPreset};
     use crate::rocket_project::{RocketProject, RocketProjectId};
-    use crate::flaw::{Flaw, FlawId};
+    use crate::flaw::{Flaw, FlawId, FlawTrigger};
 
     fn make_engine(id: u64) -> EngineDesign {
         EngineDesign {
@@ -420,7 +420,7 @@ mod tests {
             consequence: FlawConsequence::PerformanceDegradation(0.5),
             activation_chance: 1.0, // guaranteed activation
             discovery_probability: 0.5,
-            discovered: false,
+            discovered: false, trigger: FlawTrigger::PerFlight,
         };
         let ep1 = make_engine_project(1, vec![flaw]);
         let ep2 = make_engine_project(2, vec![]);
@@ -447,7 +447,7 @@ mod tests {
             consequence: FlawConsequence::StageLoss,
             activation_chance: 1.0,
             discovery_probability: 0.5,
-            discovered: false,
+            discovered: false, trigger: FlawTrigger::PerFlight,
         };
         let ep1 = make_engine_project(1, vec![flaw]);
         let ep2 = make_engine_project(2, vec![]);
@@ -475,7 +475,7 @@ mod tests {
             consequence: FlawConsequence::StageLoss,
             activation_chance: 1.0,
             discovery_probability: 0.5,
-            discovered: false,
+            discovered: false, trigger: FlawTrigger::PerFlight,
         };
         let rp = make_rocket_project(design.clone(), vec![flaw]);
         let mut rng = StdRng::seed_from_u64(42);
@@ -498,7 +498,7 @@ mod tests {
             consequence: FlawConsequence::StageLoss,
             activation_chance: 0.0,
             discovery_probability: 0.5,
-            discovered: false,
+            discovered: false, trigger: FlawTrigger::PerFlight,
         };
         let ep1 = make_engine_project(1, vec![flaw]);
         let ep2 = make_engine_project(2, vec![]);

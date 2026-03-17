@@ -1,5 +1,4 @@
 [] Add ability to put multiple payloads on a rocket.
-[] Add flight endurance related flaws that can trigger as the day advances
 [] Add consumables and propellant boiloff.
 [] Make consumables include electrical power via batteries, solar panels, etc.
 [] Add competitor company, DinoSoar

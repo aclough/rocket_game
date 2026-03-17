@@ -6,6 +6,24 @@ use serde::{Serialize, Deserialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FlawId(pub u64);
 
+/// When a flaw can trigger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FlawTrigger {
+    /// Rolls once when the stage fires (existing behavior).
+    PerFlight,
+    /// Rolls every day in flight (endurance flaw).
+    PerDay,
+}
+
+impl Default for FlawTrigger {
+    fn default() -> Self { FlawTrigger::PerFlight }
+}
+
+impl FlawTrigger {
+    /// Reference mission duration in days for converting activation_chance to daily rate.
+    const REFERENCE_DAYS: f64 = 365.0;
+}
+
 /// What happens when a flaw activates during flight.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FlawConsequence {
@@ -34,12 +52,30 @@ pub struct Flaw {
     pub id: FlawId,
     pub description: String,
     pub consequence: FlawConsequence,
-    /// Chance per flight that this flaw triggers.
+    /// Chance per flight (PerFlight) or cumulative over reference duration (PerDay).
     pub activation_chance: f64,
     /// Chance per testing cycle to discover this flaw.
     /// Computed as uniform(0,1) * sqrt(activation_chance).
     pub discovery_probability: f64,
     pub discovered: bool,
+    /// When this flaw can trigger.
+    #[serde(default)]
+    pub trigger: FlawTrigger,
+}
+
+impl Flaw {
+    /// For PerDay flaws, convert activation_chance to a daily rate.
+    /// For PerFlight flaws, returns activation_chance unchanged.
+    pub fn daily_rate(&self) -> f64 {
+        match self.trigger {
+            FlawTrigger::PerFlight => self.activation_chance,
+            FlawTrigger::PerDay => {
+                // activation_chance = 1 - (1 - daily_rate)^365
+                // daily_rate = 1 - (1 - activation_chance)^(1/365)
+                1.0 - (1.0 - self.activation_chance).powf(1.0 / FlawTrigger::REFERENCE_DAYS)
+            }
+        }
+    }
 }
 
 /// Work units required to fix one flaw via revision.
@@ -68,11 +104,34 @@ pub fn generate_flaws(
     (0..count).map(|_| {
         let id = FlawId(*next_flaw_id);
         *next_flaw_id += 1;
-        generate_single_flaw(id, rng)
+        generate_single_flaw(id, FlawTrigger::PerFlight, rng)
     }).collect()
 }
 
-fn generate_single_flaw(id: FlawId, rng: &mut StdRng) -> Flaw {
+/// Generate flaws for a rocket project. ~30% are endurance (PerDay) flaws.
+pub fn generate_rocket_flaws(
+    effective_complexity: u32,
+    rng: &mut StdRng,
+    next_flaw_id: &mut u64,
+) -> Vec<Flaw> {
+    let mean = effective_complexity as f64;
+    let stddev = 1.5;
+    let count_f = gaussian_sample(mean, stddev, rng);
+    let count = count_f.round().max(0.0) as u32;
+
+    (0..count).map(|_| {
+        let id = FlawId(*next_flaw_id);
+        *next_flaw_id += 1;
+        let trigger = if rng.gen::<f64>() < 0.30 {
+            FlawTrigger::PerDay
+        } else {
+            FlawTrigger::PerFlight
+        };
+        generate_single_flaw(id, trigger, rng)
+    }).collect()
+}
+
+fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng) -> Flaw {
     // Pick consequence type: weighted random
     // ~50% performance degradation, ~35% engine loss, ~15% stage loss
     let roll: f64 = rng.gen();
@@ -93,7 +152,10 @@ fn generate_single_flaw(id: FlawId, rng: &mut StdRng) -> Flaw {
     let uniform_roll: f64 = rng.gen();
     let discovery_probability = uniform_roll * activation_chance.sqrt();
 
-    let description = generate_flaw_description(&consequence, rng);
+    let description = match trigger {
+        FlawTrigger::PerFlight => generate_flaw_description(&consequence, rng),
+        FlawTrigger::PerDay => generate_endurance_flaw_description(&consequence, rng),
+    };
 
     Flaw {
         id,
@@ -102,6 +164,7 @@ fn generate_single_flaw(id: FlawId, rng: &mut StdRng) -> Flaw {
         activation_chance,
         discovery_probability,
         discovered: false,
+        trigger,
     }
 }
 
@@ -130,6 +193,38 @@ fn generate_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) ->
             "Ullage gas contamination risk",
             "Inter-stage electrical harness fault",
             "Catastrophic combustion instability",
+        ][..],
+    };
+
+    let idx = rng.gen_range(0..descriptions.len());
+    descriptions[idx].to_string()
+}
+
+fn generate_endurance_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
+    let descriptions = match consequence {
+        FlawConsequence::PerformanceDegradation(_) => &[
+            "Thermal cycling degradation",
+            "Sensor drift accumulation",
+            "Propellant line seal wear",
+            "Attitude control thruster fouling",
+            "Radiator coating degradation",
+            "Reaction wheel bearing wear",
+        ][..],
+        FlawConsequence::EngineLoss => &[
+            "Turbopump bearing wear",
+            "Igniter electrode erosion",
+            "Fuel valve seat degradation",
+            "Oxidizer seal embrittlement",
+            "Engine controller memory corruption",
+            "Regenerative cooling tube fatigue",
+        ][..],
+        FlawConsequence::StageLoss => &[
+            "Avionics thermal failure",
+            "Battery capacity degradation",
+            "Structural fatigue crack propagation",
+            "Guidance computer memory fault",
+            "Wiring harness insulation breakdown",
+            "Pressurization system leak",
         ][..],
     };
 
@@ -308,5 +403,61 @@ mod tests {
         let samples: Vec<f64> = (0..10000).map(|_| gaussian_sample(7.0, 1.5, &mut rng)).collect();
         let mean: f64 = samples.iter().sum::<f64>() / samples.len() as f64;
         assert!((mean - 7.0).abs() < 0.1, "Gaussian mean {} should be near 7.0", mean);
+    }
+
+    #[test]
+    fn test_daily_rate_per_flight_unchanged() {
+        let flaw = Flaw {
+            id: FlawId(1), description: "test".into(),
+            consequence: FlawConsequence::EngineLoss,
+            activation_chance: 0.5,
+            discovery_probability: 0.3,
+            discovered: false,
+            trigger: FlawTrigger::PerFlight,
+        };
+        assert_eq!(flaw.daily_rate(), 0.5);
+    }
+
+    #[test]
+    fn test_daily_rate_per_day_conversion() {
+        let flaw = Flaw {
+            id: FlawId(1), description: "test".into(),
+            consequence: FlawConsequence::EngineLoss,
+            activation_chance: 0.30,
+            discovery_probability: 0.3,
+            discovered: false,
+            trigger: FlawTrigger::PerDay,
+        };
+        let rate = flaw.daily_rate();
+        // 1 - (1 - 0.30)^(1/365) ≈ 0.000977
+        assert!(rate > 0.0009 && rate < 0.0011,
+            "Daily rate should be ~0.097%/day, got {}", rate);
+
+        // Verify: cumulative over 365 days should recover ~0.30
+        let cumulative = 1.0 - (1.0 - rate).powi(365);
+        assert!((cumulative - 0.30).abs() < 0.001,
+            "Cumulative over 365 days should be ~0.30, got {}", cumulative);
+    }
+
+    #[test]
+    fn test_rocket_flaws_have_per_day() {
+        let mut rng = test_rng();
+        let mut next_id = 0u64;
+        let flaws = generate_rocket_flaws(10, &mut rng, &mut next_id);
+        let per_day_count = flaws.iter().filter(|f| f.trigger == FlawTrigger::PerDay).count();
+        // With 30% chance and ~10 flaws, expect ~3 PerDay (allow 0-8 for randomness)
+        assert!(per_day_count > 0, "Should have some PerDay flaws");
+        assert!(per_day_count < flaws.len(), "Should have some PerFlight flaws too");
+    }
+
+    #[test]
+    fn test_engine_flaws_all_per_flight() {
+        let mut rng = test_rng();
+        let mut next_id = 0u64;
+        let flaws = generate_flaws(10, &mut rng, &mut next_id);
+        for flaw in &flaws {
+            assert_eq!(flaw.trigger, FlawTrigger::PerFlight,
+                "Engine flaws should all be PerFlight");
+        }
     }
 }

@@ -9,7 +9,7 @@ use crate::location::DELTA_V_MAP;
 use crate::rocket::RocketDesign;
 
 /// Unique identifier for a rocket project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct RocketProjectId(pub u64);
 
 /// Status of a rocket design project.
@@ -81,7 +81,7 @@ impl RocketProject {
             RocketDesignStatus::InDesign { work_completed, work_required } => {
                 *work_completed += work;
                 if *work_completed >= *work_required {
-                    self.flaws = flaw::generate_flaws(self.complexity, rng, next_flaw_id);
+                    self.flaws = flaw::generate_rocket_flaws(self.complexity, rng, next_flaw_id);
                     let flaw_count = self.flaws.len() as u32;
                     self.status = RocketDesignStatus::Testing { work_completed: 0.0 };
                     events.push(RocketWorkEvent::DesignComplete { flaw_count });
@@ -360,6 +360,7 @@ mod tests {
             activation_chance: 0.1,
             discovery_probability: 0.5,
             discovered: true,
+            trigger: crate::flaw::FlawTrigger::PerFlight,
         });
         proj.flaws.push(Flaw {
             id: crate::flaw::FlawId(901),
@@ -368,6 +369,7 @@ mod tests {
             activation_chance: 0.05,
             discovery_probability: 0.3,
             discovered: true,
+            trigger: crate::flaw::FlawTrigger::PerFlight,
         });
 
         assert_eq!(proj.flaws.len(), 2);

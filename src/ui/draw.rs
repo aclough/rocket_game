@@ -8,11 +8,18 @@ use crate::game_state::Company;
 use crate::manufacturing::ManufacturingOrderType;
 use crate::rocket_project;
 use crate::event::EventImportance;
-use crate::flaw::FlawConsequence;
+use crate::flaw::{Flaw, FlawConsequence, FlawTrigger};
 use crate::launch::LaunchOutcome;
 use crate::location::DELTA_V_MAP;
 use crate::rocket;
 use crate::ui::{App, FocusedPane, InputMode, RocketDesignerState, Tab};
+
+fn format_flaw_rate(flaw: &Flaw) -> String {
+    match flaw.trigger {
+        FlawTrigger::PerFlight => format!("{:.0}%/flight", flaw.activation_chance * 100.0),
+        FlawTrigger::PerDay => format!("{:.0}%/year, {:.2}%/day", flaw.activation_chance * 100.0, flaw.daily_rate() * 100.0),
+    }
+}
 
 /// Draw the entire application frame.
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -278,8 +285,8 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                         };
                         lines.push(Line::from(Span::styled(
                             format!(
-                                "        ⚠ {}: {} ({:.0}%/flight)",
-                                flaw.description, consequence_str, flaw.activation_chance * 100.0,
+                                "        ⚠ {}: {} ({})",
+                                flaw.description, consequence_str, format_flaw_rate(flaw),
                             ),
                             Style::default().fg(Color::Red),
                         )));
@@ -459,8 +466,8 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                         };
                         lines.push(Line::from(Span::styled(
                             format!(
-                                "        ⚠ {}: {} ({:.0}%/flight)",
-                                flaw.description, consequence_str, flaw.activation_chance * 100.0,
+                                "        ⚠ {}: {} ({})",
+                                flaw.description, consequence_str, format_flaw_rate(flaw),
                             ),
                             Style::default().fg(Color::Red),
                         )));

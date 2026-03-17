@@ -576,6 +576,7 @@ mod tests {
                 activation_chance: 0.1,
                 discovery_probability: 0.5,
                 discovered: true,
+                trigger: crate::flaw::FlawTrigger::PerFlight,
             });
         }
 
