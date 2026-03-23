@@ -1,6 +1,9 @@
+[] Add world events that trigger.
+[] Add way to improve engines and other parts over time.
+[] Add upskilling of the player's workforce with particular technologies.
+[] Add experimetal technologies unlocked by events that the player can then try to pursue.
 [] Add ability to put multiple payloads on a rocket.
-[] Add consumables and propellant boiloff.
-[] Make consumables include electrical power via batteries, solar panels, etc.
+[] Make electrical power via batteries, solar panels, etc.
 [] Add competitor company, DinoSoar
 [] Automation of bidding on contracts for any that const less than marginal cost + selected profit margin.
 [] Track revision number on inventory items (engines/rockets) so older builds carry pre-revision flaws.
