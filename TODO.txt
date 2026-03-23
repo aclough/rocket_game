@@ -1,4 +1,5 @@
 [] Add world events that trigger.
+[] Have markets as a source of contracts.
 [] Add way to improve engines and other parts over time.
 [] Add upskilling of the player's workforce with particular technologies.
 [] Add experimetal technologies unlocked by events that the player can then try to pursue.
