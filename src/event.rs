@@ -47,6 +47,8 @@ pub enum GameEvent {
     FlightArrived { rocket_name: String, destination: String },
     SpacecraftStranded { rocket_name: String, location: String },
     MidFlightFlawActivated { rocket_name: String, flaw_description: String, consequence: String },
+    /// Major economic shift affecting the launch market.
+    EconomicShift { condition: String, description: String },
 }
 
 impl fmt::Display for GameEvent {
@@ -123,6 +125,8 @@ impl fmt::Display for GameEvent {
                 write!(f, "Spacecraft stranded: {} at {}", rocket_name, location),
             GameEvent::MidFlightFlawActivated { rocket_name, flaw_description, consequence } =>
                 write!(f, "In-flight flaw on {}: {} ({})", rocket_name, flaw_description, consequence),
+            GameEvent::EconomicShift { condition, description } =>
+                write!(f, "Economic shift — {}: {}", condition, description),
         }
     }
 }
@@ -134,7 +138,8 @@ pub enum EventImportance {
     Routine,
     /// Notable events worth reading. Shown bright.
     Notable,
-    // Future: Critical — would auto-pause
+    /// Critical events that auto-pause the game and switch to Events tab.
+    Critical,
 }
 
 impl GameEvent {
@@ -174,6 +179,7 @@ impl GameEvent {
             | GameEvent::FlightArrived { .. }
             | GameEvent::SpacecraftStranded { .. }
             | GameEvent::MidFlightFlawActivated { .. } => EventImportance::Notable,
+            GameEvent::EconomicShift { .. } => EventImportance::Critical,
         }
     }
 }

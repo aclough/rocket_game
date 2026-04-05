@@ -58,13 +58,21 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let speed_str = format!("{} {}", game.speed.display_symbol(), game.speed.display_name());
     let money_str = format_money(game.player_company.money);
     let teams_str = format!("Teams: {}", game.player_company.team_count());
+    let econ_pct = ((game.economy.modifier - 1.0) * 100.0).round();
+    let econ_str = if econ_pct.abs() < 1.0 {
+        String::new()
+    } else {
+        let sign = if econ_pct > 0.0 { "+" } else { "" };
+        format!("      Econ: {}{:.0}%", sign, econ_pct)
+    };
     let text = format!(
-        "  {}      {}      {}      {}      {}",
+        "  {}      {}      {}      {}      {}{}",
         game.player_company.name,
         game.date,
         money_str,
         teams_str,
         speed_str,
+        econ_str,
     );
     let block = Block::default()
         .borders(Borders::ALL)
@@ -153,6 +161,20 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) 
             game.player_company.active_contracts.len())),
         Line::from(format!("  Launches:        {}", game.player_company.launch_history.len())),
         Line::from(format!("  Reputation:      {:.0}", game.player_company.reputation.total())),
+        Line::from(""),
+        {
+            let econ = &game.economy;
+            let pct = ((econ.modifier - 1.0) * 100.0).round();
+            let sign = if pct >= 0.0 { "+" } else { "" };
+            let color = if pct > 5.0 { Color::Green }
+                else if pct < -20.0 { Color::Rgb(255, 100, 0) }  // orange for recession
+                else if pct < -5.0 { Color::Yellow }              // yellow for slowdown
+                else { Color::White };
+            Line::from(Span::styled(
+                format!("  Economy:         {} ({}{}%)", econ.condition.display_name(), sign, pct),
+                Style::default().fg(color),
+            ))
+        },
         Line::from(""),
         Line::from(format!("  Seed:  {}", game.seed.seed())),
     ];
@@ -1041,6 +1063,7 @@ fn draw_events_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style
         .take(inner_height)
         .map(|(date, event)| {
             let style = match event.importance() {
+                EventImportance::Critical => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
                 EventImportance::Notable => Style::default().fg(Color::White),
                 EventImportance::Routine => Style::default().fg(Color::DarkGray),
             };
@@ -1062,6 +1085,7 @@ fn draw_event_feed(frame: &mut Frame, app: &App, area: Rect) {
 
     let items: Vec<ListItem> = recent.iter().map(|(date, event)| {
         let style = match event.importance() {
+            EventImportance::Critical => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             EventImportance::Notable => Style::default().fg(Color::Cyan),
             EventImportance::Routine => Style::default().fg(Color::DarkGray),
         };

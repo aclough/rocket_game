@@ -777,6 +777,9 @@ pub struct GameState {
     /// Spacecraft persisted after arrival.
     #[serde(default)]
     pub spacecraft: Vec<Spacecraft>,
+    /// Current economic conditions affecting the launch market.
+    #[serde(default)]
+    pub economy: crate::economy::EconomicState,
 }
 
 fn default_next_contract_id() -> u64 { 1 }
@@ -789,6 +792,8 @@ impl GameState {
         let mut event_log = EventLog::new(EVENT_LOG_SIZE);
         event_log.push(start, GameEvent::GameStarted);
         let seed = GameSeed::new(seed_value);
+
+        let economy = crate::economy::initial_state(&seed, start);
 
         GameState {
             date: start,
@@ -804,6 +809,7 @@ impl GameState {
             next_flight_id: 1,
             next_rocket_id: 1,
             spacecraft: Vec::new(),
+            economy,
         }
     }
 
@@ -892,19 +898,48 @@ impl GameState {
                 }
             }
 
-            // Generate monthly contract
+            // Advance economy — check if current state has expired
+            let prev_condition = self.economy.condition;
+            if let Some(new_condition) = crate::economy::advance_economy(
+                &mut self.economy, &self.seed, self.date,
+            ) {
+                // Only fire event if the condition actually changed
+                if new_condition != prev_condition {
+                    let evt = GameEvent::EconomicShift {
+                        condition: new_condition.display_name().to_string(),
+                        description: new_condition.flavor_text().to_string(),
+                    };
+                    self.event_log.push(self.date, evt.clone());
+                    events.push(evt);
+                    self.speed = GameSpeed::Paused;
+                }
+            }
+
+            // Generate monthly contracts (quantity affected by economy)
             let rep = self.player_company.reputation.total();
             let query = format!("contracts_{}_{}", self.date.year, self.date.month);
             let mut rng = self.seed.world_query(&query);
-            let contract_id = ContractId(self.next_contract_id);
-            self.next_contract_id += 1;
-            if let Some(c) = contract::generate_monthly_contract(
-                &mut rng, contract_id, self.date, rep,
-            ) {
-                let evt = GameEvent::ContractsRefreshed { count: 1 };
+            // Economy modifier affects how many contracts appear
+            use rand::Rng as _;
+            let contract_count = (self.economy.modifier + rng.gen::<f64>()) as u32;
+            let mut generated = 0u32;
+            for _ in 0..contract_count {
+                let contract_id = ContractId(self.next_contract_id);
+                self.next_contract_id += 1;
+                if let Some(mut c) = contract::generate_monthly_contract(
+                    &mut rng, contract_id, self.date, rep,
+                ) {
+                    // Economy modifier affects payment
+                    c.payment *= self.economy.modifier;
+                    c.payment = (c.payment / 10_000.0).round() * 10_000.0;
+                    self.available_contracts.push(c);
+                    generated += 1;
+                }
+            }
+            if generated > 0 {
+                let evt = GameEvent::ContractsRefreshed { count: generated };
                 self.event_log.push(self.date, evt.clone());
                 events.push(evt);
-                self.available_contracts.push(c);
             }
 
             // Start new month in financials

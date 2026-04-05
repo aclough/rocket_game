@@ -415,7 +415,13 @@ impl App {
 
             // Auto-advance when not paused
             if self.game.speed != GameSpeed::Paused && last_tick.elapsed() >= tick_rate {
-                self.game.advance_day();
+                let day_events = self.game.advance_day();
+                // Switch to Events tab on critical events
+                if day_events.iter().any(|e| e.importance() == crate::event::EventImportance::Critical) {
+                    if let Some(idx) = Tab::ALL.iter().position(|t| matches!(t, Tab::Events)) {
+                        self.active_tab = idx;
+                    }
+                }
                 last_tick = Instant::now();
             }
         }
