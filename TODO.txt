@@ -1,10 +1,15 @@
-[] Add world events that trigger.
 [] Have markets as a source of contracts.
 [] Add way to improve engines and other parts over time.
-[] Add upskilling of the player's workforce with particular technologies.
+    [] Small to moderate bonuses but at the cost of maybe adding flaws
 [] Add experimetal technologies unlocked by events that the player can then try to pursue.
+    [] They will have potentially large maluses that can be removed by a similar procedure to that improving designs but unreliably.
 [] Add ability to put multiple payloads on a rocket.
+[] Low thrust engines that take days to provide the ISP to start their transfer.
+    [] Just solar sail to start with.  Take sunlight into account for thrust.
+    [] Some routes aren't available to them, they can't go from LEO to Lunar transfer directly but have to go via MEO to represent gradual circularization.
 [] Make electrical power via batteries, solar panels, etc.
+    [] Also electric drives like Ion and Hall effect.
 [] Add competitor company, DinoSoar
+[] Add upskilling of the player's workforce with particular technologies.
 [] Automation of bidding on contracts for any that const less than marginal cost + selected profit margin.
 [] Track revision number on inventory items (engines/rockets) so older builds carry pre-revision flaws.
