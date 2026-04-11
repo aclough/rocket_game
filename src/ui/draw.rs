@@ -703,33 +703,83 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
         Line::from(""),
     ];
 
-    // Available contracts section
-    lines.push(Line::from(Span::styled(
-        "  ── Available Contracts ──",
-        Style::default().fg(Color::DarkGray),
-    )));
+    // Available contracts grouped by market
+    // Collect market IDs that have contracts
+    let active_markets: Vec<&contract::Market> = game.markets.iter()
+        .filter(|m| m.active && available.iter().any(|c| c.market_id == m.id))
+        .collect();
 
     if available.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  ── Available Contracts ──",
+            Style::default().fg(Color::DarkGray),
+        )));
         lines.push(Line::from("  (none available — wait for next month)"));
     } else {
-        for (i, c) in available.iter().enumerate() {
-            let marker = if i == app.selected_item { "▶ " } else { "  " };
-            let dest_name = contract::destination_display_name(&c.destination);
-            let style = if i == app.selected_item {
-                Style::default().fg(Color::Yellow)
-            } else {
-                match check_contract_readiness(c, &game.player_company) {
-                    ContractReadiness::Ready => Style::default(),
-                    ContractReadiness::NeedsBuild => Style::default().fg(Color::Yellow),
-                    ContractReadiness::Impossible => Style::default().fg(Color::Red),
-                }
-            };
+        // Show contracts grouped by market
+        for market in &active_markets {
+            let market_contracts: Vec<(usize, &Contract)> = available.iter()
+                .enumerate()
+                .filter(|(_, c)| c.market_id == market.id)
+                .collect();
+            if market_contracts.is_empty() { continue; }
+
+            // Market header with modifier info
+            let mut header = format!("  ── {} ──", market.name);
+            for modifier in &market.modifiers {
+                header.push_str(&format!("  ({})", modifier.description));
+            }
             lines.push(Line::from(Span::styled(
-                format!("{}{}  →{}  {:.0} kg  {}  by {}",
-                    marker, c.name, dest_name,
-                    c.payload_kg, format_money(c.payment), c.deadline),
-                style,
+                header,
+                Style::default().fg(Color::DarkGray),
             )));
+
+            for (i, c) in market_contracts {
+                let marker = if i == app.selected_item { "▶ " } else { "  " };
+                let dest_name = contract::destination_display_name(&c.destination);
+                let style = if i == app.selected_item {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    match check_contract_readiness(c, &game.player_company) {
+                        ContractReadiness::Ready => Style::default(),
+                        ContractReadiness::NeedsBuild => Style::default().fg(Color::Yellow),
+                        ContractReadiness::Impossible => Style::default().fg(Color::Red),
+                    }
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}  →{}  {:.0} kg  {}  by {}",
+                        marker, c.name, dest_name,
+                        c.payload_kg, format_money(c.payment), c.deadline),
+                    style,
+                )));
+            }
+        }
+
+        // Show any contracts from unknown/legacy markets (no market_id match)
+        let orphan_contracts: Vec<(usize, &Contract)> = available.iter()
+            .enumerate()
+            .filter(|(_, c)| !game.markets.iter().any(|m| m.id == c.market_id))
+            .collect();
+        if !orphan_contracts.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  ── Other ──",
+                Style::default().fg(Color::DarkGray),
+            )));
+            for (i, c) in orphan_contracts {
+                let marker = if i == app.selected_item { "▶ " } else { "  " };
+                let dest_name = contract::destination_display_name(&c.destination);
+                let style = if i == app.selected_item {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}  →{}  {:.0} kg  {}  by {}",
+                        marker, c.name, dest_name,
+                        c.payload_kg, format_money(c.payment), c.deadline),
+                    style,
+                )));
+            }
         }
     }
 

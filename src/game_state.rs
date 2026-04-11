@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use serde::{Serialize, Deserialize};
 
 use crate::calendar::GameDate;
-use crate::contract::{self, Contract, ContractId};
+use crate::contract::{self, Contract};
 use crate::engine::{EngineCycle, EngineId};
 use crate::engine_project::{EngineProject, EngineProjectId, EngineSource, PropellantPreset, WorkEvent};
 use crate::flight::{Flight, FlightId, FlightStatus, Payload};
@@ -780,11 +780,22 @@ pub struct GameState {
     /// Current economic conditions affecting the launch market.
     #[serde(default)]
     pub economy: crate::economy::EconomicState,
+    /// Active launch markets that generate contracts.
+    #[serde(default = "default_markets")]
+    pub markets: Vec<contract::Market>,
+    /// Tracks which market events have already fired (by event key).
+    #[serde(default)]
+    pub fired_market_events: Vec<String>,
 }
 
 fn default_next_contract_id() -> u64 { 1 }
 fn default_next_flight_id() -> u64 { 1 }
 fn default_next_rocket_id() -> u64 { 1 }
+fn default_markets() -> Vec<contract::Market> {
+    let mut markets = contract::initial_markets();
+    markets.extend(contract::event_market_templates());
+    markets
+}
 
 impl GameState {
     pub fn new(company_name: String, starting_money: f64, seed_value: u64) -> Self {
@@ -810,6 +821,8 @@ impl GameState {
             next_rocket_id: 1,
             spacecraft: Vec::new(),
             economy,
+            markets: default_markets(),
+            fired_market_events: Vec::new(),
         }
     }
 
@@ -915,28 +928,36 @@ impl GameState {
                 }
             }
 
-            // Generate monthly contracts (quantity affected by economy)
+            // Expire market modifiers
+            for market in &mut self.markets {
+                market.expire_modifiers(self.date);
+            }
+
+            // Check seed-driven market events
+            let market_events = self.check_market_events();
+            for evt in market_events {
+                self.event_log.push(self.date, evt.clone());
+                events.push(evt);
+                self.speed = GameSpeed::Paused;
+            }
+
+            // Generate monthly contracts from all active markets
             let rep = self.player_company.reputation.total();
             let query = format!("contracts_{}_{}", self.date.year, self.date.month);
             let mut rng = self.seed.world_query(&query);
-            // Economy modifier affects how many contracts appear
-            use rand::Rng as _;
-            let contract_count = (self.economy.modifier + rng.gen::<f64>()) as u32;
+            let econ_mod = self.economy.modifier;
             let mut generated = 0u32;
-            for _ in 0..contract_count {
-                let contract_id = ContractId(self.next_contract_id);
-                self.next_contract_id += 1;
-                if let Some(mut c) = contract::generate_monthly_contract(
-                    &mut rng, contract_id, self.date, rep,
-                ) {
-                    // Economy modifier affects payment
-                    c.payment *= self.economy.modifier;
-                    c.payment = (c.payment / 10_000.0).round() * 10_000.0;
-                    self.available_contracts.push(c);
-                    generated += 1;
-                }
+            for market in &self.markets {
+                let cs = contract::generate_market_contracts(
+                    market, &mut rng, &mut self.next_contract_id,
+                    self.date, rep, econ_mod,
+                );
+                generated += cs.len() as u32;
+                self.available_contracts.extend(cs);
             }
             if generated > 0 {
+                // Sort by market ID so display order matches selection order
+                self.available_contracts.sort_by_key(|c| c.market_id.0);
                 let evt = GameEvent::ContractsRefreshed { count: generated };
                 self.event_log.push(self.date, evt.clone());
                 events.push(evt);
@@ -1398,6 +1419,133 @@ impl GameState {
         self.speed = GameSpeed::Paused;
 
         Some((events, None))
+    }
+
+    /// Check seed-driven market events and activate/modify markets.
+    fn check_market_events(&mut self) -> Vec<GameEvent> {
+        use rand::Rng;
+        let mut events = Vec::new();
+
+        struct MarketEvent {
+            key: &'static str,
+            market_id: contract::MarketId,
+            probability: f64,
+            year_range: (u32, u32),
+            flavor: &'static str,
+            /// If Some, add a modifier to this other market when this event fires.
+            cross_effect: Option<(contract::MarketId, contract::MarketModifier)>,
+        }
+
+        // Define potential market events
+        let potential_events = [
+            MarketEvent {
+                key: "market_cots",
+                market_id: contract::MARKET_COTS,
+                probability: 0.70,
+                year_range: (2004, 2008),
+                flavor: "NASA announces Commercial Orbital Transportation Services program",
+                cross_effect: None,
+            },
+            MarketEvent {
+                key: "market_leo_constellation",
+                market_id: contract::MARKET_LEO_CONSTELLATION,
+                probability: 0.60,
+                year_range: (2008, 2015),
+                flavor: "Major LEO broadband constellation announced — GEO market share declining",
+                cross_effect: Some((contract::MARKET_GEO_COMSATS, contract::MarketModifier {
+                    id: "constellation_competition".into(),
+                    description: "LEO constellations taking market share".into(),
+                    volume_mult: 0.6,
+                    rate_mult: 0.9,
+                    end_date: None,
+                })),
+            },
+            MarketEvent {
+                key: "market_meo_constellation",
+                market_id: contract::MARKET_MEO_CONSTELLATION,
+                probability: 0.30,
+                year_range: (2008, 2015),
+                flavor: "MEO navigation constellation contracts opening up — GEO demand softening",
+                cross_effect: Some((contract::MARKET_GEO_COMSATS, contract::MarketModifier {
+                    id: "constellation_competition".into(),
+                    description: "MEO constellations taking market share".into(),
+                    volume_mult: 0.7,
+                    rate_mult: 0.95,
+                    end_date: None,
+                })),
+            },
+            MarketEvent {
+                key: "market_nssl",
+                market_id: contract::MARKET_NSSL,
+                probability: 0.50,
+                year_range: (2010, 2018),
+                flavor: "National security space launch program opens to new providers",
+                cross_effect: None,
+            },
+            MarketEvent {
+                key: "market_earth_obs",
+                market_id: contract::MARKET_EARTH_OBS,
+                probability: 0.70,
+                year_range: (2005, 2012),
+                flavor: "Commercial Earth observation market taking off",
+                cross_effect: None,
+            },
+        ];
+
+        // LEO and MEO constellations are mutually exclusive
+        let leo_key = "market_leo_constellation";
+        let meo_key = "market_meo_constellation";
+
+        for pe in &potential_events {
+            if self.fired_market_events.contains(&pe.key.to_string()) {
+                continue;
+            }
+
+            // Check mutual exclusivity: skip MEO if LEO already fired and vice versa
+            if pe.key == meo_key && self.fired_market_events.contains(&leo_key.to_string()) {
+                continue;
+            }
+            if pe.key == leo_key && self.fired_market_events.contains(&meo_key.to_string()) {
+                continue;
+            }
+
+            let mut rng = self.seed.world_query(pe.key);
+            let triggers = rng.gen::<f64>() < pe.probability;
+            let trigger_year = rng.gen_range(pe.year_range.0..=pe.year_range.1);
+
+            if !triggers {
+                // Mark as fired so we don't re-check
+                self.fired_market_events.push(pe.key.to_string());
+                continue;
+            }
+
+            if self.date.year >= trigger_year {
+                // Activate the market
+                if let Some(market) = self.markets.iter_mut().find(|m| m.id == pe.market_id) {
+                    market.active = true;
+                }
+                self.fired_market_events.push(pe.key.to_string());
+
+                // Apply cross-effects
+                if let Some((target_id, modifier)) = &pe.cross_effect {
+                    if let Some(target) = self.markets.iter_mut().find(|m| m.id == *target_id) {
+                        target.add_modifier(modifier.clone());
+                    }
+                }
+
+                let market_name = self.markets.iter()
+                    .find(|m| m.id == pe.market_id)
+                    .map(|m| m.name.clone())
+                    .unwrap_or_default();
+
+                events.push(GameEvent::EconomicShift {
+                    condition: format!("New Market: {}", market_name),
+                    description: pe.flavor.to_string(),
+                });
+            }
+        }
+
+        events
     }
 
     /// Process daily flight advancement. Returns events generated.

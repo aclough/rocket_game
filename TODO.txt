@@ -1,4 +1,3 @@
-[] Have markets as a source of contracts.
 [] Add way to improve engines and other parts over time.
     [] Small to moderate bonuses but at the cost of maybe adding flaws
 [] Add experimetal technologies unlocked by events that the player can then try to pursue.
@@ -13,3 +12,8 @@
 [] Add upskilling of the player's workforce with particular technologies.
 [] Automation of bidding on contracts for any that const less than marginal cost + selected profit margin.
 [] Track revision number on inventory items (engines/rockets) so older builds carry pre-revision flaws.
+
+Later tuning:
+[] Rocket construction time
+[] Rocket design time
+[] Profitability
