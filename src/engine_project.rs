@@ -231,6 +231,9 @@ pub struct EngineProject {
     /// Improvements discovered during testing. Pending ones need a revision to actualize.
     #[serde(default)]
     pub improvements: Vec<Improvement>,
+    /// Cumulative work spent in testing (persists across revisions).
+    #[serde(default)]
+    pub cumulative_testing_work: f64,
 }
 
 impl EngineProject {
@@ -284,6 +287,7 @@ impl EngineProject {
             complexity,
             nre_cost: 0.0,
             improvements: Vec::new(),
+            cumulative_testing_work: 0.0,
         })
     }
 
@@ -310,6 +314,7 @@ impl EngineProject {
             }
             EngineDesignStatus::Testing { work_completed } => {
                 *work_completed += work;
+                self.cumulative_testing_work += work;
                 // Check for testing cycle completion
                 while *work_completed >= TESTING_CYCLE_WORK {
                     *work_completed -= TESTING_CYCLE_WORK;
@@ -414,15 +419,9 @@ impl EngineProject {
         self.flaws.len()
     }
 
-    /// Testing level description based on work completed in testing.
+    /// Testing level description based on cumulative work in testing.
     pub fn testing_level(&self) -> &'static str {
-        let total_testing_work = match &self.status {
-            EngineDesignStatus::Testing { work_completed } => *work_completed,
-            _ => 0.0,
-        };
-        // Count completed cycles (approximate from total work spent in testing)
-        // This is simplified — in practice we'd track cumulative testing work
-        let cycles = (total_testing_work / TESTING_CYCLE_WORK) as u32;
+        let cycles = (self.cumulative_testing_work / TESTING_CYCLE_WORK) as u32;
         match cycles {
             0 => "Untested",
             1..=2 => "Lightly Tested",
@@ -712,19 +711,19 @@ mod tests {
     #[test]
     fn test_testing_level() {
         let mut proj = create_test_project();
-        proj.status = EngineDesignStatus::Testing { work_completed: 0.0 };
+        proj.cumulative_testing_work = 0.0;
         assert_eq!(proj.testing_level(), "Untested");
 
-        proj.status = EngineDesignStatus::Testing { work_completed: 60.0 };
+        proj.cumulative_testing_work = 60.0;
         assert_eq!(proj.testing_level(), "Lightly Tested");
 
-        proj.status = EngineDesignStatus::Testing { work_completed: 150.0 };
+        proj.cumulative_testing_work = 150.0;
         assert_eq!(proj.testing_level(), "Moderately Tested");
 
-        proj.status = EngineDesignStatus::Testing { work_completed: 250.0 };
+        proj.cumulative_testing_work = 250.0;
         assert_eq!(proj.testing_level(), "Well Tested");
 
-        proj.status = EngineDesignStatus::Testing { work_completed: 400.0 };
+        proj.cumulative_testing_work = 400.0;
         assert_eq!(proj.testing_level(), "Thoroughly Tested");
     }
 

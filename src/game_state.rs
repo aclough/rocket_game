@@ -2292,7 +2292,7 @@ mod tests {
             revision: 0,
             teams_assigned: 0,
             complexity: 6,
-            nre_cost: 0.0, improvements: Vec::new(),
+            nre_cost: 0.0, improvements: Vec::new(), cumulative_testing_work: 0.0,
         };
         let ep2 = EngineProject {
             project_id: EngineProjectId(2),
@@ -2306,7 +2306,7 @@ mod tests {
             revision: 0,
             teams_assigned: 0,
             complexity: 6,
-            nre_cost: 0.0, improvements: Vec::new(),
+            nre_cost: 0.0, improvements: Vec::new(), cumulative_testing_work: 0.0,
         };
 
         (design, vec![ep1, ep2])
