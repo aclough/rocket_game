@@ -207,8 +207,9 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             EngineDesignStatus::InDesign { .. } => "In Design".to_string(),
             EngineDesignStatus::Testing { .. } =>
                 format!("Testing  {}", project.testing_level()),
-            EngineDesignStatus::Revising { remaining_indices, .. } =>
-                format!("Revising {} flaw(s)", remaining_indices.len()),
+            EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, .. } =>
+                format!("Revising {} flaw(s), {} improvement(s)",
+                    remaining_flaw_indices.len(), remaining_improvement_indices.len()),
         };
 
         let line_text = format!(
@@ -313,6 +314,24 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                             Style::default().fg(Color::Red),
                         )));
                     }
+                }
+            }
+
+            // Show improvements
+            let pending: Vec<_> = project.improvements.iter().filter(|i| !i.actualized).collect();
+            let actualized: Vec<_> = project.improvements.iter().filter(|i| i.actualized).collect();
+            if !pending.is_empty() || !actualized.is_empty() {
+                for imp in &actualized {
+                    lines.push(Line::from(Span::styled(
+                        format!("        ✓ {}: {}", imp.description, imp.kind),
+                        Style::default().fg(Color::Green),
+                    )));
+                }
+                for imp in &pending {
+                    lines.push(Line::from(Span::styled(
+                        format!("        ★ {}: {} (pending revision)", imp.description, imp.kind),
+                        Style::default().fg(Color::Cyan),
+                    )));
                 }
             }
         }

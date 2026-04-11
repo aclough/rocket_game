@@ -47,6 +47,10 @@ pub enum GameEvent {
     FlightArrived { rocket_name: String, destination: String },
     SpacecraftStranded { rocket_name: String, location: String },
     MidFlightFlawActivated { rocket_name: String, flaw_description: String, consequence: String },
+    /// Improvement discovered during testing.
+    ImprovementDiscovered { engine_name: String, description: String },
+    /// Improvement actualized via revision.
+    ImprovementActualized { engine_name: String, description: String },
     /// Major economic shift affecting the launch market.
     EconomicShift { condition: String, description: String },
 }
@@ -125,6 +129,10 @@ impl fmt::Display for GameEvent {
                 write!(f, "Spacecraft stranded: {} at {}", rocket_name, location),
             GameEvent::MidFlightFlawActivated { rocket_name, flaw_description, consequence } =>
                 write!(f, "In-flight flaw on {}: {} ({})", rocket_name, flaw_description, consequence),
+            GameEvent::ImprovementDiscovered { engine_name, description } =>
+                write!(f, "Improvement found for {}: {}", engine_name, description),
+            GameEvent::ImprovementActualized { engine_name, description } =>
+                write!(f, "Improvement applied to {}: {}", engine_name, description),
             GameEvent::EconomicShift { condition, description } =>
                 write!(f, "Economic shift — {}: {}", condition, description),
         }
@@ -178,7 +186,9 @@ impl GameEvent {
             | GameEvent::FlightDeparted { .. }
             | GameEvent::FlightArrived { .. }
             | GameEvent::SpacecraftStranded { .. }
-            | GameEvent::MidFlightFlawActivated { .. } => EventImportance::Notable,
+            | GameEvent::MidFlightFlawActivated { .. }
+            | GameEvent::ImprovementDiscovered { .. }
+            | GameEvent::ImprovementActualized { .. } => EventImportance::Notable,
             GameEvent::EconomicShift { .. } => EventImportance::Critical,
         }
     }

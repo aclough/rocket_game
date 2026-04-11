@@ -1,3 +1,4 @@
+use rand::Rng;
 use rand::rngs::StdRng;
 use serde::{Serialize, Deserialize};
 
@@ -192,9 +193,13 @@ pub const SCALE_STEP: f64 = 0.25;
 pub enum EngineDesignStatus {
     InDesign { work_completed: f64, work_required: f64 },
     Testing { work_completed: f64 },
-    /// Revising discovered flaws. Works through remaining_indices sequentially,
-    /// removing each flaw when its revision completes.
-    Revising { remaining_indices: Vec<usize>, work_completed: f64 },
+    /// Revising discovered flaws and actualizing improvements.
+    /// Works through flaw indices first, then improvement indices.
+    Revising {
+        remaining_flaw_indices: Vec<usize>,
+        remaining_improvement_indices: Vec<usize>,
+        work_completed: f64,
+    },
 }
 
 /// Unique identifier for an engine project.
@@ -223,6 +228,9 @@ pub struct EngineProject {
     /// Cumulative engineering salary spent on this project (NRE).
     #[serde(default)]
     pub nre_cost: f64,
+    /// Improvements discovered during testing. Pending ones need a revision to actualize.
+    #[serde(default)]
+    pub improvements: Vec<Improvement>,
 }
 
 impl EngineProject {
@@ -275,6 +283,7 @@ impl EngineProject {
             teams_assigned: 0,
             complexity,
             nre_cost: 0.0,
+            improvements: Vec::new(),
         })
     }
 
@@ -310,26 +319,55 @@ impl EngineProject {
                             flaw_description: self.flaws[idx].description.clone(),
                         });
                     }
+                    // Roll for improvement discovery
+                    if rng.gen::<f64>() < IMPROVEMENT_DISCOVERY_CHANCE {
+                        let improvement = generate_improvement(rng);
+                        events.push(WorkEvent::ImprovementDiscovered {
+                            description: format!("{}: {}", improvement.description, improvement.kind),
+                        });
+                        self.improvements.push(improvement);
+                    }
                     events.push(WorkEvent::TestingCycleComplete);
                 }
             }
-            EngineDesignStatus::Revising { remaining_indices, work_completed } => {
+            EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, work_completed } => {
                 *work_completed += work;
-                while *work_completed >= FLAW_REVISION_WORK && !remaining_indices.is_empty() {
+                // Process flaws first
+                while *work_completed >= FLAW_REVISION_WORK && !remaining_flaw_indices.is_empty() {
                     *work_completed -= FLAW_REVISION_WORK;
-                    // Remove the first flaw in the queue (highest index first to
-                    // avoid shifting issues — indices are stored descending)
-                    let fi = remaining_indices.remove(0);
+                    let fi = remaining_flaw_indices.remove(0);
                     self.flaws.remove(fi);
                     events.push(WorkEvent::RevisionComplete);
-                    // Adjust remaining indices since we removed a flaw
-                    for idx in remaining_indices.iter_mut() {
+                    for idx in remaining_flaw_indices.iter_mut() {
                         if *idx > fi {
                             *idx -= 1;
                         }
                     }
                 }
-                if remaining_indices.is_empty() {
+                // Then actualize improvements
+                while *work_completed >= FLAW_REVISION_WORK && !remaining_improvement_indices.is_empty() {
+                    *work_completed -= FLAW_REVISION_WORK;
+                    let ii = remaining_improvement_indices.remove(0);
+                    if let Some(imp) = self.improvements.get_mut(ii) {
+                        imp.actualized = true;
+                        // Apply the improvement to the engine design
+                        match &imp.kind {
+                            ImprovementKind::Isp(frac) => {
+                                self.design.isp_s *= 1.0 + frac;
+                            }
+                            ImprovementKind::Mass(frac) => {
+                                self.design.mass_kg *= 1.0 - frac;
+                            }
+                            ImprovementKind::Thrust(frac) => {
+                                self.design.thrust_n *= 1.0 + frac;
+                            }
+                        }
+                        events.push(WorkEvent::ImprovementActualized {
+                            description: format!("{}: {}", imp.description, imp.kind),
+                        });
+                    }
+                }
+                if remaining_flaw_indices.is_empty() && remaining_improvement_indices.is_empty() {
                     let leftover = *work_completed;
                     self.status = EngineDesignStatus::Testing { work_completed: leftover };
                 }
@@ -339,22 +377,28 @@ impl EngineProject {
         events
     }
 
-    /// Start revising all discovered flaws. Works through them sequentially.
+    /// Start revising all discovered flaws and pending improvements.
     pub fn start_revision(&mut self) -> bool {
         if !matches!(self.status, EngineDesignStatus::Testing { .. }) {
             return false;
         }
-        let discovered_indices: Vec<usize> = self.flaws.iter()
+        let flaw_indices: Vec<usize> = self.flaws.iter()
             .enumerate()
             .filter(|(_, f)| f.discovered)
             .map(|(i, _)| i)
             .collect();
-        if discovered_indices.is_empty() {
+        let improvement_indices: Vec<usize> = self.improvements.iter()
+            .enumerate()
+            .filter(|(_, imp)| !imp.actualized)
+            .map(|(i, _)| i)
+            .collect();
+        if flaw_indices.is_empty() && improvement_indices.is_empty() {
             return false;
         }
         self.revision += 1;
         self.status = EngineDesignStatus::Revising {
-            remaining_indices: discovered_indices,
+            remaining_flaw_indices: flaw_indices,
+            remaining_improvement_indices: improvement_indices,
             work_completed: 0.0,
         };
         true
@@ -389,13 +433,81 @@ impl EngineProject {
     }
 }
 
+/// A potential improvement discovered during testing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Improvement {
+    pub description: String,
+    pub kind: ImprovementKind,
+    /// Whether this improvement has been actualized via revision.
+    pub actualized: bool,
+}
+
+/// What an improvement affects.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ImprovementKind {
+    /// Increase Isp by this fraction (e.g. 0.02 = +2%).
+    Isp(f64),
+    /// Reduce mass by this fraction (e.g. 0.03 = -3%).
+    Mass(f64),
+    /// Increase thrust by this fraction (e.g. 0.02 = +2%).
+    Thrust(f64),
+}
+
+impl std::fmt::Display for ImprovementKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImprovementKind::Isp(frac) => write!(f, "+{:.0}% Isp", frac * 100.0),
+            ImprovementKind::Mass(frac) => write!(f, "-{:.0}% mass", frac * 100.0),
+            ImprovementKind::Thrust(frac) => write!(f, "+{:.0}% thrust", frac * 100.0),
+        }
+    }
+}
+
+/// Chance per testing cycle to discover an improvement.
+const IMPROVEMENT_DISCOVERY_CHANCE: f64 = 0.08;
+
+/// Generate a random improvement.
+fn generate_improvement(rng: &mut StdRng) -> Improvement {
+    let roll: f64 = rng.gen();
+    let (kind, description) = if roll < 0.40 {
+        let frac = rng.gen_range(0.01..0.04);
+        (ImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
+            0 => "Optimized injector pattern",
+            1 => "Improved propellant mixing efficiency",
+            _ => "Better nozzle contour",
+        })
+    } else if roll < 0.70 {
+        let frac = rng.gen_range(0.02..0.06);
+        (ImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
+            0 => "Lighter turbopump housing",
+            1 => "Thinner chamber wall design",
+            _ => "Reduced gimbal mechanism mass",
+        })
+    } else {
+        let frac = rng.gen_range(0.01..0.04);
+        (ImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
+            0 => "Higher chamber pressure achievable",
+            1 => "Improved injector throughput",
+            _ => "Better regenerative cooling allows hotter burn",
+        })
+    };
+
+    Improvement {
+        description: description.to_string(),
+        kind,
+        actualized: false,
+    }
+}
+
 /// Events generated by engine project work.
 #[derive(Debug, Clone)]
 pub enum WorkEvent {
     DesignComplete { flaw_count: u32 },
     TestingCycleComplete,
     FlawDiscovered { flaw_description: String },
+    ImprovementDiscovered { description: String },
     RevisionComplete,
+    ImprovementActualized { description: String },
 }
 
 #[cfg(test)]

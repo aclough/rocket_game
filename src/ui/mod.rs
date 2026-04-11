@@ -509,15 +509,20 @@ impl App {
                 }
             }
             KeyCode::Char('r') => {
-                // Revise all discovered flaws
+                // Revise all discovered flaws and actualize pending improvements
                 if self.selected_item < self.game.player_company.engine_projects.len() {
                     let project = &mut self.game.player_company.engine_projects[self.selected_item];
                     if project.start_revision() {
-                        let count = match &project.status {
-                            EngineDesignStatus::Revising { remaining_indices, .. } => remaining_indices.len(),
-                            _ => 0,
+                        let (fc, ic) = match &project.status {
+                            EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, .. } =>
+                                (remaining_flaw_indices.len(), remaining_improvement_indices.len()),
+                            _ => (0, 0),
                         };
-                        self.status_message = Some(format!("Revising {} flaw(s)", count));
+                        if ic > 0 {
+                            self.status_message = Some(format!("Revising {} flaw(s), {} improvement(s)", fc, ic));
+                        } else {
+                            self.status_message = Some(format!("Revising {} flaw(s)", fc));
+                        }
                     }
                 }
             }

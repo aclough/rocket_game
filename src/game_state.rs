@@ -849,6 +849,10 @@ impl GameState {
                             GameEvent::FlawDiscovered { engine_name: engine_name.clone(), flaw_description },
                         WorkEvent::RevisionComplete =>
                             GameEvent::RevisionComplete { engine_name: engine_name.clone() },
+                        WorkEvent::ImprovementDiscovered { description } =>
+                            GameEvent::ImprovementDiscovered { engine_name: engine_name.clone(), description },
+                        WorkEvent::ImprovementActualized { description } =>
+                            GameEvent::ImprovementActualized { engine_name: engine_name.clone(), description },
                     };
                     self.event_log.push(self.date, evt.clone());
                     events.push(evt);
@@ -2288,7 +2292,7 @@ mod tests {
             revision: 0,
             teams_assigned: 0,
             complexity: 6,
-            nre_cost: 0.0,
+            nre_cost: 0.0, improvements: Vec::new(),
         };
         let ep2 = EngineProject {
             project_id: EngineProjectId(2),
@@ -2302,7 +2306,7 @@ mod tests {
             revision: 0,
             teams_assigned: 0,
             complexity: 6,
-            nre_cost: 0.0,
+            nre_cost: 0.0, improvements: Vec::new(),
         };
 
         (design, vec![ep1, ep2])
