@@ -476,6 +476,34 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 "      {} stages, {} engines    Teams: {}    Complexity: {}",
                 total_stages, total_engines, project.teams_assigned, project.complexity,
             )));
+
+            // Show engines used per stage group
+            let mut seen_engines: Vec<(String, u32)> = Vec::new();
+            for group in &project.design.stage_groups {
+                for stage in group {
+                    let rev = company.engine_projects.iter()
+                        .find(|ep| ep.design.id == stage.engine.id)
+                        .map(|ep| ep.revision)
+                        .or_else(|| company.contracted_engines.iter()
+                            .find(|ce| ce.design.id == stage.engine.id)
+                            .map(|_| 0))
+                        .unwrap_or(0);
+                    let key = format!("{} Rev {}", stage.engine.name, rev);
+                    if !seen_engines.iter().any(|(k, _)| k == &key) {
+                        seen_engines.push((key, stage.engine_count));
+                    } else if let Some(entry) = seen_engines.iter_mut().find(|(k, _)| k == &key) {
+                        entry.1 += stage.engine_count;
+                    }
+                }
+            }
+            let engine_list: Vec<String> = seen_engines.iter()
+                .map(|(name, count)| format!("{}x{}", count, name))
+                .collect();
+            lines.push(Line::from(format!(
+                "      Engines: {}",
+                engine_list.join(", "),
+            )));
+
             lines.push(Line::from(format!(
                 "      Total mass: {:.0} kg    dV: {:.0} m/s (0 payload)",
                 project.design.total_mass_kg(),
