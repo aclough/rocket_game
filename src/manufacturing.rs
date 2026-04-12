@@ -88,6 +88,12 @@ pub enum ManufacturingOrderType {
         engine_name: String,
         engine_mass_kg: f64,
         complexity: u32,
+        /// Revision at time of order placement.
+        revision: u32,
+        /// Flaw snapshot at time of order placement.
+        flaws: Vec<crate::flaw::Flaw>,
+        /// Actualized improvements at time of order placement.
+        improvements: Vec<crate::engine_project::Improvement>,
     },
     /// Build a single stage (tank + structure).
     Stage {
@@ -103,6 +109,10 @@ pub enum ManufacturingOrderType {
         design_id: RocketDesignId,
         rocket_name: String,
         total_stages: u32,
+        /// Rocket project revision at integration time.
+        revision: u32,
+        /// Rocket project flaw snapshot at integration time.
+        rocket_flaws: Vec<crate::flaw::Flaw>,
     },
 }
 
@@ -169,6 +179,9 @@ impl ManufacturingOrder {
         complexity: u32,
         preset: crate::engine_project::PropellantPreset,
         prior_builds: u32,
+        revision: u32,
+        flaws: Vec<crate::flaw::Flaw>,
+        improvements: Vec<crate::engine_project::Improvement>,
     ) -> Self {
         let base_work = balance::engine_build_work(complexity);
         let learning = balance::learning_curve_multiplier(prior_builds);
@@ -182,6 +195,9 @@ impl ManufacturingOrder {
                 engine_name,
                 engine_mass_kg,
                 complexity,
+                revision,
+                flaws,
+                improvements,
             },
             work_completed: 0.0,
             work_required: base_work * learning,
@@ -236,6 +252,8 @@ impl ManufacturingOrder {
         rocket_name: String,
         total_stages: u32,
         prior_builds: u32,
+        revision: u32,
+        rocket_flaws: Vec<crate::flaw::Flaw>,
     ) -> Self {
         let base_work = balance::rocket_integration_work(total_stages);
         let learning = balance::learning_curve_multiplier(prior_builds);
@@ -248,6 +266,8 @@ impl ManufacturingOrder {
                 design_id,
                 rocket_name,
                 total_stages,
+                revision,
+                rocket_flaws,
             },
             work_completed: 0.0,
             work_required: base_work * learning,
@@ -308,6 +328,15 @@ pub struct InventoryEngine {
     /// Manufacturing cost of this engine.
     #[serde(default)]
     pub build_cost: f64,
+    /// Revision of the engine project when this was built.
+    #[serde(default)]
+    pub revision: u32,
+    /// Snapshot of flaws at build time.
+    #[serde(default)]
+    pub flaws: Vec<crate::flaw::Flaw>,
+    /// Snapshot of actualized improvements at build time.
+    #[serde(default)]
+    pub improvements: Vec<crate::engine_project::Improvement>,
 }
 
 /// A built stage in inventory.
@@ -333,6 +362,12 @@ pub struct InventoryRocket {
     /// Total build cost (sum of all stage costs + integration cost).
     #[serde(default)]
     pub build_cost: f64,
+    /// Revision of the rocket project when this was integrated.
+    #[serde(default)]
+    pub revision: u32,
+    /// Snapshot of rocket project flaws at build time.
+    #[serde(default)]
+    pub rocket_flaws: Vec<crate::flaw::Flaw>,
 }
 
 /// Inventory of manufactured items.
@@ -503,13 +538,16 @@ impl Manufacturing {
             let item_id = self.next_inventory_id();
 
             match &order.order_type {
-                ManufacturingOrderType::Engine { source, engine_id, engine_name, .. } => {
+                ManufacturingOrderType::Engine { source, engine_id, engine_name, revision, flaws, improvements, .. } => {
                     self.inventory.engines.push(InventoryEngine {
                         item_id,
                         source: *source,
                         engine_id: *engine_id,
                         engine_name: engine_name.clone(),
                         build_cost: order.material_cost,
+                        revision: *revision,
+                        flaws: flaws.clone(),
+                        improvements: improvements.clone(),
                     });
                     events.push(ManufacturingEvent::EngineBuilt {
                         order_id: order.id,
@@ -532,7 +570,7 @@ impl Manufacturing {
                         stage_name: stage_name.clone(),
                     });
                 }
-                ManufacturingOrderType::RocketIntegration { rocket_project_id, design_id, rocket_name, .. } => {
+                ManufacturingOrderType::RocketIntegration { rocket_project_id, design_id, rocket_name, revision, rocket_flaws, .. } => {
                     let total_build_cost = order.material_cost;
                     self.inventory.rockets.push(InventoryRocket {
                         item_id,
@@ -540,6 +578,8 @@ impl Manufacturing {
                         design_id: *design_id,
                         rocket_name: rocket_name.clone(),
                         build_cost: total_build_cost,
+                        revision: *revision,
+                        rocket_flaws: rocket_flaws.clone(),
                     });
                     events.push(ManufacturingEvent::RocketIntegrated {
                         order_id: order.id,
@@ -654,6 +694,7 @@ mod tests {
             6,
             crate::engine_project::PropellantPreset::Kerolox,
             0,
+            0, Vec::new(), Vec::new(),
         );
         assert!(order.work_required > 0.0);
         assert!(order.material_cost > 0.0);
@@ -685,6 +726,7 @@ mod tests {
             "Falcon".into(),
             2,
             0,
+            0, Vec::new(),
         );
         assert!(order.work_required > 0.0);
         assert!(order.material_cost > 0.0);
@@ -698,11 +740,13 @@ mod tests {
             ManufacturingOrderId(1), test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
+            0, Vec::new(), Vec::new(),
         );
         let tenth = ManufacturingOrder::new_engine(
             ManufacturingOrderId(2), test_source(), EngineId(2),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 10,
+            0, Vec::new(), Vec::new(),
         );
         assert!(tenth.work_required < first.work_required,
             "10th build work {} should be less than first {}", tenth.work_required, first.work_required);
@@ -718,6 +762,7 @@ mod tests {
             id, test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
+            0, Vec::new(), Vec::new(),
         );
         order.teams_assigned = 2;
         mfg.orders.push(order);
@@ -746,14 +791,14 @@ mod tests {
             source: test_source(),
             engine_id: EngineId(1),
             engine_name: "Merlin".into(),
-            build_cost: 0.0,
+            build_cost: 0.0, revision: 0, flaws: Vec::new(), improvements: Vec::new(),
         });
         inv.engines.push(InventoryEngine {
             item_id: InventoryItemId(2),
             source: test_source(),
             engine_id: EngineId(2),
             engine_name: "Merlin".into(),
-            build_cost: 0.0,
+            build_cost: 0.0, revision: 0, flaws: Vec::new(), improvements: Vec::new(),
         });
 
         assert_eq!(inv.engine_count(test_source()), 2);
@@ -770,6 +815,7 @@ mod tests {
             id, test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
+            0, Vec::new(), Vec::new(),
         );
         order.teams_assigned = 1;
         mfg.orders.push(order);
@@ -835,6 +881,7 @@ mod tests {
             ManufacturingOrderId(1), test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
+            0, Vec::new(), Vec::new(),
         );
         assert!((order.progress() - 0.0).abs() < 0.001);
 

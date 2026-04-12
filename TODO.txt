@@ -11,7 +11,6 @@
 [] Add competitor company, DinoSoar
 [] Add upskilling of the player's workforce with particular technologies.
 [] Automation of bidding on contracts for any that const less than marginal cost + selected profit margin.
-[] Track revision number on inventory items (engines/rockets) so older builds carry pre-revision flaws.
 
 Later tuning:
 [] Rocket construction time

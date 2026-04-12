@@ -352,6 +352,9 @@ impl Company {
                                     ep.complexity,
                                     ep.preset,
                                     engine_prior,
+                                    ep.revision,
+                                    ep.flaws.clone(),
+                                    ep.improvements.iter().filter(|i| i.actualized).cloned().collect(),
                                 );
                                 total_cost += order.material_cost;
                                 self.manufacturing.orders.push(order);
@@ -371,6 +374,9 @@ impl Company {
                                     engine_id: stage.engine.id,
                                     engine_name: stage.engine.name.clone(),
                                     build_cost: ce.purchase_cost_per_unit,
+                                    revision: 0,
+                                    flaws: ce.flaws.clone(),
+                                    improvements: Vec::new(),
                                 });
                             }
                         }
@@ -412,6 +418,8 @@ impl Company {
             rocket_name.clone(),
             total_stages,
             rocket_prior,
+            rp.revision,
+            rp.flaws.clone(),
         );
         total_cost += integration_order.material_cost;
         self.manufacturing.orders.push(integration_order);
@@ -447,6 +455,9 @@ impl Company {
         let mass_kg = ep.design.mass_kg;
         let complexity = ep.complexity;
         let preset = ep.preset;
+        let revision = ep.revision;
+        let flaws = ep.flaws.clone();
+        let improvements: Vec<_> = ep.improvements.iter().filter(|i| i.actualized).cloned().collect();
         let engine_prior = *self.engine_build_counts.get(&ep_id).unwrap_or(&0);
 
         let order_id = self.manufacturing.next_order_id();
@@ -459,6 +470,9 @@ impl Company {
             complexity,
             preset,
             engine_prior,
+            revision,
+            flaws,
+            improvements,
         );
         let cost = order.material_cost;
         self.manufacturing.orders.push(order);
@@ -1255,13 +1269,16 @@ impl GameState {
         let rp = self.player_company.rocket_projects.iter()
             .find(|rp| rp.project_id == inv_rocket.rocket_project_id)?;
 
+        // Use snapshotted rocket flaws from the inventory item
+        let rocket_flaws = &inv_rocket.rocket_flaws;
+
         // Simulate flaw activation at launch
         let sim = launch::simulate_launch(
             &rp.design,
             destination,
             payload_kg,
             &self.player_company.engine_projects,
-            rp,
+            rocket_flaws,
             &self.player_company.contracted_engines,
             &mut self.seed.contingent_rng,
         );
@@ -2344,7 +2361,7 @@ mod tests {
 
         let sim = crate::launch::simulate_launch(
             &design, "leo", 0.0,
-            &engine_projects, &rp, &[], &mut rng,
+            &engine_projects, &rp.flaws, &[], &mut rng,
         );
 
         assert!(matches!(sim.outcome, crate::launch::LaunchOutcome::Success),
@@ -2447,7 +2464,7 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(99);
         let sim = crate::launch::simulate_launch(
             &design, "leo", 0.0,
-            &gs.player_company.engine_projects, &rp, &[], &mut rng,
+            &gs.player_company.engine_projects, &rp.flaws, &[], &mut rng,
         );
 
         // Build route and instantiate rocket

@@ -8,7 +8,6 @@ use crate::engine::EngineId;
 use crate::engine_project::{EngineProject, EngineSource};
 use crate::flaw::FlawConsequence;
 use crate::rocket::RocketDesign;
-use crate::rocket_project::RocketProject;
 use crate::third_party::ContractedEngine;
 
 /// Record of a flaw that activated during a launch.
@@ -68,7 +67,7 @@ pub fn simulate_launch(
     destination: &str,
     payload_kg: f64,
     engine_projects: &[EngineProject],
-    rocket_project: &RocketProject,
+    rocket_flaws: &[crate::flaw::Flaw],
     contracted_engines: &[ContractedEngine],
     rng: &mut StdRng,
 ) -> LaunchSimResult {
@@ -158,7 +157,7 @@ pub fn simulate_launch(
     }
 
     // Roll rocket project flaws — only target groups that will fire
-    for (fi, flaw) in rocket_project.flaws.iter().enumerate() {
+    for (fi, flaw) in rocket_flaws.iter().enumerate() {
         if rng.gen::<f64>() < flaw.activation_chance {
             // Pick a random stage group among those that will fire
             if groups_needed > 0 {
@@ -404,7 +403,7 @@ mod tests {
 
         let result = simulate_launch(
             &design, "leo", 0.0,
-            &[ep1, ep2], &rp, &[], &mut rng,
+            &[ep1, ep2], &rp.flaws, &[], &mut rng,
         );
 
         assert!(matches!(result.outcome, LaunchOutcome::Success));
@@ -429,7 +428,7 @@ mod tests {
 
         let result = simulate_launch(
             &design, "leo", 0.0,
-            &[ep1, ep2], &rp, &[], &mut rng,
+            &[ep1, ep2], &rp.flaws, &[], &mut rng,
         );
 
         assert_eq!(result.flaws_activated.len(), 1);
@@ -457,7 +456,7 @@ mod tests {
         // With a heavy payload, losing a stage should cause failure
         let result = simulate_launch(
             &design, "gto", 5000.0,
-            &[ep1, ep2], &rp, &[], &mut rng,
+            &[ep1, ep2], &rp.flaws, &[], &mut rng,
         );
 
         // Should be failure or partial failure (not success)
@@ -482,7 +481,7 @@ mod tests {
 
         let result = simulate_launch(
             &design, "leo", 0.0,
-            &[ep1, ep2], &rp, &[], &mut rng,
+            &[ep1, ep2], &rp.flaws, &[], &mut rng,
         );
 
         assert_eq!(result.flaws_activated.len(), 1);
@@ -507,7 +506,7 @@ mod tests {
 
         let result = simulate_launch(
             &design, "leo", 0.0,
-            &[ep1, ep2], &rp, &[], &mut rng,
+            &[ep1, ep2], &rp.flaws, &[], &mut rng,
         );
 
         assert!(result.flaws_activated.is_empty());

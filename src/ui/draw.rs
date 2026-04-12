@@ -640,17 +640,19 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
         lines.push(Line::from("    (empty)"));
     } else {
         if !mfg.inventory.engines.is_empty() {
-            // Group engines by name
-            let mut engine_counts: Vec<(&str, usize)> = Vec::new();
+            // Group engines by name + revision
+            let mut engine_counts: Vec<(&str, u32, usize)> = Vec::new();
             for eng in &mfg.inventory.engines {
-                if let Some(entry) = engine_counts.iter_mut().find(|(n, _)| *n == eng.engine_name.as_str()) {
-                    entry.1 += 1;
+                if let Some(entry) = engine_counts.iter_mut()
+                    .find(|(n, r, _)| *n == eng.engine_name.as_str() && *r == eng.revision)
+                {
+                    entry.2 += 1;
                 } else {
-                    engine_counts.push((&eng.engine_name, 1));
+                    engine_counts.push((&eng.engine_name, eng.revision, 1));
                 }
             }
-            for (name, count) in &engine_counts {
-                lines.push(Line::from(format!("    {} engines: {}", name, count)));
+            for (name, rev, count) in &engine_counts {
+                lines.push(Line::from(format!("    {} Rev {}: {}", name, rev, count)));
             }
         }
         if !mfg.inventory.stages.is_empty() {
@@ -658,7 +660,9 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
         }
         if !mfg.inventory.rockets.is_empty() {
             for rocket_inv in &mfg.inventory.rockets {
-                lines.push(Line::from(format!("    Rocket: {}", rocket_inv.rocket_name)));
+                lines.push(Line::from(format!(
+                    "    Rocket: {} Rev {}", rocket_inv.rocket_name, rocket_inv.revision
+                )));
             }
         }
     }
@@ -877,7 +881,7 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                 .unwrap_or_default();
 
             lines.push(Line::from(Span::styled(
-                format!("{}{}{}", marker, r.rocket_name, payload_info),
+                format!("{}{} (Rev {}){}", marker, r.rocket_name, r.revision, payload_info),
                 style,
             )));
         }
