@@ -51,6 +51,8 @@ pub enum GameEvent {
     ImprovementDiscovered { engine_name: String, description: String },
     /// Improvement actualized via revision.
     ImprovementActualized { engine_name: String, description: String },
+    /// Tech deficiencies found on newly designed engine.
+    TechDeficienciesFound { engine_name: String, tech_name: String, deficiencies: String },
     /// Major economic shift affecting the launch market.
     EconomicShift { condition: String, description: String },
 }
@@ -133,6 +135,8 @@ impl fmt::Display for GameEvent {
                 write!(f, "Improvement found for {}: {}", engine_name, description),
             GameEvent::ImprovementActualized { engine_name, description } =>
                 write!(f, "Improvement applied to {}: {}", engine_name, description),
+            GameEvent::TechDeficienciesFound { engine_name, tech_name, deficiencies } =>
+                write!(f, "{} has {} deficiencies: {}", engine_name, tech_name, deficiencies),
             GameEvent::EconomicShift { condition, description } =>
                 write!(f, "Economic shift — {}: {}", condition, description),
         }
@@ -188,7 +192,8 @@ impl GameEvent {
             | GameEvent::SpacecraftStranded { .. }
             | GameEvent::MidFlightFlawActivated { .. }
             | GameEvent::ImprovementDiscovered { .. }
-            | GameEvent::ImprovementActualized { .. } => EventImportance::Notable,
+            | GameEvent::ImprovementActualized { .. }
+            | GameEvent::TechDeficienciesFound { .. } => EventImportance::Notable,
             GameEvent::EconomicShift { .. } => EventImportance::Critical,
         }
     }

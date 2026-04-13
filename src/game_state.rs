@@ -233,16 +233,18 @@ impl Company {
         preset: PropellantPreset,
         scale: f64,
         use_vacuum_isp: bool,
+        technology_id: Option<crate::technology::TechnologyId>,
     ) -> Option<GameEvent> {
         let project_id = EngineProjectId(self.next_project_id);
         let engine_id = EngineId(self.next_engine_id);
         self.next_project_id += 1;
         self.next_engine_id += 1;
 
-        let project = EngineProject::new(
+        let mut project = EngineProject::new(
             project_id, engine_id, name.clone(),
             cycle, preset, scale, use_vacuum_isp,
         )?;
+        project.technology_id = technology_id;
         self.engine_projects.push(project);
         Some(GameEvent::EngineDesignStarted { engine_name: name })
     }
@@ -797,6 +799,9 @@ pub struct GameState {
     /// Active launch markets that generate contracts.
     #[serde(default = "default_markets")]
     pub markets: Vec<contract::Market>,
+    /// Experimental technologies with seed-driven deficiencies.
+    #[serde(default)]
+    pub technologies: Vec<crate::technology::Technology>,
     /// Tracks which market events have already fired (by event key).
     #[serde(default)]
     pub fired_market_events: Vec<String>,
@@ -819,6 +824,7 @@ impl GameState {
         let seed = GameSeed::new(seed_value);
 
         let economy = crate::economy::initial_state(&seed, start);
+        let technologies = crate::technology::generate_technologies(&seed);
 
         GameState {
             date: start,
@@ -837,6 +843,7 @@ impl GameState {
             economy,
             markets: default_markets(),
             fired_market_events: Vec::new(),
+            technologies,
         }
     }
 
@@ -847,17 +854,22 @@ impl GameState {
         self.date = self.date.next_day();
 
         // Process daily work on engine and rocket projects
+        let mut newly_designed_engines: Vec<usize> = Vec::new();
+        // (engine_project_index, deficiency_id)
+        let mut tech_def_attempts: Vec<(usize, crate::technology::TechDeficiencyId)> = Vec::new();
         {
             let rng = &mut self.seed.contingent_rng;
             let next_flaw_id = &mut self.player_company.next_flaw_id;
 
-            for project in &mut self.player_company.engine_projects {
+            for (pi, project) in self.player_company.engine_projects.iter_mut().enumerate() {
                 let engine_name = project.design.name.clone();
                 let work_events = project.apply_daily_work(rng, next_flaw_id);
                 for we in work_events {
                     let evt = match we {
-                        WorkEvent::DesignComplete { flaw_count } =>
-                            GameEvent::EngineDesignComplete { engine_name: engine_name.clone(), flaw_count },
+                        WorkEvent::DesignComplete { flaw_count } => {
+                            newly_designed_engines.push(pi);
+                            GameEvent::EngineDesignComplete { engine_name: engine_name.clone(), flaw_count }
+                        }
                         WorkEvent::TestingCycleComplete => continue,
                         WorkEvent::FlawDiscovered { flaw_description } =>
                             GameEvent::FlawDiscovered { engine_name: engine_name.clone(), flaw_description },
@@ -867,6 +879,10 @@ impl GameState {
                             GameEvent::ImprovementDiscovered { engine_name: engine_name.clone(), description },
                         WorkEvent::ImprovementActualized { description } =>
                             GameEvent::ImprovementActualized { engine_name: engine_name.clone(), description },
+                        WorkEvent::TechDeficiencyAttempted { deficiency_id } => {
+                            tech_def_attempts.push((pi, deficiency_id));
+                            continue;
+                        }
                     };
                     self.event_log.push(self.date, evt.clone());
                     events.push(evt);
@@ -901,6 +917,101 @@ impl GameState {
             for project in &mut self.player_company.rocket_projects {
                 if project.teams_assigned > 0 {
                     project.nre_cost += project.teams_assigned as f64 * daily_salary;
+                }
+            }
+        }
+
+        // Process tech deficiency revision attempts
+        for (pi, def_id) in tech_def_attempts {
+            let project = &mut self.player_company.engine_projects[pi];
+            let tech_id = match project.technology_id {
+                Some(id) => id,
+                None => continue,
+            };
+            if let Some(tech) = self.technologies.iter_mut().find(|t| t.id == tech_id) {
+                if let Some(def) = tech.deficiencies.iter_mut().find(|d| d.id == def_id) {
+                    let already_solved = def.solved;
+                    let engine_name = project.design.name.clone();
+                    let def_desc = format!("{}: {}", def.description, def.kind);
+
+                    if crate::technology::attempt_solve(def, already_solved, &mut self.seed.contingent_rng) {
+                        // Success — remove from engine and restore stats
+                        project.tech_deficiency_ids.retain(|id| *id != def_id);
+                        match &def.kind {
+                            crate::technology::TechDeficiencyKind::IspPenalty(frac) => {
+                                project.design.isp_s /= 1.0 - frac;
+                            }
+                            crate::technology::TechDeficiencyKind::MassPenalty(frac) => {
+                                project.design.mass_kg /= 1.0 + frac;
+                            }
+                            crate::technology::TechDeficiencyKind::ThrustPenalty(frac) => {
+                                project.design.thrust_n /= 1.0 - frac;
+                            }
+                            crate::technology::TechDeficiencyKind::ComplexityPenalty(n) => {
+                                project.complexity = project.complexity.saturating_sub(*n);
+                            }
+                        }
+                        let evt = GameEvent::RevisionComplete { engine_name: engine_name.clone() };
+                        self.event_log.push(self.date, evt.clone());
+                        events.push(evt);
+                    } else {
+                        // Failed — report attempt count
+                        let hint = crate::technology::failure_hint(def.total_attempts);
+                        let msg = if let Some(h) = hint {
+                            format!("Failed to resolve {}: {}. {}", engine_name, def_desc, h)
+                        } else {
+                            format!("Failed to resolve {} deficiency: {}", engine_name, def_desc)
+                        };
+                        let evt = GameEvent::FlawDiscovered {
+                            engine_name,
+                            flaw_description: msg,
+                        };
+                        self.event_log.push(self.date, evt.clone());
+                        events.push(evt);
+                    }
+                }
+            }
+        }
+
+        // Apply tech deficiencies to newly completed engine designs
+        for pi in newly_designed_engines {
+            let project = &mut self.player_company.engine_projects[pi];
+            if let Some(tech_id) = project.technology_id {
+                if let Some(tech) = self.technologies.iter().find(|t| t.id == tech_id) {
+                    let deficiency_ids: Vec<crate::technology::TechDeficiencyId> =
+                        tech.deficiencies.iter().map(|d| d.id).collect();
+                    // Apply stat penalties from unsolved deficiencies
+                    for def in &tech.deficiencies {
+                        match &def.kind {
+                            crate::technology::TechDeficiencyKind::IspPenalty(frac) => {
+                                project.design.isp_s *= 1.0 - frac;
+                            }
+                            crate::technology::TechDeficiencyKind::MassPenalty(frac) => {
+                                project.design.mass_kg *= 1.0 + frac;
+                            }
+                            crate::technology::TechDeficiencyKind::ThrustPenalty(frac) => {
+                                project.design.thrust_n *= 1.0 - frac;
+                            }
+                            crate::technology::TechDeficiencyKind::ComplexityPenalty(n) => {
+                                project.complexity += n;
+                            }
+                        }
+                    }
+                    project.tech_deficiency_ids = deficiency_ids;
+                    let engine_name = project.design.name.clone();
+                    let tech_name = tech.name.clone();
+                    let desc: Vec<String> = tech.deficiencies.iter()
+                        .map(|d| format!("{}: {}", d.description, d.kind))
+                        .collect();
+                    if !desc.is_empty() {
+                        let evt = GameEvent::TechDeficienciesFound {
+                            engine_name: engine_name.clone(),
+                            tech_name: tech_name.clone(),
+                            deficiencies: desc.join(", "),
+                        };
+                        self.event_log.push(self.date, evt.clone());
+                        events.push(evt);
+                    }
                 }
             }
         }
@@ -957,6 +1068,11 @@ impl GameState {
                 self.event_log.push(self.date, evt.clone());
                 events.push(evt);
                 self.speed = GameSpeed::Paused;
+            }
+
+            // Check yearly tech unlock rolls (on January)
+            if self.date.month == 1 {
+                self.check_tech_unlocks(&mut events);
             }
 
             // Generate monthly contracts from all active markets
@@ -1440,6 +1556,33 @@ impl GameState {
         self.speed = GameSpeed::Paused;
 
         Some((events, None))
+    }
+
+    /// Check yearly tech unlock rolls.
+    fn check_tech_unlocks(&mut self, events: &mut Vec<GameEvent>) {
+        use rand::Rng;
+        for tech in &mut self.technologies {
+            if tech.unlocked {
+                continue;
+            }
+            let query = format!("tech_unlock_{}_{}", tech.id.0, self.date.year);
+            let mut rng = self.seed.world_query(&query);
+            let chance = match tech.difficulty {
+                0 => 0.0,
+                1 => 0.10,
+                _ => 0.08,
+            };
+            if rng.gen::<f64>() < chance {
+                tech.unlocked = true;
+                let evt = GameEvent::EconomicShift {
+                    condition: format!("Technology Available: {}", tech.name),
+                    description: tech.description.clone(),
+                };
+                self.event_log.push(self.date, evt.clone());
+                events.push(evt);
+                self.speed = GameSpeed::Paused;
+            }
+        }
     }
 
     /// Check seed-driven market events and activate/modify markets.
@@ -2310,6 +2453,7 @@ mod tests {
             teams_assigned: 0,
             complexity: 6,
             nre_cost: 0.0, improvements: Vec::new(), cumulative_testing_work: 0.0,
+            tech_deficiency_ids: Vec::new(), technology_id: None,
         };
         let ep2 = EngineProject {
             project_id: EngineProjectId(2),
@@ -2324,6 +2468,7 @@ mod tests {
             teams_assigned: 0,
             complexity: 6,
             nre_cost: 0.0, improvements: Vec::new(), cumulative_testing_work: 0.0,
+            tech_deficiency_ids: Vec::new(), technology_id: None,
         };
 
         (design, vec![ep1, ep2])
@@ -2555,7 +2700,7 @@ mod tests {
             crate::engine::EngineCycle::GasGenerator,
             crate::engine_project::PropellantPreset::Kerolox,
             1.0,
-            true,
+            true, None,
         );
         assert!(evt.is_some());
         assert_eq!(gs.player_company.engine_projects.len(), 1);
@@ -2571,7 +2716,7 @@ mod tests {
             crate::engine::EngineCycle::GasGenerator,
             crate::engine_project::PropellantPreset::Kerolox,
             1.0,
-            true,
+            true, None,
         );
 
         assert_eq!(gs.player_company.unassigned_team_count(), 2);
@@ -2619,7 +2764,7 @@ mod tests {
             crate::engine::EngineCycle::GasGenerator,
             crate::engine_project::PropellantPreset::Kerolox,
             1.0,
-            true,
+            true, None,
         );
         gs.player_company.add_team_to_project(0);
 

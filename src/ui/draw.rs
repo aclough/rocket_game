@@ -334,6 +334,34 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                     )));
                 }
             }
+
+            // Show tech deficiencies
+            if !project.tech_deficiency_ids.is_empty() {
+                if let Some(tech_id) = project.technology_id {
+                    if let Some(tech) = app.game.technologies.iter().find(|t| t.id == tech_id) {
+                        lines.push(Line::from(format!(
+                            "      Tech deficiencies ({}):", tech.name,
+                        )));
+                        for def_id in &project.tech_deficiency_ids {
+                            if let Some(def) = tech.deficiencies.iter().find(|d| d.id == *def_id) {
+                                let status = if def.solved {
+                                    "(solved elsewhere — easy fix)".to_string()
+                                } else if def.total_attempts > 0 {
+                                    format!("({} failed attempt{})",
+                                        def.total_attempts,
+                                        if def.total_attempts == 1 { "" } else { "s" })
+                                } else {
+                                    String::new()
+                                };
+                                lines.push(Line::from(Span::styled(
+                                    format!("        ◆ {}: {} {}", def.description, def.kind, status),
+                                    Style::default().fg(Color::Magenta),
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

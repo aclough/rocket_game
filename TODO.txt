@@ -1,7 +1,5 @@
-[] Add way to improve engines and other parts over time.
-    [] Small to moderate bonuses but at the cost of maybe adding flaws
-[] Add experimetal technologies unlocked by events that the player can then try to pursue.
-    [] They will have potentially large maluses that can be removed by a similar procedure to that improving designs but unreliably.
+[] Add NERVA engine cycle (NuclearThermal) using the tech deficiency system.
+[] Add more experimental technologies over time.
 [] Add ability to put multiple payloads on a rocket.
 [] Low thrust engines that take days to provide the ISP to start their transfer.
     [] Just solar sail to start with.  Take sunlight into account for thrust.

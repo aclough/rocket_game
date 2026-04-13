@@ -193,11 +193,11 @@ pub const SCALE_STEP: f64 = 0.25;
 pub enum EngineDesignStatus {
     InDesign { work_completed: f64, work_required: f64 },
     Testing { work_completed: f64 },
-    /// Revising discovered flaws and actualizing improvements.
-    /// Works through flaw indices first, then improvement indices.
+    /// Revising discovered flaws, actualizing improvements, and attempting tech deficiency fixes.
     Revising {
         remaining_flaw_indices: Vec<usize>,
         remaining_improvement_indices: Vec<usize>,
+        remaining_tech_deficiency_ids: Vec<crate::technology::TechDeficiencyId>,
         work_completed: f64,
     },
 }
@@ -234,6 +234,12 @@ pub struct EngineProject {
     /// Cumulative work spent in testing (persists across revisions).
     #[serde(default)]
     pub cumulative_testing_work: f64,
+    /// IDs of unsolved tech deficiencies on this engine (references Technology.deficiencies).
+    #[serde(default)]
+    pub tech_deficiency_ids: Vec<crate::technology::TechDeficiencyId>,
+    /// Which technology this engine uses (if experimental).
+    #[serde(default)]
+    pub technology_id: Option<crate::technology::TechnologyId>,
 }
 
 impl EngineProject {
@@ -288,6 +294,8 @@ impl EngineProject {
             nre_cost: 0.0,
             improvements: Vec::new(),
             cumulative_testing_work: 0.0,
+            tech_deficiency_ids: Vec::new(),
+            technology_id: None,
         })
     }
 
@@ -335,7 +343,7 @@ impl EngineProject {
                     events.push(WorkEvent::TestingCycleComplete);
                 }
             }
-            EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, work_completed } => {
+            EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, remaining_tech_deficiency_ids, work_completed } => {
                 *work_completed += work;
                 // Process flaws first
                 while *work_completed >= FLAW_REVISION_WORK && !remaining_flaw_indices.is_empty() {
@@ -372,7 +380,15 @@ impl EngineProject {
                         });
                     }
                 }
-                if remaining_flaw_indices.is_empty() && remaining_improvement_indices.is_empty() {
+                // Then attempt tech deficiency fixes
+                while *work_completed >= FLAW_REVISION_WORK && !remaining_tech_deficiency_ids.is_empty() {
+                    *work_completed -= FLAW_REVISION_WORK;
+                    let def_id = remaining_tech_deficiency_ids.remove(0);
+                    events.push(WorkEvent::TechDeficiencyAttempted { deficiency_id: def_id });
+                }
+                if remaining_flaw_indices.is_empty() && remaining_improvement_indices.is_empty()
+                    && remaining_tech_deficiency_ids.is_empty()
+                {
                     let leftover = *work_completed;
                     self.status = EngineDesignStatus::Testing { work_completed: leftover };
                 }
@@ -397,13 +413,15 @@ impl EngineProject {
             .filter(|(_, imp)| !imp.actualized)
             .map(|(i, _)| i)
             .collect();
-        if flaw_indices.is_empty() && improvement_indices.is_empty() {
+        let tech_def_ids = self.tech_deficiency_ids.clone();
+        if flaw_indices.is_empty() && improvement_indices.is_empty() && tech_def_ids.is_empty() {
             return false;
         }
         self.revision += 1;
         self.status = EngineDesignStatus::Revising {
             remaining_flaw_indices: flaw_indices,
             remaining_improvement_indices: improvement_indices,
+            remaining_tech_deficiency_ids: tech_def_ids,
             work_completed: 0.0,
         };
         true
@@ -507,6 +525,8 @@ pub enum WorkEvent {
     ImprovementDiscovered { description: String },
     RevisionComplete,
     ImprovementActualized { description: String },
+    /// A tech deficiency revision was attempted — caller must resolve with technology state.
+    TechDeficiencyAttempted { deficiency_id: crate::technology::TechDeficiencyId },
 }
 
 #[cfg(test)]

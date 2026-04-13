@@ -841,8 +841,9 @@ impl App {
                         let use_vacuum = *use_vacuum;
                         self.exit_modal();
 
+                        let tech_id = crate::technology::technology_for_preset(preset);
                         if let Some(evt) = self.game.player_company.start_engine_project(
-                            name.clone(), cycle, preset, scale, use_vacuum,
+                            name.clone(), cycle, preset, scale, use_vacuum, tech_id,
                         ) {
                             self.game.event_log.push(self.game.date, evt);
                             self.status_message = Some(format!("Started design: {}", name));

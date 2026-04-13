@@ -20,6 +20,7 @@ pub mod reputation;
 pub mod launch;
 pub mod flight;
 pub mod economy;
+pub mod technology;
 pub mod game_state;
 pub mod save;
 pub mod ui;
