@@ -324,20 +324,92 @@ pub struct App {
 fn reachable_destinations(
     from: &str, remaining_dv: f64, rocket_mass: f64, low_thrust: bool,
 ) -> Vec<(String, String, f64)> {
+    reachable_destinations_multistage(from, remaining_dv, rocket_mass, low_thrust, None, None)
+}
+
+/// Compute reachable destinations considering multi-stage capability changes.
+/// If `rocket` and `design` are provided, simulates per-leg staging to check
+/// whether each leg's engine can actually use the required edge type.
+fn reachable_destinations_multistage(
+    from: &str, remaining_dv: f64, rocket_mass: f64, low_thrust: bool,
+    rocket: Option<&crate::rocket::Rocket>,
+    design: Option<&crate::rocket::RocketDesign>,
+) -> Vec<(String, String, f64)> {
     let map = &crate::location::DELTA_V_MAP;
     let mut dests = Vec::new();
+
+    // Try both low-thrust and high-thrust pathfinding, pick cheapest valid path
     for loc in map.locations() {
         if loc.id == from {
             continue;
         }
-        if let Some((_, dv)) = map.shortest_path_constrained(from, loc.id, rocket_mass, low_thrust) {
-            if dv <= remaining_dv {
-                dests.push((loc.id.to_string(), loc.display_name.to_string(), dv));
+
+        // Find candidate paths: try with current capability, and also try the other
+        let mut best: Option<(Vec<&'static str>, f64)> = None;
+
+        for try_lt in [low_thrust, !low_thrust] {
+            if let Some((path, dv)) = map.shortest_path_constrained(from, loc.id, rocket_mass, try_lt) {
+                if dv <= remaining_dv {
+                    // If we have rocket state, validate each leg
+                    if let (Some(rocket), Some(design)) = (rocket, design) {
+                        if validate_path_staging(rocket, design, &path, rocket_mass) {
+                            if best.as_ref().map_or(true, |(_, best_dv)| dv < *best_dv) {
+                                best = Some((path, dv));
+                            }
+                        }
+                    } else {
+                        // No rocket state — just use dv check
+                        if best.as_ref().map_or(true, |(_, best_dv)| dv < *best_dv) {
+                            best = Some((path, dv));
+                        }
+                    }
+                }
             }
+        }
+
+        if let Some((_, dv)) = best {
+            dests.push((loc.id.to_string(), loc.display_name.to_string(), dv));
         }
     }
     dests.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
     dests
+}
+
+/// Validate that a path is achievable given the rocket's staging.
+/// Simulates burning through the path leg-by-leg on a cloned rocket,
+/// checking that each leg's edge type matches the active stage's capability.
+fn validate_path_staging(
+    rocket: &crate::rocket::Rocket,
+    design: &crate::rocket::RocketDesign,
+    path: &[&str],
+    rocket_mass: f64,
+) -> bool {
+    let map = &crate::location::DELTA_V_MAP;
+    let mut sim_rocket = rocket.clone();
+    let sim_design = design.clone();
+
+    for window in path.windows(2) {
+        let from = window[0];
+        let to = window[1];
+
+        let transfer = match map.transfer(from, to) {
+            Some(t) => t,
+            None => return false,
+        };
+
+        let is_lt = sim_rocket.is_current_stage_low_thrust(&sim_design);
+
+        // Check if current stage can use this edge
+        let dv_cost = match transfer.delta_v_for(is_lt, rocket_mass) {
+            Some(dv) => dv,
+            None => return false, // edge not usable by current stage type
+        };
+
+        // Simulate the burn
+        let _result = sim_rocket.burn_sequential(&sim_design, dv_cost, 0.0);
+    }
+
+    true
 }
 
 impl App {
@@ -1120,7 +1192,10 @@ impl App {
                         let remaining_dv = rocket.remaining_delta_v(&rp.design);
                         let rocket_mass = rp.design.total_mass_kg() + payload_kg;
                         let low_thrust = rocket.is_current_stage_low_thrust(&rp.design);
-                        let destinations = reachable_destinations(start_id, remaining_dv, rocket_mass, low_thrust);
+                        let destinations = reachable_destinations_multistage(
+                            start_id, remaining_dv, rocket_mass, low_thrust,
+                            Some(&rocket), Some(&rp.design),
+                        );
                         self.input_mode = InputMode::DvPlanner {
                             state: Box::new(DvPlannerState {
                                 source: PlannerSource::Design { project_index: pi },
@@ -1182,8 +1257,9 @@ impl App {
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg() + state.payload_kg;
                             let lt = state.rocket.is_current_stage_low_thrust(&state.design);
-                            state.destinations = reachable_destinations(
+                            state.destinations = reachable_destinations_multistage(
                                 &state.current_location, remaining_dv, rocket_mass, lt,
+                                Some(&state.rocket), Some(&state.design),
                             );
                             state.selected = 0;
                         }
@@ -1201,8 +1277,9 @@ impl App {
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg();
                             let lt = state.rocket.is_current_stage_low_thrust(&state.design);
-                            state.destinations = reachable_destinations(
+                            state.destinations = reachable_destinations_multistage(
                                 &state.current_location, remaining_dv, rocket_mass, lt,
+                                Some(&state.rocket), Some(&state.design),
                             );
                             state.selected = state.selected.min(
                                 state.destinations.len().saturating_sub(1),
@@ -1221,8 +1298,9 @@ impl App {
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg() + state.payload_kg;
                             let lt = state.rocket.is_current_stage_low_thrust(&state.design);
-                            state.destinations = reachable_destinations(
+                            state.destinations = reachable_destinations_multistage(
                                 &state.current_location, remaining_dv, rocket_mass, lt,
+                                Some(&state.rocket), Some(&state.design),
                             );
                             state.selected = state.selected.min(
                                 state.destinations.len().saturating_sub(1),
