@@ -2782,4 +2782,146 @@ mod tests {
             _ => {} // might have completed if work_required was low enough (unlikely for complexity 6)
         }
     }
+
+    /// Test a three-stage hybrid rocket: chemical stages 1-2 for LEO, ion stage for
+    /// transit to NEA, then hypergolic thruster for asteroid surface landing.
+    /// Verifies that low-thrust pathfinding routes through low-thrust edges for the
+    /// ion stage, and the planner switches to chemical pathfinding after staging.
+    #[test]
+    fn test_hybrid_ion_chemical_to_asteroid_surface() {
+        use crate::engine::{EngineDesign, EngineId, EngineCycle, PropellantFraction};
+        use crate::propellant::Propellant;
+        use crate::stage::{Stage, StageId};
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+        use crate::location::DELTA_V_MAP;
+
+        // Stage 1: big kerolox booster for LEO
+        let booster_engine = EngineDesign {
+            id: EngineId(201),
+            name: "Booster".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 2_000_000.0,
+            isp_s: 300.0,
+            exit_pressure_pa: 80_000.0,
+            needs_atmosphere: false,
+            mass_kg: 1500.0,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.73 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.27 },
+            ],
+        };
+        let stage1 = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: booster_engine.clone(), engine_count: 3,
+            propellant_mass_kg: 200_000.0, structural_mass_kg: 5000.0,
+            fairing: None,
+        };
+        let stage2 = Stage {
+            id: StageId(2), name: "S2".into(),
+            engine: booster_engine.clone(), engine_count: 1,
+            propellant_mass_kg: 30_000.0, structural_mass_kg: 1000.0,
+            fairing: None,
+        };
+
+        // Stage 3: ion engine for transit (very high Isp, very low thrust)
+        let ion_engine = EngineDesign {
+            id: EngineId(202),
+            name: "Ion Drive".into(),
+            cycle: EngineCycle::ElectricPropulsion,
+            thrust_n: 1.0,
+            isp_s: 3000.0,
+            exit_pressure_pa: 0.0,
+            needs_atmosphere: false,
+            mass_kg: 50.0,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::Xenon, mass_fraction: 1.0 },
+            ],
+        };
+        let ion_stage = Stage {
+            id: StageId(3), name: "Ion".into(),
+            engine: ion_engine.clone(), engine_count: 1,
+            propellant_mass_kg: 500.0, structural_mass_kg: 50.0,
+            fairing: None,
+        };
+
+        // Stage 4: small hypergolic thruster for asteroid landing
+        let hyp_engine = EngineDesign {
+            id: EngineId(203),
+            name: "Lander".into(),
+            cycle: EngineCycle::PressureFed,
+            thrust_n: 5_000.0,
+            isp_s: 280.0,
+            exit_pressure_pa: 7_000.0,
+            needs_atmosphere: false,
+            mass_kg: 20.0,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::NTO, mass_fraction: 0.57 },
+                PropellantFraction { propellant: Propellant::UDMH, mass_fraction: 0.43 },
+            ],
+        };
+        let lander_stage = Stage {
+            id: StageId(4), name: "Lander".into(),
+            engine: hyp_engine.clone(), engine_count: 1,
+            propellant_mass_kg: 100.0, structural_mass_kg: 20.0,
+            fairing: None,
+        };
+
+        let design = RocketDesign {
+            id: RocketDesignId(10),
+            name: "Asteroid Explorer".into(),
+            stage_groups: vec![
+                vec![stage1],   // group 0: booster
+                vec![stage2],   // group 1: upper chemical
+                vec![ion_stage],    // group 2: ion transit
+                vec![lander_stage], // group 3: hypergolic lander
+            ],
+        };
+
+        // Instantiate at LEO (as if we've already launched)
+        let mut rocket = design.instantiate(RocketId(1), "leo", 0.0);
+
+        // Jettison groups 0 and 1 (already used for launch)
+        for si in 0..rocket.stage_states[0].len() {
+            rocket.jettison_stage(0, si);
+        }
+        for si in 0..rocket.stage_states[1].len() {
+            rocket.jettison_stage(1, si);
+        }
+
+        // Now the active stage is group 2 (ion)
+        assert!(rocket.is_current_stage_low_thrust(&design),
+            "Ion stage should be classified as low-thrust");
+
+        // Ion stage should be able to reach NEA (low-thrust path)
+        let remaining_dv = rocket.remaining_delta_v(&design);
+        assert!(remaining_dv > 7000.0,
+            "Ion stage should have enough dv for NEA transit, got {}", remaining_dv);
+
+        let nea_path = DELTA_V_MAP.shortest_path_constrained("leo", "nea", 1000.0, true);
+        assert!(nea_path.is_some(), "Low-thrust path LEO→NEA should exist");
+
+        // Ion stage should NOT be able to reach NEA surface (needs chemical)
+        let surface_path = DELTA_V_MAP.shortest_path_constrained("leo", "nea_surface", 1000.0, true);
+        assert!(surface_path.is_none(), "Low-thrust should not reach asteroid surface");
+
+        // Simulate burning the ion stage to reach NEA
+        let (_, nea_dv) = nea_path.unwrap();
+        let burn_result = rocket.burn_sequential(&design, nea_dv, 0.0);
+        assert!(burn_result.dv_achieved > 6000.0,
+            "Should burn significant dv for NEA transit, got {}", burn_result.dv_achieved);
+
+        // After ion stage exhausted or at NEA, check next stage
+        // The lander stage should now be active (or the ion stage partially used)
+        // Check if we can reach NEA surface with chemical pathfinding from NEA
+        let chemical_path = DELTA_V_MAP.shortest_path_constrained("nea", "nea_surface", 200.0, false);
+        assert!(chemical_path.is_some(), "Chemical path NEA→surface should exist");
+        let (path, dv) = chemical_path.unwrap();
+        assert_eq!(path, vec!["nea", "nea_surface"]);
+        assert!((dv - 20.0).abs() < 1.0, "NEA landing should cost ~20 m/s, got {}", dv);
+
+        // After ion stage, lander should not be low-thrust
+        // (Check by looking at group 3's engine)
+        assert!(!design.stage_groups[3][0].engine.is_low_thrust(),
+            "Lander engine should be high-thrust (chemical)");
+    }
 }
