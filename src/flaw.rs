@@ -163,8 +163,11 @@ fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cycl
 
     let use_electric = matches!(cycle, Some(crate::engine::EngineCycle::ElectricPropulsion));
     let use_nuclear = matches!(cycle, Some(crate::engine::EngineCycle::NuclearThermal));
+    let use_solar_sail = matches!(cycle, Some(crate::engine::EngineCycle::SolarSail));
 
     let description = match trigger {
+        FlawTrigger::PerFlight if use_solar_sail =>
+            generate_solar_sail_flaw_description(&consequence, rng),
         FlawTrigger::PerFlight if use_electric =>
             generate_electric_flaw_description(&consequence, rng),
         FlawTrigger::PerFlight if use_nuclear =>
@@ -305,6 +308,38 @@ fn generate_nuclear_flaw_description(consequence: &FlawConsequence, rng: &mut St
             "Reactor coolant channel blockage",
             "Uncontrolled criticality excursion risk",
             "Nozzle detachment from thermal cycling",
+        ][..],
+    };
+
+    let idx = rng.gen_range(0..descriptions.len());
+    descriptions[idx].to_string()
+}
+
+fn generate_solar_sail_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
+    let descriptions = match consequence {
+        FlawConsequence::PerformanceDegradation(_) => &[
+            "Sail reflectivity degradation",
+            "Micrometeorite puncture damage",
+            "Sail deployment mechanism binding",
+            "Attitude control vane misalignment",
+            "Sail surface wrinkling",
+            "Solar radiation pressure modeling error",
+        ][..],
+        FlawConsequence::EngineLoss => &[
+            "Sail boom structural failure",
+            "Complete sail deployment failure",
+            "Sail tearing from thermal stress",
+            "Attitude control system failure",
+            "Sail furling mechanism jam",
+            "Boom hinge seizure",
+        ][..],
+        FlawConsequence::StageLoss => &[
+            "Sail catastrophic tear propagation",
+            "Boom collapse from impact",
+            "Sail jettison mechanism malfunction",
+            "Thermal deformation beyond recovery",
+            "Complete attitude loss from sail asymmetry",
+            "Sail connection point failure",
         ][..],
     };
 

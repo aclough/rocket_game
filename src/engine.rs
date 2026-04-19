@@ -16,6 +16,8 @@ pub enum EngineCycle {
     NuclearThermal,
     /// Ion/Hall-effect thruster — very high Isp, very low thrust.
     ElectricPropulsion,
+    /// Solar sail — thrust from solar radiation pressure, no propellant.
+    SolarSail,
 }
 
 /// A single propellant component in the engine's mix.
@@ -50,8 +52,10 @@ impl EngineDesign {
     }
 
     /// Mass flow rate in kg/s (thrust / exhaust_velocity).
+    /// Returns 0.0 for solar sails (no propellant consumed).
     pub fn mass_flow_rate(&self) -> f64 {
-        self.thrust_n / self.exhaust_velocity()
+        let ve = self.exhaust_velocity();
+        if ve == 0.0 { 0.0 } else { self.thrust_n / ve }
     }
 
     /// Validate the engine design. Returns a list of problems (empty = valid).
@@ -125,7 +129,12 @@ impl EngineDesign {
     /// Whether this engine is a low-thrust type (ion, Hall, solar sail).
     /// Low-thrust engines can only use transfer edges marked low_thrust_ok.
     pub fn is_low_thrust(&self) -> bool {
-        matches!(self.cycle, EngineCycle::ElectricPropulsion)
+        matches!(self.cycle, EngineCycle::ElectricPropulsion | EngineCycle::SolarSail)
+    }
+
+    /// Whether this engine is a solar sail (no propellant, infinite dv).
+    pub fn is_solar_sail(&self) -> bool {
+        matches!(self.cycle, EngineCycle::SolarSail)
     }
 
     /// Propellant cost per kg of total propellant consumed.

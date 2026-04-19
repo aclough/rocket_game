@@ -11,6 +11,7 @@ pub fn cycle_complexity(cycle: EngineCycle) -> u32 {
         EngineCycle::FullFlow => 9,
         EngineCycle::NuclearThermal => 10,
         EngineCycle::ElectricPropulsion => 8,
+        EngineCycle::SolarSail => 6,
     }
 }
 

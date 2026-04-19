@@ -20,6 +20,8 @@ pub enum PropellantPreset {
     Hydrogen,
     /// Xenon for electric propulsion (ion/Hall thrusters).
     Xenon,
+    /// Photon pressure — no propellant, used with solar sails.
+    Photon,
 }
 
 impl PropellantPreset {
@@ -31,6 +33,7 @@ impl PropellantPreset {
         PropellantPreset::Solid,
         PropellantPreset::Hydrogen,
         PropellantPreset::Xenon,
+        PropellantPreset::Photon,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -42,6 +45,7 @@ impl PropellantPreset {
             PropellantPreset::Solid => "Solid",
             PropellantPreset::Hydrogen => "Hydrogen",
             PropellantPreset::Xenon => "Xenon",
+            PropellantPreset::Photon => "Photon",
         }
     }
 
@@ -73,6 +77,7 @@ impl PropellantPreset {
             PropellantPreset::Xenon => vec![
                 PropellantFraction { propellant: Propellant::Xenon, mass_fraction: 1.0 },
             ],
+            PropellantPreset::Photon => vec![],
         }
     }
 
@@ -87,6 +92,7 @@ impl PropellantPreset {
             PropellantPreset::Solid => &[EngineCycle::PressureFed],
             PropellantPreset::Hydrogen => &[EngineCycle::NuclearThermal],
             PropellantPreset::Xenon => &[EngineCycle::ElectricPropulsion],
+            PropellantPreset::Photon => &[EngineCycle::SolarSail],
             _ => &[
                 EngineCycle::PressureFed,
                 EngineCycle::GasGenerator,
@@ -142,6 +148,22 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         });
     }
 
+    // Solar sail: thrust from solar radiation pressure, no propellant
+    if cycle == EngineCycle::SolarSail {
+        if preset != PropellantPreset::Photon {
+            return None;
+        }
+        return Some(EngineBaseline {
+            thrust_n: 0.01,              // 10 millinewtons at 1 AU, scale 1.0
+            mass_kg: 100.0,              // sail + structure
+            isp_vac_s: 0.0,             // not meaningful for sails
+            isp_sl_s: 0.0,
+            exit_pressure_vac_pa: 0.0,
+            exit_pressure_sl_pa: 0.0,
+            vacuum_only: true,
+        });
+    }
+
     // Nuclear thermal: completely different from chemical engines
     if cycle == EngineCycle::NuclearThermal {
         if preset != PropellantPreset::Hydrogen {
@@ -170,6 +192,10 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
     if preset == PropellantPreset::Xenon {
         return None;
     }
+    // Photon only works with SolarSail cycle
+    if preset == PropellantPreset::Photon {
+        return None;
+    }
 
     // Base Isp values by propellant (vacuum), then cycle adjusts
     let (base_isp_vac, base_isp_sl) = match preset {
@@ -180,6 +206,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         PropellantPreset::Solid => (265.0, 240.0),
         PropellantPreset::Hydrogen => unreachable!(),
         PropellantPreset::Xenon => unreachable!(),
+        PropellantPreset::Photon => unreachable!(),
     };
 
     // Cycle multipliers for Isp (relative to GasGenerator baseline)
@@ -191,6 +218,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         EngineCycle::FullFlow => 1.08,
         EngineCycle::NuclearThermal => unreachable!(),
         EngineCycle::ElectricPropulsion => unreachable!(),
+        EngineCycle::SolarSail => unreachable!(),
     };
 
     // Base thrust at scale 1.0 by propellant type
@@ -202,6 +230,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         PropellantPreset::Solid => 500_000.0,         // ~medium SRB
         PropellantPreset::Hydrogen => unreachable!(),
         PropellantPreset::Xenon => unreachable!(),
+        PropellantPreset::Photon => unreachable!(),
     };
 
     // Cycle multipliers for thrust (relative to GasGenerator)
@@ -213,6 +242,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         EngineCycle::FullFlow => 1.30,
         EngineCycle::NuclearThermal => unreachable!(),
         EngineCycle::ElectricPropulsion => unreachable!(),
+        EngineCycle::SolarSail => unreachable!(),
     };
 
     // Thrust-to-weight ratio by cycle (higher = lighter for given thrust)
@@ -225,6 +255,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         EngineCycle::FullFlow => 60.0,       // heaviest complex cycle
         EngineCycle::NuclearThermal => unreachable!(),
         EngineCycle::ElectricPropulsion => unreachable!(),
+        EngineCycle::SolarSail => unreachable!(),
     };
 
     let thrust = base_thrust * thrust_mult;
@@ -400,7 +431,7 @@ impl EngineProject {
                     }
                     // Roll for improvement discovery
                     if rng.gen::<f64>() < IMPROVEMENT_DISCOVERY_CHANCE {
-                        let improvement = generate_improvement(rng);
+                        let improvement = generate_improvement(rng, self.design.cycle);
                         events.push(WorkEvent::ImprovementDiscovered {
                             description: format!("{}: {}", improvement.description, improvement.kind),
                         });
@@ -549,30 +580,102 @@ impl std::fmt::Display for ImprovementKind {
 /// Chance per testing cycle to discover an improvement.
 const IMPROVEMENT_DISCOVERY_CHANCE: f64 = 0.08;
 
-/// Generate a random improvement.
-fn generate_improvement(rng: &mut StdRng) -> Improvement {
+/// Generate a random improvement appropriate for the engine cycle.
+fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle) -> Improvement {
     let roll: f64 = rng.gen();
-    let (kind, description) = if roll < 0.40 {
-        let frac = rng.gen_range(0.01..0.04);
-        (ImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
-            0 => "Optimized injector pattern",
-            1 => "Improved propellant mixing efficiency",
-            _ => "Better nozzle contour",
-        })
-    } else if roll < 0.70 {
-        let frac = rng.gen_range(0.02..0.06);
-        (ImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
-            0 => "Lighter turbopump housing",
-            1 => "Thinner chamber wall design",
-            _ => "Reduced gimbal mechanism mass",
-        })
-    } else {
-        let frac = rng.gen_range(0.01..0.04);
-        (ImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
-            0 => "Higher chamber pressure achievable",
-            1 => "Improved injector throughput",
-            _ => "Better regenerative cooling allows hotter burn",
-        })
+
+    let (kind, description) = match cycle {
+        EngineCycle::SolarSail => {
+            // Solar sails: mass reduction or thrust improvement (reflectivity)
+            if roll < 0.50 {
+                let frac = rng.gen_range(0.02..0.06);
+                (ImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
+                    0 => "Lighter boom material",
+                    1 => "Thinner sail substrate",
+                    _ => "Optimized deployment mechanism",
+                })
+            } else {
+                let frac = rng.gen_range(0.02..0.05);
+                (ImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
+                    0 => "Higher reflectivity coating",
+                    1 => "Improved sail flatness",
+                    _ => "Better attitude control vane geometry",
+                })
+            }
+        }
+        EngineCycle::ElectricPropulsion => {
+            if roll < 0.40 {
+                let frac = rng.gen_range(0.01..0.04);
+                (ImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
+                    0 => "Optimized ion grid spacing",
+                    1 => "Improved beam focusing",
+                    _ => "Better discharge chamber geometry",
+                })
+            } else if roll < 0.70 {
+                let frac = rng.gen_range(0.02..0.06);
+                (ImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
+                    0 => "Lighter power processing unit",
+                    1 => "Reduced thruster head mass",
+                    _ => "Compact xenon feed system",
+                })
+            } else {
+                let frac = rng.gen_range(0.01..0.04);
+                (ImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
+                    0 => "Higher discharge current achievable",
+                    1 => "Improved ion extraction efficiency",
+                    _ => "Better magnetic field confinement",
+                })
+            }
+        }
+        EngineCycle::NuclearThermal => {
+            if roll < 0.40 {
+                let frac = rng.gen_range(0.01..0.04);
+                (ImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
+                    0 => "Higher reactor operating temperature",
+                    1 => "Improved fuel element heat transfer",
+                    _ => "Better hydrogen flow distribution",
+                })
+            } else if roll < 0.70 {
+                let frac = rng.gen_range(0.02..0.06);
+                (ImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
+                    0 => "Lighter radiation shielding",
+                    1 => "Compact reactor core design",
+                    _ => "Reduced turbopump mass",
+                })
+            } else {
+                let frac = rng.gen_range(0.01..0.04);
+                (ImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
+                    0 => "Higher reactor power output",
+                    1 => "Improved propellant heating efficiency",
+                    _ => "Better nozzle thermal management",
+                })
+            }
+        }
+        _ => {
+            // Chemical engines (default)
+            if roll < 0.40 {
+                let frac = rng.gen_range(0.01..0.04);
+                (ImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
+                    0 => "Optimized injector pattern",
+                    1 => "Improved propellant mixing efficiency",
+                    _ => "Better nozzle contour",
+                })
+            } else if roll < 0.70 {
+                let frac = rng.gen_range(0.02..0.06);
+                (ImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
+                    0 => "Lighter turbopump housing",
+                    1 => "Thinner chamber wall design",
+                    _ => "Reduced gimbal mechanism mass",
+                })
+            } else {
+                let frac = rng.gen_range(0.01..0.04);
+                (ImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
+                    0 => "Higher chamber pressure achievable",
+                    1 => "Improved injector throughput",
+                    _ => "Better regenerative cooling allows hotter burn",
+                })
+            }
+        }
     };
 
     Improvement {
@@ -623,11 +726,18 @@ mod tests {
                 let b = engine_baseline(*cycle, *preset);
                 assert!(b.is_some(), "Missing baseline for {:?}/{:?}", cycle, preset);
                 let b = b.unwrap();
-                assert!(b.thrust_n > 0.0);
+                // Solar sails have ~0 thrust and 0 Isp; skip those assertions
+                if b.isp_vac_s > 0.0 {
+                    assert!(b.thrust_n > 0.0);
+                }
                 assert!(b.mass_kg > 0.0);
-                assert!(b.isp_vac_s > 0.0);
-                // Nuclear thermal and electric propulsion have no sea-level Isp (vacuum only)
-                if *cycle != EngineCycle::NuclearThermal && *cycle != EngineCycle::ElectricPropulsion {
+                if *cycle != EngineCycle::SolarSail {
+                    assert!(b.isp_vac_s > 0.0);
+                }
+                // Nuclear thermal, electric propulsion, and solar sail have no sea-level Isp (vacuum only)
+                if *cycle != EngineCycle::NuclearThermal && *cycle != EngineCycle::ElectricPropulsion
+                    && *cycle != EngineCycle::SolarSail
+                {
                     assert!(b.isp_sl_s > 0.0);
                 }
             }

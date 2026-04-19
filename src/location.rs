@@ -714,6 +714,12 @@ pub fn simulate_gravity_losses(
         let mut gravity_loss = 0.0;
         let mut remaining_prop = propellant;
 
+        // Skip stages with no propellant/mass flow (solar sails)
+        if mass_flow <= 0.0 || propellant <= 0.0 {
+            results.push(0.0);
+            continue;
+        }
+
         while remaining_prop > 1e-6 {
             let dt = (1.0_f64).min(remaining_prop / mass_flow);
             gravity_loss += g * pitch.sin() * dt;

@@ -145,6 +145,16 @@ pub fn engine_bom(preset: PropellantPreset) -> BillOfMaterials {
                 (Resource::Composites, 0.05),
             ],
         },
+        // Solar sail: mostly lightweight sail material (composites) with structure
+        PropellantPreset::Photon => BillOfMaterials {
+            fractions: vec![
+                (Resource::Composites, 0.50),
+                (Resource::Aluminium, 0.20),
+                (Resource::Wiring, 0.10),
+                (Resource::Electronics, 0.10),
+                (Resource::Steel, 0.10),
+            ],
+        },
         // Nuclear thermal: reactor core (HEU), shielding, hydrogen plumbing
         PropellantPreset::Hydrogen => BillOfMaterials {
             fractions: vec![

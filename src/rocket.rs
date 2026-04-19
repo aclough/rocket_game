@@ -269,13 +269,15 @@ impl Rocket {
         ve * (m0 / mf_actual).ln()
     }
 
-    /// Whether the current active stage group (lowest with propellant) is low-thrust.
+    /// Whether the current active stage group (lowest with propellant or solar sail) is low-thrust.
     pub fn is_current_stage_low_thrust(&self, design: &RocketDesign) -> bool {
         for (gi, group) in design.stage_groups.iter().enumerate() {
-            let has_fuel = self.stage_states.get(gi)
-                .map_or(false, |ss| ss.iter().any(|s| s.attached && s.propellant_remaining_kg > 0.0));
-            if has_fuel {
-                // This is the active group — check if any engine is low-thrust
+            let is_active = self.stage_states.get(gi)
+                .map_or(false, |ss| ss.iter().any(|s| s.attached && (
+                    s.propellant_remaining_kg > 0.0
+                    || group.iter().any(|st| st.engine.is_solar_sail())
+                )));
+            if is_active {
                 return group.iter().any(|s| s.engine.is_low_thrust());
             }
         }
@@ -296,6 +298,14 @@ impl Rocket {
                     .map(|(s, ss)| s.dry_mass_kg() + ss.propellant_remaining_kg)
                     .sum::<f64>()
             }).sum::<f64>() + self.payload_mass_kg;
+
+            // Solar sail stages have infinite dv
+            let has_sail = design.stage_groups[gi].iter()
+                .zip(self.stage_states[gi].iter())
+                .any(|(s, ss)| ss.attached && s.engine.is_solar_sail());
+            if has_sail {
+                return f64::INFINITY;
+            }
 
             // Build temporary stages with remaining propellant for phased calc
             let active_stages: Vec<Stage> = design.stage_groups[gi].iter()
@@ -334,6 +344,17 @@ impl Rocket {
 
         for gi in 0..n {
             if dv_remaining <= 0.0 {
+                break;
+            }
+
+            // Solar sail: infinite dv, no propellant consumed
+            let is_sail = design.stage_groups.get(gi)
+                .map_or(false, |g| g.iter().any(|s| s.engine.is_solar_sail()))
+                && self.stage_states.get(gi)
+                    .map_or(false, |ss| ss.iter().any(|s| s.attached));
+            if is_sail {
+                dv_achieved += dv_remaining;
+                groups_burned.push(gi);
                 break;
             }
 
@@ -379,6 +400,15 @@ impl Rocket {
 
     /// Compute remaining delta-v for a single group given current propellant state.
     pub fn group_remaining_delta_v(&self, design: &RocketDesign, gi: usize) -> f64 {
+        // Solar sail: infinite dv
+        if design.stage_groups.get(gi)
+            .map_or(false, |g| g.iter().any(|s| s.engine.is_solar_sail()))
+            && self.stage_states.get(gi)
+                .map_or(false, |ss| ss.iter().any(|s| s.attached))
+        {
+            return f64::INFINITY;
+        }
+
         let n = self.stage_states.len();
         let payload_above: f64 = (gi + 1..n).map(|gj| {
             design.stage_groups[gj].iter().zip(self.stage_states[gj].iter())
@@ -579,8 +609,13 @@ pub fn compute_stage_stats(
         let group_wet: f64 = group.iter().map(|s| s.wet_mass_kg()).sum();
         let group_dry: f64 = group.iter().map(|s| s.dry_mass_kg()).sum();
 
-        let mass_ratio = (group_wet + payload_above) / (group_dry + payload_above);
-        let delta_v_vacuum = design.group_delta_v(gi, payload_above);
+        let is_sail = group.iter().any(|s| s.engine.is_solar_sail());
+        let mass_ratio = if is_sail { 1.0 } else {
+            (group_wet + payload_above) / (group_dry + payload_above)
+        };
+        let delta_v_vacuum = if is_sail { f64::INFINITY } else {
+            design.group_delta_v(gi, payload_above)
+        };
         let twr = if (group_wet + payload_above) > 0.0 {
             thrust / ((group_wet + payload_above) * surface_g)
         } else {

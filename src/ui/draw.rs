@@ -14,6 +14,11 @@ use crate::location::DELTA_V_MAP;
 use crate::rocket;
 use crate::ui::{App, FocusedPane, InputMode, RocketDesignerState, Tab};
 
+fn format_dv(dv: f64) -> String {
+    if dv.is_infinite() { "∞".to_string() }
+    else { format!("{:.0} m/s", dv) }
+}
+
 fn format_flaw_rate(flaw: &Flaw) -> String {
     match flaw.trigger {
         FlawTrigger::PerFlight => format!("{:.0}%/flight", flaw.activation_chance * 100.0),
@@ -265,6 +270,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 EngineCycle::FullFlow => "Full Flow",
                 EngineCycle::NuclearThermal => "Nuclear Thermal",
                 EngineCycle::ElectricPropulsion => "Electric Propulsion",
+                EngineCycle::SolarSail => "Solar Sail",
             };
 
             // Propellant display with 2 sig figs
@@ -966,7 +972,7 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                 Span::styled("  ● ", Style::default().fg(Color::Cyan)),
                 Span::raw(format!("{} → {}  ", flight.rocket_name, dest_name)),
                 Span::styled(format!("ETA: {}  ", eta_str), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("Δv: {:.0} m/s", remaining_dv), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("Δv: {}", format_dv(remaining_dv)), Style::default().fg(Color::DarkGray)),
             ]));
         }
     }
@@ -989,7 +995,7 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
             let mut spans = vec![
                 Span::styled("  ◆ ", Style::default().fg(Color::Green)),
                 Span::raw(format!("{} @ {}  ", sc.name, loc_name)),
-                Span::styled(format!("Δv: {:.0} m/s", dv), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("Δv: {}", format_dv(dv)), Style::default().fg(Color::DarkGray)),
             ];
             // Show current stage group if not on the final one
             let total_groups = sc.design.stage_groups.len();
@@ -1334,26 +1340,34 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
             let engine_label = format!("{}{}", stage.engine.name, tag);
 
             // Compute burn time: propellant_mass / (mass_flow_rate * engine_count)
-            let burn_time_s = {
-                let mfr = stage.engine.mass_flow_rate() * stage.engine_count as f64;
-                if mfr > 0.0 { stage.propellant_mass_kg / mfr } else { 0.0 }
-            };
-            let burn_str = if burn_time_s > 86400.0 {
-                format!("{:>4.0}d", burn_time_s / 86400.0)
+            let burn_str = if stage.engine.is_solar_sail() {
+                "   ∞".to_string()
             } else {
-                format!("{:>4.0}s", burn_time_s)
+                let burn_time_s = {
+                    let mfr = stage.engine.mass_flow_rate() * stage.engine_count as f64;
+                    if mfr > 0.0 { stage.propellant_mass_kg / mfr } else { 0.0 }
+                };
+                if burn_time_s > 86400.0 {
+                    format!("{:>4.0}d", burn_time_s / 86400.0)
+                } else {
+                    format!("{:>4.0}s", burn_time_s)
+                }
             };
 
             // Stats only shown on the last inner stage of a group
             let is_last_in_group = si + 1 == group_len;
             let stat_str = if is_last_in_group {
                 if let Some(s) = stats.get(gi) {
+                    let eff_str = if s.delta_v_effective.is_infinite() { "     ∞".to_string() }
+                        else { format!("{:>6.0}", s.delta_v_effective) };
+                    let vac_str = if s.delta_v_vacuum.is_infinite() { "       ∞".to_string() }
+                        else { format!("{:>8.0}", s.delta_v_vacuum) };
                     format!(
-                        "{:>5}  {:>5.1}  {:>6.0}  {:>8.0}  {:>5.2}",
+                        "{:>5}  {:>5.1}  {}  {}  {:>5.2}",
                         burn_str,
                         s.mass_ratio,
-                        s.delta_v_effective,
-                        s.delta_v_vacuum,
+                        eff_str,
+                        vac_str,
                         s.twr,
                     )
                 } else {
@@ -1465,8 +1479,8 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
         let total_mass = temp_design.total_mass_kg() + state.payload_kg;
 
         lines.push(Line::from(format!(
-            "  Total dV: {:.0} m/s (vacuum: {:.0})",
-            total_dv_effective, total_dv_vacuum,
+            "  Total dV: {} (vacuum: {})",
+            format_dv(total_dv_effective), format_dv(total_dv_vacuum),
         )));
         lines.push(Line::from(format!(
             "  Total mass: {}",
@@ -1536,6 +1550,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 cycles.push(("Nuclear Thermal", "Very high Isp, very heavy, hydrogen only"));
             }
             cycles.push(("Electric Propulsion", "Very high Isp, very low thrust, xenon"));
+            cycles.push(("Solar Sail", "No propellant, thrust from sunlight, very low thrust"));
             cycles.push(("Solid Rocket Motor", "Simple, cheap, not throttleable"));
             let mut lines = vec![
                 Line::from(format!("  Design: {}", name)),
@@ -1919,7 +1934,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(vec![
                     Span::raw("  Location: "),
                     Span::styled(loc_name, Style::default().fg(Color::Cyan)),
-                    Span::raw(format!("    Δv: {:.0} m/s", remaining_dv)),
+                    Span::raw(format!("    Δv: {}", format_dv(remaining_dv))),
                     Span::raw(format!("    Payload: {:.0} kg", state.payload_kg)),
                 ]),
                 Line::from(""),
@@ -2005,7 +2020,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from(vec![
                     Span::styled(format!("{}{}", marker, sc.name), style),
                     Span::styled(
-                        format!("  @ {}  Δv: {:.0} m/s", sc.location, dv),
+                        format!("  @ {}  Δv: {}", sc.location, format_dv(dv)),
                         Style::default().fg(Color::DarkGray),
                     ),
                 ]));
@@ -2025,7 +2040,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
         InputMode::FlySelectDestination { destinations, remaining_dv, selected, .. } => {
             let mut lines = vec![
                 Line::from(""),
-                Line::from(format!("  Remaining Δv: {:.0} m/s", remaining_dv)),
+                Line::from(format!("  Remaining Δv: {}", format_dv(*remaining_dv))),
                 Line::from(""),
                 Line::from("  Select destination:"),
                 Line::from(""),
