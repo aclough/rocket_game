@@ -1338,24 +1338,29 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
                 let mfr = stage.engine.mass_flow_rate() * stage.engine_count as f64;
                 if mfr > 0.0 { stage.propellant_mass_kg / mfr } else { 0.0 }
             };
+            let burn_str = if burn_time_s > 86400.0 {
+                format!("{:>4.0}d", burn_time_s / 86400.0)
+            } else {
+                format!("{:>4.0}s", burn_time_s)
+            };
 
             // Stats only shown on the last inner stage of a group
             let is_last_in_group = si + 1 == group_len;
             let stat_str = if is_last_in_group {
                 if let Some(s) = stats.get(gi) {
                     format!(
-                        "{:>5.0}s  {:>5.1}  {:>6.0}  {:>8.0}  {:>5.2}",
-                        burn_time_s,
+                        "{:>5}  {:>5.1}  {:>6.0}  {:>8.0}  {:>5.2}",
+                        burn_str,
                         s.mass_ratio,
                         s.delta_v_effective,
                         s.delta_v_vacuum,
                         s.twr,
                     )
                 } else {
-                    format!("{:>5.0}s", burn_time_s)
+                    format!("{:>5}", burn_str)
                 }
             } else {
-                format!("{:>5.0}s", burn_time_s)
+                format!("{:>5}", burn_str)
             };
 
             let style = if selected {

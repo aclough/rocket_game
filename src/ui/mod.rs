@@ -665,7 +665,7 @@ impl App {
 
     fn handle_launches_key(&mut self, key: KeyCode) {
         match key {
-            KeyCode::Char('f') => {
+            KeyCode::Char('f') | KeyCode::Char('F') => {
                 // Fly a spacecraft to a new destination
                 if self.game.spacecraft.is_empty() {
                     self.status_message = Some("No spacecraft available".into());
