@@ -263,6 +263,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 EngineCycle::Expander => "Expander",
                 EngineCycle::StagedCombustion => "Staged Combustion",
                 EngineCycle::FullFlow => "Full Flow",
+                EngineCycle::NuclearThermal => "Nuclear Thermal",
             };
 
             // Propellant display with 2 sig figs
@@ -1516,14 +1517,19 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             frame.render_widget(paragraph, modal_area);
         }
         InputMode::SelectCycle { name, selected } => {
-            let cycles = [
+            let mut cycles = vec![
                 ("Pressure Fed", "Simple, reliable, lower performance"),
                 ("Gas Generator", "Good all-around, moderate complexity"),
                 ("Expander", "Efficient, limited thrust"),
                 ("Staged Combustion", "High performance, complex"),
                 ("Full Flow", "Maximum performance, most complex"),
-                ("Solid Rocket Motor", "Simple, cheap, not throttleable"),
             ];
+            if app.game.technologies.iter().any(|t|
+                t.id == crate::technology::TECH_NUCLEAR_THERMAL && t.unlocked
+            ) {
+                cycles.push(("Nuclear Thermal", "Very high Isp, very heavy, hydrogen only"));
+            }
+            cycles.push(("Solid Rocket Motor", "Simple, cheap, not throttleable"));
             let mut lines = vec![
                 Line::from(format!("  Design: {}", name)),
                 Line::from(""),

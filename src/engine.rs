@@ -13,6 +13,7 @@ pub enum EngineCycle {
     Expander,
     StagedCombustion,
     FullFlow,
+    NuclearThermal,
 }
 
 /// A single propellant component in the engine's mix.

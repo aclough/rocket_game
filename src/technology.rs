@@ -76,6 +76,7 @@ impl Technology {
 pub fn technology_for_preset(preset: crate::engine_project::PropellantPreset) -> Option<TechnologyId> {
     match preset {
         crate::engine_project::PropellantPreset::Methalox => Some(TECH_METHALOX),
+        crate::engine_project::PropellantPreset::Hydrogen => Some(TECH_NUCLEAR_THERMAL),
         _ => None,
     }
 }

@@ -9,6 +9,7 @@ pub fn cycle_complexity(cycle: EngineCycle) -> u32 {
         EngineCycle::Expander => 7,
         EngineCycle::StagedCombustion => 8,
         EngineCycle::FullFlow => 9,
+        EngineCycle::NuclearThermal => 10,
     }
 }
 

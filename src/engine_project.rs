@@ -16,6 +16,8 @@ pub enum PropellantPreset {
     Methalox,
     Hypergolic,
     Solid,
+    /// Pure hydrogen heated by nuclear reactor (no oxidizer).
+    Hydrogen,
 }
 
 impl PropellantPreset {
@@ -25,6 +27,7 @@ impl PropellantPreset {
         PropellantPreset::Methalox,
         PropellantPreset::Hypergolic,
         PropellantPreset::Solid,
+        PropellantPreset::Hydrogen,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -34,6 +37,7 @@ impl PropellantPreset {
             PropellantPreset::Methalox => "Methalox",
             PropellantPreset::Hypergolic => "Hypergolic",
             PropellantPreset::Solid => "Solid",
+            PropellantPreset::Hydrogen => "Hydrogen",
         }
     }
 
@@ -59,6 +63,9 @@ impl PropellantPreset {
             PropellantPreset::Solid => vec![
                 PropellantFraction { propellant: Propellant::SolidMix, mass_fraction: 1.0 },
             ],
+            PropellantPreset::Hydrogen => vec![
+                PropellantFraction { propellant: Propellant::LH2, mass_fraction: 1.0 },
+            ],
         }
     }
 
@@ -71,6 +78,7 @@ impl PropellantPreset {
     pub fn compatible_cycles(&self) -> &[EngineCycle] {
         match self {
             PropellantPreset::Solid => &[EngineCycle::PressureFed],
+            PropellantPreset::Hydrogen => &[EngineCycle::NuclearThermal],
             _ => &[
                 EngineCycle::PressureFed,
                 EngineCycle::GasGenerator,
@@ -110,8 +118,28 @@ pub struct EngineBaseline {
 /// These are the "middle of the range" values at scale 1.0.
 /// Inspired by real engines but simplified for gameplay.
 pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<EngineBaseline> {
+    // Nuclear thermal: completely different from chemical engines
+    if cycle == EngineCycle::NuclearThermal {
+        if preset != PropellantPreset::Hydrogen {
+            return None;
+        }
+        return Some(EngineBaseline {
+            thrust_n: 330_000.0,          // ~NERVA class (~73 klbf)
+            mass_kg: 10_000.0,            // very heavy (reactor + shielding)
+            isp_vac_s: 850.0,             // excellent vacuum Isp
+            isp_sl_s: 0.0,               // never used at sea level
+            exit_pressure_vac_pa: 7_000.0,
+            exit_pressure_sl_pa: 7_000.0, // vacuum only
+            vacuum_only: true,
+        });
+    }
+
     // Solid engines can only be pressure-fed
     if preset == PropellantPreset::Solid && cycle != EngineCycle::PressureFed {
+        return None;
+    }
+    // Nuclear H2 only works with NuclearThermal cycle
+    if preset == PropellantPreset::Hydrogen {
         return None;
     }
 
@@ -122,6 +150,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         PropellantPreset::Methalox => (350.0, 305.0),
         PropellantPreset::Hypergolic => (290.0, 255.0),
         PropellantPreset::Solid => (265.0, 240.0),
+        PropellantPreset::Hydrogen => unreachable!(),
     };
 
     // Cycle multipliers for Isp (relative to GasGenerator baseline)
@@ -131,6 +160,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         EngineCycle::Expander => 1.04,
         EngineCycle::StagedCombustion => 1.06,
         EngineCycle::FullFlow => 1.08,
+        EngineCycle::NuclearThermal => unreachable!(),
     };
 
     // Base thrust at scale 1.0 by propellant type
@@ -140,6 +170,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         PropellantPreset::Methalox => 700_000.0,      // ~Raptor-class
         PropellantPreset::Hypergolic => 45_000.0,     // ~AJ10-class
         PropellantPreset::Solid => 500_000.0,         // ~medium SRB
+        PropellantPreset::Hydrogen => unreachable!(),
     };
 
     // Cycle multipliers for thrust (relative to GasGenerator)
@@ -149,6 +180,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         EngineCycle::Expander => 0.80,
         EngineCycle::StagedCombustion => 1.15,
         EngineCycle::FullFlow => 1.30,
+        EngineCycle::NuclearThermal => unreachable!(),
     };
 
     // Thrust-to-weight ratio by cycle (higher = lighter for given thrust)
@@ -159,6 +191,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         EngineCycle::Expander => 50.0,       // moderate
         EngineCycle::StagedCombustion => 70.0, // heavy but powerful
         EngineCycle::FullFlow => 60.0,       // heaviest complex cycle
+        EngineCycle::NuclearThermal => unreachable!(),
     };
 
     let thrust = base_thrust * thrust_mult;
@@ -560,7 +593,10 @@ mod tests {
                 assert!(b.thrust_n > 0.0);
                 assert!(b.mass_kg > 0.0);
                 assert!(b.isp_vac_s > 0.0);
-                assert!(b.isp_sl_s > 0.0);
+                // Nuclear thermal has no sea-level Isp (vacuum only)
+                if *cycle != EngineCycle::NuclearThermal {
+                    assert!(b.isp_sl_s > 0.0);
+                }
             }
         }
     }

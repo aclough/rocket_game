@@ -757,13 +757,19 @@ impl App {
                 }
             }
             InputMode::SelectCycle { name, selected } => {
-                let cycles = [
+                let mut cycles = vec![
                     EngineCycle::PressureFed,
                     EngineCycle::GasGenerator,
                     EngineCycle::Expander,
                     EngineCycle::StagedCombustion,
                     EngineCycle::FullFlow,
                 ];
+                // Add NuclearThermal if the tech is unlocked
+                if self.game.technologies.iter().any(|t|
+                    t.id == crate::technology::TECH_NUCLEAR_THERMAL && t.unlocked
+                ) {
+                    cycles.push(EngineCycle::NuclearThermal);
+                }
                 let num_options = cycles.len() + 1; // +1 for Solid Rocket Motor
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
@@ -807,8 +813,8 @@ impl App {
                     KeyCode::Enter => {
                         let preset = presets[*selected];
                         let name = name.clone();
-                        // Expander cycles are always vacuum-optimized
-                        let vacuum_only = cycle == EngineCycle::Expander;
+                        // Expander and Nuclear Thermal are always vacuum-optimized
+                        let vacuum_only = matches!(cycle, EngineCycle::Expander | EngineCycle::NuclearThermal);
                         self.input_mode = InputMode::SelectScale {
                             name,
                             cycle,

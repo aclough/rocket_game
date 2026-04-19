@@ -13,6 +13,8 @@ pub enum Resource {
     Electronics,
     Plumbing,
     SolidPropellant,
+    /// Highly Enriched Uranium for nuclear thermal engines.
+    HEU,
 }
 
 impl Resource {
@@ -25,6 +27,7 @@ impl Resource {
         Resource::Electronics,
         Resource::Plumbing,
         Resource::SolidPropellant,
+        Resource::HEU,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -37,6 +40,7 @@ impl Resource {
             Resource::Electronics => "Electronics",
             Resource::Plumbing => "Plumbing",
             Resource::SolidPropellant => "Solid Propellant",
+            Resource::HEU => "HEU",
         }
     }
 
@@ -51,6 +55,7 @@ impl Resource {
             Resource::Electronics => 20_000.0,
             Resource::Plumbing => 1_500.0,
             Resource::SolidPropellant => 15.0,
+            Resource::HEU => 100_000.0, // very expensive, regulated material
         }
     }
 }
@@ -126,6 +131,19 @@ pub fn engine_bom(preset: PropellantPreset) -> BillOfMaterials {
                 (Resource::Wiring, 0.02),
                 (Resource::Electronics, 0.003),
                 (Resource::Plumbing, 0.027),
+            ],
+        },
+        // Nuclear thermal: reactor core (HEU), shielding, hydrogen plumbing
+        PropellantPreset::Hydrogen => BillOfMaterials {
+            fractions: vec![
+                (Resource::HEU, 0.15),
+                (Resource::Superalloys, 0.35),
+                (Resource::Steel, 0.20),
+                (Resource::Aluminium, 0.05),
+                (Resource::Plumbing, 0.10),
+                (Resource::Wiring, 0.05),
+                (Resource::Electronics, 0.01),
+                (Resource::Composites, 0.04),
             ],
         },
     }

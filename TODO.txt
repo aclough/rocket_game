@@ -1,4 +1,3 @@
-[] Add NERVA engine cycle (NuclearThermal) using the tech deficiency system.
 [] Add more experimental technologies over time.
 [] Add ability to put multiple payloads on a rocket.
 [] Low thrust engines that take days to provide the ISP to start their transfer.
