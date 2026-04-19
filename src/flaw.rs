@@ -94,17 +94,26 @@ pub fn generate_flaws(
     rng: &mut StdRng,
     next_flaw_id: &mut u64,
 ) -> Vec<Flaw> {
+    generate_flaws_for_cycle(effective_complexity, rng, next_flaw_id, None)
+}
+
+/// Generate flaws with cycle-specific descriptions.
+pub fn generate_flaws_for_cycle(
+    effective_complexity: u32,
+    rng: &mut StdRng,
+    next_flaw_id: &mut u64,
+    cycle: Option<crate::engine::EngineCycle>,
+) -> Vec<Flaw> {
     let mean = effective_complexity as f64;
     let stddev = 1.5;
 
-    // Box-Muller transform for gaussian
     let count_f = gaussian_sample(mean, stddev, rng);
     let count = count_f.round().max(0.0) as u32;
 
     (0..count).map(|_| {
         let id = FlawId(*next_flaw_id);
         *next_flaw_id += 1;
-        generate_single_flaw(id, FlawTrigger::PerFlight, rng)
+        generate_single_flaw(id, FlawTrigger::PerFlight, rng, cycle)
     }).collect()
 }
 
@@ -127,11 +136,11 @@ pub fn generate_rocket_flaws(
         } else {
             FlawTrigger::PerFlight
         };
-        generate_single_flaw(id, trigger, rng)
+        generate_single_flaw(id, trigger, rng, None)
     }).collect()
 }
 
-fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng) -> Flaw {
+fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cycle: Option<crate::engine::EngineCycle>) -> Flaw {
     // Pick consequence type: weighted random
     // ~50% performance degradation, ~35% engine loss, ~15% stage loss
     let roll: f64 = rng.gen();
@@ -152,7 +161,14 @@ fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng) -> F
     let uniform_roll: f64 = rng.gen();
     let discovery_probability = uniform_roll * activation_chance.sqrt();
 
+    let use_electric = matches!(cycle, Some(crate::engine::EngineCycle::ElectricPropulsion));
+    let use_nuclear = matches!(cycle, Some(crate::engine::EngineCycle::NuclearThermal));
+
     let description = match trigger {
+        FlawTrigger::PerFlight if use_electric =>
+            generate_electric_flaw_description(&consequence, rng),
+        FlawTrigger::PerFlight if use_nuclear =>
+            generate_nuclear_flaw_description(&consequence, rng),
         FlawTrigger::PerFlight => generate_flaw_description(&consequence, rng),
         FlawTrigger::PerDay => generate_endurance_flaw_description(&consequence, rng),
     };
@@ -225,6 +241,70 @@ fn generate_endurance_flaw_description(consequence: &FlawConsequence, rng: &mut 
             "Guidance computer memory fault",
             "Wiring harness insulation breakdown",
             "Pressurization system leak",
+        ][..],
+    };
+
+    let idx = rng.gen_range(0..descriptions.len());
+    descriptions[idx].to_string()
+}
+
+fn generate_electric_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
+    let descriptions = match consequence {
+        FlawConsequence::PerformanceDegradation(_) => &[
+            "Ion grid erosion rate higher than expected",
+            "Beam neutralizer current drift",
+            "Discharge chamber magnetic field asymmetry",
+            "Xenon flow controller calibration offset",
+            "Thruster plume divergence angle excessive",
+            "Power processing unit efficiency loss",
+        ][..],
+        FlawConsequence::EngineLoss => &[
+            "Grid short circuit from sputtered material",
+            "Cathode heater element failure",
+            "Xenon isolator valve seizure",
+            "High-voltage breakdown in PPU",
+            "Discharge chamber wall sputter-through",
+            "Neutralizer keeper electrode erosion",
+        ][..],
+        FlawConsequence::StageLoss => &[
+            "Xenon tank pressure regulator failure",
+            "Solar array connection arc fault",
+            "Thruster gimbal mechanism binding",
+            "Power bus overcurrent shutdown",
+            "Propellant management unit leak",
+            "Electromagnetic interference with avionics",
+        ][..],
+    };
+
+    let idx = rng.gen_range(0..descriptions.len());
+    descriptions[idx].to_string()
+}
+
+fn generate_nuclear_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
+    let descriptions = match consequence {
+        FlawConsequence::PerformanceDegradation(_) => &[
+            "Fuel element hydrogen corrosion",
+            "Reactor power distribution imbalance",
+            "Turbopump hydrogen bearing wear",
+            "Nozzle skirt hydrogen embrittlement",
+            "Moderator element swelling",
+            "Reflector drum actuator lag",
+        ][..],
+        FlawConsequence::EngineLoss => &[
+            "Fuel element mid-section break",
+            "Control drum servo mechanism failure",
+            "Reactor thermal runaway risk",
+            "Hydrogen leak in reactor pressure vessel",
+            "Neutron poison buildup in fuel elements",
+            "Turbopump seal failure from radiation damage",
+        ][..],
+        FlawConsequence::StageLoss => &[
+            "Radiation shielding structural failure",
+            "Reactor SCRAM system false trigger",
+            "Hydrogen tank embrittlement fracture",
+            "Reactor coolant channel blockage",
+            "Uncontrolled criticality excursion risk",
+            "Nozzle detachment from thermal cycling",
         ][..],
     };
 

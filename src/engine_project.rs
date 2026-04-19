@@ -380,7 +380,7 @@ impl EngineProject {
                     // Design complete — generate flaws
                     let propellants = self.preset.propellants();
                     let eff = balance::effective_complexity(self.design.cycle, &propellants);
-                    self.flaws = flaw::generate_flaws(eff, rng, next_flaw_id);
+                    self.flaws = flaw::generate_flaws_for_cycle(eff, rng, next_flaw_id, Some(self.design.cycle));
                     let flaw_count = self.flaws.len() as u32;
                     self.status = EngineDesignStatus::Testing { work_completed: 0.0 };
                     events.push(WorkEvent::DesignComplete { flaw_count });
