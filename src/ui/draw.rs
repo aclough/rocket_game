@@ -264,6 +264,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 EngineCycle::StagedCombustion => "Staged Combustion",
                 EngineCycle::FullFlow => "Full Flow",
                 EngineCycle::NuclearThermal => "Nuclear Thermal",
+                EngineCycle::ElectricPropulsion => "Electric Propulsion",
             };
 
             // Propellant display with 2 sig figs
@@ -1529,6 +1530,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             ) {
                 cycles.push(("Nuclear Thermal", "Very high Isp, very heavy, hydrogen only"));
             }
+            cycles.push(("Electric Propulsion", "Very high Isp, very low thrust, xenon"));
             cycles.push(("Solid Rocket Motor", "Simple, cheap, not throttleable"));
             let mut lines = vec![
                 Line::from(format!("  Design: {}", name)),

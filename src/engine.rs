@@ -14,6 +14,8 @@ pub enum EngineCycle {
     StagedCombustion,
     FullFlow,
     NuclearThermal,
+    /// Ion/Hall-effect thruster — very high Isp, very low thrust.
+    ElectricPropulsion,
 }
 
 /// A single propellant component in the engine's mix.

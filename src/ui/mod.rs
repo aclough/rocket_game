@@ -770,6 +770,7 @@ impl App {
                 ) {
                     cycles.push(EngineCycle::NuclearThermal);
                 }
+                cycles.push(EngineCycle::ElectricPropulsion);
                 let num_options = cycles.len() + 1; // +1 for Solid Rocket Motor
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
@@ -814,7 +815,7 @@ impl App {
                         let preset = presets[*selected];
                         let name = name.clone();
                         // Expander and Nuclear Thermal are always vacuum-optimized
-                        let vacuum_only = matches!(cycle, EngineCycle::Expander | EngineCycle::NuclearThermal);
+                        let vacuum_only = matches!(cycle, EngineCycle::Expander | EngineCycle::NuclearThermal | EngineCycle::ElectricPropulsion);
                         self.input_mode = InputMode::SelectScale {
                             name,
                             cycle,

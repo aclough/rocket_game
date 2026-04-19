@@ -18,6 +18,8 @@ pub enum PropellantPreset {
     Solid,
     /// Pure hydrogen heated by nuclear reactor (no oxidizer).
     Hydrogen,
+    /// Xenon for electric propulsion (ion/Hall thrusters).
+    Xenon,
 }
 
 impl PropellantPreset {
@@ -28,6 +30,7 @@ impl PropellantPreset {
         PropellantPreset::Hypergolic,
         PropellantPreset::Solid,
         PropellantPreset::Hydrogen,
+        PropellantPreset::Xenon,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -38,6 +41,7 @@ impl PropellantPreset {
             PropellantPreset::Hypergolic => "Hypergolic",
             PropellantPreset::Solid => "Solid",
             PropellantPreset::Hydrogen => "Hydrogen",
+            PropellantPreset::Xenon => "Xenon",
         }
     }
 
@@ -66,6 +70,9 @@ impl PropellantPreset {
             PropellantPreset::Hydrogen => vec![
                 PropellantFraction { propellant: Propellant::LH2, mass_fraction: 1.0 },
             ],
+            PropellantPreset::Xenon => vec![
+                PropellantFraction { propellant: Propellant::Xenon, mass_fraction: 1.0 },
+            ],
         }
     }
 
@@ -79,6 +86,7 @@ impl PropellantPreset {
         match self {
             PropellantPreset::Solid => &[EngineCycle::PressureFed],
             PropellantPreset::Hydrogen => &[EngineCycle::NuclearThermal],
+            PropellantPreset::Xenon => &[EngineCycle::ElectricPropulsion],
             _ => &[
                 EngineCycle::PressureFed,
                 EngineCycle::GasGenerator,
@@ -118,6 +126,22 @@ pub struct EngineBaseline {
 /// These are the "middle of the range" values at scale 1.0.
 /// Inspired by real engines but simplified for gameplay.
 pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<EngineBaseline> {
+    // Electric propulsion: completely different from chemical engines
+    if cycle == EngineCycle::ElectricPropulsion {
+        if preset != PropellantPreset::Xenon {
+            return None;
+        }
+        return Some(EngineBaseline {
+            thrust_n: 1.0,               // 1 Newton — very low thrust
+            mass_kg: 50.0,               // light
+            isp_vac_s: 3000.0,           // very high Isp
+            isp_sl_s: 0.0,              // vacuum only
+            exit_pressure_vac_pa: 0.0,
+            exit_pressure_sl_pa: 0.0,    // not applicable
+            vacuum_only: true,
+        });
+    }
+
     // Nuclear thermal: completely different from chemical engines
     if cycle == EngineCycle::NuclearThermal {
         if preset != PropellantPreset::Hydrogen {
@@ -142,6 +166,10 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
     if preset == PropellantPreset::Hydrogen {
         return None;
     }
+    // Xenon only works with ElectricPropulsion cycle
+    if preset == PropellantPreset::Xenon {
+        return None;
+    }
 
     // Base Isp values by propellant (vacuum), then cycle adjusts
     let (base_isp_vac, base_isp_sl) = match preset {
@@ -151,6 +179,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         PropellantPreset::Hypergolic => (290.0, 255.0),
         PropellantPreset::Solid => (265.0, 240.0),
         PropellantPreset::Hydrogen => unreachable!(),
+        PropellantPreset::Xenon => unreachable!(),
     };
 
     // Cycle multipliers for Isp (relative to GasGenerator baseline)
@@ -161,6 +190,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         EngineCycle::StagedCombustion => 1.06,
         EngineCycle::FullFlow => 1.08,
         EngineCycle::NuclearThermal => unreachable!(),
+        EngineCycle::ElectricPropulsion => unreachable!(),
     };
 
     // Base thrust at scale 1.0 by propellant type
@@ -171,6 +201,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         PropellantPreset::Hypergolic => 45_000.0,     // ~AJ10-class
         PropellantPreset::Solid => 500_000.0,         // ~medium SRB
         PropellantPreset::Hydrogen => unreachable!(),
+        PropellantPreset::Xenon => unreachable!(),
     };
 
     // Cycle multipliers for thrust (relative to GasGenerator)
@@ -181,6 +212,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         EngineCycle::StagedCombustion => 1.15,
         EngineCycle::FullFlow => 1.30,
         EngineCycle::NuclearThermal => unreachable!(),
+        EngineCycle::ElectricPropulsion => unreachable!(),
     };
 
     // Thrust-to-weight ratio by cycle (higher = lighter for given thrust)
@@ -192,6 +224,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         EngineCycle::StagedCombustion => 70.0, // heavy but powerful
         EngineCycle::FullFlow => 60.0,       // heaviest complex cycle
         EngineCycle::NuclearThermal => unreachable!(),
+        EngineCycle::ElectricPropulsion => unreachable!(),
     };
 
     let thrust = base_thrust * thrust_mult;
@@ -593,8 +626,8 @@ mod tests {
                 assert!(b.thrust_n > 0.0);
                 assert!(b.mass_kg > 0.0);
                 assert!(b.isp_vac_s > 0.0);
-                // Nuclear thermal has no sea-level Isp (vacuum only)
-                if *cycle != EngineCycle::NuclearThermal {
+                // Nuclear thermal and electric propulsion have no sea-level Isp (vacuum only)
+                if *cycle != EngineCycle::NuclearThermal && *cycle != EngineCycle::ElectricPropulsion {
                     assert!(b.isp_sl_s > 0.0);
                 }
             }

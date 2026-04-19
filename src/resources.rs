@@ -133,6 +133,18 @@ pub fn engine_bom(preset: PropellantPreset) -> BillOfMaterials {
                 (Resource::Plumbing, 0.027),
             ],
         },
+        // Electric propulsion: electronics-heavy, lightweight
+        PropellantPreset::Xenon => BillOfMaterials {
+            fractions: vec![
+                (Resource::Superalloys, 0.20),
+                (Resource::Steel, 0.15),
+                (Resource::Aluminium, 0.15),
+                (Resource::Wiring, 0.15),
+                (Resource::Electronics, 0.20),
+                (Resource::Plumbing, 0.10),
+                (Resource::Composites, 0.05),
+            ],
+        },
         // Nuclear thermal: reactor core (HEU), shielding, hydrogen plumbing
         PropellantPreset::Hydrogen => BillOfMaterials {
             fractions: vec![

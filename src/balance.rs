@@ -10,6 +10,7 @@ pub fn cycle_complexity(cycle: EngineCycle) -> u32 {
         EngineCycle::StagedCombustion => 8,
         EngineCycle::FullFlow => 9,
         EngineCycle::NuclearThermal => 10,
+        EngineCycle::ElectricPropulsion => 8,
     }
 }
 
@@ -23,7 +24,7 @@ fn single_fuel_complexity(p: Propellant) -> u32 {
     match p {
         Propellant::LH2 => 5,
         Propellant::LOX | Propellant::Methane => 4,
-        Propellant::RP1 | Propellant::UDMH | Propellant::NTO | Propellant::SolidMix => 3,
+        Propellant::RP1 | Propellant::UDMH | Propellant::NTO | Propellant::SolidMix | Propellant::Xenon => 3,
     }
 }
 

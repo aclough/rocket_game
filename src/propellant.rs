@@ -10,6 +10,7 @@ pub enum Propellant {
     UDMH,
     NTO,
     SolidMix,
+    Xenon,
 }
 
 impl Propellant {
@@ -23,6 +24,7 @@ impl Propellant {
             Propellant::UDMH => 0.791,
             Propellant::NTO => 1.45,
             Propellant::SolidMix => 1.77,
+            Propellant::Xenon => 1.1,
         }
     }
 
@@ -41,6 +43,7 @@ impl Propellant {
             Propellant::UDMH => 30.00,
             Propellant::NTO => 15.00,
             Propellant::SolidMix => 12.00,
+            Propellant::Xenon => 3000.0,
         }
     }
 
@@ -53,6 +56,7 @@ impl Propellant {
             Propellant::UDMH => "UDMH",
             Propellant::NTO => "Nitrogen Tetroxide",
             Propellant::SolidMix => "Solid Propellant Mix",
+            Propellant::Xenon => "Xenon",
         }
     }
 }
@@ -66,7 +70,7 @@ mod tests {
         for p in [
             Propellant::LOX, Propellant::RP1, Propellant::LH2,
             Propellant::Methane, Propellant::UDMH, Propellant::NTO,
-            Propellant::SolidMix,
+            Propellant::SolidMix, Propellant::Xenon,
         ] {
             assert!(p.density_kg_per_l() > 0.0, "{:?} density should be positive", p);
         }
@@ -88,7 +92,7 @@ mod tests {
         for p in [
             Propellant::LOX, Propellant::RP1, Propellant::LH2,
             Propellant::Methane, Propellant::UDMH, Propellant::NTO,
-            Propellant::SolidMix,
+            Propellant::SolidMix, Propellant::Xenon,
         ] {
             assert!(p.cost_per_kg() > 0.0, "{:?} cost should be positive", p);
         }
@@ -100,6 +104,7 @@ mod tests {
         for p in [
             Propellant::LOX, Propellant::RP1, Propellant::Methane,
             Propellant::UDMH, Propellant::NTO, Propellant::SolidMix,
+            Propellant::Xenon,
         ] {
             assert!(
                 Propellant::LH2.density_kg_per_l() < p.density_kg_per_l(),

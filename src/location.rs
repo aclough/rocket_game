@@ -56,6 +56,11 @@ pub struct Transfer {
     pub can_aerobrake: bool,
     /// Transit time in game-days for this transfer leg
     pub transit_days: u32,
+    /// Whether low-thrust vehicles can use this edge.
+    pub low_thrust_ok: bool,
+    /// Delta-v cost for low-thrust vehicles (spiral transfers cost more).
+    /// When None, uses standard delta_v.
+    pub low_thrust_delta_v: Option<f64>,
 }
 
 /// Estimate aerodynamic drag loss for a launch through atmosphere.
@@ -75,6 +80,24 @@ impl Transfer {
             self.delta_v + aero_drag_loss(rocket_mass_kg)
         } else {
             self.delta_v
+        }
+    }
+
+    /// Delta-v cost for a given engine capability.
+    /// Low-thrust engines use low_thrust_delta_v if available, else standard.
+    pub fn delta_v_for(&self, low_thrust: bool, rocket_mass_kg: f64) -> Option<f64> {
+        if low_thrust {
+            if !self.low_thrust_ok {
+                return None; // edge not usable by low-thrust
+            }
+            let dv = self.low_thrust_delta_v.unwrap_or(self.delta_v);
+            if self.through_atmosphere {
+                Some(dv + aero_drag_loss(rocket_mass_kg))
+            } else {
+                Some(dv)
+            }
+        } else {
+            Some(self.total_delta_v(rocket_mass_kg))
         }
     }
 }
@@ -206,6 +229,32 @@ impl DeltaVMap {
                 }),
                 parent_body: "moon",
             },
+            Location {
+                id: "nea",
+                display_name: "Near-Earth Asteroid",
+                short_name: "NEA",
+                location_type: LocationType::Surface(SurfaceProperties {
+                    gravity_m_s2: 0.0003,   // ~300m radius asteroid
+                    radius_m: 300.0,
+                    has_atmosphere: false,
+                    atmosphere_density: 0.0,
+                    ambient_pressure_pa: 0.0,
+                }),
+                parent_body: "sun",
+            },
+            Location {
+                id: "nea_surface",
+                display_name: "Asteroid Surface",
+                short_name: "SURF",
+                location_type: LocationType::Surface(SurfaceProperties {
+                    gravity_m_s2: 0.0003,
+                    radius_m: 300.0,
+                    has_atmosphere: false,
+                    atmosphere_density: 0.0,
+                    ambient_pressure_pa: 0.0,
+                }),
+                parent_body: "sun",
+            },
         ];
 
         let transfers = vec![
@@ -216,7 +265,7 @@ impl DeltaVMap {
                 through_atmosphere: true,
                 animation: Some(TransferAnimation::Launch),
                 can_aerobrake: false,
-                transit_days: 0,
+                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "earth_surface",
@@ -225,7 +274,7 @@ impl DeltaVMap {
                 through_atmosphere: true,
                 animation: Some(TransferAnimation::Launch),
                 can_aerobrake: false,
-                transit_days: 0,
+                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "leo",
@@ -234,7 +283,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 0,
+                transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "leo",
@@ -243,7 +292,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 0,
+                transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: Some(3500.0),
             },
             Transfer {
                 from: "leo",
@@ -252,7 +301,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 1,
+                transit_days: 1, low_thrust_ok: false, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "gto",
@@ -261,7 +310,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 0,
+                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "leo",
@@ -270,7 +319,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 5,
+                transit_days: 5, low_thrust_ok: true, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "l1",
@@ -279,7 +328,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 2,
+                transit_days: 2, low_thrust_ok: true, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "leo",
@@ -288,7 +337,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 4,
+                transit_days: 4, low_thrust_ok: true, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "lunar_orbit",
@@ -297,7 +346,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: Some(TransferAnimation::Landing),
                 can_aerobrake: false,
-                transit_days: 0,
+                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "lunar_surface",
@@ -306,7 +355,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: Some(TransferAnimation::Launch),
                 can_aerobrake: false,
-                transit_days: 0,
+                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
             },
             // Reverse/cross-orbit transfers for spacecraft navigation
             Transfer {
@@ -316,7 +365,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 0,
+                transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "meo",
@@ -325,7 +374,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 0,
+                transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: Some(3500.0),
             },
             Transfer {
                 from: "gto",
@@ -334,7 +383,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 1,
+                transit_days: 1, low_thrust_ok: false, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "geo",
@@ -343,7 +392,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 0,
+                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "lunar_orbit",
@@ -352,7 +401,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 4,
+                transit_days: 4, low_thrust_ok: true, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "lunar_orbit",
@@ -361,7 +410,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 2,
+                transit_days: 2, low_thrust_ok: true, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "l1",
@@ -370,7 +419,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 5,
+                transit_days: 5, low_thrust_ok: true, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "l2",
@@ -379,7 +428,7 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 2,
+                transit_days: 2, low_thrust_ok: true, low_thrust_delta_v: None,
             },
             Transfer {
                 from: "leo",
@@ -388,7 +437,76 @@ impl DeltaVMap {
                 through_atmosphere: false,
                 animation: None,
                 can_aerobrake: false,
-                transit_days: 5,
+                transit_days: 5, low_thrust_ok: true, low_thrust_delta_v: None,
+            },
+            // Near-Earth asteroid transfers
+            Transfer {
+                from: "leo",
+                to: "nea",
+                delta_v: 5500.0,
+                through_atmosphere: false,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 90,
+                low_thrust_ok: true,
+                low_thrust_delta_v: Some(7000.0),
+            },
+            Transfer {
+                from: "nea",
+                to: "leo",
+                delta_v: 5500.0,
+                through_atmosphere: false,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 90,
+                low_thrust_ok: true,
+                low_thrust_delta_v: Some(7000.0),
+            },
+            // NEA surface landing/takeoff (very low gravity, chemical only)
+            Transfer {
+                from: "nea",
+                to: "nea_surface",
+                delta_v: 20.0,
+                through_atmosphere: false,
+                animation: Some(TransferAnimation::Landing),
+                can_aerobrake: false,
+                transit_days: 0,
+                low_thrust_ok: false,
+                low_thrust_delta_v: None,
+            },
+            Transfer {
+                from: "nea_surface",
+                to: "nea",
+                delta_v: 20.0,
+                through_atmosphere: false,
+                animation: Some(TransferAnimation::Launch),
+                can_aerobrake: false,
+                transit_days: 0,
+                low_thrust_ok: false,
+                low_thrust_delta_v: None,
+            },
+            // MEO → GEO direct (low-thrust spiral, or high-thrust)
+            Transfer {
+                from: "meo",
+                to: "geo",
+                delta_v: 2000.0,
+                through_atmosphere: false,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 0,
+                low_thrust_ok: true,
+                low_thrust_delta_v: Some(2500.0),
+            },
+            Transfer {
+                from: "geo",
+                to: "meo",
+                delta_v: 2000.0,
+                through_atmosphere: false,
+                animation: None,
+                can_aerobrake: false,
+                transit_days: 0,
+                low_thrust_ok: true,
+                low_thrust_delta_v: Some(2500.0),
             },
         ];
 
@@ -474,6 +592,56 @@ impl DeltaVMap {
         }
 
         // Reconstruct path
+        let mut path = Vec::new();
+        let mut current = to_idx;
+        while let Some(p) = prev[current] {
+            path.push(self.locations[current].id);
+            current = p;
+        }
+        path.push(self.locations[from_idx].id);
+        path.reverse();
+
+        Some((path, dist[to_idx]))
+    }
+
+    /// Find shortest path with engine capability constraint.
+    /// If `low_thrust` is true, only edges with `low_thrust_ok` are used,
+    /// and `low_thrust_delta_v` is preferred when available.
+    pub fn shortest_path_constrained(
+        &self, from: &str, to: &str, rocket_mass_kg: f64, low_thrust: bool,
+    ) -> Option<(Vec<&'static str>, f64)> {
+        let from_idx = self.locations.iter().position(|l| l.id == from)?;
+        let to_idx = self.locations.iter().position(|l| l.id == to)?;
+
+        let n = self.locations.len();
+        let mut dist = vec![f64::INFINITY; n];
+        let mut prev = vec![None; n];
+        let mut heap = BinaryHeap::new();
+
+        dist[from_idx] = 0.0;
+        heap.push(DijkstraState { cost: 0.0, node_index: from_idx });
+
+        while let Some(DijkstraState { cost, node_index }) = heap.pop() {
+            if node_index == to_idx { break; }
+            if cost > dist[node_index] { continue; }
+
+            let loc_id = self.locations[node_index].id;
+            for transfer in self.transfers_from(loc_id) {
+                if let Some(dv) = transfer.delta_v_for(low_thrust, rocket_mass_kg) {
+                    if let Some(next_idx) = self.locations.iter().position(|l| l.id == transfer.to) {
+                        let next_cost = cost + dv;
+                        if next_cost < dist[next_idx] {
+                            dist[next_idx] = next_cost;
+                            prev[next_idx] = Some(node_index);
+                            heap.push(DijkstraState { cost: next_cost, node_index: next_idx });
+                        }
+                    }
+                }
+            }
+        }
+
+        if dist[to_idx].is_infinite() { return None; }
+
         let mut path = Vec::new();
         let mut current = to_idx;
         while let Some(p) = prev[current] {
@@ -612,7 +780,7 @@ mod tests {
         let t = Transfer {
             from: "leo", to: "gto", delta_v: 2440.0,
             through_atmosphere: false,
-            animation: None, can_aerobrake: false, transit_days: 1,
+            animation: None, can_aerobrake: false, transit_days: 1, low_thrust_ok: true, low_thrust_delta_v: None,
         };
         assert_eq!(t.total_delta_v(REF_MASS), 2440.0);
     }
@@ -622,7 +790,7 @@ mod tests {
         let t = Transfer {
             from: "earth_surface", to: "leo", delta_v: 7800.0,
             through_atmosphere: true,
-            animation: None, can_aerobrake: false, transit_days: 0,
+            animation: None, can_aerobrake: false, transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: None,
         };
         let total = t.total_delta_v(REF_MASS);
         assert!((total - 8100.0).abs() < 1.0, "Should be ~8100, got {}", total);
@@ -662,7 +830,7 @@ mod tests {
     #[test]
     fn test_location_count() {
         let map = DeltaVMap::earth_moon();
-        assert_eq!(map.location_count(), 11);
+        assert_eq!(map.location_count(), 13);
     }
 
     #[test]
@@ -700,7 +868,7 @@ mod tests {
     fn test_transfers_from_leo() {
         let map = DeltaVMap::earth_moon();
         let transfers = map.transfers_from("leo");
-        assert_eq!(transfers.len(), 6);
+        assert_eq!(transfers.len(), 7); // sso, meo, gto, l1, lunar_orbit, l2, nea
     }
 
     #[test]
@@ -766,7 +934,7 @@ mod tests {
 
     #[test]
     fn test_static_delta_v_map() {
-        assert_eq!(DELTA_V_MAP.location_count(), 11);
+        assert_eq!(DELTA_V_MAP.location_count(), 13);
         assert!(DELTA_V_MAP.location("leo").is_some());
     }
 
@@ -828,8 +996,9 @@ mod tests {
     fn test_cross_orbit_geo_to_meo() {
         let map = DeltaVMap::earth_moon();
         let (path, dv) = map.shortest_path("geo", "meo", REF_MASS).unwrap();
-        assert_eq!(dv, 6040.0);
-        assert_eq!(path, vec!["geo", "gto", "leo", "meo"]);
+        // Direct geo→meo edge exists now (2000 m/s)
+        assert_eq!(path, vec!["geo", "meo"]);
+        assert!((dv - 2000.0).abs() < 1.0, "Expected ~2000, got {}", dv);
     }
 
     #[test]
@@ -881,6 +1050,64 @@ mod tests {
         // Both should be in the ballpark of 7800 + some drag
         assert!(dv_light > 7800.0 && dv_light < 9000.0);
         assert!(dv_heavy > 7800.0 && dv_heavy < 9000.0);
+    }
+
+    // ==========================================
+    // Low-thrust pathfinding tests
+    // ==========================================
+
+    #[test]
+    fn test_low_thrust_cannot_reach_surface() {
+        let map = DeltaVMap::earth_moon();
+        // Low-thrust can't launch from surface
+        assert!(map.shortest_path_constrained("earth_surface", "leo", REF_MASS, true).is_none());
+        // Low-thrust can't land on lunar surface
+        assert!(map.shortest_path_constrained("lunar_orbit", "lunar_surface", REF_MASS, true).is_none());
+    }
+
+    #[test]
+    fn test_low_thrust_cannot_use_gto() {
+        let map = DeltaVMap::earth_moon();
+        // Low-thrust should go LEO→MEO→GEO, not through GTO
+        let result = map.shortest_path_constrained("leo", "geo", REF_MASS, true);
+        assert!(result.is_some());
+        let (path, _dv) = result.unwrap();
+        assert!(!path.contains(&"gto"), "Low-thrust should not use GTO, path: {:?}", path);
+    }
+
+    #[test]
+    fn test_low_thrust_leo_to_geo_costs_more() {
+        let map = DeltaVMap::earth_moon();
+        let (_, dv_high) = map.shortest_path_constrained("leo", "geo", REF_MASS, false).unwrap();
+        let (_, dv_low) = map.shortest_path_constrained("leo", "geo", REF_MASS, true).unwrap();
+        assert!(dv_low > dv_high,
+            "Low-thrust LEO→GEO ({}) should cost more than high-thrust ({})", dv_low, dv_high);
+    }
+
+    #[test]
+    fn test_low_thrust_can_reach_nea_orbit() {
+        let map = DeltaVMap::earth_moon();
+        let result = map.shortest_path_constrained("leo", "nea", REF_MASS, true);
+        assert!(result.is_some());
+        let (_, dv) = result.unwrap();
+        // Should use the low_thrust_delta_v of 7000
+        assert!(dv >= 7000.0, "Low-thrust LEO→NEA should cost ≥7000, got {}", dv);
+    }
+
+    #[test]
+    fn test_low_thrust_cannot_reach_nea_surface() {
+        let map = DeltaVMap::earth_moon();
+        // Low-thrust can reach NEA orbit but not the surface (chemical landing needed)
+        assert!(map.shortest_path_constrained("leo", "nea_surface", REF_MASS, true).is_none());
+    }
+
+    #[test]
+    fn test_high_thrust_can_reach_nea_surface() {
+        let map = DeltaVMap::earth_moon();
+        let result = map.shortest_path_constrained("leo", "nea_surface", REF_MASS, false);
+        assert!(result.is_some());
+        let (path, _) = result.unwrap();
+        assert_eq!(path, vec!["leo", "nea", "nea_surface"]);
     }
 
     // ==========================================
