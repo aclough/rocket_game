@@ -117,13 +117,15 @@ pub fn build_route(
     path: &[&'static str],
     rocket_mass_kg: f64,
     total_thrust_n: f64,
+    low_thrust: bool,
 ) -> Vec<FlightLeg> {
     let mut legs = Vec::new();
     for window in path.windows(2) {
         let from = window[0];
         let to = window[1];
         if let Some(transfer) = DELTA_V_MAP.transfer(from, to) {
-            let dv_cost = transfer.total_delta_v(rocket_mass_kg);
+            let dv_cost = transfer.delta_v_for(low_thrust, rocket_mass_kg)
+                .unwrap_or_else(|| transfer.total_delta_v(rocket_mass_kg));
             let coast_days = transfer.transit_days;
 
             // Burn time: dv / acceleration, where acceleration = thrust / mass
@@ -165,7 +167,7 @@ mod tests {
     fn test_build_route_leo() {
         // Earth surface -> LEO is a single leg
         let path = vec!["earth_surface", "leo"];
-        let legs = build_route(&path, 500_000.0, 7_000_000.0);
+        let legs = build_route(&path, 500_000.0, 7_000_000.0, false);
         assert_eq!(legs.len(), 1);
         assert_eq!(legs[0].from, "earth_surface");
         assert_eq!(legs[0].to, "leo");
@@ -180,7 +182,7 @@ mod tests {
         let path_opt = DELTA_V_MAP.shortest_path("earth_surface", "lunar_surface", 500_000.0);
         assert!(path_opt.is_some());
         let (path, _) = path_opt.unwrap();
-        let legs = build_route(&path, 500_000.0, 7_000_000.0);
+        let legs = build_route(&path, 500_000.0, 7_000_000.0, false);
         assert!(legs.len() > 1);
         // Total coast days should be > 0 for a lunar mission
         let total_coast: u32 = legs.iter().map(|l| l.coast_days).sum();

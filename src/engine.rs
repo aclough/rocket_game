@@ -122,6 +122,12 @@ impl EngineDesign {
         ((ratio - 4.0) * 0.2).clamp(0.0, 1.0)
     }
 
+    /// Whether this engine is a low-thrust type (ion, Hall, solar sail).
+    /// Low-thrust engines can only use transfer edges marked low_thrust_ok.
+    pub fn is_low_thrust(&self) -> bool {
+        matches!(self.cycle, EngineCycle::ElectricPropulsion)
+    }
+
     /// Propellant cost per kg of total propellant consumed.
     pub fn propellant_cost_per_kg(&self) -> f64 {
         self.propellant_mix.iter()

@@ -1729,7 +1729,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     let mass = design.total_mass_kg() + c.payload_kg;
                     let thrust = design.group_thrust_n(0);
                     let path = DELTA_V_MAP.shortest_path("earth_surface", &c.destination, mass)?;
-                    let route = crate::flight::build_route(&path.0, mass, thrust);
+                    let route = crate::flight::build_route(&path.0, mass, thrust, false);
                     let days: u32 = route.iter().map(|l| l.total_days()).sum();
                     Some((days, app.game.date.days_until(&c.deadline)))
                 });

@@ -322,7 +322,7 @@ pub struct App {
 }
 
 fn reachable_destinations(
-    from: &str, remaining_dv: f64, rocket_mass: f64,
+    from: &str, remaining_dv: f64, rocket_mass: f64, low_thrust: bool,
 ) -> Vec<(String, String, f64)> {
     let map = &crate::location::DELTA_V_MAP;
     let mut dests = Vec::new();
@@ -330,7 +330,7 @@ fn reachable_destinations(
         if loc.id == from {
             continue;
         }
-        if let Some((_, dv)) = map.shortest_path(from, loc.id, rocket_mass) {
+        if let Some((_, dv)) = map.shortest_path_constrained(from, loc.id, rocket_mass, low_thrust) {
             if dv <= remaining_dv {
                 dests.push((loc.id.to_string(), loc.display_name.to_string(), dv));
             }
@@ -1013,7 +1013,8 @@ impl App {
                         let sc = &self.game.spacecraft[selected];
                         let remaining_dv = sc.remaining_delta_v();
                         let rocket_mass = sc.rocket.payload_mass_kg + sc.design.total_mass_kg();
-                        let destinations = reachable_destinations(&sc.location, remaining_dv, rocket_mass);
+                        let low_thrust = sc.rocket.is_current_stage_low_thrust(&sc.design);
+                        let destinations = reachable_destinations(&sc.location, remaining_dv, rocket_mass, low_thrust);
                         if destinations.is_empty() {
                             self.status_message = Some("No reachable destinations for this spacecraft".into());
                             return;
@@ -1118,7 +1119,8 @@ impl App {
                         );
                         let remaining_dv = rocket.remaining_delta_v(&rp.design);
                         let rocket_mass = rp.design.total_mass_kg() + payload_kg;
-                        let destinations = reachable_destinations(start_id, remaining_dv, rocket_mass);
+                        let low_thrust = rocket.is_current_stage_low_thrust(&rp.design);
+                        let destinations = reachable_destinations(start_id, remaining_dv, rocket_mass, low_thrust);
                         self.input_mode = InputMode::DvPlanner {
                             state: Box::new(DvPlannerState {
                                 source: PlannerSource::Design { project_index: pi },
@@ -1179,8 +1181,9 @@ impl App {
                             // Recompute destinations
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg() + state.payload_kg;
+                            let lt = state.rocket.is_current_stage_low_thrust(&state.design);
                             state.destinations = reachable_destinations(
-                                &state.current_location, remaining_dv, rocket_mass,
+                                &state.current_location, remaining_dv, rocket_mass, lt,
                             );
                             state.selected = 0;
                         }
@@ -1197,8 +1200,9 @@ impl App {
                             // Recompute destinations with new mass
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg();
+                            let lt = state.rocket.is_current_stage_low_thrust(&state.design);
                             state.destinations = reachable_destinations(
-                                &state.current_location, remaining_dv, rocket_mass,
+                                &state.current_location, remaining_dv, rocket_mass, lt,
                             );
                             state.selected = state.selected.min(
                                 state.destinations.len().saturating_sub(1),
@@ -1216,8 +1220,9 @@ impl App {
 
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg() + state.payload_kg;
+                            let lt = state.rocket.is_current_stage_low_thrust(&state.design);
                             state.destinations = reachable_destinations(
-                                &state.current_location, remaining_dv, rocket_mass,
+                                &state.current_location, remaining_dv, rocket_mass, lt,
                             );
                             state.selected = state.selected.min(
                                 state.destinations.len().saturating_sub(1),

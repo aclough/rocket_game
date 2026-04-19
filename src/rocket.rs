@@ -269,6 +269,19 @@ impl Rocket {
         ve * (m0 / mf_actual).ln()
     }
 
+    /// Whether the current active stage group (lowest with propellant) is low-thrust.
+    pub fn is_current_stage_low_thrust(&self, design: &RocketDesign) -> bool {
+        for (gi, group) in design.stage_groups.iter().enumerate() {
+            let has_fuel = self.stage_states.get(gi)
+                .map_or(false, |ss| ss.iter().any(|s| s.attached && s.propellant_remaining_kg > 0.0));
+            if has_fuel {
+                // This is the active group — check if any engine is low-thrust
+                return group.iter().any(|s| s.engine.is_low_thrust());
+            }
+        }
+        false
+    }
+
     /// Total remaining delta-v based on current propellant state.
     /// Simplified: treats each group sequentially, each stage in a group independently.
     pub fn remaining_delta_v(&self, design: &RocketDesign) -> f64 {

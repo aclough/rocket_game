@@ -1499,7 +1499,7 @@ impl GameState {
         let path = crate::location::DELTA_V_MAP
             .shortest_path("earth_surface", destination, rocket_mass);
         let route = match path {
-            Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust),
+            Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, false),
             None => vec![],
         };
 
@@ -2189,11 +2189,12 @@ impl GameState {
         let sc = self.spacecraft.remove(spacecraft_index);
         let rocket_mass = sc.design.total_mass_kg() + sc.rocket.payload_mass_kg;
         let first_group_thrust = sc.design.group_thrust_n(0);
+        let low_thrust = sc.rocket.is_current_stage_low_thrust(&sc.design);
 
         let path = crate::location::DELTA_V_MAP
-            .shortest_path(&sc.location, destination, rocket_mass);
+            .shortest_path_constrained(&sc.location, destination, rocket_mass, low_thrust);
         let route = match path {
-            Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust),
+            Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, low_thrust),
             None => vec![],
         };
 
@@ -2618,7 +2619,7 @@ mod tests {
         let path = crate::location::DELTA_V_MAP
             .shortest_path("earth_surface", "leo", rocket_mass);
         let route = match path {
-            Some((p, _)) => crate::flight::build_route(&p, rocket_mass, thrust),
+            Some((p, _)) => crate::flight::build_route(&p, rocket_mass, thrust, false),
             None => vec![],
         };
         let rocket = sim.degraded_design.instantiate(
