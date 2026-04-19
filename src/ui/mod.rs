@@ -321,12 +321,6 @@ pub struct App {
     pub pre_modal_speed: Option<GameSpeed>,
 }
 
-fn reachable_destinations(
-    from: &str, remaining_dv: f64, rocket_mass: f64, low_thrust: bool,
-) -> Vec<(String, String, f64)> {
-    reachable_destinations_multistage(from, remaining_dv, rocket_mass, low_thrust, None, None)
-}
-
 /// Compute reachable destinations considering multi-stage capability changes.
 /// If `rocket` and `design` are provided, simulates per-leg staging to check
 /// whether each leg's engine can actually use the required edge type.
@@ -1086,7 +1080,10 @@ impl App {
                         let remaining_dv = sc.remaining_delta_v();
                         let rocket_mass = sc.rocket.payload_mass_kg + sc.design.total_mass_kg();
                         let low_thrust = sc.rocket.is_current_stage_low_thrust(&sc.design);
-                        let destinations = reachable_destinations(&sc.location, remaining_dv, rocket_mass, low_thrust);
+                        let destinations = reachable_destinations_multistage(
+                            &sc.location, remaining_dv, rocket_mass, low_thrust,
+                            Some(&sc.rocket), Some(&sc.design),
+                        );
                         if destinations.is_empty() {
                             self.status_message = Some("No reachable destinations for this spacecraft".into());
                             return;

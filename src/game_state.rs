@@ -2195,8 +2195,16 @@ impl GameState {
             .shortest_path_constrained(&sc.location, destination, rocket_mass, low_thrust);
         let route = match path {
             Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, low_thrust),
-            None => vec![],
+            None => {
+                // No valid path — put the spacecraft back and abort
+                self.spacecraft.insert(spacecraft_index, sc);
+                return;
+            }
         };
+        if route.is_empty() {
+            self.spacecraft.insert(spacecraft_index, sc);
+            return;
+        }
 
         let flight_id = FlightId(self.next_flight_id);
         self.next_flight_id += 1;
