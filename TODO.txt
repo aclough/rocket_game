@@ -1,14 +1,12 @@
-[] Add ability to put multiple payloads on a rocket.
-[] Low thrust engines that take days to provide the ISP to start their transfer.
-    [] Just solar sail to start with.  Take sunlight into account for thrust.
-    [] Some routes aren't available to them, they can't go from LEO to Lunar transfer directly but have to go via MEO to represent gradual circularization.
 [] Show current location in "In Flight" as the rocket travels.
     [] Also mark down the delta-v stage by stage
 [] Instead of "low thrust" have minimum TWRs
+[] Add ability to put multiple payloads on a rocket.
+    [] Add a rocket as a payload for a rocket
 [] Make electrical power via batteries, solar panels, etc.
     [] Also electric drives like Ion and Hall effect.
+[] Have player choose price for markets
 [] Add competitor company, DinoSoar
-[] Add upskilling of the player's workforce with particular technologies.
 [] Automation of bidding on contracts for any that const less than marginal cost + selected profit margin.
 
 Later tuning:
