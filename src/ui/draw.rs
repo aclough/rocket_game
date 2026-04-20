@@ -964,16 +964,68 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
         lines.push(Line::from("  (no flights in transit)"));
     } else {
         for flight in flights.iter() {
-            let dest_name = contract::destination_display_name(flight.destination());
+            let final_dest = contract::destination_display_name(flight.destination());
             let eta = flight.eta_days();
             let eta_str = if eta == 1 { "1 day".to_string() } else { format!("{} days", eta) };
             let remaining_dv = flight.rocket.remaining_delta_v(&flight.design);
+            let current_loc = contract::destination_display_name(&flight.current_location);
+
+            // First line: rocket name, current → next leg, final destination
+            let total_legs = flight.route.len();
+            let current_leg_num = (flight.current_leg + 1).min(total_legs);
+            let next_hop = flight.route.get(flight.current_leg)
+                .map(|leg| contract::destination_display_name(&leg.to));
+            let progress_str = if let Some(next) = next_hop {
+                if next != final_dest {
+                    format!("{} → {} (leg {}/{}, final: {})",
+                        current_loc, next, current_leg_num, total_legs, final_dest)
+                } else {
+                    format!("{} → {} (leg {}/{})",
+                        current_loc, final_dest, current_leg_num, total_legs)
+                }
+            } else {
+                format!("{} → {}", current_loc, final_dest)
+            };
+
             lines.push(Line::from(vec![
                 Span::styled("  ● ", Style::default().fg(Color::Cyan)),
-                Span::raw(format!("{} → {}  ", flight.rocket_name, dest_name)),
+                Span::raw(format!("{}  ", flight.rocket_name)),
+                Span::styled(progress_str, Style::default().fg(Color::White)),
+            ]));
+
+            // Second line: leg progress, ETA, dv
+            let leg_progress = flight.route.get(flight.current_leg).map(|leg| {
+                let total = leg.total_days();
+                let elapsed = total.saturating_sub(flight.leg_days_remaining);
+                format!("leg: {}/{} days", elapsed, total)
+            }).unwrap_or_default();
+
+            lines.push(Line::from(vec![
+                Span::raw("      "),
+                Span::styled(format!("{}  ", leg_progress), Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("ETA: {}  ", eta_str), Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("Δv: {}", format_dv(remaining_dv)), Style::default().fg(Color::DarkGray)),
             ]));
+
+            // Per-stage dv breakdown (for multi-stage rockets)
+            if flight.design.stage_groups.len() > 1 {
+                let mut stage_parts = Vec::new();
+                for gi in 0..flight.design.stage_groups.len() {
+                    let attached = flight.rocket.stage_states.get(gi)
+                        .map_or(false, |ss| ss.iter().any(|s| s.attached));
+                    if !attached {
+                        continue;
+                    }
+                    let stage_dv = flight.rocket.group_remaining_delta_v(&flight.design, gi);
+                    stage_parts.push(format!("S{}: {}", gi + 1, format_dv(stage_dv)));
+                }
+                if !stage_parts.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("      Stages: {}", stage_parts.join(", ")),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
         }
     }
 
@@ -1014,6 +1066,26 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                 }
             }
             lines.push(Line::from(spans));
+
+            // Per-stage dv breakdown for multi-stage spacecraft
+            if total_groups > 1 {
+                let mut stage_parts = Vec::new();
+                for gi in 0..total_groups {
+                    let attached = sc.rocket.stage_states.get(gi)
+                        .map_or(false, |ss| ss.iter().any(|s| s.attached));
+                    if !attached {
+                        continue;
+                    }
+                    let stage_dv = sc.rocket.group_remaining_delta_v(&sc.design, gi);
+                    stage_parts.push(format!("S{}: {}", gi + 1, format_dv(stage_dv)));
+                }
+                if !stage_parts.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("      Stages: {}", stage_parts.join(", ")),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
         }
     }
 
