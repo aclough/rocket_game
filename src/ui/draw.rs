@@ -14,6 +14,29 @@ use crate::location::DELTA_V_MAP;
 use crate::rocket;
 use crate::ui::{App, FocusedPane, InputMode, RocketDesignerState, Tab};
 
+/// Deduplicated list of destinations served by the player's currently-active
+/// markets — including markets that haven't generated a contract this month.
+/// Falls back to the basic Earth-orbit set (LEO, MEO, GTO, GEO) when no
+/// markets are active yet.
+fn relevant_destinations<'a>(game: &'a crate::game_state::GameState) -> Vec<&'a str> {
+    let mut dests: Vec<&str> = Vec::new();
+    for market in &game.markets {
+        if !market.active {
+            continue;
+        }
+        for d in &market.destinations {
+            let id = d.location_id.as_str();
+            if !dests.contains(&id) {
+                dests.push(id);
+            }
+        }
+    }
+    if dests.is_empty() {
+        dests.extend(["leo", "meo", "gto", "geo"]);
+    }
+    dests
+}
+
 fn format_dv(dv: f64) -> String {
     if dv.is_infinite() { "∞".to_string() }
     else { format!("{:.0} m/s", dv) }
@@ -546,8 +569,12 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 project.design.total_delta_v(0.0),
             )));
 
-            // Show payload table
-            let table = crate::rocket_project::payload_table(&project.design, "earth_surface");
+            // Show payload table for destinations served by active markets
+            // (or the LEO/MEO/GTO/GEO fallback when none are active yet).
+            let dests = relevant_destinations(&app.game);
+            let table = crate::rocket_project::payload_table_for(
+                &project.design, "earth_surface", &dests,
+            );
             if !table.is_empty() {
                 lines.push(Line::from("      Max payload:"));
                 for (dest, payload) in &table {
@@ -1404,7 +1431,7 @@ fn draw_rocket_designer_full(frame: &mut Frame, app: &App, state: &RocketDesigne
         ])
         .split(area);
 
-    draw_rocket_designer_content(frame, state, outer[0]);
+    draw_rocket_designer_content(frame, app, state, outer[0]);
 
     // Help bar for designer
     let help_text = if let Some(ref msg) = app.status_message {
@@ -1422,7 +1449,7 @@ fn draw_rocket_designer_full(frame: &mut Frame, app: &App, state: &RocketDesigne
     frame.render_widget(paragraph, outer[1]);
 }
 
-fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, area: Rect) {
+fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesignerState, area: Rect) {
     let mut lines = Vec::new();
 
     // Launch site display name
@@ -1625,8 +1652,12 @@ fn draw_rocket_designer_content(frame: &mut Frame, state: &RocketDesignerState, 
         )));
         lines.push(Line::from(""));
 
-        // Payload feasibility table
-        let table = rocket_project::payload_table(&temp_design, state.launch_from);
+        // Payload feasibility for destinations served by active markets
+        // (or the LEO/MEO/GTO/GEO fallback when none are active yet).
+        let dests = relevant_destinations(&app.game);
+        let table = rocket_project::payload_table_for(
+            &temp_design, state.launch_from, &dests,
+        );
         if !table.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  Payload Feasibility:",
