@@ -1,5 +1,3 @@
-[] Show current location in "In Flight" as the rocket travels.
-    [] Also mark down the delta-v stage by stage
 [] Add cost for rocket engines as well
 [] Add ability to put multiple payloads on a rocket.
     [] Add a rocket as a payload for a rocket

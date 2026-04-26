@@ -88,6 +88,27 @@ pub struct Flight {
     pub flaw_rolled_groups: std::collections::HashSet<usize>,
 }
 
+/// Sub-phase of the current leg, used for status display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlightPhase {
+    /// Engines firing (first portion of leg, length = leg.burn_days).
+    Burning,
+    /// Coasting on a ballistic transfer (after the burn portion).
+    Coasting,
+    /// Final-approach burn into the very last leg of a multi-leg route.
+    Arriving,
+}
+
+impl FlightPhase {
+    pub fn word(self) -> &'static str {
+        match self {
+            FlightPhase::Burning => "Burning",
+            FlightPhase::Coasting => "Coasting",
+            FlightPhase::Arriving => "Arriving",
+        }
+    }
+}
+
 impl Flight {
     /// Total payload mass across all payloads.
     pub fn total_payload_kg(&self) -> f64 {
@@ -108,6 +129,64 @@ impl Flight {
             total += leg.total_days();
         }
         total
+    }
+
+    /// What sub-phase the flight is currently in.
+    /// Returns None if the flight has completed all legs.
+    pub fn current_phase(&self) -> Option<FlightPhase> {
+        let leg = self.route.get(self.current_leg)?;
+        let elapsed = leg.total_days().saturating_sub(self.leg_days_remaining);
+        let in_burn = elapsed < leg.burn_days;
+        let is_final_leg = self.current_leg + 1 == self.route.len();
+        let is_first_leg = self.current_leg == 0;
+
+        Some(if in_burn {
+            // "Arriving" only on the final approach burn after at least one prior leg —
+            // a single-leg ascent reads more naturally as "Burning".
+            if is_final_leg && !is_first_leg { FlightPhase::Arriving } else { FlightPhase::Burning }
+        } else {
+            FlightPhase::Coasting
+        })
+    }
+
+    /// For each remaining leg (starting at `current_leg`), simulate the burn and
+    /// return the per-stage-group delta-v contribution.
+    ///
+    /// Each entry is `Vec<(group_index, dv_provided_m_s)>` for the corresponding leg.
+    /// Groups that contributed less than 1 m/s are filtered out.
+    pub fn dv_plan(&self) -> Vec<Vec<(usize, f64)>> {
+        let mut result = Vec::new();
+        let mut sim_rocket = self.rocket.clone();
+        let sim_design = self.design.clone();
+        let n_groups = sim_design.stage_groups.len();
+
+        for leg_idx in self.current_leg..self.route.len() {
+            let leg = &self.route[leg_idx];
+
+            let before: Vec<f64> = (0..n_groups)
+                .map(|gi| sim_rocket.group_remaining_delta_v(&sim_design, gi))
+                .collect();
+
+            sim_rocket.burn_sequential(&sim_design, leg.delta_v_cost, leg.ambient_pressure_pa);
+
+            let after: Vec<f64> = (0..n_groups)
+                .map(|gi| sim_rocket.group_remaining_delta_v(&sim_design, gi))
+                .collect();
+
+            let mut contributions: Vec<(usize, f64)> = Vec::new();
+            for gi in 0..n_groups {
+                // Skip groups with infinite dv (solar sail) — diff is undefined.
+                if before[gi].is_infinite() {
+                    continue;
+                }
+                let diff = before[gi] - after[gi];
+                if diff > 1.0 {
+                    contributions.push((gi, diff));
+                }
+            }
+            result.push(contributions);
+        }
+        result
     }
 }
 
@@ -232,5 +311,151 @@ mod tests {
         assert_eq!(flight.eta_days(), 2);
         assert_eq!(flight.destination(), "gto");
         assert_eq!(flight.total_payload_kg(), 100.0);
+    }
+
+    /// Build a 2-leg flight (Earth Surface -> LEO -> GTO) using a real
+    /// 2-stage rocket design so the dv-plan dry-run has something to bite into.
+    fn make_two_leg_flight() -> Flight {
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::propellant::Propellant;
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+        use crate::stage::{Stage, StageId};
+
+        let booster_engine = EngineDesign {
+            id: EngineId(1), name: "Booster".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 7_000_000.0, mass_kg: 1_500.0, isp_s: 280.0,
+            exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
+            ],
+        };
+        let upper_engine = EngineDesign {
+            id: EngineId(2), name: "Upper".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 1_000_000.0, mass_kg: 800.0, isp_s: 340.0,
+            exit_pressure_pa: 10_000.0, needs_atmosphere: false,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
+            ],
+        };
+        let s1 = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: booster_engine, engine_count: 1,
+            propellant_mass_kg: 350_000.0, structural_mass_kg: 25_000.0,
+            fairing: None,
+        };
+        let s2 = Stage {
+            id: StageId(2), name: "S2".into(),
+            engine: upper_engine, engine_count: 1,
+            propellant_mass_kg: 90_000.0, structural_mass_kg: 5_000.0,
+            fairing: None,
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(1),
+            name: "TwoStage".into(),
+            stage_groups: vec![vec![s1], vec![s2]],
+        };
+        let rocket = design.instantiate(RocketId(1), "earth_surface", 5_000.0);
+
+        Flight {
+            id: FlightId(1),
+            rocket_name: "TwoStage".into(),
+            rocket_project_id: RocketProjectId(1),
+            design,
+            rocket,
+            payloads: vec![Payload::TestMass { mass_kg: 5_000.0 }],
+            current_location: "earth_surface".into(),
+            route: vec![
+                FlightLeg {
+                    from: "earth_surface".into(), to: "leo".into(),
+                    delta_v_cost: 9_400.0, burn_days: 1, coast_days: 0,
+                    ambient_pressure_pa: 101_325.0,
+                },
+                FlightLeg {
+                    from: "leo".into(), to: "gto".into(),
+                    delta_v_cost: 2_440.0, burn_days: 1, coast_days: 2,
+                    ambient_pressure_pa: 0.0,
+                },
+            ],
+            current_leg: 0,
+            leg_days_remaining: 1,
+            status: FlightStatus::InTransit,
+            flaws_activated: vec![],
+            launch_date: crate::calendar::GameDate::new(2001, 1, 1),
+            persist: false,
+            launch_partial: false,
+            flaw_rolled_groups: std::collections::HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn test_phase_burning_during_burn_portion() {
+        let mut flight = make_two_leg_flight();
+        // Leg 0: 1 burn day, 0 coast. leg_days_remaining=1 (full), elapsed=0 → burn phase.
+        // It's also leg 0 (first leg), so single-leg-style "Burning" wins over "Arriving".
+        flight.current_leg = 0;
+        flight.leg_days_remaining = 1;
+        assert_eq!(flight.current_phase(), Some(FlightPhase::Burning));
+    }
+
+    #[test]
+    fn test_phase_coasting_after_burn() {
+        let mut flight = make_two_leg_flight();
+        // Leg 1: 1 burn day, 2 coast days. leg_days_remaining=2 → elapsed=1 → in coast.
+        flight.current_leg = 1;
+        flight.leg_days_remaining = 2;
+        assert_eq!(flight.current_phase(), Some(FlightPhase::Coasting));
+    }
+
+    #[test]
+    fn test_phase_arriving_on_final_leg_burn() {
+        let mut flight = make_two_leg_flight();
+        // Final leg, burn portion (elapsed=0 < burn_days=1), and not the first leg.
+        flight.current_leg = 1;
+        flight.leg_days_remaining = 3; // total=3, elapsed=0 → burn phase
+        assert_eq!(flight.current_phase(), Some(FlightPhase::Arriving));
+    }
+
+    #[test]
+    fn test_phase_single_leg_flight_burns_not_arrives() {
+        // A flight with only one leg should read as "Burning" during its burn,
+        // not "Arriving" — single-leg ascents are launches, not arrivals.
+        let mut flight = make_two_leg_flight();
+        flight.route.truncate(1);
+        flight.current_leg = 0;
+        flight.leg_days_remaining = 1;
+        assert_eq!(flight.current_phase(), Some(FlightPhase::Burning));
+    }
+
+    #[test]
+    fn test_dv_plan_two_leg_burns_each_stage() {
+        let flight = make_two_leg_flight();
+        let plan = flight.dv_plan();
+        assert_eq!(plan.len(), 2, "one entry per remaining leg");
+
+        // Leg 0 (Earth Surface -> LEO, 9.4 km/s) should drain stage 0 (booster).
+        // It might also dip into stage 1 if booster can't provide all of it.
+        let leg0_groups: Vec<usize> = plan[0].iter().map(|(gi, _)| *gi).collect();
+        assert!(leg0_groups.contains(&0), "booster should contribute on leg 0");
+
+        // Leg 1 (LEO -> GTO, 2.44 km/s) should be served by stage 1 (upper).
+        // Stage 0 should NOT contribute (it's been jettisoned by then).
+        let leg1_groups: Vec<usize> = plan[1].iter().map(|(gi, _)| *gi).collect();
+        assert!(leg1_groups.contains(&1), "upper stage should contribute on leg 1");
+        assert!(!leg1_groups.contains(&0), "booster should already be gone by leg 1");
+    }
+
+    #[test]
+    fn test_dv_plan_starts_at_current_leg() {
+        // After leg 0 has been completed, dv_plan should only return entries for
+        // leg 1 onward — it walks remaining legs only.
+        let mut flight = make_two_leg_flight();
+        flight.current_leg = 1;
+        flight.leg_days_remaining = 3;
+        let plan = flight.dv_plan();
+        assert_eq!(plan.len(), 1);
     }
 }

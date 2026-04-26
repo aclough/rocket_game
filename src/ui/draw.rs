@@ -970,21 +970,24 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
             let remaining_dv = flight.rocket.remaining_delta_v(&flight.design);
             let current_loc = contract::destination_display_name(&flight.current_location);
 
-            // First line: rocket name, current → next leg, final destination
+            // First line: rocket name, phase, current → next leg, final destination
             let total_legs = flight.route.len();
             let current_leg_num = (flight.current_leg + 1).min(total_legs);
             let next_hop = flight.route.get(flight.current_leg)
                 .map(|leg| contract::destination_display_name(&leg.to));
+            let phase_prefix = flight.current_phase()
+                .map(|p| format!("{}: ", p.word()))
+                .unwrap_or_default();
             let progress_str = if let Some(next) = next_hop {
                 if next != final_dest {
-                    format!("{} → {} (leg {}/{}, final: {})",
-                        current_loc, next, current_leg_num, total_legs, final_dest)
+                    format!("{}{} → {} (leg {}/{}, final: {})",
+                        phase_prefix, current_loc, next, current_leg_num, total_legs, final_dest)
                 } else {
-                    format!("{} → {} (leg {}/{})",
-                        current_loc, final_dest, current_leg_num, total_legs)
+                    format!("{}{} → {} (leg {}/{})",
+                        phase_prefix, current_loc, final_dest, current_leg_num, total_legs)
                 }
             } else {
-                format!("{} → {}", current_loc, final_dest)
+                format!("{}{} → {}", phase_prefix, current_loc, final_dest)
             };
 
             lines.push(Line::from(vec![
@@ -1022,6 +1025,28 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                 if !stage_parts.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("      Stages: {}", stage_parts.join(", ")),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+
+            // Per-leg Δv plan: which stage(s) burn for each remaining leg.
+            let plan = flight.dv_plan();
+            if !plan.is_empty() {
+                let mut leg_parts = Vec::new();
+                for (offset, contributions) in plan.iter().enumerate() {
+                    if contributions.is_empty() {
+                        continue;
+                    }
+                    let leg_num = flight.current_leg + offset + 1;
+                    let stage_strs: Vec<String> = contributions.iter()
+                        .map(|(gi, dv)| format!("S{} {}", gi + 1, format_dv(*dv)))
+                        .collect();
+                    leg_parts.push(format!("L{}: {}", leg_num, stage_strs.join(" + ")));
+                }
+                if !leg_parts.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("      Plan: {}", leg_parts.join(" | ")),
                         Style::default().fg(Color::DarkGray),
                     )));
                 }
