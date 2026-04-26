@@ -321,89 +321,42 @@ pub struct App {
     pub pre_modal_speed: Option<GameSpeed>,
 }
 
-/// Compute reachable destinations considering multi-stage capability changes.
-/// If `rocket` and `design` are provided, simulates per-leg staging to check
-/// whether each leg's engine can actually use the required edge type.
+/// Compute reachable destinations using the stage-aware path planner.
+///
+/// When `rocket` and `design` are both provided, plans from the spacecraft's
+/// current state (partially-used stages, jettisoned lower stages) so the
+/// reachability and dv numbers reflect what the rocket can still do.
+/// Otherwise falls back to the abstract single-stage planner using
+/// `rocket_mass`.
 fn reachable_destinations_multistage(
-    from: &str, remaining_dv: f64, rocket_mass: f64, low_thrust: bool,
+    from: &str, remaining_dv: f64, rocket_mass: f64, _low_thrust: bool,
     rocket: Option<&crate::rocket::Rocket>,
     design: Option<&crate::rocket::RocketDesign>,
 ) -> Vec<(String, String, f64)> {
     let map = &crate::location::DELTA_V_MAP;
     let mut dests = Vec::new();
 
-    // Try both low-thrust and high-thrust pathfinding, pick cheapest valid path
     for loc in map.locations() {
         if loc.id == from {
             continue;
         }
 
-        // Find candidate paths: try with current capability, and also try the other
-        let mut best: Option<(Vec<&'static str>, f64)> = None;
+        let path = if let (Some(rocket), Some(design)) = (rocket, design) {
+            map.shortest_path_for_rocket_state(from, loc.id, design, rocket)
+        } else {
+            // No rocket state — fall back to the abstract Dijkstra so the
+            // UI can still surface destinations for empty/imaginary rockets.
+            map.shortest_path(from, loc.id, rocket_mass)
+        };
 
-        for try_lt in [low_thrust, !low_thrust] {
-            if let Some((path, dv)) = map.shortest_path_constrained(from, loc.id, rocket_mass, try_lt) {
-                if dv <= remaining_dv {
-                    // If we have rocket state, validate each leg
-                    if let (Some(rocket), Some(design)) = (rocket, design) {
-                        if validate_path_staging(rocket, design, &path, rocket_mass) {
-                            if best.as_ref().map_or(true, |(_, best_dv)| dv < *best_dv) {
-                                best = Some((path, dv));
-                            }
-                        }
-                    } else {
-                        // No rocket state — just use dv check
-                        if best.as_ref().map_or(true, |(_, best_dv)| dv < *best_dv) {
-                            best = Some((path, dv));
-                        }
-                    }
-                }
+        if let Some((_, dv)) = path {
+            if dv <= remaining_dv {
+                dests.push((loc.id.to_string(), loc.display_name.to_string(), dv));
             }
-        }
-
-        if let Some((_, dv)) = best {
-            dests.push((loc.id.to_string(), loc.display_name.to_string(), dv));
         }
     }
     dests.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
     dests
-}
-
-/// Validate that a path is achievable given the rocket's staging.
-/// Simulates burning through the path leg-by-leg on a cloned rocket,
-/// checking that each leg's edge type matches the active stage's capability.
-fn validate_path_staging(
-    rocket: &crate::rocket::Rocket,
-    design: &crate::rocket::RocketDesign,
-    path: &[&str],
-    rocket_mass: f64,
-) -> bool {
-    let map = &crate::location::DELTA_V_MAP;
-    let mut sim_rocket = rocket.clone();
-    let sim_design = design.clone();
-
-    for window in path.windows(2) {
-        let from = window[0];
-        let to = window[1];
-
-        let transfer = match map.transfer(from, to) {
-            Some(t) => t,
-            None => return false,
-        };
-
-        let is_lt = sim_rocket.is_current_stage_low_thrust(&sim_design);
-
-        // Check if current stage can use this edge
-        let dv_cost = match transfer.delta_v_for(is_lt, rocket_mass) {
-            Some(dv) => dv,
-            None => return false, // edge not usable by current stage type
-        };
-
-        // Simulate the burn
-        let _result = sim_rocket.burn_sequential(&sim_design, dv_cost, 0.0);
-    }
-
-    true
 }
 
 impl App {

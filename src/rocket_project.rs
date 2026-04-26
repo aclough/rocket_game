@@ -194,9 +194,11 @@ fn design_stats(design: &RocketDesign) -> (u32, u32, u32) {
 ///
 /// Uses binary search over payload mass.
 pub fn max_payload_to(design: &RocketDesign, from: &str, to: &str) -> f64 {
-    // First check if the destination is reachable at all (with 0 payload)
+    // First check if the destination is reachable at all (with 0 payload).
+    // Use the stage-aware planner so rockets with mixed thrust classes get
+    // the right per-edge dv (e.g. ion stages use spiral costs).
     let rocket_mass = design.total_mass_kg();
-    let path = DELTA_V_MAP.shortest_path(from, to, rocket_mass);
+    let path = DELTA_V_MAP.shortest_path_for_rocket(from, to, design, 0.0);
     if path.is_none() {
         return 0.0;
     }

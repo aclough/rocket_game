@@ -76,10 +76,10 @@ pub fn simulate_launch(
     let mut rocket_flaw_discoveries: Vec<usize> = Vec::new();
     let mut contracted_flaw_discoveries: Vec<(EngineSource, Vec<usize>)> = Vec::new();
 
-    // Compute required delta-v for the destination
-    let rocket_mass = design.total_mass_kg();
+    // Compute required delta-v for the destination using the stage-aware
+    // planner (so e.g. an ion upper stage uses spiral dv on transfers).
     let required_dv = crate::location::DELTA_V_MAP
-        .shortest_path("earth_surface", destination, rocket_mass)
+        .shortest_path_for_rocket("earth_surface", destination, design, payload_kg)
         .map(|(_, dv)| dv)
         .unwrap_or(f64::INFINITY);
 

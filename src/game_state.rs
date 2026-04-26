@@ -1530,7 +1530,9 @@ impl GameState {
         let first_group_thrust = sim.degraded_design.group_thrust_n(0);
 
         let path = crate::location::DELTA_V_MAP
-            .shortest_path("earth_surface", destination, rocket_mass);
+            .shortest_path_for_rocket(
+                "earth_surface", destination, &sim.degraded_design, payload_kg,
+            );
         let route = match path {
             Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, false),
             None => vec![],
@@ -2225,7 +2227,9 @@ impl GameState {
         let low_thrust = sc.rocket.is_current_stage_low_thrust(&sc.design);
 
         let path = crate::location::DELTA_V_MAP
-            .shortest_path_constrained(&sc.location, destination, rocket_mass, low_thrust);
+            .shortest_path_for_rocket(
+                &sc.location, destination, &sc.design, sc.rocket.payload_mass_kg,
+            );
         let route = match path {
             Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, low_thrust),
             None => {

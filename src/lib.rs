@@ -3,6 +3,7 @@ pub mod engine;
 pub mod stage;
 pub mod rocket;
 pub mod location;
+pub mod path_planning;
 pub mod calendar;
 pub mod event;
 pub mod seed;
