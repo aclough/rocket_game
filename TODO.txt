@@ -12,3 +12,6 @@ Later tuning:
 [] Rocket construction time
 [] Rocket design time
 [] Profitability
+[] Replace high/low thrust binary and asteroid-landing rules with a principled
+   acceleration / gravity comparison (so an ion drive can land on Bennu but not
+   Phobos based on numbers, not hand-tagged edge flags).

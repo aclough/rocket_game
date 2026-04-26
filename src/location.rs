@@ -136,379 +136,300 @@ impl Ord for DijkstraState {
     }
 }
 
+// ─── Builder helpers for the inner-solar-system graph ────────────────
+// These are private to the module and exist so the long graph-construction
+// function below stays readable.
+
+fn loc_orbit(
+    id: &'static str, display: &'static str, short: &'static str, parent: &'static str,
+) -> Location {
+    Location {
+        id, display_name: display, short_name: short,
+        location_type: LocationType::Orbit, parent_body: parent,
+    }
+}
+
+fn loc_lagrange(
+    id: &'static str, display: &'static str, short: &'static str, parent: &'static str,
+) -> Location {
+    Location {
+        id, display_name: display, short_name: short,
+        location_type: LocationType::LagrangePoint, parent_body: parent,
+    }
+}
+
+fn loc_surface(
+    id: &'static str, display: &'static str, short: &'static str, parent: &'static str,
+    gravity: f64, radius: f64, has_atm: bool, atm_density: f64, ambient: f64,
+) -> Location {
+    Location {
+        id, display_name: display, short_name: short,
+        location_type: LocationType::Surface(SurfaceProperties {
+            gravity_m_s2: gravity, radius_m: radius,
+            has_atmosphere: has_atm, atmosphere_density: atm_density,
+            ambient_pressure_pa: ambient,
+        }),
+        parent_body: parent,
+    }
+}
+
+/// Push a high-thrust-only symmetric edge pair (a ↔ b).
+fn add_impulsive_pair(
+    transfers: &mut Vec<Transfer>,
+    a: &'static str, b: &'static str, dv: f64, days: u32,
+) {
+    let make = |from, to| Transfer {
+        from, to, delta_v: dv,
+        through_atmosphere: false, animation: None,
+        can_aerobrake: false, transit_days: days,
+        low_thrust_ok: false, low_thrust_delta_v: None,
+    };
+    transfers.push(make(a, b));
+    transfers.push(make(b, a));
+}
+
+/// Push a low-thrust-friendly symmetric edge pair (a ↔ b).
+/// `lt_dv = None` means low-thrust uses the same dv as high-thrust (small
+/// burns where spiral inefficiency is negligible).
+fn add_spiral_pair(
+    transfers: &mut Vec<Transfer>,
+    a: &'static str, b: &'static str, dv: f64, lt_dv: Option<f64>, days: u32,
+) {
+    let make = |from, to| Transfer {
+        from, to, delta_v: dv,
+        through_atmosphere: false, animation: None,
+        can_aerobrake: false, transit_days: days,
+        low_thrust_ok: true, low_thrust_delta_v: lt_dv,
+    };
+    transfers.push(make(a, b));
+    transfers.push(make(b, a));
+}
+
+/// Push a surface ↔ orbit pair with the same nominal dv both ways.
+/// Ascent edge sets `through_atmosphere` (drag is added on top of dv);
+/// descent edge sets `can_aerobrake` (flag for future aerobrake savings).
+/// `lt_dv = Some(...)` allows low-thrust to use this pair (e.g. Bennu).
+fn add_ground_pair(
+    transfers: &mut Vec<Transfer>,
+    surface: &'static str, orbit: &'static str, dv: f64, days: u32,
+    has_atm: bool, lt_dv: Option<f64>,
+) {
+    let lt_ok = lt_dv.is_some();
+    transfers.push(Transfer {
+        from: surface, to: orbit, delta_v: dv,
+        through_atmosphere: has_atm,
+        animation: Some(TransferAnimation::Launch),
+        can_aerobrake: false, transit_days: days,
+        low_thrust_ok: lt_ok, low_thrust_delta_v: lt_dv,
+    });
+    transfers.push(Transfer {
+        from: orbit, to: surface, delta_v: dv,
+        through_atmosphere: false,
+        animation: Some(TransferAnimation::Landing),
+        can_aerobrake: has_atm, transit_days: days,
+        low_thrust_ok: lt_ok, low_thrust_delta_v: lt_dv,
+    });
+}
+
+/// Add a body's full side-branch off the heliocentric ladder:
+/// `transfer ↔ capture ↔ orbit ↔ surface`.
+/// All edges symmetric. The capture and orbit links are spiral-friendly;
+/// the surface link is created by `add_ground_pair`.
+fn add_body_branch(
+    transfers: &mut Vec<Transfer>,
+    transfer_node: &'static str, capture: &'static str,
+    orbit: &'static str, surface: &'static str,
+    capture_dv: f64, capture_days: u32,
+    capture_to_orbit_dv: f64,
+    orbit_to_surface_dv: f64,
+    surface_has_atm: bool,
+    surface_low_thrust: Option<f64>,
+) {
+    // transfer ↔ capture: heliocentric injection burn (large; spiral penalty 1.5x)
+    add_spiral_pair(
+        transfers, transfer_node, capture, capture_dv,
+        Some(capture_dv * 1.5), capture_days,
+    );
+    // capture ↔ orbit: orbital insertion (small; same dv both classes)
+    add_spiral_pair(transfers, capture, orbit, capture_to_orbit_dv, None, 0);
+    // orbit ↔ surface: launch/landing
+    add_ground_pair(
+        transfers, surface, orbit, orbit_to_surface_dv, 0,
+        surface_has_atm, surface_low_thrust,
+    );
+}
+
 impl DeltaVMap {
-    /// Build the initial Earth-Moon delta-v graph
+    /// Build the inner-solar-system delta-v graph (Mercury through the
+    /// asteroid belt, plus Earth/Moon and a couple of NEAs).
     pub fn earth_moon() -> Self {
         let locations = vec![
-            Location {
-                id: "earth_surface",
-                display_name: "Earth Surface",
-                short_name: "EARTH",
-                location_type: LocationType::Surface(SurfaceProperties {
-                    gravity_m_s2: 9.81,
-                    radius_m: 6_371_000.0,
-                    has_atmosphere: true,
-                    atmosphere_density: 1.225,
-                    ambient_pressure_pa: 101_325.0,
-                }),
-                parent_body: "earth",
-            },
-            Location {
-                id: "suborbital",
-                display_name: "Suborbital",
-                short_name: "SUB",
-                location_type: LocationType::Orbit,
-                parent_body: "earth",
-            },
-            Location {
-                id: "leo",
-                display_name: "Low Earth Orbit",
-                short_name: "LEO",
-                location_type: LocationType::Orbit,
-                parent_body: "earth",
-            },
-            Location {
-                id: "sso",
-                display_name: "Sun-Synchronous Orbit",
-                short_name: "SSO",
-                location_type: LocationType::Orbit,
-                parent_body: "earth",
-            },
-            Location {
-                id: "meo",
-                display_name: "Medium Earth Orbit",
-                short_name: "MEO",
-                location_type: LocationType::Orbit,
-                parent_body: "earth",
-            },
-            Location {
-                id: "gto",
-                display_name: "Geostationary Transfer",
-                short_name: "GTO",
-                location_type: LocationType::Orbit,
-                parent_body: "earth",
-            },
-            Location {
-                id: "geo",
-                display_name: "Geostationary Orbit",
-                short_name: "GEO",
-                location_type: LocationType::Orbit,
-                parent_body: "earth",
-            },
-            Location {
-                id: "l1",
-                display_name: "Earth-Moon L1",
-                short_name: "L1",
-                location_type: LocationType::LagrangePoint,
-                parent_body: "earth",
-            },
-            Location {
-                id: "l2",
-                display_name: "Earth-Moon L2",
-                short_name: "L2",
-                location_type: LocationType::LagrangePoint,
-                parent_body: "earth",
-            },
-            Location {
-                id: "lunar_orbit",
-                display_name: "Lunar Orbit",
-                short_name: "LLO",
-                location_type: LocationType::Orbit,
-                parent_body: "moon",
-            },
-            Location {
-                id: "lunar_surface",
-                display_name: "Lunar Surface",
-                short_name: "MOON",
-                location_type: LocationType::Surface(SurfaceProperties {
-                    gravity_m_s2: 1.62,
-                    radius_m: 1_737_000.0,
-                    has_atmosphere: false,
-                    atmosphere_density: 0.0,
-                    ambient_pressure_pa: 0.0,
-                }),
-                parent_body: "moon",
-            },
-            Location {
-                id: "nea",
-                display_name: "Near-Earth Asteroid",
-                short_name: "NEA",
-                location_type: LocationType::Surface(SurfaceProperties {
-                    gravity_m_s2: 0.0003,   // ~300m radius asteroid
-                    radius_m: 300.0,
-                    has_atmosphere: false,
-                    atmosphere_density: 0.0,
-                    ambient_pressure_pa: 0.0,
-                }),
-                parent_body: "sun",
-            },
-            Location {
-                id: "nea_surface",
-                display_name: "Asteroid Surface",
-                short_name: "SURF",
-                location_type: LocationType::Surface(SurfaceProperties {
-                    gravity_m_s2: 0.0003,
-                    radius_m: 300.0,
-                    has_atmosphere: false,
-                    atmosphere_density: 0.0,
-                    ambient_pressure_pa: 0.0,
-                }),
-                parent_body: "sun",
-            },
+            // ─── Earth system ───
+            loc_surface("earth_surface", "Earth Surface", "EARTH", "earth",
+                9.81, 6_371_000.0, true, 1.225, 101_325.0),
+            loc_orbit("suborbital", "Suborbital", "SUB", "earth"),
+            loc_orbit("leo", "Low Earth Orbit", "LEO", "earth"),
+            loc_orbit("sso", "Sun-Synchronous Orbit", "SSO", "earth"),
+            loc_orbit("meo", "Medium Earth Orbit", "MEO", "earth"),
+            loc_orbit("gto", "Geostationary Transfer", "GTO", "earth"),
+            loc_orbit("geo", "Geostationary Orbit", "GEO", "earth"),
+            loc_orbit("earth_escape", "Earth Escape", "ESC", "sun"),
+            loc_lagrange("l1", "Earth-Moon L1", "L1", "earth"),
+            loc_lagrange("l2", "Earth-Moon L2", "L2", "earth"),
+            loc_orbit("lunar_orbit", "Lunar Orbit", "LLO", "moon"),
+            loc_surface("lunar_surface", "Lunar Surface", "MOON", "moon",
+                1.62, 1_737_000.0, false, 0.0, 0.0),
+            // ─── Mercury ───
+            loc_orbit("mercury_transfer", "Mercury Transfer", "MTRF", "sun"),
+            loc_orbit("mercury_capture", "Mercury Capture", "MCAP", "mercury"),
+            loc_orbit("mercury_orbit_100km", "Mercury 100km Orbit", "MORB", "mercury"),
+            loc_surface("mercury_surface", "Mercury Surface", "MERC", "mercury",
+                3.7, 2_440_000.0, false, 0.0, 0.0),
+            // ─── Venus (balloons at 1 bar instead of surface) ───
+            loc_orbit("venus_transfer", "Venus Transfer", "VTRF", "sun"),
+            loc_orbit("venus_capture", "Venus Capture", "VCAP", "venus"),
+            loc_orbit("venus_orbit_400km", "Venus 400km Orbit", "VORB", "venus"),
+            loc_surface("venus_balloons", "Venus 1bar Balloons", "VBAL", "venus",
+                8.69, 6_101_800.0, true, 1.2, 100_000.0),
+            // ─── Mars + moons ───
+            loc_orbit("mars_transfer", "Mars Transfer", "MARTR", "sun"),
+            loc_orbit("mars_capture", "Mars Capture", "MARC", "mars"),
+            loc_orbit("mars_orbit_200km", "Mars 200km Orbit", "MARO", "mars"),
+            loc_surface("mars_surface", "Mars Surface", "MARS", "mars",
+                3.71, 3_389_500.0, true, 0.020, 600.0),
+            loc_orbit("phobos_transfer", "Phobos Transfer", "PHTR", "mars"),
+            loc_orbit("phobos_orbit", "Phobos Orbit", "PHOR", "phobos"),
+            loc_surface("phobos_surface", "Phobos Surface", "PHOB", "phobos",
+                0.0057, 11_000.0, false, 0.0, 0.0),
+            loc_orbit("deimos_transfer", "Deimos Transfer", "DETR", "mars"),
+            loc_orbit("deimos_orbit", "Deimos Orbit", "DEOR", "deimos"),
+            loc_surface("deimos_surface", "Deimos Surface", "DEIM", "deimos",
+                0.003, 6_200.0, false, 0.0, 0.0),
+            // ─── Asteroid belt (Vesta, Ceres, Hygiea — Pallas skipped) ───
+            loc_orbit("vesta_transfer", "Vesta Transfer", "VETR", "sun"),
+            loc_orbit("vesta_capture", "Vesta Capture", "VECP", "vesta"),
+            loc_orbit("vesta_orbit_20km", "Vesta 20km Orbit", "VEOR", "vesta"),
+            loc_surface("vesta_surface", "Vesta Surface", "VEST", "vesta",
+                0.25, 262_700.0, false, 0.0, 0.0),
+            loc_orbit("ceres_transfer", "Ceres Transfer", "CETR", "sun"),
+            loc_orbit("ceres_capture", "Ceres Capture", "CECP", "ceres"),
+            loc_orbit("ceres_orbit_20km", "Ceres 20km Orbit", "CEOR", "ceres"),
+            loc_surface("ceres_surface", "Ceres Surface", "CERE", "ceres",
+                0.27, 473_000.0, false, 0.0, 0.0),
+            loc_orbit("hygiea_transfer", "Hygiea Transfer", "HYTR", "sun"),
+            loc_orbit("hygiea_capture", "Hygiea Capture", "HYCP", "hygiea"),
+            loc_orbit("hygiea_orbit_20km", "Hygiea 20km Orbit", "HYOR", "hygiea"),
+            loc_surface("hygiea_surface", "Hygiea Surface", "HYGI", "hygiea",
+                0.13, 200_000.0, false, 0.0, 0.0),
+            // ─── NEAs (Eros, Bennu) ───
+            loc_orbit("eros_transfer", "Eros Transfer", "ERTR", "sun"),
+            loc_orbit("eros_capture", "Eros Capture", "ERCP", "eros"),
+            loc_orbit("eros_orbit", "Eros Orbit", "EROR", "eros"),
+            loc_surface("eros_surface", "Eros Surface", "EROS", "eros",
+                0.0059, 16_840.0, false, 0.0, 0.0),
+            loc_orbit("bennu_transfer", "Bennu Transfer", "BNTR", "sun"),
+            loc_orbit("bennu_capture", "Bennu Capture", "BNCP", "bennu"),
+            loc_orbit("bennu_orbit", "Bennu Orbit", "BNOR", "bennu"),
+            loc_surface("bennu_surface", "Bennu Surface", "BENN", "bennu",
+                0.000060, 245.0, false, 0.0, 0.0),
         ];
 
-        let transfers = vec![
-            Transfer {
-                from: "earth_surface",
-                to: "suborbital",
-                delta_v: 3500.0,
-                through_atmosphere: true,
-                animation: Some(TransferAnimation::Launch),
-                can_aerobrake: false,
-                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "earth_surface",
-                to: "leo",
-                delta_v: 7800.0,
-                through_atmosphere: true,
-                animation: Some(TransferAnimation::Launch),
-                can_aerobrake: false,
-                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "leo",
-                to: "sso",
-                delta_v: 500.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "leo",
-                to: "meo",
-                delta_v: 2100.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: Some(3500.0),
-            },
-            Transfer {
-                from: "leo",
-                to: "gto",
-                delta_v: 2440.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 1, low_thrust_ok: false, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "gto",
-                to: "geo",
-                delta_v: 1500.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "leo",
-                to: "l1",
-                delta_v: 3150.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 5, low_thrust_ok: true, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "l1",
-                to: "lunar_orbit",
-                delta_v: 700.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 2, low_thrust_ok: true, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "leo",
-                to: "lunar_orbit",
-                delta_v: 3850.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 4, low_thrust_ok: true, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "lunar_orbit",
-                to: "lunar_surface",
-                delta_v: 1700.0,
-                through_atmosphere: false,
-                animation: Some(TransferAnimation::Landing),
-                can_aerobrake: false,
-                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "lunar_surface",
-                to: "lunar_orbit",
-                delta_v: 1700.0,
-                through_atmosphere: false,
-                animation: Some(TransferAnimation::Launch),
-                can_aerobrake: false,
-                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
-            },
-            // Reverse/cross-orbit transfers for spacecraft navigation
-            Transfer {
-                from: "sso",
-                to: "leo",
-                delta_v: 500.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "meo",
-                to: "leo",
-                delta_v: 2100.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: Some(3500.0),
-            },
-            Transfer {
-                from: "gto",
-                to: "leo",
-                delta_v: 2440.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 1, low_thrust_ok: false, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "geo",
-                to: "gto",
-                delta_v: 1500.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 0, low_thrust_ok: false, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "lunar_orbit",
-                to: "leo",
-                delta_v: 3850.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 4, low_thrust_ok: true, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "lunar_orbit",
-                to: "l1",
-                delta_v: 700.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 2, low_thrust_ok: true, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "l1",
-                to: "leo",
-                delta_v: 3150.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 5, low_thrust_ok: true, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "l2",
-                to: "lunar_orbit",
-                delta_v: 800.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 2, low_thrust_ok: true, low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "leo",
-                to: "l2",
-                delta_v: 3200.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 5, low_thrust_ok: true, low_thrust_delta_v: None,
-            },
-            // Near-Earth asteroid transfers
-            Transfer {
-                from: "leo",
-                to: "nea",
-                delta_v: 5500.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 90,
-                low_thrust_ok: true,
-                low_thrust_delta_v: Some(7000.0),
-            },
-            Transfer {
-                from: "nea",
-                to: "leo",
-                delta_v: 5500.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 90,
-                low_thrust_ok: true,
-                low_thrust_delta_v: Some(7000.0),
-            },
-            // NEA surface landing/takeoff (very low gravity, chemical only)
-            Transfer {
-                from: "nea",
-                to: "nea_surface",
-                delta_v: 20.0,
-                through_atmosphere: false,
-                animation: Some(TransferAnimation::Landing),
-                can_aerobrake: false,
-                transit_days: 0,
-                low_thrust_ok: false,
-                low_thrust_delta_v: None,
-            },
-            Transfer {
-                from: "nea_surface",
-                to: "nea",
-                delta_v: 20.0,
-                through_atmosphere: false,
-                animation: Some(TransferAnimation::Launch),
-                can_aerobrake: false,
-                transit_days: 0,
-                low_thrust_ok: false,
-                low_thrust_delta_v: None,
-            },
-            // MEO → GEO direct (low-thrust spiral, or high-thrust)
-            Transfer {
-                from: "meo",
-                to: "geo",
-                delta_v: 2000.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 0,
-                low_thrust_ok: true,
-                low_thrust_delta_v: Some(2500.0),
-            },
-            Transfer {
-                from: "geo",
-                to: "meo",
-                delta_v: 2000.0,
-                through_atmosphere: false,
-                animation: None,
-                can_aerobrake: false,
-                transit_days: 0,
-                low_thrust_ok: true,
-                low_thrust_delta_v: Some(2500.0),
-            },
-        ];
+        let mut transfers: Vec<Transfer> = Vec::new();
+
+        // ─── Earth surface launches ───
+        // Suborbital is genuinely one-way (you fall back, no thrust needed),
+        // so it stays asymmetric.
+        transfers.push(Transfer {
+            from: "earth_surface", to: "suborbital", delta_v: 3500.0,
+            through_atmosphere: true, animation: Some(TransferAnimation::Launch),
+            can_aerobrake: false, transit_days: 0,
+            low_thrust_ok: false, low_thrust_delta_v: None,
+        });
+        // Earth surface ↔ LEO: same nominal dv both ways, drag on ascent only.
+        add_ground_pair(&mut transfers, "earth_surface", "leo", 7800.0, 0, true, None);
+
+        // ─── Earth orbital climb (low-thrust climbs the ladder) ───
+        add_spiral_pair(&mut transfers, "leo", "sso", 500.0, None, 0);
+        add_spiral_pair(&mut transfers, "leo", "meo", 2100.0, Some(3500.0), 0);
+        add_spiral_pair(&mut transfers, "meo", "geo", 2000.0, Some(2500.0), 0);
+        add_spiral_pair(&mut transfers, "geo", "earth_escape", 700.0, Some(1500.0), 0);
+
+        // ─── Earth high-thrust shortcuts (no low-thrust direct shortcuts to escape) ───
+        add_impulsive_pair(&mut transfers, "leo", "gto", 2440.0, 1);
+        add_impulsive_pair(&mut transfers, "gto", "geo", 1500.0, 0);
+        add_impulsive_pair(&mut transfers, "leo", "lunar_orbit", 3850.0, 4);
+        add_impulsive_pair(&mut transfers, "lunar_orbit", "earth_escape", 93.0, 4);
+
+        // ─── Lagrange points and lunar surface ───
+        add_spiral_pair(&mut transfers, "leo", "l1", 3150.0, None, 5);
+        add_spiral_pair(&mut transfers, "l1", "lunar_orbit", 700.0, None, 2);
+        add_spiral_pair(&mut transfers, "leo", "l2", 3200.0, None, 5);
+        add_spiral_pair(&mut transfers, "l2", "lunar_orbit", 800.0, None, 2);
+        add_ground_pair(&mut transfers, "lunar_surface", "lunar_orbit", 1700.0, 0, false, None);
+
+        // ─── Heliocentric backbone (Hohmann ladder) ───
+        add_spiral_pair(&mut transfers, "mercury_transfer", "venus_transfer",
+            2085.0, Some(2085.0 * 1.5), 50);
+        add_spiral_pair(&mut transfers, "venus_transfer", "earth_escape",
+            280.0, Some(280.0 * 1.5), 100);
+        add_spiral_pair(&mut transfers, "earth_escape", "mars_transfer",
+            388.0, Some(388.0 * 1.5), 200);
+        add_spiral_pair(&mut transfers, "mars_transfer", "vesta_transfer",
+            923.0, Some(923.0 * 1.5), 100);
+        add_spiral_pair(&mut transfers, "vesta_transfer", "ceres_transfer",
+            379.0, Some(379.0 * 1.5), 100);
+        add_spiral_pair(&mut transfers, "ceres_transfer", "hygiea_transfer",
+            570.0, Some(570.0 * 1.5), 100);
+
+        // ─── NEA branches off Earth escape (not on the planetary ladder) ───
+        add_spiral_pair(&mut transfers, "earth_escape", "eros_transfer",
+            600.0, Some(900.0), 200);
+        add_spiral_pair(&mut transfers, "earth_escape", "bennu_transfer",
+            400.0, Some(600.0), 150);
+
+        // ─── Body branches: transfer → capture → orbit → surface ───
+        // Mercury (no atmosphere)
+        add_body_branch(&mut transfers, "mercury_transfer", "mercury_capture",
+            "mercury_orbit_100km", "mercury_surface",
+            3062.0, 30, 1220.0, 6310.0, false, None);
+        // Venus (1bar balloons instead of surface; descent through atmosphere)
+        add_body_branch(&mut transfers, "venus_transfer", "venus_capture",
+            "venus_orbit_400km", "venus_balloons",
+            359.0, 30, 2939.0, 1500.0, true, None);
+        // Mars (atmosphere)
+        add_body_branch(&mut transfers, "mars_transfer", "mars_capture",
+            "mars_orbit_200km", "mars_surface",
+            673.0, 30, 3578.0, 4100.0, true, None);
+        // Vesta / Ceres / Hygiea (no atmosphere, large injection burns)
+        add_body_branch(&mut transfers, "vesta_transfer", "vesta_capture",
+            "vesta_orbit_20km", "vesta_surface",
+            4096.0, 30, 102.0, 173.0, false, None);
+        add_body_branch(&mut transfers, "ceres_transfer", "ceres_capture",
+            "ceres_orbit_20km", "ceres_surface",
+            4381.0, 30, 148.0, 280.0, false, None);
+        add_body_branch(&mut transfers, "hygiea_transfer", "hygiea_capture",
+            "hygiea_orbit_20km", "hygiea_surface",
+            4915.0, 30, 63.0, 139.0, false, None);
+        // Eros (NEA, tiny gravity but high-thrust only)
+        add_body_branch(&mut transfers, "eros_transfer", "eros_capture",
+            "eros_orbit", "eros_surface",
+            30.0, 30, 5.0, 10.0, false, None);
+        // Bennu (NEA, gravity so low ion drives can land)
+        add_body_branch(&mut transfers, "bennu_transfer", "bennu_capture",
+            "bennu_orbit", "bennu_surface",
+            20.0, 30, 5.0, 5.0, false, Some(5.0));
+
+        // ─── Mars moons (Phobos and Deimos branch off mars_capture) ───
+        // Phobos: tiny gravity but ion-thrust margin too small per the
+        // planning rule — keep landing high-thrust only.
+        add_spiral_pair(&mut transfers, "mars_capture", "phobos_transfer", 535.0, None, 1);
+        add_spiral_pair(&mut transfers, "phobos_transfer", "phobos_orbit", 3.0, None, 0);
+        add_ground_pair(&mut transfers, "phobos_surface", "phobos_orbit",
+            6.0, 0, false, None);
+        add_spiral_pair(&mut transfers, "mars_capture", "deimos_transfer", 649.0, None, 1);
+        add_spiral_pair(&mut transfers, "deimos_transfer", "deimos_orbit", 2.0, None, 0);
+        add_ground_pair(&mut transfers, "deimos_surface", "deimos_orbit",
+            4.0, 0, false, None);
 
         DeltaVMap {
             locations,
@@ -836,7 +757,7 @@ mod tests {
     #[test]
     fn test_location_count() {
         let map = DeltaVMap::earth_moon();
-        assert_eq!(map.location_count(), 13);
+        assert_eq!(map.location_count(), 50);
     }
 
     #[test]
@@ -911,9 +832,15 @@ mod tests {
     }
 
     #[test]
-    fn test_shortest_path_no_route() {
+    fn test_shortest_path_descent_to_earth_surface() {
+        // With symmetric ascent/descent edges, leo → earth_surface is now
+        // reachable (descent at the same nominal dv as ascent; aerobrake
+        // savings will be a future feature).
         let map = DeltaVMap::earth_moon();
-        assert!(map.shortest_path("leo", "earth_surface", REF_MASS).is_none());
+        let (path, dv) = map.shortest_path("leo", "earth_surface", REF_MASS).unwrap();
+        assert_eq!(path, vec!["leo", "earth_surface"]);
+        // Same nominal dv as ascent (without the ascent's drag penalty).
+        assert!((dv - 7800.0).abs() < 1.0);
     }
 
     #[test]
@@ -940,7 +867,7 @@ mod tests {
 
     #[test]
     fn test_static_delta_v_map() {
-        assert_eq!(DELTA_V_MAP.location_count(), 13);
+        assert_eq!(DELTA_V_MAP.location_count(), 50);
         assert!(DELTA_V_MAP.location("leo").is_some());
     }
 
@@ -1008,11 +935,13 @@ mod tests {
     }
 
     #[test]
-    fn test_no_return_to_earth_surface() {
+    fn test_return_to_earth_surface_now_reachable() {
+        // Symmetric ascent/descent means orbits can now plot return paths to
+        // Earth surface. (Previously the graph was launch-only.)
         let map = DeltaVMap::earth_moon();
-        assert!(map.shortest_path("leo", "earth_surface", REF_MASS).is_none());
-        assert!(map.shortest_path("geo", "earth_surface", REF_MASS).is_none());
-        assert!(map.shortest_path("lunar_orbit", "earth_surface", REF_MASS).is_none());
+        assert!(map.shortest_path("leo", "earth_surface", REF_MASS).is_some());
+        assert!(map.shortest_path("geo", "earth_surface", REF_MASS).is_some());
+        assert!(map.shortest_path("lunar_orbit", "earth_surface", REF_MASS).is_some());
     }
 
     #[test]
@@ -1091,29 +1020,46 @@ mod tests {
     }
 
     #[test]
-    fn test_low_thrust_can_reach_nea_orbit() {
+    fn test_low_thrust_can_reach_eros_orbit() {
         let map = DeltaVMap::earth_moon();
-        let result = map.shortest_path_constrained("leo", "nea", REF_MASS, true);
+        // Low-thrust must spiral up the Earth ladder to reach Eros.
+        let result = map.shortest_path_constrained("leo", "eros_orbit", REF_MASS, true);
         assert!(result.is_some());
-        let (_, dv) = result.unwrap();
-        // Should use the low_thrust_delta_v of 7000
-        assert!(dv >= 7000.0, "Low-thrust LEO→NEA should cost ≥7000, got {}", dv);
+        let (path, _dv) = result.unwrap();
+        // Path must climb LEO → MEO → GEO → escape rather than shortcut to GTO.
+        assert!(!path.contains(&"gto"), "low-thrust path should not use GTO: {:?}", path);
+        assert!(path.contains(&"earth_escape"), "should pass through earth_escape: {:?}", path);
     }
 
     #[test]
-    fn test_low_thrust_cannot_reach_nea_surface() {
+    fn test_low_thrust_cannot_reach_eros_surface() {
+        // Eros gravity is ~5e-3 m/s² — too high for a typical ion drive to
+        // land safely. The orbit→surface edge is high-thrust only.
         let map = DeltaVMap::earth_moon();
-        // Low-thrust can reach NEA orbit but not the surface (chemical landing needed)
-        assert!(map.shortest_path_constrained("leo", "nea_surface", REF_MASS, true).is_none());
+        assert!(map.shortest_path_constrained("leo", "eros_surface", REF_MASS, true).is_none());
     }
 
     #[test]
-    fn test_high_thrust_can_reach_nea_surface() {
+    fn test_low_thrust_can_reach_bennu_surface() {
+        // Bennu gravity is ~6e-5 m/s² — well below ion-drive acceleration,
+        // so the surface edge is flagged low_thrust_ok and a low-thrust path
+        // exists end-to-end.
         let map = DeltaVMap::earth_moon();
-        let result = map.shortest_path_constrained("leo", "nea_surface", REF_MASS, false);
+        let result = map.shortest_path_constrained("leo", "bennu_surface", REF_MASS, true);
+        assert!(result.is_some(), "low-thrust should reach bennu surface");
+    }
+
+    #[test]
+    fn test_high_thrust_can_reach_eros_surface() {
+        let map = DeltaVMap::earth_moon();
+        let result = map.shortest_path_constrained("leo", "eros_surface", REF_MASS, false);
         assert!(result.is_some());
         let (path, _) = result.unwrap();
-        assert_eq!(path, vec!["leo", "nea", "nea_surface"]);
+        // Path must traverse Earth escape and the Eros side branch.
+        assert_eq!(path.first(), Some(&"leo"));
+        assert_eq!(path.last(), Some(&"eros_surface"));
+        assert!(path.contains(&"earth_escape"));
+        assert!(path.contains(&"eros_transfer"));
     }
 
     // ==========================================

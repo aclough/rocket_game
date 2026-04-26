@@ -488,9 +488,8 @@ mod tests {
 
     #[test]
     fn unreachable_goal_returns_none() {
-        // 2-stage chemical rocket: not enough dv to reach NEA surface even
-        // ignoring stage-class constraints (asteroid is far, low_thrust_ok
-        // edges save dv). Use a tiny rocket so its dv is well below the path.
+        // Tiny 2-stage chemical rocket: insufficient dv to reach Eros even
+        // optimistically. The path Earth → ... → Eros surface needs ~10+ km/s.
         let s1 = stage(1, "S1", kerolox_engine(1, 100_000.0, 200.0, 280.0), 1, 1_000.0, 200.0);
         let s2 = stage(2, "S2", kerolox_engine(2, 50_000.0, 100.0, 340.0), 1, 500.0, 100.0);
         let design = RocketDesign {
@@ -498,24 +497,28 @@ mod tests {
             stage_groups: vec![vec![s1], vec![s2]],
         };
         let result = DELTA_V_MAP.shortest_path_for_rocket(
-            "earth_surface", "nea_surface", &design, 100.0,
+            "earth_surface", "eros_surface", &design, 100.0,
         );
-        assert!(result.is_none(), "tiny rocket can't reach NEA surface");
+        assert!(result.is_none(), "tiny rocket can't reach Eros surface");
     }
 
     #[test]
     fn chemical_then_ion_uses_ion_for_long_transfer() {
         let design = chemical_then_ion();
+        // Eros orbit is reachable from Earth surface for a chem booster +
+        // ion upper: chem lifts to LEO, ion spirals through MEO/GEO/escape
+        // out to Eros.
         let result = DELTA_V_MAP.shortest_path_for_rocket(
-            "earth_surface", "nea", &design, 200.0,
+            "earth_surface", "eros_orbit", &design, 200.0,
         );
-        assert!(result.is_some(), "chem+ion stack should reach NEA orbit");
+        assert!(result.is_some(), "chem+ion stack should reach Eros orbit");
         let (path, _dv) = result.unwrap();
         assert_eq!(path.first(), Some(&"earth_surface"));
-        assert_eq!(path.last(), Some(&"nea"));
-        // The path must traverse LEO (chemical can't get further on its own,
-        // and the ion stage must take over from LEO outward).
+        assert_eq!(path.last(), Some(&"eros_orbit"));
+        // Must traverse LEO (chem can't get further alone) and earth_escape
+        // (ion has to spiral up the ladder to leave Earth's neighborhood).
         assert!(path.contains(&"leo"), "path={:?}", path);
+        assert!(path.contains(&"earth_escape"), "path={:?}", path);
     }
 
     #[test]

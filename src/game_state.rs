@@ -2937,35 +2937,39 @@ mod tests {
         assert!(rocket.is_current_stage_low_thrust(&design),
             "Ion stage should be classified as low-thrust");
 
-        // Ion stage should be able to reach NEA (low-thrust path)
+        // Ion stage should be able to reach Eros orbit (low-thrust path).
         let remaining_dv = rocket.remaining_delta_v(&design);
         assert!(remaining_dv > 7000.0,
-            "Ion stage should have enough dv for NEA transit, got {}", remaining_dv);
+            "Ion stage should have enough dv for Eros transit, got {}", remaining_dv);
 
-        let nea_path = DELTA_V_MAP.shortest_path_constrained("leo", "nea", 1000.0, true);
-        assert!(nea_path.is_some(), "Low-thrust path LEO→NEA should exist");
+        let eros_path = DELTA_V_MAP.shortest_path_constrained(
+            "leo", "eros_orbit", 1000.0, true,
+        );
+        assert!(eros_path.is_some(), "Low-thrust path LEO→Eros orbit should exist");
 
-        // Ion stage should NOT be able to reach NEA surface (needs chemical)
-        let surface_path = DELTA_V_MAP.shortest_path_constrained("leo", "nea_surface", 1000.0, true);
-        assert!(surface_path.is_none(), "Low-thrust should not reach asteroid surface");
+        // Ion stage should NOT be able to reach Eros surface (Eros gravity
+        // is just above the ion-drive landing threshold).
+        let surface_path = DELTA_V_MAP.shortest_path_constrained(
+            "leo", "eros_surface", 1000.0, true,
+        );
+        assert!(surface_path.is_none(),
+            "Low-thrust should not reach Eros surface");
 
-        // Simulate burning the ion stage to reach NEA
-        let (_, nea_dv) = nea_path.unwrap();
-        let burn_result = rocket.burn_sequential(&design, nea_dv, 0.0);
+        // Simulate burning the ion stage along the Eros transit.
+        let (_, eros_dv) = eros_path.unwrap();
+        let burn_result = rocket.burn_sequential(&design, eros_dv, 0.0);
         assert!(burn_result.dv_achieved > 6000.0,
-            "Should burn significant dv for NEA transit, got {}", burn_result.dv_achieved);
+            "Should burn significant dv for Eros transit, got {}", burn_result.dv_achieved);
 
-        // After ion stage exhausted or at NEA, check next stage
-        // The lander stage should now be active (or the ion stage partially used)
-        // Check if we can reach NEA surface with chemical pathfinding from NEA
-        let chemical_path = DELTA_V_MAP.shortest_path_constrained("nea", "nea_surface", 200.0, false);
-        assert!(chemical_path.is_some(), "Chemical path NEA→surface should exist");
-        let (path, dv) = chemical_path.unwrap();
-        assert_eq!(path, vec!["nea", "nea_surface"]);
-        assert!((dv - 20.0).abs() < 1.0, "NEA landing should cost ~20 m/s, got {}", dv);
+        // The chemical lander handles eros_orbit → eros_surface (high-thrust only).
+        let chemical_path = DELTA_V_MAP.shortest_path_constrained(
+            "eros_orbit", "eros_surface", 200.0, false,
+        );
+        assert!(chemical_path.is_some(), "Chemical path Eros orbit → surface should exist");
+        let (path, _dv) = chemical_path.unwrap();
+        assert_eq!(path, vec!["eros_orbit", "eros_surface"]);
 
-        // After ion stage, lander should not be low-thrust
-        // (Check by looking at group 3's engine)
+        // After ion stage, lander should not be low-thrust.
         assert!(!design.stage_groups[3][0].engine.is_low_thrust(),
             "Lander engine should be high-thrust (chemical)");
     }
