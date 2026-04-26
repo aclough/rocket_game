@@ -2,8 +2,6 @@
 
 # Overview
 
-This is a Rust + Godot (GDScript) rocket tycoon game. The Rust code handles game logic, physics, and state; GDScript handles UI and timing. When making changes that cross the Rust/GDScript boundary (signals, state sync), verify both sides are consistent.
-
 See 'Rocket_Tycoon.md' for what the final game will be like.
 
 Ask clarifying questions when the architecture or parameters are unclear.
@@ -24,11 +22,6 @@ Make sure to avoid duplication of calculation and sources of truth for things li
 # Testing
 
 When modifying physics parameters, game balance values, or constants, always update corresponding test assertions in the same edit. Never leave hardcoded test values that will break due to parameter changes.
-
-After finishing changes to the Godot sections, run
-flatpak run org.godotengine.Godot --headless --quit --path /path/to/changes on them.
-
-After a major change provide the user with a list of things to test in the Godot GUI.
 
 # Completion
 
