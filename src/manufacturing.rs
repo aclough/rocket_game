@@ -135,6 +135,12 @@ pub struct ManufacturingOrder {
     pub work_completed: f64,
     pub work_required: f64,
     pub material_cost: f64,
+    /// Labor (manufacturing-team salary) accrued against this order while teams
+    /// are assigned. Combined with material_cost to give the true per-unit
+    /// build cost. The actual money was already paid via monthly salaries —
+    /// this is purely an attribution figure for cost reporting.
+    #[serde(default)]
+    pub labor_cost: f64,
     pub teams_assigned: u32,
     pub floor_space_used: u32,
     /// If true, this order is waiting for prerequisite items in inventory.
@@ -150,6 +156,8 @@ pub enum ManufacturingEvent {
         order_id: ManufacturingOrderId,
         engine_id: EngineId,
         engine_name: String,
+        source: EngineSource,
+        build_cost: f64,
     },
     StageBuilt {
         order_id: ManufacturingOrderId,
@@ -202,6 +210,7 @@ impl ManufacturingOrder {
             work_completed: 0.0,
             work_required: base_work * learning,
             material_cost,
+            labor_cost: 0.0,
             teams_assigned: 0,
             floor_space_used: 1,
             waiting_for_prerequisites: false,
@@ -237,6 +246,7 @@ impl ManufacturingOrder {
             work_completed: 0.0,
             work_required: base_work * learning,
             material_cost,
+            labor_cost: 0.0,
             teams_assigned: 0,
             floor_space_used: 1,
             waiting_for_prerequisites: true, // wait for engines
@@ -272,6 +282,7 @@ impl ManufacturingOrder {
             work_completed: 0.0,
             work_required: base_work * learning,
             material_cost,
+            labor_cost: 0.0,
             teams_assigned: 0,
             floor_space_used: total_stages, // scales with rocket size
             waiting_for_prerequisites: true, // wait for all stages
@@ -304,6 +315,10 @@ impl ManufacturingOrder {
         }
         let work = team::manufacturing_work_rate(self.teams_assigned);
         self.work_completed += work;
+        // Attribute one team-day of salary per assigned team. 30 days/month
+        // is the same approximation used by the salary-deduction path.
+        let daily_salary = team::MANUFACTURING_MONTHLY_SALARY / 30.0;
+        self.labor_cost += self.teams_assigned as f64 * daily_salary;
         self.work_completed >= self.work_required
     }
 
@@ -537,6 +552,11 @@ impl Manufacturing {
             let order = self.orders.remove(i);
             let item_id = self.next_inventory_id();
 
+            // Inventory build_cost is the full attributed cost: this order's
+            // accumulated material_cost (which already absorbed any consumed
+            // children's full build_cost via try_unblock) plus this order's
+            // own labor.
+            let total_build_cost = order.material_cost + order.labor_cost;
             match &order.order_type {
                 ManufacturingOrderType::Engine { source, engine_id, engine_name, revision, flaws, improvements, .. } => {
                     self.inventory.engines.push(InventoryEngine {
@@ -544,7 +564,7 @@ impl Manufacturing {
                         source: *source,
                         engine_id: *engine_id,
                         engine_name: engine_name.clone(),
-                        build_cost: order.material_cost,
+                        build_cost: total_build_cost,
                         revision: *revision,
                         flaws: flaws.clone(),
                         improvements: improvements.clone(),
@@ -553,6 +573,8 @@ impl Manufacturing {
                         order_id: order.id,
                         engine_id: *engine_id,
                         engine_name: engine_name.clone(),
+                        source: *source,
+                        build_cost: total_build_cost,
                     });
                 }
                 ManufacturingOrderType::Stage { rocket_project_id, group_index, stage_index, stage_name, .. } => {
@@ -562,7 +584,7 @@ impl Manufacturing {
                         group_index: *group_index,
                         stage_index: *stage_index,
                         stage_name: stage_name.clone(),
-                        build_cost: order.material_cost,
+                        build_cost: total_build_cost,
                     });
                     events.push(ManufacturingEvent::StageBuilt {
                         order_id: order.id,
@@ -571,7 +593,6 @@ impl Manufacturing {
                     });
                 }
                 ManufacturingOrderType::RocketIntegration { rocket_project_id, design_id, rocket_name, revision, rocket_flaws, .. } => {
-                    let total_build_cost = order.material_cost;
                     self.inventory.rockets.push(InventoryRocket {
                         item_id,
                         rocket_project_id: *rocket_project_id,

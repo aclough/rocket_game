@@ -1232,27 +1232,9 @@ fn draw_finance_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
 
         for rp in &company.rocket_projects {
             let design_id = rp.design.id;
-
-            // Compute NRE: rocket project NRE + apportioned engine NRE
-            let mut total_nre = rp.nre_cost;
-            for group in &rp.design.stage_groups {
-                for stage in group {
-                    // Find the engine project for this engine
-                    if let Some(ep) = company.engine_projects.iter()
-                        .find(|ep| ep.design.id == stage.engine.id)
-                    {
-                        // Apportion: (engines used by this design / total engines built) * engine NRE
-                        let total_built = *company.engine_build_counts
-                            .get(&ep.project_id)
-                            .unwrap_or(&0);
-                        if total_built > 0 {
-                            let engines_in_design = stage.engine_count as f64;
-                            let fraction = engines_in_design / total_built as f64;
-                            total_nre += fraction * ep.nre_cost;
-                        }
-                    }
-                }
-            }
+            // Rocket NRE is just the rocket project's own NRE — engine NRE is
+            // shown in the Engine Costs section so it isn't double-counted.
+            let nre = rp.nre_cost;
 
             let cost_history = company.rocket_cost_history.get(&design_id);
             let built = cost_history.map_or(0, |h| h.len());
@@ -1260,7 +1242,7 @@ fn draw_finance_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             let (avg_str, marginal_str) = if built > 0 {
                 let history = cost_history.unwrap();
                 let total_build: f64 = history.iter().sum();
-                let avg = (total_nre + total_build) / built as f64;
+                let avg = (nre + total_build) / built as f64;
                 let marginal = *history.last().unwrap();
                 (format_money(avg), format_money(marginal))
             } else {
@@ -1275,7 +1257,65 @@ fn draw_finance_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
 
             lines.push(Line::from(format!(
                 "  {:<18} {:>12} {:>12} {:>12} {:>5}",
-                name, format_money(total_nre), avg_str, marginal_str, built
+                name, format_money(nre), avg_str, marginal_str, built
+            )));
+        }
+    }
+
+    // Engine Costs section
+    let any_engines = !company.engine_projects.is_empty()
+        || !company.contracted_engines.is_empty();
+    if any_engines {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  ── Engine Costs ──",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from("  Engine            NRE          Avg Cost     Marginal     Built"));
+        lines.push(Line::from("  ─────────────────────────────────────────────────────────────────"));
+
+        for ep in &company.engine_projects {
+            let history = company.engine_cost_history.get(&ep.project_id);
+            let built = *company.engine_build_counts.get(&ep.project_id).unwrap_or(&0);
+
+            let (avg_str, marginal_str) = if built > 0 {
+                if let Some(h) = history {
+                    let sum: f64 = h.iter().sum();
+                    let avg = (ep.nre_cost + sum) / built as f64;
+                    let marginal = *h.last().unwrap();
+                    (format_money(avg), format_money(marginal))
+                } else {
+                    ("—".to_string(), "—".to_string())
+                }
+            } else {
+                ("—".to_string(), "—".to_string())
+            };
+
+            let name = if ep.design.name.len() > 18 {
+                format!("{}…", &ep.design.name[..17])
+            } else {
+                ep.design.name.clone()
+            };
+
+            lines.push(Line::from(format!(
+                "  {:<18} {:>12} {:>12} {:>12} {:>5}",
+                name, format_money(ep.nre_cost), avg_str, marginal_str, built
+            )));
+        }
+
+        // Contracted engines: flat per-unit cost, no NRE/avg.
+        for ce in &company.contracted_engines {
+            let built = *company.contracted_engine_build_counts
+                .get(&ce.id).unwrap_or(&0);
+            let name = if ce.design.name.len() > 18 {
+                format!("{}…", &ce.design.name[..17])
+            } else {
+                ce.design.name.clone()
+            };
+            let marginal_str = format_money(ce.purchase_cost_per_unit);
+            lines.push(Line::from(format!(
+                "  {:<18} {:>12} {:>12} {:>12} {:>5}",
+                name, "—", "—", marginal_str, built
             )));
         }
     }

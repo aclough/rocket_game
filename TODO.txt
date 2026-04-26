@@ -1,4 +1,3 @@
-[] Add cost for rocket engines as well
 [] Add ability to put multiple payloads on a rocket.
     [] Add a rocket as a payload for a rocket
 [] Make electrical power via batteries, solar panels, etc.

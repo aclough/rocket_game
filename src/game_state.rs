@@ -133,8 +133,18 @@ pub struct Company {
     #[serde(default)]
     pub rocket_build_counts: HashMap<RocketDesignId, u32>,
     /// Build cost history per rocket design (for avg/marginal cost).
+    /// Each entry is the *total* per-rocket cost (engines + stages + integration)
+    /// charged at order time.
     #[serde(default)]
     pub rocket_cost_history: HashMap<RocketDesignId, Vec<f64>>,
+    /// Per-engine-project build cost history (player-designed engines only).
+    /// Each entry is the material_cost for one built engine, recorded at order
+    /// time so the learning curve is reflected.
+    #[serde(default)]
+    pub engine_cost_history: HashMap<EngineProjectId, Vec<f64>>,
+    /// How many engines have been ordered per contracted engine catalog entry.
+    #[serde(default)]
+    pub contracted_engine_build_counts: HashMap<ContractedEngineId, u32>,
     /// Auto-build targets: maintain at least N rockets in inventory per project.
     #[serde(default)]
     pub auto_build_targets: HashMap<RocketProjectId, u32>,
@@ -169,6 +179,8 @@ impl Company {
             engine_build_counts: HashMap::new(),
             rocket_build_counts: HashMap::new(),
             rocket_cost_history: HashMap::new(),
+            engine_cost_history: HashMap::new(),
+            contracted_engine_build_counts: HashMap::new(),
             auto_build_targets: HashMap::new(),
         };
         // Start with one engineering team
@@ -380,6 +392,7 @@ impl Company {
                                     flaws: ce.flaws.clone(),
                                     improvements: Vec::new(),
                                 });
+                                *self.contracted_engine_build_counts.entry(ce_id).or_insert(0) += 1;
                             }
                         }
                         None => {}
@@ -428,6 +441,10 @@ impl Company {
 
         // Increment rocket build count
         *self.rocket_build_counts.entry(design_id).or_insert(0) += 1;
+
+        // Note: rocket_cost_history is populated at integration completion
+        // (see advance_day) so the recorded marginal cost includes labor
+        // accrued during manufacturing, not just material cost.
 
         // Deduct costs
         self.money -= total_cost;
@@ -479,6 +496,8 @@ impl Company {
         let cost = order.material_cost;
         self.manufacturing.orders.push(order);
         *self.engine_build_counts.entry(ep_id).or_insert(0) += 1;
+        // engine_cost_history is populated at engine-build completion so the
+        // recorded cost includes labor in addition to materials.
         self.money -= cost;
         self.notified_manufacturing_idle = false;
 
@@ -547,7 +566,9 @@ impl Company {
                                 let available = self.manufacturing.inventory.engine_count(source);
                                 if available >= stage.engine_count as usize {
                                     order.waiting_for_prerequisites = false;
-                                    // Consume engines from inventory, accumulating their build cost
+                                    // Consume engines from inventory, rolling
+                                    // their full build_cost (material + labor)
+                                    // into this stage order's material_cost.
                                     for _ in 0..stage.engine_count {
                                         if let Some(eng) = self.manufacturing.inventory.take_engine(source) {
                                             order.material_cost += eng.build_cost;
@@ -1124,11 +1145,23 @@ impl GameState {
         let mfg_events = self.player_company.manufacturing.advance_day();
         for me in mfg_events {
             let evt = match me {
-                crate::manufacturing::ManufacturingEvent::EngineBuilt { engine_name, .. } =>
-                    GameEvent::EngineBuilt { engine_name },
+                crate::manufacturing::ManufacturingEvent::EngineBuilt {
+                    engine_name, source, build_cost, ..
+                } => {
+                    // Only player-designed engines have a per-project history.
+                    if let EngineSource::PlayerDesign(ep_id) = source {
+                        self.player_company.engine_cost_history
+                            .entry(ep_id)
+                            .or_default()
+                            .push(build_cost);
+                    }
+                    GameEvent::EngineBuilt { engine_name }
+                }
                 crate::manufacturing::ManufacturingEvent::StageBuilt { stage_name, .. } =>
                     GameEvent::StageBuilt { stage_name },
-                crate::manufacturing::ManufacturingEvent::RocketIntegrated { rocket_name, design_id, build_cost, .. } => {
+                crate::manufacturing::ManufacturingEvent::RocketIntegrated {
+                    rocket_name, design_id, build_cost, ..
+                } => {
                     self.player_company.rocket_cost_history
                         .entry(design_id)
                         .or_default()
@@ -2931,5 +2964,164 @@ mod tests {
         // (Check by looking at group 3's engine)
         assert!(!design.stage_groups[3][0].engine.is_low_thrust(),
             "Lander engine should be high-thrust (chemical)");
+    }
+
+    /// Set up a game state with a Testing-status rocket project ready for build.
+    fn setup_buildable_rocket(gs: &mut GameState) -> RocketProjectId {
+        use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
+
+        let (design, engine_projects) = make_three_stage_design();
+        gs.player_company.engine_projects = engine_projects;
+
+        let mut rp = RocketProject::new(RocketProjectId(1), design);
+        rp.status = RocketDesignStatus::Testing { work_completed: 100.0 };
+        let rp_id = rp.project_id;
+        gs.player_company.rocket_projects.push(rp);
+        rp_id
+    }
+
+    /// Drive the manufacturing pipeline to completion by force-finishing all
+    /// orders each day and advancing the game until inventory holds a rocket.
+    /// Cap at 30 iterations to avoid infinite loops if something is wrong.
+    fn run_manufacturing_to_rocket(gs: &mut GameState) {
+        // Hire a manufacturing team so auto-assignment can pick orders up.
+        gs.player_company.hire_manufacturing_team("MfgA".into());
+        for _ in 0..30 {
+            // Force every active order to "almost complete" so the next day's
+            // work tick finishes them. We still tick advance_day so the full
+            // event-handling pipeline (try_unblock, history pushes) runs.
+            for order in &mut gs.player_company.manufacturing.orders {
+                if !order.waiting_for_prerequisites && order.teams_assigned > 0 {
+                    order.work_completed = order.work_required;
+                }
+            }
+            gs.advance_day();
+            if !gs.player_company.manufacturing.inventory.rockets.is_empty()
+                && gs.player_company.manufacturing.orders.is_empty()
+            {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn test_engine_build_accrues_labor_cost() {
+        // Direct manufacturing-layer test: an engine order with a team
+        // assigned should accrue per-day labor that exceeds material cost
+        // for a multi-day build.
+        use crate::manufacturing::{ManufacturingOrder, ManufacturingOrderId};
+        use crate::engine_project::PropellantPreset;
+        use crate::engine::EngineId;
+        use crate::engine_project::EngineSource;
+
+        let mut order = ManufacturingOrder::new_engine(
+            ManufacturingOrderId(1),
+            EngineSource::PlayerDesign(crate::engine_project::EngineProjectId(1)),
+            EngineId(1),
+            "Test".into(),
+            500.0,
+            6,
+            PropellantPreset::Kerolox,
+            0,
+            0,
+            Vec::new(),
+            Vec::new(),
+        );
+        let material = order.material_cost;
+        order.teams_assigned = 1;
+
+        // Tick 30 days of work — this is roughly one team-month = $300K of labor.
+        for _ in 0..30 {
+            order.apply_daily_work();
+        }
+        let expected_month_labor = crate::team::MANUFACTURING_MONTHLY_SALARY;
+        assert!((order.labor_cost - expected_month_labor).abs() < 1.0,
+            "labor after 30 days should be ≈ one month salary, got {}", order.labor_cost);
+        // Material cost should be unchanged by the work loop.
+        assert!((order.material_cost - material).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_rocket_cost_history_includes_full_cost_at_completion() {
+        let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+        setup_buildable_rocket(&mut gs);
+
+        gs.player_company.order_rocket_build(0).unwrap();
+        run_manufacturing_to_rocket(&mut gs);
+
+        let design_id = gs.player_company.rocket_projects[0].design.id;
+        let history = gs.player_company.rocket_cost_history.get(&design_id)
+            .expect("rocket cost history should be populated at integration");
+        assert_eq!(history.len(), 1);
+        // The recorded cost must exceed pure material total — labor must be
+        // present. The integration alone is many days × team-day salary.
+        let recorded = history[0];
+        assert!(recorded > 1_000_000.0,
+            "recorded rocket cost should reflect labor too; got {}", recorded);
+    }
+
+    #[test]
+    fn test_engine_cost_history_populated_on_completion() {
+        use crate::engine_project::EngineProjectId;
+        let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+        setup_buildable_rocket(&mut gs);
+
+        gs.player_company.order_rocket_build(0).unwrap();
+        run_manufacturing_to_rocket(&mut gs);
+
+        // Three-stage design: 4 EP1 engines (3 on S1 + 1 on S2), 1 EP2 (S3).
+        let ep1_history = gs.player_company.engine_cost_history
+            .get(&EngineProjectId(1)).expect("EP1 history populated");
+        assert_eq!(ep1_history.len(), 4);
+        let ep2_history = gs.player_company.engine_cost_history
+            .get(&EngineProjectId(2)).expect("EP2 history populated");
+        assert_eq!(ep2_history.len(), 1);
+
+        // Each entry should include labor — for our setup (single team,
+        // engine work_required = 108) labor is on the order of $1M, which
+        // dwarfs the materials for a 1500kg engine.
+        assert!(ep1_history.iter().all(|&c| c > 100_000.0),
+            "engine cost should include labor: history={:?}", ep1_history);
+    }
+
+    #[test]
+    fn test_contracted_engine_build_count_increments_at_order_time() {
+        use crate::engine_project::EngineProjectId;
+        let mut gs = GameState::new("Test".into(), 200_000_000.0, 42);
+
+        let date = gs.date;
+        let seed = gs.seed.clone();
+        let tp_idx = gs.player_company.third_party_catalog.iter()
+            .position(|e| e.available_from <= date)
+            .expect("at least one starter engine should be available");
+        gs.player_company.contract_third_party(tp_idx, date, &seed)
+            .expect("contracting should succeed");
+        let ce_id = gs.player_company.contracted_engines[0].id;
+
+        let (mut design, engine_projects) = make_three_stage_design();
+        gs.player_company.engine_projects = engine_projects;
+
+        let contracted_engine = gs.player_company.contracted_engines[0].design.clone();
+        for stage in design.stage_groups[0].iter_mut() {
+            stage.engine = contracted_engine.clone();
+        }
+        let stage1_count = design.stage_groups[0][0].engine_count;
+
+        use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
+        let mut rp = RocketProject::new(RocketProjectId(1), design);
+        rp.status = RocketDesignStatus::Testing { work_completed: 100.0 };
+        gs.player_company.rocket_projects.push(rp);
+
+        // Contracted engines are billed and counted at order time (instant
+        // delivery to inventory) — no manufacturing cycle needed.
+        gs.player_company.order_rocket_build(0).unwrap();
+
+        let count = *gs.player_company.contracted_engine_build_counts
+            .get(&ce_id).unwrap_or(&0);
+        assert_eq!(count, stage1_count);
+        // Player-designed engine history is populated only after the build
+        // pipeline runs — at this point it's still empty.
+        assert!(gs.player_company.engine_cost_history
+            .get(&EngineProjectId(2)).is_none());
     }
 }
