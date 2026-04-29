@@ -99,4 +99,79 @@ mod tests {
         let path = save_path("My Cool Company!");
         assert!(path.to_string_lossy().contains("My_Cool_Company_"));
     }
+
+    #[test]
+    fn test_save_and_load_with_spacecraft_payload() {
+        // Round-trip a Spacecraft (carrying a nested Spacecraft payload)
+        // through save/load and confirm the nested manifest survives.
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::flight::Payload;
+        use crate::game_state::Spacecraft;
+        use crate::propellant::Propellant;
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+        use crate::rocket_project::RocketProjectId;
+        use crate::stage::{Stage, StageId};
+
+        let path = temp_path();
+        let mut state = GameState::new("PayloadCorp".into(), 100.0, 7);
+
+        let make_design = |id: u64, name: &str| -> RocketDesign {
+            let engine = EngineDesign {
+                id: EngineId(id), name: "E".into(),
+                cycle: EngineCycle::GasGenerator,
+                thrust_n: 1.0, mass_kg: 1.0, isp_s: 100.0,
+                exit_pressure_pa: 1.0, needs_atmosphere: false,
+                propellant_mix: vec![PropellantFraction {
+                    propellant: Propellant::LOX, mass_fraction: 1.0,
+                }],
+            };
+            let stage = Stage {
+                id: StageId(id), name: "S".into(),
+                engine, engine_count: 1,
+                propellant_mass_kg: 100.0, structural_mass_kg: 10.0,
+                fairing: None,
+            };
+            RocketDesign {
+                id: RocketDesignId(id), name: name.into(),
+                stage_groups: vec![vec![stage]],
+            }
+        };
+        let csm_design = make_design(1, "CSM");
+        let lem_design = make_design(2, "LEM");
+        let lem_rocket = lem_design.instantiate(RocketId(2), "lunar_orbit", 0.0);
+        let csm_rocket = csm_design.instantiate(RocketId(1), "lunar_orbit", 0.0);
+
+        let lem_payload = Payload::Spacecraft {
+            deploy_at: "lunar_surface".into(),
+            design: lem_design,
+            rocket: lem_rocket,
+            nested_payloads: vec![],
+            rocket_project_id: RocketProjectId(2),
+            name: "LEM".into(),
+        };
+        state.spacecraft.push(Spacecraft {
+            id: crate::game_state::SpacecraftId(1),
+            name: "CSM".into(),
+            rocket: csm_rocket,
+            design: csm_design,
+            location: "lunar_orbit".into(),
+            rocket_project_id: RocketProjectId(1),
+            payloads: vec![lem_payload],
+        });
+
+        save_game(&state, &path).expect("save failed");
+        let loaded = load_game(&path).expect("load failed");
+
+        assert_eq!(loaded.spacecraft.len(), 1);
+        assert_eq!(loaded.spacecraft[0].payloads.len(), 1);
+        match &loaded.spacecraft[0].payloads[0] {
+            Payload::Spacecraft { name, deploy_at, .. } => {
+                assert_eq!(name, "LEM");
+                assert_eq!(deploy_at, "lunar_surface");
+            }
+            _ => panic!("nested payload variant lost in round-trip"),
+        }
+
+        let _ = fs::remove_file(&path);
+    }
 }

@@ -1138,6 +1138,24 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                     )));
                 }
             }
+
+            // Show payloads still aboard (e.g. CSM still carrying LEM).
+            if !sc.payloads.is_empty() {
+                let parts: Vec<String> = sc.payloads.iter().map(|p| match p {
+                    crate::flight::Payload::Spacecraft { name, deploy_at, .. } => {
+                        let dest = contract::destination_display_name(deploy_at);
+                        format!("{} → {}", name, dest)
+                    }
+                    crate::flight::Payload::ContractDelivery { payload_kg, .. } =>
+                        format!("contract ({:.0} kg)", payload_kg),
+                    crate::flight::Payload::TestMass { mass_kg } =>
+                        format!("test mass ({:.0} kg)", mass_kg),
+                }).collect();
+                lines.push(Line::from(Span::styled(
+                    format!("      Carrying: {}", parts.join(", ")),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
         }
     }
 
@@ -1885,77 +1903,129 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
-        InputMode::LaunchSelectContract { rocket_item_id, selected, .. } => {
+        InputMode::LaunchManifest {
+            rocket_item_id, contract_picks, spacecraft_picks,
+            spacecraft_item_ids, cursor, ..
+        } => {
             let contracts = &app.game.player_company.active_contracts;
-            let total_options = contracts.len() + 1;
+            let inventory = &app.game.player_company.manufacturing.inventory;
 
-            // Look up rocket design for ETA computation
-            let rocket_design = app.game.player_company.manufacturing.inventory.rockets.iter()
+            let carrier_name = inventory.rockets.iter()
                 .find(|r| r.item_id == *rocket_item_id)
-                .and_then(|r| {
-                    app.game.player_company.rocket_projects.iter()
+                .map(|r| r.rocket_name.clone())
+                .unwrap_or_else(|| "(unknown)".into());
+
+            // Compute manifest summary: destination + total payload mass.
+            let mut destination: Option<String> = None;
+            let mut destination_conflict = false;
+            for (i, p) in contract_picks.iter().enumerate() {
+                if !p { continue; }
+                let dest = &contracts[i].destination;
+                match &destination {
+                    None => destination = Some(dest.clone()),
+                    Some(d) if d == dest => {}
+                    Some(_) => destination_conflict = true,
+                }
+            }
+            let destination_for_summary = destination.clone()
+                .unwrap_or_else(|| "leo".to_string());
+
+            let mut payload_mass = 0.0;
+            for (i, p) in contract_picks.iter().enumerate() {
+                if *p { payload_mass += contracts[i].payload_kg; }
+            }
+            for (i, p) in spacecraft_picks.iter().enumerate() {
+                if !p { continue; }
+                let item_id = spacecraft_item_ids[i];
+                if let Some(r) = inventory.rockets.iter().find(|r| r.item_id == item_id) {
+                    if let Some(rp) = app.game.player_company.rocket_projects.iter()
                         .find(|rp| rp.project_id == r.rocket_project_id)
-                })
-                .map(|rp| &rp.design);
+                    {
+                        payload_mass += rp.design.total_mass_kg();
+                    }
+                }
+            }
 
             let mut lines = vec![
                 Line::from(""),
-                Line::from("  Select mission:"),
+                Line::from(format!("  Carrier: {}", carrier_name)),
+                Line::from(format!(
+                    "  Destination: {}{}",
+                    contract::destination_display_name(&destination_for_summary),
+                    if destination_conflict { "  ⚠ contracts disagree" } else { "" },
+                )),
+                Line::from(format!("  Payload mass: {}", format_mass(payload_mass))),
                 Line::from(""),
             ];
-            for (i, c) in contracts.iter().enumerate() {
-                let marker = if i == *selected { " ▶ " } else { "   " };
-                let dest_name = contract::destination_display_name(&c.destination);
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                };
 
-                // Compute transit time estimate
-                let transit_info = rocket_design.and_then(|design| {
-                    let mass = design.total_mass_kg() + c.payload_kg;
-                    let thrust = design.group_thrust_n(0);
-                    let path = DELTA_V_MAP.shortest_path("earth_surface", &c.destination, mass)?;
-                    let route = crate::flight::build_route(&path.0, mass, thrust, false);
-                    let days: u32 = route.iter().map(|l| l.total_days()).sum();
-                    Some((days, app.game.date.days_until(&c.deadline)))
-                });
+            let mut row = 0usize;
 
-                let mut spans = vec![Span::styled(
-                    format!("{}{} → {} ({:.0} kg, {})",
-                        marker, c.name, dest_name, c.payload_kg, format_money(c.payment)),
-                    style,
-                )];
-
-                if let Some((transit_days, days_to_deadline)) = transit_info {
-                    let eta_str = format!("  ~{}d", transit_days);
-                    if transit_days > days_to_deadline {
-                        spans.push(Span::styled(eta_str, Style::default().fg(Color::Red)));
-                        spans.push(Span::styled(" LATE!", Style::default().fg(Color::Red)));
+            if !contracts.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  ── Contracts ──",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                for (i, c) in contracts.iter().enumerate() {
+                    let mark = if *cursor == row { " ▶ " } else { "   " };
+                    let check = if contract_picks[i] { "[✓]" } else { "[ ]" };
+                    let dest_name = contract::destination_display_name(&c.destination);
+                    let style = if *cursor == row {
+                        Style::default().fg(Color::Yellow)
                     } else {
-                        spans.push(Span::styled(eta_str, Style::default().fg(Color::DarkGray)));
-                    }
+                        Style::default()
+                    };
+                    lines.push(Line::from(Span::styled(
+                        format!("{}{} {} → {} ({:.0} kg, {})",
+                            mark, check, c.name, dest_name, c.payload_kg, format_money(c.payment)),
+                        style,
+                    )));
+                    row += 1;
                 }
-
-                lines.push(Line::from(spans));
+                lines.push(Line::from(""));
             }
-            // Test launch option
-            let test_idx = contracts.len();
-            let marker = if test_idx == *selected { " ▶ " } else { "   " };
-            let style = if test_idx == *selected {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
+
+            if !spacecraft_item_ids.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  ── Spacecraft Payloads ──",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                for (i, item_id) in spacecraft_item_ids.iter().enumerate() {
+                    let mark = if *cursor == row { " ▶ " } else { "   " };
+                    let check = if spacecraft_picks[i] { "[✓]" } else { "[ ]" };
+                    let style = if *cursor == row {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default()
+                    };
+                    let (name, mass) = inventory.rockets.iter()
+                        .find(|r| r.item_id == *item_id)
+                        .and_then(|r| {
+                            app.game.player_company.rocket_projects.iter()
+                                .find(|rp| rp.project_id == r.rocket_project_id)
+                                .map(|rp| (r.rocket_name.clone(), rp.design.total_mass_kg()))
+                        })
+                        .unwrap_or_else(|| ("(unknown)".into(), 0.0));
+                    lines.push(Line::from(Span::styled(
+                        format!("{}{} {} ({})", mark, check, name, format_mass(mass)),
+                        style,
+                    )));
+                    row += 1;
+                }
+                lines.push(Line::from(""));
+            }
+
+            if contracts.is_empty() && spacecraft_item_ids.is_empty() {
+                lines.push(Line::from("  (no contracts or spacecraft available — Enter for test launch)"));
+            }
+            lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!("{}Test Launch (LEO, no payload)", marker),
-                style,
+                "  [Space] toggle  [Enter] launch  [Esc] cancel",
+                Style::default().fg(Color::DarkGray),
             )));
-            let _ = total_options; // suppress unused warning
+
             let block = Block::default()
                 .borders(Borders::ALL)
-                .title(" Launch Mission ")
+                .title(" Launch Manifest ")
                 .style(Style::default().fg(Color::Yellow));
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);

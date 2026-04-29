@@ -224,11 +224,23 @@ pub enum InputMode {
         state: Box<RocketDesignerState>,
         buffer: String,
     },
-    /// Selecting contract for a launch (or test launch).
-    LaunchSelectContract {
+    /// Building the launch manifest: pick contracts and/or inventory
+    /// rockets (as Spacecraft payloads) to fly together. Empty manifest =
+    /// test launch to LEO.
+    LaunchManifest {
         rocket_item_id: crate::manufacturing::InventoryItemId,
-        selected: usize,  // 0..N = contracts, N = test launch
-        persist: bool,    // whether to create a spacecraft on arrival
+        persist: bool,
+        /// Parallel to `player_company.active_contracts`.
+        contract_picks: Vec<bool>,
+        /// Parallel to inventory rockets *excluding* the carrier (the
+        /// rocket whose `rocket_item_id` matches the carrier's). The UI
+        /// rebuilds this list to skip the carrier so the player can't pick
+        /// it as its own payload.
+        spacecraft_picks: Vec<bool>,
+        /// Item ids for the rockets in `spacecraft_picks`, in order.
+        spacecraft_item_ids: Vec<crate::manufacturing::InventoryItemId>,
+        /// Row in the merged manifest (contracts then spacecraft).
+        cursor: usize,
     },
     /// Showing launch result.
     LaunchResult {
@@ -386,6 +398,111 @@ impl App {
         self.input_mode = InputMode::Normal;
         if let Some(s) = self.pre_modal_speed.take() {
             self.game.speed = s;
+        }
+    }
+
+    /// Assemble the launch manifest from the user's checks and submit it.
+    /// All picked contracts must share a destination; the destination of
+    /// the carrier flight is that shared destination (or LEO if the only
+    /// picks are spacecraft / nothing). Spacecraft payloads are taken from
+    /// inventory at submit time and packed with `deploy_at = destination`.
+    fn submit_manifest_launch(
+        &mut self,
+        rocket_item_id: crate::manufacturing::InventoryItemId,
+        persist: bool,
+        contract_picks: Vec<bool>,
+        spacecraft_picks: Vec<bool>,
+        spacecraft_item_ids: Vec<crate::manufacturing::InventoryItemId>,
+    ) {
+        use crate::flight::Payload;
+
+        // Determine destination from picked contracts (must agree). If no
+        // contracts picked, default to LEO.
+        let mut destination: Option<String> = None;
+        for (i, picked) in contract_picks.iter().enumerate() {
+            if !picked { continue; }
+            let dest = self.game.player_company.active_contracts[i].destination.clone();
+            match &destination {
+                None => destination = Some(dest),
+                Some(d) if d == &dest => {}
+                Some(d) => {
+                    self.status_message = Some(format!(
+                        "Picked contracts have different destinations ({} vs {}). Untoggle one.",
+                        d, dest,
+                    ));
+                    return;
+                }
+            }
+        }
+        let destination = destination.unwrap_or_else(|| "leo".to_string());
+
+        // Build contract-delivery payloads.
+        let mut payloads: Vec<Payload> = Vec::new();
+        for (i, picked) in contract_picks.iter().enumerate() {
+            if !picked { continue; }
+            let c = &self.game.player_company.active_contracts[i];
+            payloads.push(Payload::ContractDelivery {
+                contract_id: c.id,
+                payload_kg: c.payload_kg,
+            });
+        }
+
+        // Take picked inventory rockets and pack as Spacecraft payloads.
+        // We take in reverse so removing items from the inventory Vec
+        // doesn't shift earlier indices (we look up by item_id, not index,
+        // but extra-safe).
+        for (i, picked) in spacecraft_picks.iter().enumerate() {
+            if !picked { continue; }
+            let item_id = spacecraft_item_ids[i];
+            let inv_rocket = match self.game.player_company.manufacturing.inventory
+                .take_rocket(item_id)
+            {
+                Some(r) => r,
+                None => {
+                    self.status_message = Some("Spacecraft payload no longer in inventory.".into());
+                    return;
+                }
+            };
+            // Pull the project's design and instantiate a fresh Rocket
+            // with full propellant. Nested payload mass is 0 for now (no
+            // recursive picking in this UI).
+            let rp = self.game.player_company.rocket_projects.iter()
+                .find(|rp| rp.project_id == inv_rocket.rocket_project_id);
+            if rp.is_none() {
+                self.status_message = Some("Payload rocket project not found.".into());
+                return;
+            }
+            let design = rp.unwrap().design.clone();
+            let rocket_id = crate::rocket::RocketId(self.game.next_rocket_id);
+            self.game.next_rocket_id += 1;
+            let rocket = design.instantiate(rocket_id, "earth_surface", 0.0);
+            payloads.push(Payload::Spacecraft {
+                deploy_at: destination.clone(),
+                design,
+                rocket,
+                nested_payloads: vec![],
+                rocket_project_id: inv_rocket.rocket_project_id,
+                name: inv_rocket.rocket_name.clone(),
+            });
+        }
+
+        // No picks → test launch with zero mass.
+        if payloads.is_empty() {
+            payloads.push(Payload::TestMass { mass_kg: 0.0 });
+        }
+
+        match self.game.launch_rocket(rocket_item_id, &destination, payloads, persist) {
+            Some((_events, Some(record))) => {
+                self.input_mode = InputMode::LaunchResult { record };
+            }
+            Some((_events, None)) => {
+                self.status_message = Some("Flight departed — in transit".into());
+                self.exit_modal();
+            }
+            None => {
+                self.status_message = Some("Launch failed (rocket not found)".into());
+                self.exit_modal();
+            }
         }
     }
 
@@ -741,11 +858,21 @@ impl App {
                     return;
                 }
 
-                // Enter launch modal — pick contract or test launch
-                self.enter_modal(InputMode::LaunchSelectContract {
+                // Enter launch modal — assemble multi-payload manifest.
+                let contract_picks = vec![false; self.game.player_company.active_contracts.len()];
+                let spacecraft_item_ids: Vec<_> = self.game.player_company.manufacturing.inventory.rockets
+                    .iter()
+                    .filter(|r| r.item_id != item_id)
+                    .map(|r| r.item_id)
+                    .collect();
+                let spacecraft_picks = vec![false; spacecraft_item_ids.len()];
+                self.enter_modal(InputMode::LaunchManifest {
                     rocket_item_id: item_id,
-                    selected: 0,
                     persist,
+                    contract_picks,
+                    spacecraft_picks,
+                    spacecraft_item_ids,
+                    cursor: 0,
                 });
             }
             _ => {}
@@ -940,63 +1067,40 @@ impl App {
                     _ => unreachable!(),
                 }
             }
-            InputMode::LaunchSelectContract { rocket_item_id, selected, persist } => {
+            InputMode::LaunchManifest {
+                rocket_item_id, persist, contract_picks, spacecraft_picks,
+                spacecraft_item_ids, cursor,
+            } => {
                 let rocket_item_id = *rocket_item_id;
-                let selected = *selected;
                 let persist = *persist;
-                let num_contracts = self.game.player_company.active_contracts.len();
-                let total_options = num_contracts + 1; // +1 for test launch
+                let num_contracts = contract_picks.len();
+                let num_spacecraft = spacecraft_picks.len();
+                let total_rows = num_contracts + num_spacecraft;
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
                     KeyCode::Up => {
-                        if selected > 0 {
-                            if let InputMode::LaunchSelectContract { selected: s, .. } = &mut self.input_mode {
-                                *s -= 1;
-                            }
-                        }
+                        if *cursor > 0 { *cursor -= 1; }
                     }
                     KeyCode::Down => {
-                        if selected + 1 < total_options {
-                            if let InputMode::LaunchSelectContract { selected: s, .. } = &mut self.input_mode {
-                                *s += 1;
-                            }
+                        if *cursor + 1 < total_rows { *cursor += 1; }
+                    }
+                    KeyCode::Char(' ') => {
+                        if *cursor < num_contracts {
+                            contract_picks[*cursor] = !contract_picks[*cursor];
+                        } else if *cursor - num_contracts < num_spacecraft {
+                            let idx = *cursor - num_contracts;
+                            spacecraft_picks[idx] = !spacecraft_picks[idx];
                         }
                     }
                     KeyCode::Enter => {
-                        if selected < num_contracts {
-                            // Launch for this contract
-                            let contract = &self.game.player_company.active_contracts[selected];
-                            let destination = contract.destination.clone();
-                            let payload_kg = contract.payload_kg;
-                            if let Some((_events, record)) = self.game.launch_rocket(
-                                rocket_item_id, Some(selected), &destination, payload_kg, persist,
-                            ) {
-                                if let Some(record) = record {
-                                    self.input_mode = InputMode::LaunchResult { record };
-                                } else {
-                                    self.status_message = Some("Flight departed — in transit".into());
-                                    self.exit_modal();
-                                }
-                            } else {
-                                self.status_message = Some("Launch failed (rocket not found)".into());
-                                self.exit_modal();
-                            }
-                        } else {
-                            // Test launch to LEO with 0 payload
-                            if let Some((_events, record)) = self.game.launch_rocket(
-                                rocket_item_id, None, "leo", 0.0, persist,
-                            ) {
-                                if let Some(record) = record {
-                                    self.input_mode = InputMode::LaunchResult { record };
-                                } else {
-                                    self.status_message = Some("Flight departed — in transit".into());
-                                    self.exit_modal();
-                                }
-                            } else {
-                                self.status_message = Some("Launch failed (rocket not found)".into());
-                                self.exit_modal();
-                            }
-                        }
+                        // Snapshot picks (we'll need to mutate game state).
+                        let contract_picks = contract_picks.clone();
+                        let spacecraft_picks = spacecraft_picks.clone();
+                        let spacecraft_item_ids = spacecraft_item_ids.clone();
+                        self.submit_manifest_launch(
+                            rocket_item_id, persist,
+                            contract_picks, spacecraft_picks, spacecraft_item_ids,
+                        );
                     }
                     _ => {}
                 }
@@ -1032,7 +1136,11 @@ impl App {
                     KeyCode::Enter => {
                         let sc = &self.game.spacecraft[selected];
                         let remaining_dv = sc.remaining_delta_v();
-                        let rocket_mass = sc.rocket.payload_mass_kg + sc.design.total_mass_kg();
+                        // Use the live sum of carried payload masses rather than
+                        // the cached `payload_mass_kg`, which may be stale if
+                        // payloads were detached on a previous flight.
+                        let payload_mass: f64 = sc.payloads.iter().map(|p| p.mass_kg()).sum();
+                        let rocket_mass = payload_mass + sc.design.total_mass_kg();
                         let low_thrust = sc.rocket.is_current_stage_low_thrust(&sc.design);
                         let destinations = reachable_destinations_multistage(
                             &sc.location, remaining_dv, rocket_mass, low_thrust,

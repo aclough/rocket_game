@@ -11,7 +11,12 @@ use crate::rocket_project::RocketProjectId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FlightId(pub u64);
 
-/// What a flight is carrying. Expandable later for fuel, crew, probes, etc.
+/// What a flight (or parked spacecraft) is carrying.
+///
+/// `Spacecraft` is a nested rocket — Apollo CSM carrying the LEM, Saturn V
+/// lifting Skylab, Falcon 9 with a Dragon. On arrival at `deploy_at`, it's
+/// dropped off as an independent `Spacecraft` in the player's fleet,
+/// keeping any of its own `nested_payloads` with it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Payload {
     ContractDelivery {
@@ -21,13 +26,46 @@ pub enum Payload {
     TestMass {
         mass_kg: f64,
     },
+    Spacecraft {
+        /// Where this payload is dropped off. Phase 1: must equal the
+        /// flight's final destination. Phase 2 will allow mid-route
+        /// waypoints.
+        deploy_at: String,
+        design: RocketDesign,
+        rocket: Rocket,
+        /// What this nested rocket itself carries (CSM-carries-LEM).
+        #[serde(default)]
+        nested_payloads: Vec<Payload>,
+        /// Lineage for cost / launch-history reporting.
+        rocket_project_id: RocketProjectId,
+        /// Display name for the deployed spacecraft. Inherited from the
+        /// inventory rocket at launch time; future work may let the player
+        /// customise it per-launch.
+        name: String,
+    },
 }
 
 impl Payload {
+    /// Mass this payload contributes to its carrier. Recursive for
+    /// `Spacecraft` payloads — sums the nested rocket's current attached-
+    /// stage wet mass plus its own nested payloads.
     pub fn mass_kg(&self) -> f64 {
         match self {
             Payload::ContractDelivery { payload_kg, .. } => *payload_kg,
             Payload::TestMass { mass_kg } => *mass_kg,
+            Payload::Spacecraft { design, rocket, nested_payloads, .. } => {
+                let mut spacecraft_mass = 0.0;
+                for (gi, group) in design.stage_groups.iter().enumerate() {
+                    for (si, stage) in group.iter().enumerate() {
+                        if let Some(state) = rocket.stage_states.get(gi).and_then(|g| g.get(si)) {
+                            if state.attached {
+                                spacecraft_mass += stage.dry_mass_kg() + state.propellant_remaining_kg;
+                            }
+                        }
+                    }
+                }
+                spacecraft_mass + nested_payloads.iter().map(|p| p.mass_kg()).sum::<f64>()
+            }
         }
     }
 }
@@ -241,6 +279,70 @@ pub fn build_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a tiny single-stage RocketDesign + matching Rocket so we can
+    /// assemble Payload::Spacecraft test instances without dragging in the
+    /// full engine/stage helpers.
+    fn tiny_spacecraft(id: u64, prop: f64, dry: f64) -> (RocketDesign, Rocket) {
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::propellant::Propellant;
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+        use crate::stage::{Stage, StageId};
+        let engine = EngineDesign {
+            id: EngineId(id), name: "TestEng".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 100_000.0, mass_kg: 100.0, isp_s: 300.0,
+            exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
+            ],
+        };
+        let stage = Stage {
+            id: StageId(id), name: format!("S{}", id),
+            engine, engine_count: 1,
+            propellant_mass_kg: prop, structural_mass_kg: dry,
+            fairing: None,
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(id), name: format!("Tiny{}", id),
+            stage_groups: vec![vec![stage]],
+        };
+        // Payload mass on the inner rocket = 0 here; tests using nested
+        // payloads sum manually.
+        let rocket = design.instantiate(RocketId(id), "earth_surface", 0.0);
+        (design, rocket)
+    }
+
+    #[test]
+    fn test_payload_mass_recursive() {
+        // Outer Spacecraft (LEM-class): wet mass ~700kg, no nested payloads.
+        let (lem_design, lem_rocket) = tiny_spacecraft(1, 500.0, 100.0);
+        // engine = 100 kg, dry = 100 + 100 = 200; wet = 700.
+        let lem_payload = Payload::Spacecraft {
+            deploy_at: "lunar_surface".into(),
+            design: lem_design.clone(),
+            rocket: lem_rocket,
+            nested_payloads: vec![],
+            rocket_project_id: RocketProjectId(1),
+            name: "LEM".into(),
+        };
+        assert!((lem_payload.mass_kg() - 700.0).abs() < 0.01);
+
+        // Outer Spacecraft (CSM-class) carrying the LEM as a nested payload.
+        let (csm_design, csm_rocket) = tiny_spacecraft(2, 1000.0, 200.0);
+        // engine = 100, dry = 100 + 200 = 300; wet = 1300.
+        let csm_payload = Payload::Spacecraft {
+            deploy_at: "lunar_orbit".into(),
+            design: csm_design.clone(),
+            rocket: csm_rocket,
+            nested_payloads: vec![lem_payload],
+            rocket_project_id: RocketProjectId(2),
+            name: "CSM".into(),
+        };
+        // CSM (1300) + LEM (700) = 2000.
+        assert!((csm_payload.mass_kg() - 2000.0).abs() < 0.01);
+    }
 
     #[test]
     fn test_build_route_leo() {

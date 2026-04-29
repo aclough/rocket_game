@@ -80,6 +80,11 @@ pub struct Spacecraft {
     pub location: String,
     #[serde(default)]
     pub rocket_project_id: RocketProjectId,
+    /// Payloads still aboard (e.g. CSM in lunar orbit still carrying LEM).
+    /// Detached when the player flies the spacecraft and the payload's
+    /// `deploy_at` matches a stop on the new mission.
+    #[serde(default)]
+    pub payloads: Vec<crate::flight::Payload>,
 }
 
 impl Spacecraft {
@@ -1398,19 +1403,24 @@ impl GameState {
         Some(evt)
     }
 
-    /// Launch a rocket for a contract (or test launch if contract_index is None).
-    /// `rocket_item_id` identifies the InventoryRocket to consume.
-    /// `contract_index` is the index into player_company.active_contracts (None for test launch).
-    /// Returns the events generated. On catastrophic failure, also returns a LaunchRecord.
-    /// On success/partial success, the rocket enters transit and resolves on arrival.
+    /// Launch a rocket carrying a manifest of payloads.
+    /// `rocket_item_id` identifies the InventoryRocket to use as the carrier.
+    /// `payloads` is the full manifest — any combination of contract
+    /// deliveries, test masses, and nested Spacecraft. The caller is
+    /// responsible for already having taken any nested-rocket inventory
+    /// items out of inventory and packed them into Spacecraft payloads.
+    /// Returns events; on catastrophic failure, also a LaunchRecord. On
+    /// success/partial success, the rocket enters transit and resolves on
+    /// arrival.
     pub fn launch_rocket(
         &mut self,
         rocket_item_id: crate::manufacturing::InventoryItemId,
-        contract_index: Option<usize>,
         destination: &str,
-        payload_kg: f64,
+        payloads: Vec<Payload>,
         persist: bool,
     ) -> Option<(Vec<GameEvent>, Option<LaunchRecord>)> {
+        let total_payload_kg: f64 = payloads.iter().map(|p| p.mass_kg()).sum();
+
         // Take the rocket from inventory
         let inv_rocket = self.player_company.manufacturing.inventory.take_rocket(rocket_item_id)?;
 
@@ -1425,7 +1435,7 @@ impl GameState {
         let sim = launch::simulate_launch(
             &rp.design,
             destination,
-            payload_kg,
+            total_payload_kg,
             &self.player_company.engine_projects,
             rocket_flaws,
             &self.player_company.contracted_engines,
@@ -1488,16 +1498,30 @@ impl GameState {
         // Update launch tracking
         self.player_company.last_launch_date = Some(self.date);
 
-        // Catastrophic failure at launch — resolve immediately
+        // Catastrophic failure at launch — resolve immediately. The carrier
+        // and all nested Spacecraft payloads are destroyed (the `payloads`
+        // Vec is dropped here — by user spec, nothing returns to inventory).
+        // All on-manifest contracts are forfeited.
         if matches!(sim.outcome, LaunchOutcome::Failure { .. }) {
-            let contract_id = contract_index.and_then(|ci| {
-                self.player_company.active_contracts.get(ci).map(|c| c.id)
-            });
+            let mut contract_id_for_record: Option<crate::contract::ContractId> = None;
+            let manifest_contract_ids: Vec<crate::contract::ContractId> = payloads.iter()
+                .filter_map(|p| match p {
+                    Payload::ContractDelivery { contract_id, .. } => Some(*contract_id),
+                    _ => None,
+                })
+                .collect();
+            if let Some(first) = manifest_contract_ids.first() {
+                contract_id_for_record = Some(*first);
+            }
 
             self.player_company.reputation.on_launch_failure();
 
-            if let Some(ci) = contract_index {
-                self.player_company.active_contracts.remove(ci);
+            for cid in &manifest_contract_ids {
+                if let Some(ci) = self.player_company.active_contracts.iter()
+                    .position(|c| c.id == *cid)
+                {
+                    self.player_company.active_contracts.remove(ci);
+                }
             }
 
             let reason = match &sim.outcome {
@@ -1514,9 +1538,9 @@ impl GameState {
             let record = LaunchRecord {
                 launch_date: self.date,
                 rocket_name: inv_rocket.rocket_name,
-                contract_id,
+                contract_id: contract_id_for_record,
                 destination: destination.to_string(),
-                payload_kg,
+                payload_kg: total_payload_kg,
                 outcome: sim.outcome,
                 flaws_activated: sim.flaws_activated,
             };
@@ -1526,24 +1550,16 @@ impl GameState {
         }
 
         // Success or partial failure — create a flight in transit
-        let rocket_mass = sim.degraded_design.total_mass_kg() + payload_kg;
+        let rocket_mass = sim.degraded_design.total_mass_kg() + total_payload_kg;
         let first_group_thrust = sim.degraded_design.group_thrust_n(0);
 
         let path = crate::location::DELTA_V_MAP
             .shortest_path_for_rocket(
-                "earth_surface", destination, &sim.degraded_design, payload_kg,
+                "earth_surface", destination, &sim.degraded_design, total_payload_kg,
             );
         let route = match path {
             Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, false),
             None => vec![],
-        };
-
-        // Build payloads
-        let payloads = if let Some(ci) = contract_index {
-            let contract_id = self.player_company.active_contracts[ci].id;
-            vec![Payload::ContractDelivery { contract_id, payload_kg }]
-        } else {
-            vec![Payload::TestMass { mass_kg: payload_kg }]
         };
 
         let flight_id = FlightId(self.next_flight_id);
@@ -1553,7 +1569,7 @@ impl GameState {
         let rocket_instance_id = RocketId(self.next_rocket_id);
         self.next_rocket_id += 1;
         let rocket_instance = sim.degraded_design.instantiate(
-            rocket_instance_id, "earth_surface", payload_kg,
+            rocket_instance_id, "earth_surface", total_payload_kg,
         );
 
         let leg_days = route.first().map(|l| l.total_days()).unwrap_or(0);
@@ -2125,16 +2141,19 @@ impl GameState {
             self.player_company.reputation.on_launch_success();
         }
 
-        // Process each payload
+        // Process each payload. Spacecraft payloads marked for this
+        // destination are detached and pushed into the fleet; others
+        // (contracts/test masses) are completed/discarded as before.
         let mut contract_id_for_record = None;
-        for payload in &flight.payloads {
+        let mut deployed_spacecraft: Vec<Payload> = Vec::new();
+        let mut remaining_payloads: Vec<Payload> = Vec::new();
+        for payload in flight.payloads {
             match payload {
                 Payload::ContractDelivery { contract_id, .. } => {
-                    contract_id_for_record = Some(*contract_id);
+                    contract_id_for_record = Some(contract_id);
 
-                    // Find and remove the contract, pay the player
                     if let Some(ci) = self.player_company.active_contracts.iter()
-                        .position(|c| c.id == *contract_id)
+                        .position(|c| c.id == contract_id)
                     {
                         let contract = &self.player_company.active_contracts[ci];
                         let payment = if is_partial {
@@ -2157,7 +2176,16 @@ impl GameState {
                     }
                 }
                 Payload::TestMass { .. } => {
-                    // No payment for test launches
+                    // No payment for test launches.
+                }
+                Payload::Spacecraft { ref deploy_at, .. } if deploy_at == &destination => {
+                    deployed_spacecraft.push(payload);
+                }
+                other => {
+                    // Spacecraft payload bound for some other waypoint —
+                    // not implemented yet (Phase 2). For now keep it on the
+                    // arriving rocket as if the carrier were continuing.
+                    remaining_payloads.push(other);
                 }
             }
         }
@@ -2193,7 +2221,7 @@ impl GameState {
             launch_date: flight.launch_date,
             rocket_name: rocket_name.clone(),
             contract_id: contract_id_for_record,
-            destination,
+            destination: destination.clone(),
             payload_kg: total_payload_kg,
             outcome,
             flaws_activated: flight.flaws_activated,
@@ -2210,25 +2238,60 @@ impl GameState {
                 design: design_clone,
                 location: dest_for_spacecraft,
                 rocket_project_id: flight.rocket_project_id,
+                payloads: remaining_payloads,
             });
+        }
+
+        // Detach Spacecraft payloads at this destination into the fleet.
+        for payload in deployed_spacecraft {
+            if let Payload::Spacecraft {
+                design, rocket, nested_payloads, rocket_project_id, name, ..
+            } = payload {
+                let sc_id = SpacecraftId(self.next_rocket_id);
+                self.next_rocket_id += 1;
+                let evt = GameEvent::SpacecraftDeployed {
+                    spacecraft_name: name.clone(),
+                    location: dest_display.to_string(),
+                };
+                events.push(evt);
+                self.spacecraft.push(Spacecraft {
+                    id: sc_id,
+                    name,
+                    rocket,
+                    design,
+                    location: destination.clone(),
+                    rocket_project_id,
+                    payloads: nested_payloads,
+                });
+            }
         }
 
         events
     }
 
-    /// Send a spacecraft on a new flight to a destination.
+    /// Send a spacecraft on a new flight to a destination. Any payloads
+    /// the spacecraft is still carrying ride along; those whose `deploy_at`
+    /// matches the destination will be detached on arrival (via the regular
+    /// arrival path).
     pub fn fly_spacecraft(&mut self, spacecraft_index: usize, destination: &str) {
         if spacecraft_index >= self.spacecraft.len() {
             return;
         }
-        let sc = self.spacecraft.remove(spacecraft_index);
-        let rocket_mass = sc.design.total_mass_kg() + sc.rocket.payload_mass_kg;
+        let mut sc = self.spacecraft.remove(spacecraft_index);
+        // Recompute payload mass from current carried payloads (live value
+        // may differ from rocket.payload_mass_kg if payloads were detached
+        // earlier). Sync the rocket's cached payload mass too so dv math
+        // stays correct.
+        let payload_mass: f64 = sc.payloads.iter().map(|p| p.mass_kg()).sum();
+        sc.rocket.payload_mass_kg = payload_mass;
+
+        let rocket_mass = sc.design.total_mass_kg() + payload_mass;
         let first_group_thrust = sc.design.group_thrust_n(0);
         let low_thrust = sc.rocket.is_current_stage_low_thrust(&sc.design);
 
         let path = crate::location::DELTA_V_MAP
             .shortest_path_for_rocket(
-                &sc.location, destination, &sc.design, sc.rocket.payload_mass_kg,
+                &sc.location, destination, &sc.design, payload_mass,
             );
         let route = match path {
             Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, low_thrust),
@@ -2255,7 +2318,7 @@ impl GameState {
             rocket_project_id: crate::rocket_project::RocketProjectId(0), // no project for spacecraft flights
             design: sc.design,
             rocket: sc.rocket,
-            payloads: vec![],
+            payloads: sc.payloads,
             current_location: sc.location,
             route,
             current_leg: 0,
@@ -2604,6 +2667,7 @@ mod tests {
             design: sim.degraded_design,
             location: "leo".into(),
             rocket_project_id: RocketProjectId(1),
+            payloads: Vec::new(),
         };
         gs.spacecraft.push(sc);
 
@@ -3131,5 +3195,167 @@ mod tests {
         // pipeline runs — at this point it's still empty.
         assert!(gs.player_company.engine_cost_history
             .get(&EngineProjectId(2)).is_none());
+    }
+
+    /// Build a tiny single-stage RocketDesign suitable for use as a
+    /// Payload::Spacecraft in arrival/deployment tests.
+    fn tiny_payload_spacecraft(
+        id: u64, name: &str, deploy_at: &str, nested: Vec<Payload>,
+    ) -> Payload {
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::propellant::Propellant;
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+        use crate::stage::{Stage, StageId};
+        let engine = EngineDesign {
+            id: EngineId(id), name: "TinyEng".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 100_000.0, mass_kg: 100.0, isp_s: 300.0,
+            exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
+            ],
+        };
+        let stage = Stage {
+            id: StageId(id), name: format!("S{}", id),
+            engine, engine_count: 1,
+            propellant_mass_kg: 500.0, structural_mass_kg: 100.0,
+            fairing: None,
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(id), name: name.into(),
+            stage_groups: vec![vec![stage]],
+        };
+        let nested_mass: f64 = nested.iter().map(|p| p.mass_kg()).sum();
+        let rocket = design.instantiate(RocketId(id), "earth_surface", nested_mass);
+        Payload::Spacecraft {
+            deploy_at: deploy_at.into(),
+            design,
+            rocket,
+            nested_payloads: nested,
+            rocket_project_id: RocketProjectId(id),
+            name: name.into(),
+        }
+    }
+
+    /// Assemble a minimal Flight with the given payloads and run the
+    /// arrival path. Used by deployment tests below to skip the full
+    /// launch+manufacturing pipeline.
+    fn arrive_test_flight(
+        gs: &mut GameState, destination: &str, payloads: Vec<Payload>,
+    ) -> Vec<crate::event::GameEvent> {
+        use crate::flight::{Flight, FlightId, FlightLeg, FlightStatus};
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+
+        // Empty carrier design — arrival logic doesn't care about its dv.
+        let design = RocketDesign {
+            id: RocketDesignId(999), name: "CarrierStub".into(),
+            stage_groups: vec![],
+        };
+        let rocket = design.instantiate(RocketId(999), "earth_surface", 0.0);
+        let flight = Flight {
+            id: FlightId(1),
+            rocket_name: "Carrier".into(),
+            rocket_project_id: RocketProjectId(999),
+            design,
+            rocket,
+            payloads,
+            current_location: destination.into(),
+            route: vec![FlightLeg {
+                from: "earth_surface".into(),
+                to: destination.into(),
+                delta_v_cost: 0.0, burn_days: 0, coast_days: 0,
+                ambient_pressure_pa: 0.0,
+            }],
+            current_leg: 0,
+            leg_days_remaining: 0,
+            status: FlightStatus::Arrived,
+            flaws_activated: vec![],
+            launch_date: gs.date,
+            persist: false,
+            launch_partial: false,
+            flaw_rolled_groups: std::collections::HashSet::new(),
+        };
+        gs.resolve_arrived_flight(flight)
+    }
+
+    #[test]
+    fn test_spacecraft_payload_deployed_on_arrival() {
+        // Skylab-style: Saturn V drops a station as a Spacecraft at LEO.
+        let mut gs = GameState::new("Test".into(), 1_000_000.0, 42);
+        let skylab = tiny_payload_spacecraft(1, "Skylab", "leo", vec![]);
+        let events = arrive_test_flight(&mut gs, "leo", vec![skylab]);
+        assert_eq!(gs.spacecraft.len(), 1, "Skylab should be in fleet");
+        let sc = &gs.spacecraft[0];
+        assert_eq!(sc.name, "Skylab");
+        assert_eq!(sc.location, "leo");
+        assert!(sc.payloads.is_empty());
+        assert!(events.iter().any(|e| matches!(
+            e, crate::event::GameEvent::SpacecraftDeployed { spacecraft_name, .. }
+                if spacecraft_name == "Skylab"
+        )));
+    }
+
+    #[test]
+    fn test_csm_carrying_lem_keeps_lem_after_deployment() {
+        // Apollo-style: CSM is deployed at lunar_orbit carrying LEM as its
+        // own payload. The LEM stays *with* CSM (in CSM.payloads), not
+        // separately in the fleet, until CSM later flies somewhere.
+        let mut gs = GameState::new("Test".into(), 1_000_000.0, 42);
+        let lem = tiny_payload_spacecraft(2, "LEM", "lunar_surface", vec![]);
+        let csm = tiny_payload_spacecraft(1, "CSM", "lunar_orbit", vec![lem]);
+        arrive_test_flight(&mut gs, "lunar_orbit", vec![csm]);
+
+        assert_eq!(gs.spacecraft.len(), 1, "only CSM in fleet, LEM is its payload");
+        let csm_sc = &gs.spacecraft[0];
+        assert_eq!(csm_sc.name, "CSM");
+        assert_eq!(csm_sc.location, "lunar_orbit");
+        assert_eq!(csm_sc.payloads.len(), 1);
+        match &csm_sc.payloads[0] {
+            Payload::Spacecraft { name, deploy_at, .. } => {
+                assert_eq!(name, "LEM");
+                assert_eq!(deploy_at, "lunar_surface");
+            }
+            _ => panic!("expected nested Spacecraft payload"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_payloads_at_same_destination() {
+        // Rideshare: a launch carrying two contract deliveries to LEO. The
+        // arrival handler must pay both contracts.
+        use crate::contract::{Contract, ContractId, ContractStatus};
+        use crate::calendar::GameDate;
+        let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+        let starting_money = gs.player_company.money;
+        let contract_a = Contract {
+            id: ContractId(1), name: "A".into(),
+            destination: "leo".into(), payload_kg: 100.0, payment: 1_000_000.0,
+            deadline: GameDate::new(2099, 1, 1),
+            status: ContractStatus::Accepted,
+            market_id: Default::default(),
+        };
+        let contract_b = Contract {
+            id: ContractId(2), name: "B".into(),
+            destination: "leo".into(), payload_kg: 200.0, payment: 2_000_000.0,
+            deadline: GameDate::new(2099, 1, 1),
+            status: ContractStatus::Accepted,
+            market_id: Default::default(),
+        };
+        gs.player_company.active_contracts.push(contract_a);
+        gs.player_company.active_contracts.push(contract_b);
+
+        let payloads = vec![
+            Payload::ContractDelivery { contract_id: ContractId(1), payload_kg: 100.0 },
+            Payload::ContractDelivery { contract_id: ContractId(2), payload_kg: 200.0 },
+        ];
+        arrive_test_flight(&mut gs, "leo", payloads);
+
+        assert_eq!(gs.player_company.active_contracts.len(), 0,
+            "both contracts should be completed and removed");
+        // Money increased by 3M (1M + 2M from the two contracts).
+        let earned = gs.player_company.money - starting_money;
+        assert!((earned - 3_000_000.0).abs() < 1.0,
+            "expected 3M paid out, got {}", earned);
     }
 }

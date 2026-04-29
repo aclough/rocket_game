@@ -45,6 +45,7 @@ pub enum GameEvent {
     // Phase 5: Flight events
     FlightDeparted { rocket_name: String, destination: String },
     FlightArrived { rocket_name: String, destination: String },
+    SpacecraftDeployed { spacecraft_name: String, location: String },
     SpacecraftStranded { rocket_name: String, location: String },
     MidFlightFlawActivated { rocket_name: String, flaw_description: String, consequence: String },
     /// Improvement discovered during testing.
@@ -127,6 +128,8 @@ impl fmt::Display for GameEvent {
                 write!(f, "Flight departed: {} → {}", rocket_name, destination),
             GameEvent::FlightArrived { rocket_name, destination } =>
                 write!(f, "Flight arrived: {} at {}", rocket_name, destination),
+            GameEvent::SpacecraftDeployed { spacecraft_name, location } =>
+                write!(f, "Deployed: {} at {}", spacecraft_name, location),
             GameEvent::SpacecraftStranded { rocket_name, location } =>
                 write!(f, "Spacecraft stranded: {} at {}", rocket_name, location),
             GameEvent::MidFlightFlawActivated { rocket_name, flaw_description, consequence } =>
@@ -189,6 +192,7 @@ impl GameEvent {
             | GameEvent::EngineBuildOrdered { .. }
             | GameEvent::FlightDeparted { .. }
             | GameEvent::FlightArrived { .. }
+            | GameEvent::SpacecraftDeployed { .. }
             | GameEvent::SpacecraftStranded { .. }
             | GameEvent::MidFlightFlawActivated { .. }
             | GameEvent::ImprovementDiscovered { .. }
