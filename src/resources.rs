@@ -245,6 +245,21 @@ pub fn rocket_integration_cost() -> f64 {
 }
 
 /// Format a dollar amount for display (e.g. "$1.5M", "$300K").
+/// Format a money amount with comma thousands separators, e.g. $1,234,567.
+/// Used where exact amounts matter more than compactness (event log).
+pub fn format_money_exact(amount: f64) -> String {
+    let n = amount.round() as i64;
+    let s = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-${}", out) } else { format!("${}", out) }
+}
+
 pub fn format_money(amount: f64) -> String {
     if amount >= 1_000_000_000.0 {
         format!("${:.1}B", amount / 1_000_000_000.0)

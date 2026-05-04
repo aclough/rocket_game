@@ -121,7 +121,8 @@ impl fmt::Display for GameEvent {
             GameEvent::LaunchFailure { rocket_name, reason } =>
                 write!(f, "Launch failed: {} ({})", rocket_name, reason),
             GameEvent::PaymentReceived { amount, contract_name } =>
-                write!(f, "Payment received: ${:.0} for {}", amount, contract_name),
+                write!(f, "Payment received: {} for {}",
+                    crate::resources::format_money_exact(*amount), contract_name),
             GameEvent::EngineBuildOrdered { engine_name } =>
                 write!(f, "Ordered engine build: {}", engine_name),
             GameEvent::FlightDeparted { rocket_name, destination } =>
