@@ -1,5 +1,6 @@
 [] Make electrical power via batteries, solar panels, etc.
     [] Also electric drives like Ion and Hall effect.
+[] Add crew support and modules
 [] Propellant boiloff
 [] Have player choose price for markets
 [] Add competitor company, DinoSoar
