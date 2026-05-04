@@ -1143,8 +1143,11 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
             if !sc.payloads.is_empty() {
                 let parts: Vec<String> = sc.payloads.iter().map(|p| match p {
                     crate::flight::Payload::Spacecraft { name, deploy_at, .. } => {
-                        let dest = contract::destination_display_name(deploy_at);
-                        format!("{} → {}", name, dest)
+                        match deploy_at {
+                            Some(loc) => format!(
+                                "{} → {}", name, contract::destination_display_name(loc)),
+                            None => format!("{} (docked)", name),
+                        }
                     }
                     crate::flight::Payload::ContractDelivery { payload_kg, .. } =>
                         format!("contract ({:.0} kg)", payload_kg),
@@ -1188,7 +1191,7 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(" Launches [L]aunch [U]ndisposable [F]ly [P]lan ");
+        .title(" Launches [L]aunch [K]eep [F]ly [D]ock [U]ndock [P]lan ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -2313,6 +2316,124 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(" Fly Spacecraft ")
+                .style(Style::default().fg(Color::Cyan));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::DockSelectSmall { selected } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from("  Pick spacecraft to dock onto another:"),
+                Line::from(""),
+            ];
+            for (i, sc) in app.game.spacecraft.iter().enumerate() {
+                let marker = if i == *selected { " ▶ " } else { "   " };
+                let style = if i == *selected {
+                    Style::default().fg(Color::Yellow)
+                } else { Style::default() };
+                let loc = contract::destination_display_name(&sc.location);
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}  @ {}", marker, sc.name, loc),
+                    style,
+                )));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [Enter] Select  [Esc] Cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+            let block = Block::default().borders(Borders::ALL)
+                .title(" Dock — Pick Spacecraft ")
+                .style(Style::default().fg(Color::Cyan));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::DockSelectLarge { small_idx, candidates, selected } => {
+            let small_name = &app.game.spacecraft[*small_idx].name;
+            let small_loc = contract::destination_display_name(
+                &app.game.spacecraft[*small_idx].location);
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(format!("  Dock {} onto … (at {})", small_name, small_loc)),
+                Line::from(""),
+            ];
+            for (i, &cand) in candidates.iter().enumerate() {
+                let marker = if i == *selected { " ▶ " } else { "   " };
+                let style = if i == *selected {
+                    Style::default().fg(Color::Yellow)
+                } else { Style::default() };
+                let sc = &app.game.spacecraft[cand];
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}", marker, sc.name),
+                    style,
+                )));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [Enter] Confirm  [Esc] Cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+            let block = Block::default().borders(Borders::ALL)
+                .title(" Dock — Pick Carrier ")
+                .style(Style::default().fg(Color::Cyan));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::UndockSelectCarrier { candidates, selected } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from("  Pick carrier to undock from:"),
+                Line::from(""),
+            ];
+            for (i, &cand) in candidates.iter().enumerate() {
+                let marker = if i == *selected { " ▶ " } else { "   " };
+                let style = if i == *selected {
+                    Style::default().fg(Color::Yellow)
+                } else { Style::default() };
+                let sc = &app.game.spacecraft[cand];
+                let loc = contract::destination_display_name(&sc.location);
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}  @ {}", marker, sc.name, loc),
+                    style,
+                )));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [Enter] Select  [Esc] Cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+            let block = Block::default().borders(Borders::ALL)
+                .title(" Undock — Pick Carrier ")
+                .style(Style::default().fg(Color::Cyan));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::UndockSelectPayload { carrier_idx, payload_indices, selected } => {
+            let carrier = &app.game.spacecraft[*carrier_idx];
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(format!("  Undock from {}:", carrier.name)),
+                Line::from(""),
+            ];
+            for (i, &pi) in payload_indices.iter().enumerate() {
+                let marker = if i == *selected { " ▶ " } else { "   " };
+                let style = if i == *selected {
+                    Style::default().fg(Color::Yellow)
+                } else { Style::default() };
+                if let crate::flight::Payload::Spacecraft { name, .. } = &carrier.payloads[pi] {
+                    lines.push(Line::from(Span::styled(
+                        format!("{}{}", marker, name),
+                        style,
+                    )));
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [Enter] Confirm  [Esc] Cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+            let block = Block::default().borders(Borders::ALL)
+                .title(" Undock — Pick Payload ")
                 .style(Style::default().fg(Color::Cyan));
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);

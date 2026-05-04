@@ -2178,7 +2178,7 @@ impl GameState {
                 Payload::TestMass { .. } => {
                     // No payment for test launches.
                 }
-                Payload::Spacecraft { ref deploy_at, .. } if deploy_at == &destination => {
+                Payload::Spacecraft { deploy_at: Some(ref d), .. } if *d == destination => {
                     deployed_spacecraft.push(payload);
                 }
                 other => {
@@ -2338,6 +2338,85 @@ impl GameState {
             destination: dest_display.to_string(),
         };
         self.event_log.push(self.date, evt);
+    }
+
+    /// Dock spacecraft `small_idx` onto `large_idx`. Both must be at the
+    /// same location and refer to different spacecraft. The smaller is
+    /// removed from `game.spacecraft` and re-wrapped as a
+    /// `Payload::Spacecraft` (with `deploy_at = None`, meaning manual
+    /// undock only) on the larger. Returns true on success.
+    pub fn dock_spacecraft(&mut self, small_idx: usize, large_idx: usize) -> bool {
+        if small_idx == large_idx { return false; }
+        let n = self.spacecraft.len();
+        if small_idx >= n || large_idx >= n { return false; }
+        if self.spacecraft[small_idx].location != self.spacecraft[large_idx].location {
+            return false;
+        }
+        // Remove the smaller first; if its index was below the larger's,
+        // the larger's index has shifted down by one.
+        let small = self.spacecraft.remove(small_idx);
+        let adjusted_large = if small_idx < large_idx { large_idx - 1 } else { large_idx };
+        let location = small.location.clone();
+        let small_name = small.name.clone();
+        let large_name = self.spacecraft[adjusted_large].name.clone();
+
+        let payload = crate::flight::Payload::Spacecraft {
+            deploy_at: None,
+            design: small.design,
+            rocket: small.rocket,
+            nested_payloads: small.payloads,
+            rocket_project_id: small.rocket_project_id,
+            name: small.name,
+        };
+        self.spacecraft[adjusted_large].payloads.push(payload);
+
+        let evt = GameEvent::SpacecraftDocked {
+            small: small_name,
+            large: large_name,
+            location: crate::contract::destination_display_name(&location).to_string(),
+        };
+        self.event_log.push(self.date, evt);
+        true
+    }
+
+    /// Undock the `payload_idx`-th payload of `carrier_idx` and add it to
+    /// the fleet at the carrier's location. The payload must be a
+    /// `Payload::Spacecraft`. Returns true on success.
+    pub fn undock_payload(&mut self, carrier_idx: usize, payload_idx: usize) -> bool {
+        if carrier_idx >= self.spacecraft.len() { return false; }
+        if payload_idx >= self.spacecraft[carrier_idx].payloads.len() { return false; }
+        let is_spacecraft = matches!(
+            self.spacecraft[carrier_idx].payloads[payload_idx],
+            crate::flight::Payload::Spacecraft { .. },
+        );
+        if !is_spacecraft { return false; }
+
+        let location = self.spacecraft[carrier_idx].location.clone();
+        let carrier_name = self.spacecraft[carrier_idx].name.clone();
+        let payload = self.spacecraft[carrier_idx].payloads.remove(payload_idx);
+        let crate::flight::Payload::Spacecraft {
+            design, rocket, nested_payloads, rocket_project_id, name, ..
+        } = payload else {
+            return false; // unreachable given the matches! above
+        };
+        let payload_name = name.clone();
+
+        let sc_id = SpacecraftId(self.next_rocket_id);
+        self.next_rocket_id += 1;
+        self.spacecraft.push(Spacecraft {
+            id: sc_id, name, rocket, design,
+            location: location.clone(),
+            rocket_project_id,
+            payloads: nested_payloads,
+        });
+
+        let evt = GameEvent::SpacecraftUndocked {
+            payload: payload_name,
+            carrier: carrier_name,
+            location: crate::contract::destination_display_name(&location).to_string(),
+        };
+        self.event_log.push(self.date, evt);
+        true
     }
 }
 
@@ -3229,7 +3308,7 @@ mod tests {
         let nested_mass: f64 = nested.iter().map(|p| p.mass_kg()).sum();
         let rocket = design.instantiate(RocketId(id), "earth_surface", nested_mass);
         Payload::Spacecraft {
-            deploy_at: deploy_at.into(),
+            deploy_at: Some(deploy_at.into()),
             design,
             rocket,
             nested_payloads: nested,
@@ -3314,7 +3393,7 @@ mod tests {
         match &csm_sc.payloads[0] {
             Payload::Spacecraft { name, deploy_at, .. } => {
                 assert_eq!(name, "LEM");
-                assert_eq!(deploy_at, "lunar_surface");
+                assert_eq!(deploy_at.as_deref(), Some("lunar_surface"));
             }
             _ => panic!("expected nested Spacecraft payload"),
         }
@@ -3357,5 +3436,165 @@ mod tests {
         let earned = gs.player_company.money - starting_money;
         assert!((earned - 3_000_000.0).abs() < 1.0,
             "expected 3M paid out, got {}", earned);
+    }
+
+    /// Push a freshly-built minimal Spacecraft into `gs.spacecraft` at
+    /// `location` with the given name. Returns its index.
+    fn push_test_spacecraft(gs: &mut GameState, id: u64, name: &str, location: &str) -> usize {
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::propellant::Propellant;
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+        use crate::stage::{Stage, StageId};
+        let engine = EngineDesign {
+            id: EngineId(id), name: "E".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 1.0, mass_kg: 1.0, isp_s: 100.0,
+            exit_pressure_pa: 1.0, needs_atmosphere: false,
+            propellant_mix: vec![PropellantFraction {
+                propellant: Propellant::LOX, mass_fraction: 1.0,
+            }],
+        };
+        let stage = Stage {
+            id: StageId(id), name: "S".into(),
+            engine, engine_count: 1,
+            propellant_mass_kg: 100.0, structural_mass_kg: 10.0,
+            fairing: None,
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(id), name: name.into(),
+            stage_groups: vec![vec![stage]],
+        };
+        let rocket = design.instantiate(RocketId(id), location, 0.0);
+        gs.spacecraft.push(Spacecraft {
+            id: SpacecraftId(id),
+            name: name.into(),
+            rocket, design,
+            location: location.into(),
+            rocket_project_id: RocketProjectId(id),
+            payloads: Vec::new(),
+        });
+        gs.spacecraft.len() - 1
+    }
+
+    #[test]
+    fn test_dock_combines_two_spacecraft() {
+        let mut gs = GameState::new("T".into(), 1.0, 0);
+        let csm = push_test_spacecraft(&mut gs, 1, "CSM", "lunar_orbit");
+        let lem = push_test_spacecraft(&mut gs, 2, "LEM", "lunar_orbit");
+        // Dock LEM onto CSM.
+        assert!(gs.dock_spacecraft(lem, csm));
+        assert_eq!(gs.spacecraft.len(), 1);
+        let carrier = &gs.spacecraft[0];
+        assert_eq!(carrier.name, "CSM");
+        assert_eq!(carrier.payloads.len(), 1);
+        match &carrier.payloads[0] {
+            Payload::Spacecraft { name, deploy_at, .. } => {
+                assert_eq!(name, "LEM");
+                assert!(deploy_at.is_none(), "manual undock only");
+            }
+            _ => panic!("expected Spacecraft payload"),
+        }
+    }
+
+    #[test]
+    fn test_dock_rejects_different_locations() {
+        let mut gs = GameState::new("T".into(), 1.0, 0);
+        let a = push_test_spacecraft(&mut gs, 1, "A", "leo");
+        let b = push_test_spacecraft(&mut gs, 2, "B", "lunar_orbit");
+        assert!(!gs.dock_spacecraft(a, b),
+            "dock should refuse cross-location");
+        assert_eq!(gs.spacecraft.len(), 2,
+            "no spacecraft removed on rejected dock");
+    }
+
+    #[test]
+    fn test_undock_restores_fleet_member() {
+        let mut gs = GameState::new("T".into(), 1.0, 0);
+        let csm = push_test_spacecraft(&mut gs, 1, "CSM", "lunar_orbit");
+        let lem = push_test_spacecraft(&mut gs, 2, "LEM", "lunar_orbit");
+        assert!(gs.dock_spacecraft(lem, csm));
+        assert_eq!(gs.spacecraft.len(), 1);
+        // Carrier index after dock is 0 (was csm, now alone).
+        assert!(gs.undock_payload(0, 0));
+        assert_eq!(gs.spacecraft.len(), 2);
+        // The undocked LEM should be at the same location.
+        let lem_idx = gs.spacecraft.iter()
+            .position(|sc| sc.name == "LEM")
+            .expect("LEM back in fleet");
+        assert_eq!(gs.spacecraft[lem_idx].location, "lunar_orbit");
+    }
+
+    #[test]
+    fn test_dock_then_fly_keeps_payload_aboard() {
+        // After docking with deploy_at = None, flying the carrier should
+        // not auto-detach the docked payload.
+        let mut gs = GameState::new("T".into(), 1.0, 0);
+        let csm = push_test_spacecraft(&mut gs, 1, "CSM", "lunar_orbit");
+        let lem = push_test_spacecraft(&mut gs, 2, "LEM", "lunar_orbit");
+        gs.dock_spacecraft(lem, csm);
+
+        // Synthesize an arrival of the CSM at earth_escape — the existing
+        // arrival path should keep the docked LEM aboard because deploy_at
+        // is None (never matches a destination).
+        let payloads = std::mem::take(&mut gs.spacecraft[0].payloads);
+        let _events = arrive_test_flight(&mut gs, "earth_escape", payloads);
+        // arrive_test_flight builds its own carrier, so the docked LEM
+        // payload becomes a "remaining_payload" on a non-persisted flight,
+        // which means it gets dropped — that's fine for this assertion:
+        // we just want to confirm the payload was NOT in deployed_spacecraft.
+        let deployed_lem = gs.spacecraft.iter().any(|sc| sc.name == "LEM");
+        assert!(!deployed_lem,
+            "deploy_at = None should never auto-detach on arrival");
+    }
+
+    #[test]
+    fn test_undock_with_nested_payloads() {
+        // Build a chain: A docked into B, B docked into C. Undock B from C
+        // and confirm A is still nested in B.
+        let mut gs = GameState::new("T".into(), 1.0, 0);
+        let _a = push_test_spacecraft(&mut gs, 1, "A", "leo");
+        let _b = push_test_spacecraft(&mut gs, 2, "B", "leo");
+        let _c = push_test_spacecraft(&mut gs, 3, "C", "leo");
+        // Dock A onto B (indices currently 0, 1, 2; B is at 1, A at 0).
+        assert!(gs.dock_spacecraft(0, 1));
+        // After: spacecraft = [B(carrying A), C]. Dock B onto C.
+        assert!(gs.dock_spacecraft(0, 1));
+        // After: spacecraft = [C(carrying B(carrying A))]. Undock B from C.
+        assert!(gs.undock_payload(0, 0));
+        // Now: C alone in fleet, B in fleet with A nested.
+        let b = gs.spacecraft.iter().find(|sc| sc.name == "B")
+            .expect("B back in fleet");
+        assert_eq!(b.payloads.len(), 1);
+        match &b.payloads[0] {
+            Payload::Spacecraft { name, .. } => assert_eq!(name, "A"),
+            _ => panic!("expected nested A"),
+        }
+    }
+
+    #[test]
+    fn test_save_and_load_with_docked_spacecraft() {
+        // Round-trip a docked configuration through save/load.
+        use crate::save::{save_game, load_game};
+        let mut gs = GameState::new("DockCorp".into(), 1.0, 99);
+        let csm = push_test_spacecraft(&mut gs, 1, "CSM", "lunar_orbit");
+        let lem = push_test_spacecraft(&mut gs, 2, "LEM", "lunar_orbit");
+        gs.dock_spacecraft(lem, csm);
+
+        let path = std::env::temp_dir().join(format!(
+            "dock_test_{}.json", std::process::id()));
+        save_game(&gs, &path).unwrap();
+        let loaded = load_game(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.spacecraft.len(), 1);
+        let carrier = &loaded.spacecraft[0];
+        assert_eq!(carrier.name, "CSM");
+        match &carrier.payloads[0] {
+            Payload::Spacecraft { name, deploy_at, .. } => {
+                assert_eq!(name, "LEM");
+                assert!(deploy_at.is_none(), "deploy_at = None survives round-trip");
+            }
+            _ => panic!("expected nested Spacecraft payload"),
+        }
     }
 }

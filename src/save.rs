@@ -142,7 +142,7 @@ mod tests {
         let csm_rocket = csm_design.instantiate(RocketId(1), "lunar_orbit", 0.0);
 
         let lem_payload = Payload::Spacecraft {
-            deploy_at: "lunar_surface".into(),
+            deploy_at: Some("lunar_surface".into()),
             design: lem_design,
             rocket: lem_rocket,
             nested_payloads: vec![],
@@ -167,7 +167,7 @@ mod tests {
         match &loaded.spacecraft[0].payloads[0] {
             Payload::Spacecraft { name, deploy_at, .. } => {
                 assert_eq!(name, "LEM");
-                assert_eq!(deploy_at, "lunar_surface");
+                assert_eq!(deploy_at.as_deref(), Some("lunar_surface"));
             }
             _ => panic!("nested payload variant lost in round-trip"),
         }

@@ -250,6 +250,32 @@ pub enum InputMode {
     FlySelectSpacecraft {
         selected: usize,
     },
+    /// Step 1 of docking: pick the spacecraft that will become a payload.
+    DockSelectSmall {
+        selected: usize,
+    },
+    /// Step 2 of docking: pick the carrier to dock onto. `candidates` is
+    /// the list of fleet indices (other spacecraft at the same location
+    /// as the small one).
+    DockSelectLarge {
+        small_idx: usize,
+        candidates: Vec<usize>,
+        selected: usize,
+    },
+    /// Step 1 of undocking: pick which carrier to remove a payload from.
+    /// Only carriers with at least one Spacecraft payload are considered.
+    UndockSelectCarrier {
+        candidates: Vec<usize>,
+        selected: usize,
+    },
+    /// Step 2 of undocking: pick which payload (by index into
+    /// carrier.payloads) to release. Only `Payload::Spacecraft` items
+    /// are surfaced.
+    UndockSelectPayload {
+        carrier_idx: usize,
+        payload_indices: Vec<usize>,
+        selected: usize,
+    },
     /// Selecting destination for a spacecraft flight.
     FlySelectDestination {
         spacecraft_index: usize,
@@ -477,7 +503,7 @@ impl App {
             self.game.next_rocket_id += 1;
             let rocket = design.instantiate(rocket_id, "earth_surface", 0.0);
             payloads.push(Payload::Spacecraft {
-                deploy_at: destination.clone(),
+                deploy_at: Some(destination.clone()),
                 design,
                 rocket,
                 nested_payloads: vec![],
@@ -811,6 +837,29 @@ impl App {
                     selected: 0,
                 });
             }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                // Dock one spacecraft onto another at the same location.
+                if self.game.spacecraft.len() < 2 {
+                    self.status_message = Some("Need at least two spacecraft to dock".into());
+                    return;
+                }
+                self.enter_modal(InputMode::DockSelectSmall { selected: 0 });
+            }
+            KeyCode::Char('u') | KeyCode::Char('U') => {
+                // Undock a payload from a carrier.
+                let candidates: Vec<usize> = self.game.spacecraft.iter().enumerate()
+                    .filter(|(_, sc)| sc.payloads.iter().any(|p|
+                        matches!(p, crate::flight::Payload::Spacecraft { .. })))
+                    .map(|(i, _)| i)
+                    .collect();
+                if candidates.is_empty() {
+                    self.status_message = Some("No spacecraft with docked payloads".into());
+                    return;
+                }
+                self.enter_modal(InputMode::UndockSelectCarrier {
+                    candidates, selected: 0,
+                });
+            }
             KeyCode::Char('p') => {
                 // Open delta-v planner setup
                 let eligible: Vec<usize> = self.game.player_company.rocket_projects.iter()
@@ -838,8 +887,11 @@ impl App {
                     }),
                 });
             }
-            KeyCode::Char('l') | KeyCode::Enter | KeyCode::Char('u') => {
-                let persist = key == KeyCode::Char('u');
+            KeyCode::Char('l') | KeyCode::Enter
+            | KeyCode::Char('k') | KeyCode::Char('K') => {
+                // 'k'/'K' = keep: the carrier becomes a Spacecraft at the
+                // destination instead of being discarded on arrival.
+                let persist = matches!(key, KeyCode::Char('k') | KeyCode::Char('K'));
                 // Launch the selected rocket
                 let rockets = &self.game.player_company.manufacturing.inventory.rockets;
                 if self.selected_item >= rockets.len() {
@@ -1187,6 +1239,116 @@ impl App {
                             self.status_message = Some("Spacecraft flight departed".into());
                             self.exit_modal();
                         }
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::DockSelectSmall { selected } => {
+                let selected = *selected;
+                let num = self.game.spacecraft.len();
+                match key {
+                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Up => if let InputMode::DockSelectSmall { selected: s } = &mut self.input_mode {
+                        if *s > 0 { *s -= 1; }
+                    },
+                    KeyCode::Down => if let InputMode::DockSelectSmall { selected: s } = &mut self.input_mode {
+                        if *s + 1 < num { *s += 1; }
+                    },
+                    KeyCode::Enter => {
+                        // Build candidate list: other spacecraft at the
+                        // same location as the chosen "small" one.
+                        let small_loc = &self.game.spacecraft[selected].location;
+                        let candidates: Vec<usize> = self.game.spacecraft.iter().enumerate()
+                            .filter(|(i, sc)| *i != selected && sc.location == *small_loc)
+                            .map(|(i, _)| i)
+                            .collect();
+                        if candidates.is_empty() {
+                            self.status_message = Some(
+                                "No other spacecraft at this location".into());
+                            self.exit_modal();
+                            return;
+                        }
+                        self.input_mode = InputMode::DockSelectLarge {
+                            small_idx: selected, candidates, selected: 0,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::DockSelectLarge { small_idx, candidates, selected } => {
+                let small_idx = *small_idx;
+                let selected = *selected;
+                let num = candidates.len();
+                match key {
+                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Up => if let InputMode::DockSelectLarge { selected: s, .. } = &mut self.input_mode {
+                        if *s > 0 { *s -= 1; }
+                    },
+                    KeyCode::Down => if let InputMode::DockSelectLarge { selected: s, .. } = &mut self.input_mode {
+                        if *s + 1 < num { *s += 1; }
+                    },
+                    KeyCode::Enter => {
+                        let large_idx = candidates[selected];
+                        if self.game.dock_spacecraft(small_idx, large_idx) {
+                            self.status_message = Some("Docked".into());
+                        } else {
+                            self.status_message = Some("Dock failed".into());
+                        }
+                        self.exit_modal();
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::UndockSelectCarrier { candidates, selected } => {
+                let selected = *selected;
+                let num = candidates.len();
+                match key {
+                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Up => if let InputMode::UndockSelectCarrier { selected: s, .. } = &mut self.input_mode {
+                        if *s > 0 { *s -= 1; }
+                    },
+                    KeyCode::Down => if let InputMode::UndockSelectCarrier { selected: s, .. } = &mut self.input_mode {
+                        if *s + 1 < num { *s += 1; }
+                    },
+                    KeyCode::Enter => {
+                        let carrier_idx = candidates[selected];
+                        let payload_indices: Vec<usize> = self.game.spacecraft[carrier_idx]
+                            .payloads.iter().enumerate()
+                            .filter(|(_, p)| matches!(p, crate::flight::Payload::Spacecraft { .. }))
+                            .map(|(i, _)| i)
+                            .collect();
+                        if payload_indices.is_empty() {
+                            self.status_message = Some("No spacecraft payloads".into());
+                            self.exit_modal();
+                            return;
+                        }
+                        self.input_mode = InputMode::UndockSelectPayload {
+                            carrier_idx, payload_indices, selected: 0,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::UndockSelectPayload { carrier_idx, payload_indices, selected } => {
+                let carrier_idx = *carrier_idx;
+                let selected = *selected;
+                let num = payload_indices.len();
+                match key {
+                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Up => if let InputMode::UndockSelectPayload { selected: s, .. } = &mut self.input_mode {
+                        if *s > 0 { *s -= 1; }
+                    },
+                    KeyCode::Down => if let InputMode::UndockSelectPayload { selected: s, .. } = &mut self.input_mode {
+                        if *s + 1 < num { *s += 1; }
+                    },
+                    KeyCode::Enter => {
+                        let payload_idx = payload_indices[selected];
+                        if self.game.undock_payload(carrier_idx, payload_idx) {
+                            self.status_message = Some("Undocked".into());
+                        } else {
+                            self.status_message = Some("Undock failed".into());
+                        }
+                        self.exit_modal();
                     }
                     _ => {}
                 }

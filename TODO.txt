@@ -1,11 +1,3 @@
-[] Mid-route payload detach — drop a Spacecraft payload at a waypoint and
-   have the carrier continue with reduced mass (e.g. Falcon 9 drops Dragon
-   at LEO and the upper stage flies on).
-[] Docking — re-attach a previously-deployed spacecraft as a payload of
-   another (Apollo CSM/LEM rendezvous in lunar orbit).
-[] Multi-payload launch UI: nested manifest picking so a Spacecraft payload
-   can itself carry sub-payloads at launch time (Saturn V → CSM → LEM).
-   Today the UI only does flat picks; nesting requires programmatic setup.
 [] Make electrical power via batteries, solar panels, etc.
     [] Also electric drives like Ion and Hall effect.
 [] Have player choose price for markets
@@ -21,3 +13,7 @@ Later tuning:
 [] Replace high/low thrust binary and asteroid-landing rules with a principled
    acceleration / gravity comparison (so an ion drive can land on Bennu but not
    Phobos based on numbers, not hand-tagged edge flags).
+[] Mid-route payload detach — drop a Spacecraft payload at a waypoint and
+   have the carrier continue with reduced mass (e.g. Falcon 9 drops Dragon
+   at LEO and the upper stage flies on).
+

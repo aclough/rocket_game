@@ -46,6 +46,8 @@ pub enum GameEvent {
     FlightDeparted { rocket_name: String, destination: String },
     FlightArrived { rocket_name: String, destination: String },
     SpacecraftDeployed { spacecraft_name: String, location: String },
+    SpacecraftDocked { small: String, large: String, location: String },
+    SpacecraftUndocked { payload: String, carrier: String, location: String },
     SpacecraftStranded { rocket_name: String, location: String },
     MidFlightFlawActivated { rocket_name: String, flaw_description: String, consequence: String },
     /// Improvement discovered during testing.
@@ -131,6 +133,10 @@ impl fmt::Display for GameEvent {
                 write!(f, "Flight arrived: {} at {}", rocket_name, destination),
             GameEvent::SpacecraftDeployed { spacecraft_name, location } =>
                 write!(f, "Deployed: {} at {}", spacecraft_name, location),
+            GameEvent::SpacecraftDocked { small, large, location } =>
+                write!(f, "Docked: {} onto {} at {}", small, large, location),
+            GameEvent::SpacecraftUndocked { payload, carrier, location } =>
+                write!(f, "Undocked: {} from {} at {}", payload, carrier, location),
             GameEvent::SpacecraftStranded { rocket_name, location } =>
                 write!(f, "Spacecraft stranded: {} at {}", rocket_name, location),
             GameEvent::MidFlightFlawActivated { rocket_name, flaw_description, consequence } =>
@@ -194,6 +200,8 @@ impl GameEvent {
             | GameEvent::FlightDeparted { .. }
             | GameEvent::FlightArrived { .. }
             | GameEvent::SpacecraftDeployed { .. }
+            | GameEvent::SpacecraftDocked { .. }
+            | GameEvent::SpacecraftUndocked { .. }
             | GameEvent::SpacecraftStranded { .. }
             | GameEvent::MidFlightFlawActivated { .. }
             | GameEvent::ImprovementDiscovered { .. }

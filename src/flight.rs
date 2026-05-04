@@ -27,10 +27,11 @@ pub enum Payload {
         mass_kg: f64,
     },
     Spacecraft {
-        /// Where this payload is dropped off. Phase 1: must equal the
-        /// flight's final destination. Phase 2 will allow mid-route
-        /// waypoints.
-        deploy_at: String,
+        /// Where this payload is dropped off:
+        /// - `Some(loc)` — auto-detach when the carrier arrives at `loc`.
+        /// - `None` — stay aboard until the player manually undocks.
+        ///   Set this way by the docking action.
+        deploy_at: Option<String>,
         design: RocketDesign,
         rocket: Rocket,
         /// What this nested rocket itself carries (CSM-carries-LEM).
@@ -320,7 +321,7 @@ mod tests {
         let (lem_design, lem_rocket) = tiny_spacecraft(1, 500.0, 100.0);
         // engine = 100 kg, dry = 100 + 100 = 200; wet = 700.
         let lem_payload = Payload::Spacecraft {
-            deploy_at: "lunar_surface".into(),
+            deploy_at: Some("lunar_surface".into()),
             design: lem_design.clone(),
             rocket: lem_rocket,
             nested_payloads: vec![],
@@ -333,7 +334,7 @@ mod tests {
         let (csm_design, csm_rocket) = tiny_spacecraft(2, 1000.0, 200.0);
         // engine = 100, dry = 100 + 200 = 300; wet = 1300.
         let csm_payload = Payload::Spacecraft {
-            deploy_at: "lunar_orbit".into(),
+            deploy_at: Some("lunar_orbit".into()),
             design: csm_design.clone(),
             rocket: csm_rocket,
             nested_payloads: vec![lem_payload],
