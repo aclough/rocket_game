@@ -1,5 +1,6 @@
 [] Make electrical power via batteries, solar panels, etc.
     [] Also electric drives like Ion and Hall effect.
+[] Propellant boiloff
 [] Have player choose price for markets
 [] Add competitor company, DinoSoar
 [] Automation of bidding on contracts for any that cost less than marginal cost + selected profit margin.
