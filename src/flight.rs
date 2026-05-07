@@ -304,6 +304,7 @@ mod tests {
             engine, engine_count: 1,
             propellant_mass_kg: prop, structural_mass_kg: dry,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let design = RocketDesign {
             id: RocketDesignId(id), name: format!("Tiny{}", id),
@@ -449,12 +450,14 @@ mod tests {
             engine: booster_engine, engine_count: 1,
             propellant_mass_kg: 350_000.0, structural_mass_kg: 25_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
             engine: upper_engine, engine_count: 1,
             propellant_mass_kg: 90_000.0, structural_mass_kg: 5_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let design = RocketDesign {
             id: RocketDesignId(1),

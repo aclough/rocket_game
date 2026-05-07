@@ -38,6 +38,38 @@ pub struct Location {
     pub parent_body: &'static str,
 }
 
+/// Mean heliocentric distance in AU for a parent body. Used for
+/// solar-panel power scaling. NEAs and Lagrange points inherit Earth's
+/// 1.0 AU since they orbit near it.
+pub fn parent_body_sun_distance_au(parent: &str) -> f64 {
+    match parent {
+        "sun" => 0.0,    // sentinel — heliocentric "transfer" nodes
+        "mercury" => 0.39,
+        "venus" => 0.72,
+        "earth" => 1.0,
+        "moon" => 1.0,
+        "mars" => 1.52,
+        "phobos" | "deimos" => 1.52,
+        "vesta" => 2.36,
+        "ceres" => 2.77,
+        "hygiea" => 3.14,
+        "eros" => 1.46,
+        "bennu" => 1.13,
+        _ => 1.0,
+    }
+}
+
+impl Location {
+    /// Distance from the Sun in AU. For heliocentric "transfer" nodes the
+    /// parent body is "sun" and we return 1.0 (treating Earth-launch
+    /// transfers as 1 AU; this is fine for solar-panel rating since power
+    /// matters at the destination, which is the body branch).
+    pub fn sun_distance_au(&self) -> f64 {
+        let d = parent_body_sun_distance_au(self.parent_body);
+        if d == 0.0 { 1.0 } else { d }
+    }
+}
+
 /// Animation type for a transfer between locations
 #[derive(Debug, Clone)]
 pub enum TransferAnimation {

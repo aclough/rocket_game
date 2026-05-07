@@ -1810,6 +1810,7 @@ impl App {
                         propellant_mass_kg,
                         structural_mass_kg: 0.0,
                         fairing: None,
+                        power_sources: Vec::new(),
                     };
                     state.next_stage_id += 1;
 

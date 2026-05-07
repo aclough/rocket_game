@@ -359,6 +359,7 @@ mod tests {
             propellant_mass_kg: 50_000.0,
             structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         }
     }
 

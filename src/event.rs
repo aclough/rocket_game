@@ -49,6 +49,7 @@ pub enum GameEvent {
     SpacecraftDocked { small: String, large: String, location: String },
     SpacecraftUndocked { payload: String, carrier: String, location: String },
     SpacecraftStranded { rocket_name: String, location: String },
+    PowerLost { rocket_name: String, location: String },
     MidFlightFlawActivated { rocket_name: String, flaw_description: String, consequence: String },
     /// Improvement discovered during testing.
     ImprovementDiscovered { engine_name: String, description: String },
@@ -139,6 +140,9 @@ impl fmt::Display for GameEvent {
                 write!(f, "Undocked: {} from {} at {}", payload, carrier, location),
             GameEvent::SpacecraftStranded { rocket_name, location } =>
                 write!(f, "Spacecraft stranded: {} at {}", rocket_name, location),
+            GameEvent::PowerLost { rocket_name, location } =>
+                write!(f, "Power lost: {} stranded at {} (battery exhausted)",
+                    rocket_name, location),
             GameEvent::MidFlightFlawActivated { rocket_name, flaw_description, consequence } =>
                 write!(f, "In-flight flaw on {}: {} ({})", rocket_name, flaw_description, consequence),
             GameEvent::ImprovementDiscovered { engine_name, description } =>
@@ -203,6 +207,7 @@ impl GameEvent {
             | GameEvent::SpacecraftDocked { .. }
             | GameEvent::SpacecraftUndocked { .. }
             | GameEvent::SpacecraftStranded { .. }
+            | GameEvent::PowerLost { .. }
             | GameEvent::MidFlightFlawActivated { .. }
             | GameEvent::ImprovementDiscovered { .. }
             | GameEvent::ImprovementActualized { .. }

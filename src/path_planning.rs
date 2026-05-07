@@ -441,6 +441,7 @@ mod tests {
             engine, engine_count: count,
             propellant_mass_kg: prop, structural_mass_kg: dry,
             fairing: None,
+            power_sources: Vec::new(),
         }
     }
 

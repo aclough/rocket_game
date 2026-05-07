@@ -130,6 +130,7 @@ mod tests {
                 engine, engine_count: 1,
                 propellant_mass_kg: 100.0, structural_mass_kg: 10.0,
                 fairing: None,
+                power_sources: Vec::new(),
             };
             RocketDesign {
                 id: RocketDesignId(id), name: name.into(),

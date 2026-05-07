@@ -1,6 +1,7 @@
 pub mod propellant;
 pub mod engine;
 pub mod stage;
+pub mod power;
 pub mod rocket;
 pub mod location;
 pub mod path_planning;

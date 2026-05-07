@@ -310,12 +310,14 @@ mod tests {
             engine: e1, engine_count: 1,
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
             engine: e2, engine_count: 1,
             propellant_mass_kg: 10_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         RocketDesign {
             id: crate::rocket::RocketDesignId(1),

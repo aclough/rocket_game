@@ -1,6 +1,7 @@
 use serde::{Serialize, Deserialize};
 
 use crate::engine::EngineDesign;
+use crate::power::PowerSource;
 
 /// Unique identifier for a stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -13,7 +14,8 @@ pub struct Fairing {
     pub diameter_m: f64,
 }
 
-/// A rocket stage: structural mass, engines, propellant, and optional fairing.
+/// A rocket stage: structural mass, engines, propellant, optional fairing,
+/// and any power sources (batteries, panels, RTGs, etc.).
 ///
 /// The stage holds a reference to its engine design (by clone) and the number of
 /// engines of that type. It does NOT own fuel composition — that comes from the engine.
@@ -26,14 +28,31 @@ pub struct Stage {
     pub propellant_mass_kg: f64,
     pub structural_mass_kg: f64,
     pub fairing: Option<Fairing>,
+    /// Power sources (batteries, solar panels, RTGs…) installed on this
+    /// stage. Default empty for save compat; rockets without explicitly
+    /// added power get a tiny battery synthesised at instantiate time.
+    #[serde(default)]
+    pub power_sources: Vec<PowerSource>,
 }
 
 impl Stage {
-    /// Dry mass: structural mass + all engines + fairing (if present).
+    /// Dry mass: structural mass + all engines + fairing (if present)
+    /// + power sources.
     pub fn dry_mass_kg(&self) -> f64 {
         let engine_mass = self.engine.mass_kg * self.engine_count as f64;
         let fairing_mass = self.fairing.as_ref().map_or(0.0, |f| f.mass_kg);
-        self.structural_mass_kg + engine_mass + fairing_mass
+        let power_mass: f64 = self.power_sources.iter().map(|p| p.mass_kg).sum();
+        self.structural_mass_kg + engine_mass + fairing_mass + power_mass
+    }
+
+    /// Steady-state housekeeping draw in watts. Approximates ~1 W per 10 kg
+    /// of dry mass (excluding power sources themselves so adding panels
+    /// doesn't increase your own load).
+    pub fn housekeeping_w(&self) -> f64 {
+        let engine_mass = self.engine.mass_kg * self.engine_count as f64;
+        let fairing_mass = self.fairing.as_ref().map_or(0.0, |f| f.mass_kg);
+        let bus_mass = self.structural_mass_kg + engine_mass + fairing_mass;
+        bus_mass * 0.1 // 1 W per 10 kg
     }
 
     /// Wet mass: dry mass + propellant.
@@ -100,6 +119,7 @@ mod tests {
             propellant_mass_kg: 20_000.0,
             structural_mass_kg: 1_500.0,
             fairing: None,
+            power_sources: Vec::new(),
         }
     }
 

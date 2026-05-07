@@ -31,6 +31,12 @@ pub struct RocketDesign {
 pub struct StageState {
     pub propellant_remaining_kg: f64,
     pub attached: bool,
+    /// Energy stored in this stage's batteries, in kilowatt-days. Sum
+    /// across all `Battery`-kind power sources on the stage; the per-day
+    /// power tick drains or recharges this from the supply/demand
+    /// balance. Default 0.0 for legacy saves.
+    #[serde(default)]
+    pub battery_kwd_remaining: f64,
 }
 
 /// Result of a sequential burn operation.
@@ -132,9 +138,20 @@ impl RocketDesign {
     pub fn instantiate(&self, rocket_id: RocketId, location: &str, payload_mass_kg: f64) -> Rocket {
         let stage_states = self.stage_groups.iter()
             .map(|group| {
-                group.iter().map(|stage| StageState {
-                    propellant_remaining_kg: stage.propellant_mass_kg,
-                    attached: true,
+                group.iter().map(|stage| {
+                    // Sum battery capacity across the stage's power
+                    // sources, then start fully charged.
+                    let battery_capacity: f64 = stage.power_sources.iter()
+                        .filter_map(|p| match &p.kind {
+                            crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
+                            _ => None,
+                        })
+                        .sum();
+                    StageState {
+                        propellant_remaining_kg: stage.propellant_mass_kg,
+                        attached: true,
+                        battery_kwd_remaining: battery_capacity,
+                    }
                 }).collect()
             })
             .collect();
@@ -530,6 +547,163 @@ impl Rocket {
         }
         mass
     }
+
+    // ─── Power balance ────────────────────────────────────────────────
+
+    /// Sum of steady-state power output (watts) across all attached
+    /// stages' power sources, evaluated at `sun_distance_au`.
+    pub fn total_power_supply_w(&self, design: &RocketDesign, sun_distance_au: f64) -> f64 {
+        let mut total = 0.0;
+        for (gi, group) in design.stage_groups.iter().enumerate() {
+            for (si, stage) in group.iter().enumerate() {
+                let attached = self.stage_states.get(gi)
+                    .and_then(|g| g.get(si))
+                    .map_or(false, |ss| ss.attached);
+                if !attached { continue; }
+                for src in &stage.power_sources {
+                    total += src.steady_output_w(sun_distance_au);
+                }
+            }
+        }
+        total
+    }
+
+    /// Sum of housekeeping draw (watts) across all attached stages.
+    pub fn total_housekeeping_w(&self, design: &RocketDesign) -> f64 {
+        let mut total = 0.0;
+        for (gi, group) in design.stage_groups.iter().enumerate() {
+            for (si, stage) in group.iter().enumerate() {
+                let attached = self.stage_states.get(gi)
+                    .and_then(|g| g.get(si))
+                    .map_or(false, |ss| ss.attached);
+                if attached {
+                    total += stage.housekeeping_w();
+                }
+            }
+        }
+        total
+    }
+
+    /// Sum of battery capacity (kilowatt-days) across all attached stages.
+    pub fn total_battery_capacity_kwd(&self, design: &RocketDesign) -> f64 {
+        let mut total = 0.0;
+        for (gi, group) in design.stage_groups.iter().enumerate() {
+            for (si, stage) in group.iter().enumerate() {
+                let attached = self.stage_states.get(gi)
+                    .and_then(|g| g.get(si))
+                    .map_or(false, |ss| ss.attached);
+                if !attached { continue; }
+                for src in &stage.power_sources {
+                    if let crate::power::PowerSourceKind::Battery = src.kind {
+                        total += src.capacity_kwd;
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    /// Current battery charge (kilowatt-days) summed across attached stages.
+    pub fn total_battery_charge_kwd(&self) -> f64 {
+        self.stage_states.iter()
+            .flat_map(|g| g.iter())
+            .filter(|ss| ss.attached)
+            .map(|ss| ss.battery_kwd_remaining)
+            .sum()
+    }
+
+    /// True if at least one attached stage has any explicit power source.
+    /// Stages with no power_sources are treated as grandfathered in
+    /// (Phase 1 doesn't enforce power on legacy designs).
+    pub fn has_explicit_power(&self, design: &RocketDesign) -> bool {
+        for (gi, group) in design.stage_groups.iter().enumerate() {
+            for (si, stage) in group.iter().enumerate() {
+                let attached = self.stage_states.get(gi)
+                    .and_then(|g| g.get(si))
+                    .map_or(false, |ss| ss.attached);
+                if attached && !stage.power_sources.is_empty() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Run one day of power balance: housekeeping draws against supply +
+    /// battery; surplus recharges batteries up to capacity. Returns true
+    /// if the total battery hit zero with demand still unmet (brownout).
+    ///
+    /// No-op on rockets with no explicit power sources (grandfathered).
+    pub fn run_daily_power_tick(
+        &mut self, design: &RocketDesign, sun_distance_au: f64,
+    ) -> bool {
+        if !self.has_explicit_power(design) {
+            return false;
+        }
+        let supply_w = self.total_power_supply_w(design, sun_distance_au);
+        let demand_w = self.total_housekeeping_w(design);
+        // Convert to kWd over one day (kW × 1 day).
+        let net_kwd = (supply_w - demand_w) / 1000.0;
+        if net_kwd >= 0.0 {
+            // Surplus: recharge batteries proportionally.
+            self.distribute_charge_kwd(design, net_kwd);
+            false
+        } else {
+            // Deficit: drain batteries.
+            let deficit = -net_kwd;
+            let drained = self.drain_battery_kwd(deficit);
+            // Brownout if we couldn't drain the full deficit.
+            drained < deficit - 1e-9
+        }
+    }
+
+    /// Distribute `kwd` of charge across attached batteries, respecting
+    /// capacity. Helper for `run_daily_power_tick`.
+    fn distribute_charge_kwd(&mut self, design: &RocketDesign, mut kwd: f64) {
+        // First pass: how much room is there?
+        for (gi, group) in design.stage_groups.iter().enumerate() {
+            for (si, stage) in group.iter().enumerate() {
+                let attached = self.stage_states.get(gi)
+                    .and_then(|g| g.get(si))
+                    .map_or(false, |ss| ss.attached);
+                if !attached { continue; }
+                let stage_capacity: f64 = stage.power_sources.iter()
+                    .filter_map(|p| match p.kind {
+                        crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
+                        _ => None,
+                    })
+                    .sum();
+                if stage_capacity <= 0.0 { continue; }
+                let state = &mut self.stage_states[gi][si];
+                let room = stage_capacity - state.battery_kwd_remaining;
+                let add = kwd.min(room).max(0.0);
+                state.battery_kwd_remaining += add;
+                kwd -= add;
+                if kwd <= 0.0 { return; }
+            }
+        }
+    }
+
+    /// Drain `kwd` from attached batteries proportionally. Returns the
+    /// amount actually drained (== requested unless batteries hit zero).
+    fn drain_battery_kwd(&mut self, kwd: f64) -> f64 {
+        let total_charge: f64 = self.stage_states.iter()
+            .flat_map(|g| g.iter())
+            .filter(|ss| ss.attached)
+            .map(|ss| ss.battery_kwd_remaining)
+            .sum();
+        if total_charge <= 0.0 { return 0.0; }
+        let drain = kwd.min(total_charge);
+        let frac = drain / total_charge;
+        for group in &mut self.stage_states {
+            for ss in group.iter_mut() {
+                if ss.attached {
+                    ss.battery_kwd_remaining *= 1.0 - frac;
+                }
+            }
+        }
+        drain
+    }
 }
 
 /// Per-stage-group performance statistics for the rocket designer display.
@@ -716,12 +890,14 @@ mod tests {
             engine: engine1.clone(), engine_count: 1,
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
             engine: engine2.clone(), engine_count: 1,
             propellant_mass_kg: 10_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let rocket = RocketDesign {
@@ -760,6 +936,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 20_000.0, structural_mass_kg: 1_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let rocket = RocketDesign {
@@ -796,12 +973,14 @@ mod tests {
             engine: core_engine.clone(), engine_count: 1,
             propellant_mass_kg: 100_000.0, structural_mass_kg: 5_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let srb = Stage {
             id: StageId(2), name: "SRB".into(),
             engine: srb_engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let rocket = RocketDesign {
@@ -836,12 +1015,14 @@ mod tests {
             engine: core_engine.clone(), engine_count: 1,
             propellant_mass_kg: 80_000.0, structural_mass_kg: 4_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let srb = Stage {
             id: StageId(2), name: "SRB".into(),
             engine: srb_engine.clone(), engine_count: 1,
             propellant_mass_kg: 20_000.0, structural_mass_kg: 1_500.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let payload = 10_000.0;
@@ -877,18 +1058,21 @@ mod tests {
             engine: core_engine, engine_count: 1,
             propellant_mass_kg: 100_000.0, structural_mass_kg: 5_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let srb = Stage {
             id: StageId(2), name: "SRB".into(),
             engine: srb_engine, engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let upper = Stage {
             id: StageId(3), name: "Upper".into(),
             engine: upper_engine, engine_count: 1,
             propellant_mass_kg: 15_000.0, structural_mass_kg: 800.0,
             fairing: Some(Fairing { mass_kg: 200.0, diameter_m: 4.0 }),
+            power_sources: Vec::new(),
         };
 
         let rocket = RocketDesign {
@@ -918,12 +1102,14 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 8_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -952,6 +1138,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -980,12 +1167,14 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 8_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -1012,6 +1201,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -1065,12 +1255,14 @@ mod tests {
             engine: ion_engine, engine_count: 1,
             propellant_mass_kg: 200.0, structural_mass_kg: 100.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let lander_stage = Stage {
             id: StageId(11), name: "Lander".into(),
             engine: lander_engine, engine_count: 1,
             propellant_mass_kg: 5_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -1099,12 +1291,14 @@ mod tests {
             engine: engine1, engine_count: 1,
             propellant_mass_kg: 80_000.0, structural_mass_kg: 3_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
             engine: engine2, engine_count: 1,
             propellant_mass_kg: 15_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -1141,6 +1335,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let design_single = RocketDesign {
             id: RocketDesignId(1),
@@ -1154,6 +1349,7 @@ mod tests {
             engine: engine.clone(), engine_count: 3,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let design_triple = RocketDesign {
             id: RocketDesignId(2),
@@ -1179,6 +1375,7 @@ mod tests {
             engine: engine, engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let design = RocketDesign {
             id: RocketDesignId(1),
@@ -1214,6 +1411,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -1244,12 +1442,14 @@ mod tests {
             engine: engine1, engine_count: 1,
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
             engine: engine2, engine_count: 1,
             propellant_mass_kg: 10_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -1289,6 +1489,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 10_000.0, structural_mass_kg: 1_000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -1304,5 +1505,101 @@ mod tests {
         let result = rocket.burn_sequential(&design, total_dv + 5_000.0, 0.0);
         assert!((result.dv_achieved - total_dv).abs() < 50.0,
             "Should only burn total available dv={}, got {}", total_dv, result.dv_achieved);
+    }
+
+    // ─── Power balance tests ──────────────────────────────────────────
+
+    fn powered_design(panel_w: f64, battery_kwd: f64) -> RocketDesign {
+        use crate::power::PowerSource;
+        let mut s1 = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: kerolox_engine(1, 1_000_000.0, 500.0, 280.0),
+            engine_count: 1,
+            propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0,
+            fairing: None, power_sources: Vec::new(),
+        };
+        if panel_w > 0.0 {
+            s1.power_sources.push(PowerSource::new_solar_panel(panel_w));
+        }
+        if battery_kwd > 0.0 {
+            s1.power_sources.push(PowerSource::new_battery(battery_kwd));
+        }
+        RocketDesign {
+            id: RocketDesignId(1), name: "Powered".into(),
+            stage_groups: vec![vec![s1]],
+        }
+    }
+
+    #[test]
+    fn rocket_with_no_power_sources_is_grandfathered() {
+        // A design with no power_sources skips power tracking entirely —
+        // run_daily_power_tick is a no-op and never browns out.
+        let design = powered_design(0.0, 0.0);
+        let mut rocket = design.instantiate(RocketId(1), "leo", 1000.0);
+        assert!(!rocket.has_explicit_power(&design));
+        for _ in 0..1000 {
+            assert!(!rocket.run_daily_power_tick(&design, 1.0));
+        }
+    }
+
+    #[test]
+    fn solar_panel_keeps_battery_topped_up_at_earth() {
+        // A panel sized comfortably above housekeeping recharges battery.
+        let design = powered_design(2000.0, 1.0);
+        let mut rocket = design.instantiate(RocketId(1), "leo", 0.0);
+        // Drain the battery a bit, then tick.
+        rocket.stage_states[0][0].battery_kwd_remaining = 0.5;
+        let supply = rocket.total_power_supply_w(&design, 1.0);
+        let demand = rocket.total_housekeeping_w(&design);
+        assert!(supply > demand, "expected supply {} > demand {}", supply, demand);
+        let brownout = rocket.run_daily_power_tick(&design, 1.0);
+        assert!(!brownout);
+        // Battery should have charged.
+        assert!(rocket.stage_states[0][0].battery_kwd_remaining > 0.5);
+    }
+
+    #[test]
+    fn battery_drains_when_far_from_sun_and_browns_out() {
+        // Solar panel sized for Earth's orbit, but flight is at 5 AU
+        // (Jupiter-ish). Panel output ≪ housekeeping → battery drains
+        // each day; eventually empty → brownout.
+        let design = powered_design(1000.0, 1.0);
+        let mut rocket = design.instantiate(RocketId(1), "leo", 0.0);
+        let mut browned_out = false;
+        for _ in 0..100 {
+            if rocket.run_daily_power_tick(&design, 5.0) {
+                browned_out = true;
+                break;
+            }
+        }
+        assert!(browned_out, "expected brownout at 5 AU within 100 days");
+        assert!(rocket.total_battery_charge_kwd() < 1e-6,
+            "battery should be drained after brownout");
+    }
+
+    #[test]
+    fn rtg_only_design_never_browns_out_if_steady_supply_covers_demand() {
+        // RTG supplying more than housekeeping: never browns out, even
+        // far from the sun.
+        use crate::power::{PowerSource, RtgClass};
+        let mut s1 = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: kerolox_engine(1, 1_000_000.0, 500.0, 280.0),
+            engine_count: 1,
+            propellant_mass_kg: 50_000.0,
+            structural_mass_kg: 100.0, // tiny bus, low housekeeping
+            fairing: None,
+            power_sources: vec![PowerSource::new_rtg(RtgClass::Cassini)],
+        };
+        // small battery for bookkeeping
+        s1.power_sources.push(PowerSource::new_battery(0.5));
+        let design = RocketDesign {
+            id: RocketDesignId(1), name: "Probe".into(),
+            stage_groups: vec![vec![s1]],
+        };
+        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 0.0);
+        for _ in 0..1000 {
+            assert!(!rocket.run_daily_power_tick(&design, 30.0)); // way out
+        }
     }
 }

@@ -1853,6 +1853,27 @@ impl GameState {
                 flight.leg_days_remaining -= 1;
             }
 
+            // Power tick: drain or recharge batteries from supply vs.
+            // housekeeping demand at the current location's solar
+            // distance. Brownout strands the flight (housekeeping lost →
+            // loss of control). No-op for grandfathered designs with no
+            // explicit power sources.
+            let sun_au = crate::location::DELTA_V_MAP
+                .location(&flight.current_location)
+                .map_or(1.0, |l| l.sun_distance_au());
+            let brownout = flight.rocket.run_daily_power_tick(&flight.design, sun_au);
+            if brownout {
+                flight.status = FlightStatus::Stranded;
+                stranded_indices.push(i);
+                let evt = GameEvent::PowerLost {
+                    rocket_name: flight.rocket_name.clone(),
+                    location: crate::contract::destination_display_name(
+                        &flight.current_location).to_string(),
+                };
+                events.push(evt);
+                continue;
+            }
+
             // Roll endurance (PerDay) flaws for this flight's rocket project
             for rf in &rocket_flaw_table {
                 if rf.project_id != flight.rocket_project_id {
@@ -2577,6 +2598,7 @@ mod tests {
             propellant_mass_kg: 200_000.0,
             structural_mass_kg: 5000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let stage2 = Stage {
             id: StageId(2),
@@ -2586,6 +2608,7 @@ mod tests {
             propellant_mass_kg: 30_000.0,
             structural_mass_kg: 1000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         // Stage 3 sized so that LEO→GTO (2440 m/s) + GTO→GEO (1500 m/s) = 3940 m/s
         // exceeds its dv, ensuring it gets exhausted and jettisoned mid-flight.
@@ -2598,6 +2621,7 @@ mod tests {
             propellant_mass_kg: 1000.0,
             structural_mass_kg: 300.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -3003,12 +3027,14 @@ mod tests {
             engine: booster_engine.clone(), engine_count: 3,
             propellant_mass_kg: 200_000.0, structural_mass_kg: 5000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let stage2 = Stage {
             id: StageId(2), name: "S2".into(),
             engine: booster_engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 1000.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         // Stage 3: ion engine for transit (very high Isp, very low thrust)
@@ -3030,6 +3056,7 @@ mod tests {
             engine: ion_engine.clone(), engine_count: 1,
             propellant_mass_kg: 500.0, structural_mass_kg: 50.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         // Stage 4: small hypergolic thruster for asteroid landing
@@ -3052,6 +3079,7 @@ mod tests {
             engine: hyp_engine.clone(), engine_count: 1,
             propellant_mass_kg: 100.0, structural_mass_kg: 20.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
 
         let design = RocketDesign {
@@ -3300,6 +3328,7 @@ mod tests {
             engine, engine_count: 1,
             propellant_mass_kg: 500.0, structural_mass_kg: 100.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let design = RocketDesign {
             id: RocketDesignId(id), name: name.into(),
@@ -3459,6 +3488,7 @@ mod tests {
             engine, engine_count: 1,
             propellant_mass_kg: 100.0, structural_mass_kg: 10.0,
             fairing: None,
+            power_sources: Vec::new(),
         };
         let design = RocketDesign {
             id: RocketDesignId(id), name: name.into(),

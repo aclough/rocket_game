@@ -1671,6 +1671,47 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
             "  Total mass: {}",
             format_mass(total_mass),
         )));
+
+        // Electrical summary. Read-only for now; editing UI is a follow-up.
+        // Compute supply at takeoff (1 AU) and housekeeping demand across
+        // attached stages; show whether designs balance.
+        let mut total_housekeeping = 0.0;
+        let mut total_supply_1au = 0.0;
+        let mut total_battery_kwd = 0.0;
+        let mut any_explicit = false;
+        for group in &temp_design.stage_groups {
+            for stage in group {
+                total_housekeeping += stage.housekeeping_w();
+                for src in &stage.power_sources {
+                    any_explicit = true;
+                    total_supply_1au += src.steady_output_w(1.0);
+                    if let crate::power::PowerSourceKind::Battery = src.kind {
+                        total_battery_kwd += src.capacity_kwd;
+                    }
+                }
+            }
+        }
+        let summary = if any_explicit {
+            let surplus = total_supply_1au - total_housekeeping;
+            let surplus_marker = if surplus >= 0.0 { "+" } else { "" };
+            format!(
+                "  Power: {:.0} W supply (@ 1 AU)  /  {:.0} W demand  ({}{:.0} W)  battery: {:.2} kWd",
+                total_supply_1au, total_housekeeping, surplus_marker, surplus, total_battery_kwd,
+            )
+        } else {
+            format!(
+                "  Power: no explicit sources (grandfathered)  housekeeping demand: {:.0} W",
+                total_housekeeping,
+            )
+        };
+        lines.push(Line::from(Span::styled(
+            summary,
+            if any_explicit && total_supply_1au < total_housekeeping {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        )));
         lines.push(Line::from(""));
 
         // Payload feasibility for destinations served by active markets
