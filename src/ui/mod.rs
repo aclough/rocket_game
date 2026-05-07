@@ -210,6 +210,16 @@ pub enum InputMode {
     RocketName { buffer: String },
     /// Persistent rocket designer screen.
     RocketDesigner { state: Box<RocketDesignerState> },
+    /// Per-stage power-source editor opened from the rocket designer.
+    /// Cursor walks a merged list of "equipped sources" then "presets to
+    /// add"; Space adds a preset, X/Del removes an equipped source, Esc
+    /// returns to the designer.
+    PowerEditor {
+        state: Box<RocketDesignerState>,
+        group_index: usize,
+        stage_index: usize,
+        cursor: usize,
+    },
     /// Picking an engine for a new or replacement stage.
     RocketPickEngine {
         state: Box<RocketDesignerState>,
@@ -1100,7 +1110,8 @@ impl App {
             }
             InputMode::RocketDesigner { .. }
             | InputMode::RocketPickEngine { .. }
-            | InputMode::RocketPayloadInput { .. } => {
+            | InputMode::RocketPayloadInput { .. }
+            | InputMode::PowerEditor { .. } => {
                 // Extract all data from the enum variant before calling handlers,
                 // to avoid holding a mutable borrow on self.input_mode.
                 let old_mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
@@ -1115,6 +1126,11 @@ impl App {
                     }
                     InputMode::RocketPayloadInput { state, buffer } => {
                         self.handle_rocket_payload_input_key(key, state, buffer);
+                    }
+                    InputMode::PowerEditor { state, group_index, stage_index, cursor } => {
+                        self.handle_power_editor_key(
+                            key, state, group_index, stage_index, cursor,
+                        );
                     }
                     _ => unreachable!(),
                 }
@@ -1650,6 +1666,19 @@ impl App {
                     selected: 0,
                 };
             }
+            KeyCode::Char('w') | KeyCode::Char('W') => {
+                // Open the power-source editor for the currently-selected
+                // stage. No-op when on the "add stage" sentinel slot.
+                if !state.on_add_slot() {
+                    let group_index = state.selected_group;
+                    let stage_index = state.selected_inner;
+                    self.input_mode = InputMode::PowerEditor {
+                        state, group_index, stage_index, cursor: 0,
+                    };
+                } else {
+                    self.input_mode = InputMode::RocketDesigner { state };
+                }
+            }
             KeyCode::Char('i') | KeyCode::Char('I') => {
                 // Insert stage before selected group
                 if !state.on_add_slot() {
@@ -1895,6 +1924,72 @@ impl App {
                 self.input_mode = InputMode::RocketPayloadInput { state, buffer };
             }
         }
+    }
+
+    /// Power-source editor key handler. The cursor walks a merged list:
+    /// rows 0..N for currently-equipped sources, then rows N..N+P for
+    /// the preset-add menu. Space adds a preset; X/Del removes an
+    /// equipped source. Esc returns to the designer.
+    fn handle_power_editor_key(
+        &mut self,
+        key: KeyCode,
+        mut state: Box<RocketDesignerState>,
+        group_index: usize,
+        stage_index: usize,
+        mut cursor: usize,
+    ) {
+        // Sanity-bound the indices in case the design changed underneath
+        // us (shouldn't, but be defensive).
+        let stage = state.stage_groups
+            .get(group_index)
+            .and_then(|g| g.get(stage_index));
+        if stage.is_none() {
+            self.input_mode = InputMode::RocketDesigner { state };
+            return;
+        }
+        let n_equipped = state.stage_groups[group_index][stage_index]
+            .power_sources.len();
+        let presets = crate::power::power_presets();
+        let n_total = n_equipped + presets.len();
+
+        match key {
+            KeyCode::Esc => {
+                self.input_mode = InputMode::RocketDesigner { state };
+                return;
+            }
+            KeyCode::Up => {
+                if cursor > 0 { cursor -= 1; }
+            }
+            KeyCode::Down => {
+                if cursor + 1 < n_total { cursor += 1; }
+            }
+            KeyCode::Char(' ') => {
+                // Add preset if cursor is on the preset block.
+                if cursor >= n_equipped {
+                    let pi = cursor - n_equipped;
+                    let new_src = (presets[pi].build)();
+                    state.stage_groups[group_index][stage_index]
+                        .power_sources.push(new_src);
+                    // Move cursor onto the just-added source for clarity.
+                    cursor = n_equipped;
+                }
+            }
+            KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
+                if cursor < n_equipped {
+                    state.stage_groups[group_index][stage_index]
+                        .power_sources.remove(cursor);
+                    let new_n_equipped = state.stage_groups[group_index][stage_index]
+                        .power_sources.len();
+                    if cursor >= new_n_equipped && cursor > 0 {
+                        cursor -= 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.input_mode = InputMode::PowerEditor {
+            state, group_index, stage_index, cursor,
+        };
     }
 
     /// Build the list of available engines (player Testing + contracted).

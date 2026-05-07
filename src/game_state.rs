@@ -1200,6 +1200,34 @@ impl GameState {
             events.push(evt);
         }
 
+        // Run the daily power balance on parked spacecraft too. Brownout
+        // kills the spacecraft (loss of attitude/comms/etc — same lethal
+        // outcome as a flight stranding). Anything aboard is lost with it.
+        let mut browned_out: Vec<usize> = Vec::new();
+        for (i, sc) in self.spacecraft.iter_mut().enumerate() {
+            if !sc.rocket.has_explicit_power(&sc.design) {
+                continue;
+            }
+            let had_charge_before = sc.rocket.total_battery_charge_kwd() > 1e-9;
+            let sun_au = crate::location::DELTA_V_MAP
+                .location(&sc.location)
+                .map_or(1.0, |l| l.sun_distance_au());
+            let brownout = sc.rocket.run_daily_power_tick(&sc.design, sun_au);
+            if brownout && had_charge_before {
+                browned_out.push(i);
+            }
+        }
+        for &i in browned_out.iter().rev() {
+            let sc = self.spacecraft.remove(i);
+            let evt = GameEvent::PowerLost {
+                rocket_name: sc.name,
+                location: crate::contract::destination_display_name(&sc.location)
+                    .to_string(),
+            };
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+        }
+
         // Roll endurance flaws for parked spacecraft
         {
             use rand::Rng;

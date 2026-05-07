@@ -1,6 +1,3 @@
-[] Rocket-designer UI for adding/removing power sources per stage
-   (data model & per-day power tick are in place; the designer currently
-   only shows a read-only power-balance summary).
 [] Electric drive power coupling — when ion / Hall thrusters fire, draw
    from the bus; if power is short, scale thrust + mass-flow by the
    power fraction (Isp unchanged, burn time stretches).

@@ -182,6 +182,54 @@ impl RtgClass {
     }
 }
 
+/// Preset power sources surfaced in the rocket designer's power editor.
+/// Each preset has a label and a way to construct the underlying
+/// `PowerSource`. We keep this list short and human-friendly for the
+/// first-cut UI; future work will let the player pick custom sizes.
+pub struct PowerPreset {
+    pub label: &'static str,
+    pub build: fn() -> PowerSource,
+}
+
+pub fn power_presets() -> &'static [PowerPreset] {
+    &[
+        PowerPreset { label: "Small Battery (0.5 kWd)",
+            build: || PowerSource::new_battery(0.5) },
+        PowerPreset { label: "Medium Battery (2 kWd)",
+            build: || PowerSource::new_battery(2.0) },
+        PowerPreset { label: "Large Battery (10 kWd)",
+            build: || PowerSource::new_battery(10.0) },
+        PowerPreset { label: "Small Solar Panel (500 W @ 1 AU)",
+            build: || PowerSource::new_solar_panel(500.0) },
+        PowerPreset { label: "Medium Solar Panel (2 kW @ 1 AU)",
+            build: || PowerSource::new_solar_panel(2_000.0) },
+        PowerPreset { label: "Large Solar Panel (10 kW @ 1 AU)",
+            build: || PowerSource::new_solar_panel(10_000.0) },
+        PowerPreset { label: "Small RTG (40 W)",
+            build: || PowerSource::new_rtg(RtgClass::Small) },
+        PowerPreset { label: "MMRTG (120 W)",
+            build: || PowerSource::new_rtg(RtgClass::Mmrtg) },
+        PowerPreset { label: "Cassini-class RTG (290 W)",
+            build: || PowerSource::new_rtg(RtgClass::Cassini) },
+    ]
+}
+
+/// Short summary label for the equipped-list display.
+pub fn source_summary(src: &PowerSource) -> String {
+    match &src.kind {
+        PowerSourceKind::Battery => format!(
+            "Battery ({:.2} kWd, {:.1} kg)", src.capacity_kwd, src.mass_kg),
+        PowerSourceKind::SolarPanel { peak_w_at_1au } => format!(
+            "Solar Panel ({:.0} W, {:.1} kg)", peak_w_at_1au, src.mass_kg),
+        PowerSourceKind::Rtg { steady_w } => format!(
+            "RTG ({:.0} W, {:.1} kg)", steady_w, src.mass_kg),
+        PowerSourceKind::FuelCell { peak_w, .. } => format!(
+            "Fuel Cell ({:.0} W, {:.1} kg)", peak_w, src.mass_kg),
+        PowerSourceKind::Reactor { steady_w, temperature_k, .. } => format!(
+            "Reactor ({:.0} W, {} K, {:.1} kg)", steady_w, temperature_k, src.mass_kg),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

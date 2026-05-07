@@ -1458,7 +1458,7 @@ fn draw_rocket_designer_full(frame: &mut Frame, app: &App, state: &RocketDesigne
     let help_text = if let Some(ref msg) = app.status_message {
         format!(" {} ", msg)
     } else {
-        " [Enter] Edit  [←→] Engines  [+/-] Prop  [A] Add  [I] Ins  [B] Booster  [X] Rem  [P] Payload  [L] Site  [D] Done  [Esc] Cancel ".to_string()
+        " [Enter] Edit  [←→] Engines  [+/-] Prop  [A] Add  [I] Ins  [B] Booster  [W] Power  [X] Rem  [P] Payload  [L] Site  [D] Done  [Esc] Cancel ".to_string()
     };
     let style = if app.status_message.is_some() {
         Style::default().fg(Color::Green)
@@ -1590,6 +1590,27 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                 ),
                 style,
             )));
+
+            // Per-stage power summary (compact)
+            if !stage.power_sources.is_empty() {
+                let supply: f64 = stage.power_sources.iter()
+                    .map(|p| p.steady_output_w(1.0)).sum();
+                let battery: f64 = stage.power_sources.iter()
+                    .filter_map(|p| match p.kind {
+                        crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
+                        _ => None,
+                    }).sum();
+                let demand = stage.housekeeping_w();
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "{}      power: {} src, {:.0}/{:.0} W @ 1AU, {:.2} kWd",
+                        group_indent,
+                        stage.power_sources.len(),
+                        supply, demand, battery,
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
 
             // Show losses sub-line after the last inner stage of a group
             if is_last_in_group {
@@ -1932,6 +1953,11 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
         }
         InputMode::RocketPickEngine { state, selected, .. } => {
             draw_rocket_pick_engine_modal(frame, app, state, *selected, modal_area);
+        }
+        InputMode::PowerEditor { state, group_index, stage_index, cursor } => {
+            draw_power_editor_modal(
+                frame, state, *group_index, *stage_index, *cursor, modal_area,
+            );
         }
         InputMode::RocketPayloadInput { buffer, .. } => {
             let lines = vec![
@@ -2645,4 +2671,103 @@ fn render_gauges(
             .gauge_style(Style::default().fg(gauge_info.fill_color).bg(Color::DarkGray));
         frame.render_widget(gauge, gauge_area);
     }
+}
+
+fn draw_power_editor_modal(
+    frame: &mut Frame,
+    state: &RocketDesignerState,
+    group_index: usize,
+    stage_index: usize,
+    cursor: usize,
+    area: Rect,
+) {
+    use crate::power::{power_presets, source_summary};
+
+    let stage = match state.stage_groups
+        .get(group_index)
+        .and_then(|g| g.get(stage_index))
+    {
+        Some(s) => s,
+        None => return,
+    };
+    let group_len = state.stage_groups[group_index].len();
+    let stage_label = RocketDesignerState::stage_name(group_index, stage_index, group_len);
+
+    // Live totals for the header — supply at 1 AU, housekeeping demand,
+    // total battery capacity.
+    let supply_w: f64 = stage.power_sources.iter()
+        .map(|p| p.steady_output_w(1.0)).sum();
+    let demand_w = stage.housekeeping_w();
+    let battery_kwd: f64 = stage.power_sources.iter()
+        .filter_map(|p| match p.kind {
+            crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
+            _ => None,
+        }).sum();
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(format!("  Power editor — stage {}", stage_label)),
+        Line::from(format!(
+            "  Supply @ 1 AU: {:.0} W   Demand: {:.0} W   Battery: {:.2} kWd",
+            supply_w, demand_w, battery_kwd,
+        )),
+        Line::from(""),
+    ];
+
+    let n_equipped = stage.power_sources.len();
+    let presets = power_presets();
+    let mut row = 0usize;
+
+    // Equipped sources
+    lines.push(Line::from(Span::styled(
+        "  ── Equipped ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+    if n_equipped == 0 {
+        lines.push(Line::from(Span::styled(
+            "    (none)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    for src in &stage.power_sources {
+        let mark = if cursor == row { " ▶ " } else { "   " };
+        let style = if cursor == row {
+            Style::default().fg(Color::Yellow)
+        } else { Style::default() };
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", mark, source_summary(src)),
+            style,
+        )));
+        row += 1;
+    }
+    lines.push(Line::from(""));
+
+    // Add presets
+    lines.push(Line::from(Span::styled(
+        "  ── Add ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+    for preset in presets {
+        let mark = if cursor == row { " ▶ " } else { "   " };
+        let style = if cursor == row {
+            Style::default().fg(Color::Yellow)
+        } else { Style::default() };
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", mark, preset.label),
+            style,
+        )));
+        row += 1;
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [↑↓] Navigate  [Space] Add  [X/Del] Remove  [Esc] Done",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Power Editor — {} ", stage_label))
+        .style(Style::default().fg(Color::Cyan));
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
 }
