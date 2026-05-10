@@ -5,6 +5,7 @@
 [] Fuel cells as a Phase 2 PowerSourceKind, drawing on stage propellant.
 [] Reactor as a Phase 3 PowerSourceKind, gated on a Technology entry.
 [] Solar-panel cost/mass scaling tuning pass once the editor is in.
+[] A way to tranfer mission payloads between rockets to get them to their destination
 [] Add crew support and modules
 [] Propellant boiloff
 [] Have player choose price for markets
