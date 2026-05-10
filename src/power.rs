@@ -71,9 +71,14 @@ pub struct PowerSource {
 
 impl PowerSource {
     /// Steady-state power output (watts) at the given distance from the
-    /// Sun. Batteries and fuel cells are not steady-state producers and
-    /// return 0 here; battery surge handling lives in the per-day balance
-    /// step rather than here.
+    /// Sun.
+    ///
+    /// For display and thrust derating this returns the rated output of
+    /// every source — including fuel-cell peak power, since a fuel cell
+    /// genuinely can supply that much continuously *as long as the
+    /// stage's propellant lasts*. The per-day balance tick separately
+    /// invokes fuel cells and deducts propellant for what they actually
+    /// produced; batteries (zero-steady) are handled by the surge path.
     pub fn steady_output_w(&self, sun_distance_au: f64) -> f64 {
         match &self.kind {
             PowerSourceKind::Battery => 0.0,
@@ -82,7 +87,7 @@ impl PowerSource {
                 peak_w_at_1au / (sun_distance_au * sun_distance_au)
             }
             PowerSourceKind::Rtg { steady_w } => *steady_w,
-            PowerSourceKind::FuelCell { .. } => 0.0,
+            PowerSourceKind::FuelCell { peak_w, .. } => *peak_w,
             PowerSourceKind::Reactor { steady_w, .. } => *steady_w,
         }
     }
@@ -135,6 +140,28 @@ impl PowerSource {
         let material_cost = ref_cost * (p / ref_w).powf(0.85);
         PowerSource {
             kind: PowerSourceKind::SolarPanel { peak_w_at_1au },
+            mass_kg,
+            material_cost,
+            stored_kwd: 0.0,
+            capacity_kwd: 0.0,
+        }
+    }
+
+    /// Build a fuel cell rated at `peak_w` watts. Burns the stage's own
+    /// propellant at `kg_per_kwd` kg per kilowatt-day of output. Mass
+    /// scales linearly at ~30 kg/kW (PEM-class), with material cost
+    /// roughly $200K/kW.
+    pub fn new_fuel_cell(peak_w: f64) -> Self {
+        let p = peak_w.max(1.0);
+        let mass_kg = (p / 1000.0) * 30.0;
+        let material_cost = (p / 1000.0) * 200_000.0;
+        PowerSource {
+            kind: PowerSourceKind::FuelCell {
+                peak_w: p,
+                // ~5 kg of LOX/LH2 per kWd of output (≈Apollo-PEM
+                // efficiency, generous for hydrocarbon mixtures).
+                kg_per_kwd: 5.0,
+            },
             mass_kg,
             material_cost,
             stored_kwd: 0.0,
@@ -211,7 +238,24 @@ pub fn power_presets() -> &'static [PowerPreset] {
             build: || PowerSource::new_rtg(RtgClass::Mmrtg) },
         PowerPreset { label: "Cassini-class RTG (290 W)",
             build: || PowerSource::new_rtg(RtgClass::Cassini) },
+        PowerPreset { label: "Small Fuel Cell (1 kW)",
+            build: || PowerSource::new_fuel_cell(1_000.0) },
+        PowerPreset { label: "Medium Fuel Cell (5 kW)",
+            build: || PowerSource::new_fuel_cell(5_000.0) },
+        PowerPreset { label: "Large Fuel Cell (20 kW)",
+            build: || PowerSource::new_fuel_cell(20_000.0) },
     ]
+}
+
+/// True if the engine's propellant mix is something a fuel cell can
+/// burn (any liquid hydrocarbon or hydrolox). Solid and ion stages can
+/// have a fuel cell installed but it won't produce anything.
+pub fn fuel_cell_can_run_on(engine: &crate::engine::EngineDesign) -> bool {
+    use crate::propellant::Propellant;
+    !engine.propellant_mix.iter().any(|f| matches!(
+        f.propellant,
+        Propellant::SolidMix | Propellant::Xenon,
+    ))
 }
 
 /// Short summary label for the equipped-list display.

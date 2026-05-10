@@ -1635,7 +1635,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
             // Per-stage power summary (compact)
             if !stage.power_sources.is_empty() {
                 let supply: f64 = stage.power_sources.iter()
-                    .map(|p| p.steady_output_w(1.0)).sum();
+                    .map(|p| crate::rocket::stage_source_supply_w(stage, p, 1.0)).sum();
                 let battery: f64 = stage.power_sources.iter()
                     .filter_map(|p| match p.kind {
                         crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
@@ -1746,7 +1746,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                 total_housekeeping += stage.housekeeping_w();
                 for src in &stage.power_sources {
                     any_explicit = true;
-                    total_supply_1au += src.steady_output_w(1.0);
+                    total_supply_1au += crate::rocket::stage_source_supply_w(stage, src, 1.0);
                     if let crate::power::PowerSourceKind::Battery = src.kind {
                         total_battery_kwd += src.capacity_kwd;
                     }
@@ -2768,7 +2768,7 @@ fn draw_power_editor_modal(
     // For a chemical engine the two are equal; for an ion stage the
     // thrust draw can be orders of magnitude higher than housekeeping.
     let supply_w: f64 = stage.power_sources.iter()
-        .map(|p| p.steady_output_w(1.0)).sum();
+        .map(|p| crate::rocket::stage_source_supply_w(stage, p, 1.0)).sum();
     let idle_demand_w = stage.housekeeping_w();
     let engine_draw_w = stage.engine.power_draw_w * stage.engine_count as f64;
     let thrust_demand_w = idle_demand_w + engine_draw_w;

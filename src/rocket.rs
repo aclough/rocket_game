@@ -49,6 +49,23 @@ pub struct BurnResult {
     pub groups_jettisoned: Vec<usize>,
 }
 
+/// Effective steady-state output of one power source on a given stage.
+/// Same as `PowerSource::steady_output_w` except fuel cells return 0 if
+/// the host stage's engine has propellant the cell can't burn (solid
+/// or xenon).
+pub fn stage_source_supply_w(
+    stage: &Stage,
+    src: &crate::power::PowerSource,
+    sun_distance_au: f64,
+) -> f64 {
+    match src.kind {
+        crate::power::PowerSourceKind::FuelCell { peak_w, .. } => {
+            if crate::power::fuel_cell_can_run_on(&stage.engine) { peak_w } else { 0.0 }
+        }
+        _ => src.steady_output_w(sun_distance_au),
+    }
+}
+
 /// A physical rocket instance with runtime state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rocket {
@@ -77,13 +94,15 @@ impl RocketDesign {
 
     /// Total electrical power supply (watts) at the given heliocentric
     /// distance. Sums steady output of every power source on every stage
-    /// — assumes all stages full / attached / charged.
+    /// — assumes all stages full / attached / charged. Fuel cells only
+    /// count if their host stage's engine uses propellants the cell can
+    /// burn (no solid, no xenon).
     pub fn total_power_supply_w(&self, sun_distance_au: f64) -> f64 {
         let mut total = 0.0;
         for group in &self.stage_groups {
             for stage in group {
                 for src in &stage.power_sources {
-                    total += src.steady_output_w(sun_distance_au);
+                    total += stage_source_supply_w(stage, src, sun_distance_au);
                 }
             }
         }
@@ -612,7 +631,9 @@ impl Rocket {
     // ─── Power balance ────────────────────────────────────────────────
 
     /// Sum of steady-state power output (watts) across all attached
-    /// stages' power sources, evaluated at `sun_distance_au`.
+    /// stages' power sources, evaluated at `sun_distance_au`. Fuel cells
+    /// only count when their host stage's engine has compatible
+    /// propellant.
     pub fn total_power_supply_w(&self, design: &RocketDesign, sun_distance_au: f64) -> f64 {
         let mut total = 0.0;
         for (gi, group) in design.stage_groups.iter().enumerate() {
@@ -622,7 +643,7 @@ impl Rocket {
                     .map_or(false, |ss| ss.attached);
                 if !attached { continue; }
                 for src in &stage.power_sources {
-                    total += src.steady_output_w(sun_distance_au);
+                    total += stage_source_supply_w(stage, src, sun_distance_au);
                 }
             }
         }
@@ -690,9 +711,16 @@ impl Rocket {
         false
     }
 
-    /// Run one day of power balance: housekeeping draws against supply +
-    /// battery; surplus recharges batteries up to capacity. Returns true
-    /// if the total battery hit zero with demand still unmet (brownout).
+    /// Run one day of power balance.
+    ///
+    /// Priority of supply against housekeeping demand:
+    ///   1. Free supply (solar / RTG / reactor) — surplus charges
+    ///      batteries up to capacity.
+    ///   2. If still in deficit, fuel cells fire up to cover the
+    ///      remainder and consume propellant from their stage.
+    ///   3. If still in deficit, batteries discharge.
+    ///   4. If batteries hit zero with demand unmet, brownout (return
+    ///      true).
     ///
     /// No-op on rockets with no explicit power sources (grandfathered).
     pub fn run_daily_power_tick(
@@ -701,21 +729,98 @@ impl Rocket {
         if !self.has_explicit_power(design) {
             return false;
         }
-        let supply_w = self.total_power_supply_w(design, sun_distance_au);
+        let free_supply_w = self.free_supply_w(design, sun_distance_au);
         let demand_w = self.total_housekeeping_w(design);
-        // Convert to kWd over one day (kW × 1 day).
-        let net_kwd = (supply_w - demand_w) / 1000.0;
-        if net_kwd >= 0.0 {
+        let net_w = free_supply_w - demand_w;
+        if net_w >= 0.0 {
             // Surplus: recharge batteries proportionally.
-            self.distribute_charge_kwd(design, net_kwd);
-            false
-        } else {
-            // Deficit: drain batteries.
-            let deficit = -net_kwd;
-            let drained = self.drain_battery_kwd(deficit);
-            // Brownout if we couldn't drain the full deficit.
-            drained < deficit - 1e-9
+            self.distribute_charge_kwd(design, net_w / 1000.0);
+            return false;
         }
+        // Deficit. Run fuel cells (consume propellant) before batteries.
+        let deficit_w = -net_w;
+        let fuel_cell_produced_w = self.run_fuel_cells_for_w(design, deficit_w);
+        let remaining_w = (deficit_w - fuel_cell_produced_w).max(0.0);
+        if remaining_w <= 1e-6 {
+            return false;
+        }
+        let deficit_kwd = remaining_w / 1000.0;
+        let drained = self.drain_battery_kwd(deficit_kwd);
+        drained < deficit_kwd - 1e-9
+    }
+
+    /// Steady supply from solar / RTG / reactor (excludes fuel cells,
+    /// which consume propellant and are handled as a fallback in the
+    /// daily tick).
+    fn free_supply_w(&self, design: &RocketDesign, sun_distance_au: f64) -> f64 {
+        let mut total = 0.0;
+        for (gi, group) in design.stage_groups.iter().enumerate() {
+            for (si, stage) in group.iter().enumerate() {
+                let attached = self.stage_states.get(gi)
+                    .and_then(|g| g.get(si))
+                    .map_or(false, |ss| ss.attached);
+                if !attached { continue; }
+                for src in &stage.power_sources {
+                    match src.kind {
+                        crate::power::PowerSourceKind::SolarPanel { .. }
+                        | crate::power::PowerSourceKind::Rtg { .. }
+                        | crate::power::PowerSourceKind::Reactor { .. } => {
+                            total += src.steady_output_w(sun_distance_au);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    /// Fire fuel cells to cover up to `required_w` of demand. Each cell
+    /// produces up to its rated peak_w and consumes propellant from its
+    /// own stage at `kg_per_kwd` kg per kilowatt-day of output. If the
+    /// stage runs out of propellant, the cell's output is reduced
+    /// proportionally. Returns the actual total watts produced.
+    fn run_fuel_cells_for_w(
+        &mut self, design: &RocketDesign, required_w: f64,
+    ) -> f64 {
+        if required_w <= 0.0 {
+            return 0.0;
+        }
+        let mut produced_w = 0.0;
+        let mut remaining_w = required_w;
+        for gi in 0..design.stage_groups.len() {
+            for si in 0..design.stage_groups[gi].len() {
+                let attached = self.stage_states.get(gi)
+                    .and_then(|g| g.get(si))
+                    .map_or(false, |ss| ss.attached);
+                if !attached { continue; }
+                let stage = &design.stage_groups[gi][si];
+                if !crate::power::fuel_cell_can_run_on(&stage.engine) {
+                    continue;
+                }
+                for src in &stage.power_sources {
+                    if remaining_w <= 0.0 { return produced_w; }
+                    let (peak_w, kg_per_kwd) = match src.kind {
+                        crate::power::PowerSourceKind::FuelCell { peak_w, kg_per_kwd }
+                            => (peak_w, kg_per_kwd),
+                        _ => continue,
+                    };
+                    let desired_w = peak_w.min(remaining_w);
+                    let desired_kwd = desired_w / 1000.0;
+                    let propellant_needed = desired_kwd * kg_per_kwd;
+                    let avail = self.stage_states[gi][si].propellant_remaining_kg;
+                    let consumed = propellant_needed.min(avail);
+                    self.stage_states[gi][si].propellant_remaining_kg -= consumed;
+                    let actual_kwd = if kg_per_kwd > 0.0 {
+                        consumed / kg_per_kwd
+                    } else { desired_kwd };
+                    let actual_w = actual_kwd * 1000.0;
+                    produced_w += actual_w;
+                    remaining_w -= actual_w;
+                }
+            }
+        }
+        produced_w
     }
 
     /// Distribute `kwd` of charge across attached batteries, respecting
@@ -1742,6 +1847,92 @@ mod tests {
         assert_eq!(avail, 0.0);
         let effective = design.group_effective_thrust_n(0, avail);
         assert_eq!(effective, 0.0);
+    }
+
+    // ─── Fuel cell tests ──────────────────────────────────────────────
+
+    fn hydrolox_engine() -> EngineDesign {
+        EngineDesign {
+            id: EngineId(1), name: "RL-10-like".into(),
+            cycle: EngineCycle::Expander,
+            thrust_n: 100_000.0, mass_kg: 170.0, isp_s: 450.0,
+            exit_pressure_pa: 5_000.0, needs_atmosphere: false,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.833 },
+                PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.167 },
+            ],
+            power_draw_w: 0.0,
+        }
+    }
+
+    fn fuel_celled_hydrolox_stage(fuel_cell_w: f64, prop_kg: f64) -> RocketDesign {
+        use crate::power::PowerSource;
+        let stage = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: hydrolox_engine(),
+            engine_count: 1,
+            propellant_mass_kg: prop_kg,
+            structural_mass_kg: 500.0,
+            fairing: None,
+            power_sources: vec![PowerSource::new_fuel_cell(fuel_cell_w)],
+        };
+        RocketDesign {
+            id: RocketDesignId(1), name: "HydroloxCell".into(),
+            stage_groups: vec![vec![stage]],
+        }
+    }
+
+    #[test]
+    fn fuel_cell_covers_deficit_and_burns_propellant() {
+        // Hydrolox stage with a 1 kW fuel cell, plenty of propellant.
+        // No solar/RTG → free supply is 0 → fuel cell must cover the
+        // housekeeping demand by burning propellant.
+        let design = fuel_celled_hydrolox_stage(1_000.0, 5_000.0);
+        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 0.0);
+        let prop_before = rocket.stage_states[0][0].propellant_remaining_kg;
+        let brownout = rocket.run_daily_power_tick(&design, 1.0);
+        assert!(!brownout, "fuel cell should cover housekeeping");
+        let prop_after = rocket.stage_states[0][0].propellant_remaining_kg;
+        assert!(prop_after < prop_before,
+            "fuel cell should consume propellant ({} -> {})",
+            prop_before, prop_after);
+    }
+
+    #[test]
+    fn fuel_cell_on_xenon_stage_does_nothing() {
+        // Put a fuel cell on an ion stage. Engine burns xenon — no
+        // hydrocarbon for the cell. Cell produces nothing → battery
+        // would have to cover (none here) → brownout.
+        use crate::power::PowerSource;
+        let stage = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: ion_engine_design(5.0, 150_000.0),
+            engine_count: 1,
+            propellant_mass_kg: 1_000.0,
+            structural_mass_kg: 200.0,
+            fairing: None,
+            power_sources: vec![PowerSource::new_fuel_cell(1_000.0)],
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(1), name: "IonCell".into(),
+            stage_groups: vec![vec![stage]],
+        };
+        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 0.0);
+        let prop_before = rocket.stage_states[0][0].propellant_remaining_kg;
+        let brownout = rocket.run_daily_power_tick(&design, 1.0);
+        assert!(brownout, "fuel cell shouldn't run on xenon → brownout");
+        let prop_after = rocket.stage_states[0][0].propellant_remaining_kg;
+        assert_eq!(prop_before, prop_after,
+            "fuel cell on xenon should not consume propellant");
+    }
+
+    #[test]
+    fn fuel_cell_with_empty_propellant_browns_out() {
+        // Start with the stage's propellant near zero. Cell can't run.
+        let design = fuel_celled_hydrolox_stage(1_000.0, 0.001);
+        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 0.0);
+        let brownout = rocket.run_daily_power_tick(&design, 1.0);
+        assert!(brownout, "no propellant → fuel cell idle → brownout");
     }
 
     #[test]
