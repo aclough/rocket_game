@@ -1,7 +1,3 @@
-[] Phase 2b electric-drive power: per-leg recompute of effective thrust
-   based on the leg's start sun_au, so an outer-system ion mission's
-   burn times naturally lengthen as panels weaken. Phase 2a uses the
-   takeoff sun_au for the whole flight.
 [] Fuel cells as a Phase 2 PowerSourceKind, drawing on stage propellant.
 [] Reactor as a Phase 3 PowerSourceKind, gated on a Technology entry.
 [] Solar-panel cost/mass scaling tuning pass once the editor is in.

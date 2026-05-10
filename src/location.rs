@@ -60,11 +60,22 @@ pub fn parent_body_sun_distance_au(parent: &str) -> f64 {
 }
 
 impl Location {
-    /// Distance from the Sun in AU. For heliocentric "transfer" nodes the
-    /// parent body is "sun" and we return 1.0 (treating Earth-launch
-    /// transfers as 1 AU; this is fine for solar-panel rating since power
-    /// matters at the destination, which is the body branch).
+    /// Distance from the Sun in AU. Heliocentric "X_transfer" and
+    /// "X_escape" nodes (parent_body = "sun") look up X's heliocentric
+    /// distance so the burn at that node sees the right solar flux —
+    /// e.g. `mars_transfer` reports 1.52 AU even though it's filed
+    /// under the Sun. Everything else uses its parent body.
     pub fn sun_distance_au(&self) -> f64 {
+        if self.parent_body == "sun" {
+            if let Some(prefix) = self.id.strip_suffix("_transfer") {
+                let d = parent_body_sun_distance_au(prefix);
+                if d > 0.0 { return d; }
+            }
+            if let Some(prefix) = self.id.strip_suffix("_escape") {
+                let d = parent_body_sun_distance_au(prefix);
+                if d > 0.0 { return d; }
+            }
+        }
         let d = parent_body_sun_distance_au(self.parent_body);
         if d == 0.0 { 1.0 } else { d }
     }

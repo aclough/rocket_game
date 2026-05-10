@@ -277,6 +277,100 @@ pub fn build_route(
     legs
 }
 
+/// Power-aware route builder. For each leg, computes the effective
+/// thrust at the leg's start location based on the rocket's current
+/// attached stages, propellant load, and the local sun-distance —
+/// then derives burn_days from that thrust. A dry-run of
+/// `burn_sequential` updates the simulated rocket state between legs
+/// so jettisoned stages no longer contribute power or housekeeping
+/// demand on later legs.
+///
+/// Use this whenever you have a concrete `Rocket` instance; it's
+/// strictly more accurate than `build_route` for missions whose burn
+/// times depend on solar distance (ion / Hall stages).
+pub fn build_route_for_rocket(
+    path: &[&'static str],
+    design: &RocketDesign,
+    rocket: &Rocket,
+    payload_mass_kg: f64,
+) -> Vec<FlightLeg> {
+    let mut sim = rocket.clone();
+    let mut legs = Vec::new();
+
+    for window in path.windows(2) {
+        let from = window[0];
+        let to = window[1];
+        let transfer = match DELTA_V_MAP.transfer(from, to) {
+            Some(t) => t,
+            None => continue,
+        };
+
+        // Current attached wet mass (dry + remaining prop) + payload.
+        let mut stage_mass = 0.0;
+        for (gi, group) in design.stage_groups.iter().enumerate() {
+            for (si, stage) in group.iter().enumerate() {
+                if let Some(state) = sim.stage_states.get(gi).and_then(|g| g.get(si)) {
+                    if state.attached {
+                        stage_mass += stage.dry_mass_kg() + state.propellant_remaining_kg;
+                    }
+                }
+            }
+        }
+        let current_mass = stage_mass + payload_mass_kg;
+
+        // Pick the active group's thrust class so we use the right
+        // dv (impulsive vs spiral) for this transfer.
+        let low_thrust = sim.is_current_stage_low_thrust(design);
+        let dv_cost = transfer.delta_v_for(low_thrust, current_mass)
+            .unwrap_or_else(|| transfer.total_delta_v(current_mass));
+        let coast_days = transfer.transit_days;
+
+        // Effective thrust at this leg's start: derate electric engines
+        // by available power at the local sun-distance.
+        let sun_au = DELTA_V_MAP.location(from)
+            .map_or(1.0, |l| l.sun_distance_au());
+        let supply_w = sim.total_power_supply_w(design, sun_au);
+        let housekeeping_w = sim.total_housekeeping_w(design);
+        let avail_for_engines = (supply_w - housekeeping_w).max(0.0);
+        let active_group = (0..design.stage_groups.len())
+            .find(|gi| sim.stage_states.get(*gi)
+                .map_or(false, |g| g.iter().any(|s|
+                    s.attached && s.propellant_remaining_kg > 0.0)));
+        let thrust = active_group
+            .map(|gi| design.group_effective_thrust_n(gi, avail_for_engines))
+            .unwrap_or(0.0);
+
+        let burn_days = if thrust > 0.0 {
+            let accel = thrust / current_mass;
+            let burn_time_s = dv_cost / accel;
+            (burn_time_s / 86400.0).ceil() as u32
+        } else {
+            0
+        };
+
+        let ambient_pressure_pa = if transfer.through_atmosphere {
+            DELTA_V_MAP.surface_properties(from)
+                .map_or(0.0, |p| p.ambient_pressure_pa)
+        } else {
+            0.0
+        };
+
+        legs.push(FlightLeg {
+            from: from.to_string(),
+            to: to.to_string(),
+            delta_v_cost: dv_cost,
+            burn_days,
+            coast_days,
+            ambient_pressure_pa,
+        });
+
+        // Advance the simulated rocket through this burn so the next
+        // leg sees the updated stage states (and any jettisons).
+        sim.burn_sequential(design, dv_cost, ambient_pressure_pa);
+    }
+    legs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,5 +660,71 @@ mod tests {
         flight.leg_days_remaining = 3;
         let plan = flight.dv_plan();
         assert_eq!(plan.len(), 1);
+    }
+
+    /// Build an ion-only spacecraft with `panel_w` watts of solar at
+    /// 1 AU. Big propellant so a long burn is possible.
+    fn ion_spacecraft_design(panel_w: f64) -> RocketDesign {
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::power::PowerSource;
+        use crate::propellant::Propellant;
+        use crate::rocket::{RocketDesign, RocketDesignId};
+        use crate::stage::{Stage, StageId};
+        let ion = EngineDesign {
+            id: EngineId(1), name: "Ion".into(),
+            cycle: EngineCycle::ElectricPropulsion,
+            thrust_n: 5.0, mass_kg: 35.0, isp_s: 3000.0,
+            exit_pressure_pa: 0.0, needs_atmosphere: false,
+            propellant_mix: vec![PropellantFraction {
+                propellant: Propellant::Xenon, mass_fraction: 1.0,
+            }],
+            power_draw_w: 150_000.0, // 5 N × 30 kW/N
+        };
+        let stage = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: ion, engine_count: 1,
+            propellant_mass_kg: 1_000.0, structural_mass_kg: 200.0,
+            fairing: None,
+            power_sources: vec![PowerSource::new_solar_panel(panel_w)],
+        };
+        RocketDesign {
+            id: RocketDesignId(1), name: "Ion".into(),
+            stage_groups: vec![vec![stage]],
+        }
+    }
+
+    #[test]
+    fn build_route_for_rocket_stretches_burns_far_from_sun() {
+        // An ion craft burning at Mars (1.52 AU) gets less panel power
+        // than the same burn at Earth (1 AU). With the same engine the
+        // burn_days should be larger on the Mars-side leg.
+        use crate::rocket::RocketId;
+        let design = ion_spacecraft_design(300_000.0);
+        let rocket = design.instantiate(RocketId(1), "earth_escape", 100.0);
+
+        // Path crossing the heliocentric backbone from Earth toward Mars.
+        let path = vec!["earth_escape", "mars_transfer", "mars_capture"];
+        let legs = build_route_for_rocket(&path, &design, &rocket, 100.0);
+        assert_eq!(legs.len(), 2);
+        // Leg 0 starts at earth_escape (1.0 AU), leg 1 at mars_transfer
+        // (1.52 AU). Same engine, same panel — leg 1 should be slower.
+        assert!(legs[1].burn_days >= legs[0].burn_days,
+            "expected Mars-side burn to be at least as long: \
+             leg0={} leg1={}", legs[0].burn_days, legs[1].burn_days);
+    }
+
+    #[test]
+    fn build_route_for_rocket_zero_thrust_zero_burn_days() {
+        // Panel too small to power the engine at all → effective thrust
+        // is zero → burn_days = 0 (caller is expected to refuse the
+        // flight, but the function itself should produce a coherent vec).
+        use crate::rocket::RocketId;
+        let design = ion_spacecraft_design(1.0); // 1 W panel for a 150 kW engine
+        let rocket = design.instantiate(RocketId(1), "leo", 0.0);
+        let path = vec!["leo", "meo"];
+        let legs = build_route_for_rocket(&path, &design, &rocket, 0.0);
+        assert_eq!(legs.len(), 1);
+        assert_eq!(legs[0].burn_days, 0,
+            "with zero effective thrust, burn_days should be 0");
     }
 }

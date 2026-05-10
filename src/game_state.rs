@@ -1577,11 +1577,10 @@ impl GameState {
             return Some((events, Some(record)));
         }
 
-        // Success or partial failure — create a flight in transit
-        let rocket_mass = sim.degraded_design.total_mass_kg() + total_payload_kg;
-        // Effective thrust: derate electric engines by available power.
-        // Earth surface = 1 AU; we use takeoff power for the whole flight
-        // (Phase 2a). Per-leg derate based on current sun_au is Phase 2b.
+        // Success or partial failure — create a flight in transit.
+        // Refuse to launch if the active group's engines have no
+        // electrical power available at takeoff (e.g. ion stage with no
+        // panels). Chemical engines always have nominal thrust regardless.
         let avail_power_at_takeoff = sim.degraded_design.power_for_engines_w(1.0);
         let first_group_thrust = sim.degraded_design
             .group_effective_thrust_n(0, avail_power_at_takeoff);
@@ -1590,14 +1589,22 @@ impl GameState {
             .shortest_path_for_rocket(
                 "earth_surface", destination, &sim.degraded_design, total_payload_kg,
             );
-        // If the active group's electric engines have no power available,
-        // effective thrust is zero — refuse to launch. (Chemical engines
-        // always produce nominal thrust regardless of power.)
+        // Build the route using the power-aware path so per-leg burn
+        // times reflect each leg's sun-distance (Phase 2b).
         let route = if first_group_thrust <= 0.0 {
             Vec::new()
         } else {
             match path {
-                Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, false),
+                Some((path, _)) => {
+                    let sim_rocket = sim.degraded_design.instantiate(
+                        crate::rocket::RocketId(0),
+                        "earth_surface",
+                        total_payload_kg,
+                    );
+                    crate::flight::build_route_for_rocket(
+                        &path, &sim.degraded_design, &sim_rocket, total_payload_kg,
+                    )
+                }
                 None => vec![],
             }
         };
@@ -2346,30 +2353,27 @@ impl GameState {
         let payload_mass: f64 = sc.payloads.iter().map(|p| p.mass_kg()).sum();
         sc.rocket.payload_mass_kg = payload_mass;
 
-        let rocket_mass = sc.design.total_mass_kg() + payload_mass;
-        // Derate effective thrust by available electrical power at the
-        // spacecraft's current location (Phase 2a — takeoff sun_au only).
+        // Refuse the flight if the active group's electric engines
+        // can't produce thrust at the spacecraft's current location.
         let sun_au_at_takeoff = crate::location::DELTA_V_MAP
             .location(&sc.location)
             .map_or(1.0, |l| l.sun_distance_au());
         let avail_power = sc.design.power_for_engines_w(sun_au_at_takeoff);
         let first_group_thrust = sc.design
             .group_effective_thrust_n(0, avail_power);
-        let low_thrust = sc.rocket.is_current_stage_low_thrust(&sc.design);
-
-        // If electric engines lack the power to produce any thrust,
-        // refuse the flight (effectively stranding the spacecraft until
-        // it recharges or gets more panels).
         if first_group_thrust <= 0.0 {
             self.spacecraft.insert(spacecraft_index, sc);
             return;
         }
+
         let path = crate::location::DELTA_V_MAP
             .shortest_path_for_rocket(
                 &sc.location, destination, &sc.design, payload_mass,
             );
         let route = match path {
-            Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, low_thrust),
+            Some((path, _)) => crate::flight::build_route_for_rocket(
+                &path, &sc.design, &sc.rocket, payload_mass,
+            ),
             None => {
                 // No valid path — put the spacecraft back and abort
                 self.spacecraft.insert(spacecraft_index, sc);
