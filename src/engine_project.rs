@@ -125,6 +125,9 @@ pub struct EngineBaseline {
     pub exit_pressure_sl_pa: f64,
     /// If true, this engine can only be built in vacuum configuration.
     pub vacuum_only: bool,
+    /// Electrical power draw at full thrust (watts). 0 for everything
+    /// except `ElectricPropulsion`.
+    pub power_draw_w: f64,
 }
 
 /// Get the baseline engine parameters for a (cycle, propellant) combination.
@@ -139,12 +142,17 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         }
         return Some(EngineBaseline {
             thrust_n: 1.0,               // 1 Newton — very low thrust
-            mass_kg: 50.0,               // light
+            // Mass cut from 50 kg to 35 kg now that the engine no longer
+            // implicitly carries its own power supply (panels are
+            // provisioned separately on the stage).
+            mass_kg: 35.0,
             isp_vac_s: 3000.0,           // very high Isp
             isp_sl_s: 0.0,              // vacuum only
             exit_pressure_vac_pa: 0.0,
             exit_pressure_sl_pa: 0.0,    // not applicable
             vacuum_only: true,
+            // ~30 kW per Newton of thrust — NEXT-thruster scale.
+            power_draw_w: 30_000.0,
         });
     }
 
@@ -161,6 +169,9 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
             exit_pressure_vac_pa: 0.0,
             exit_pressure_sl_pa: 0.0,
             vacuum_only: true,
+            // Solar sails get thrust from photons, not electricity. A
+            // future "magnetic sail" variant might draw power.
+            power_draw_w: 0.0,
         });
     }
 
@@ -177,6 +188,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
             exit_pressure_vac_pa: 7_000.0,
             exit_pressure_sl_pa: 7_000.0, // vacuum only
             vacuum_only: true,
+            power_draw_w: 0.0,
         });
     }
 
@@ -276,6 +288,8 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         exit_pressure_vac_pa: exit_pressure_vac,
         exit_pressure_sl_pa: exit_pressure_sl,
         vacuum_only: cycle == EngineCycle::Expander,
+        // Chemical engines don't draw electrical power.
+        power_draw_w: 0.0,
     })
 }
 
@@ -373,6 +387,9 @@ impl EngineProject {
             exit_pressure_pa: exit_pressure,
             needs_atmosphere: !use_vacuum,
             propellant_mix: preset.propellant_mix(),
+            // Power draw: scales with thrust for ion drives (~30 kW/N
+            // ≈ NEXT thruster ratio); 0 for everything else.
+            power_draw_w: baseline.power_draw_w * scale,
         };
 
         Some(EngineProject {

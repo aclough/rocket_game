@@ -298,6 +298,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
             ],
+            power_draw_w: 0.0,
         };
         let stage = Stage {
             id: StageId(id), name: format!("S{}", id),
@@ -434,6 +435,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
+            power_draw_w: 0.0,
         };
         let upper_engine = EngineDesign {
             id: EngineId(2), name: "Upper".into(),
@@ -444,6 +446,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
+            power_draw_w: 0.0,
         };
         let s1 = Stage {
             id: StageId(1), name: "S1".into(),

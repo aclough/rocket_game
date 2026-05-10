@@ -57,6 +57,7 @@ pub fn generate_starter_engines(_seed: &GameSeed) -> Vec<ThirdPartyEngine> {
                 propellant_mix: vec![
                     PropellantFraction { propellant: Propellant::SolidMix, mass_fraction: 1.0 },
                 ],
+                power_draw_w: 0.0,
             },
             preset: PropellantPreset::Solid,
             complexity: 5,
@@ -77,6 +78,7 @@ pub fn generate_starter_engines(_seed: &GameSeed) -> Vec<ThirdPartyEngine> {
                     PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.73 },
                     PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.27 },
                 ],
+                power_draw_w: 0.0,
             },
             preset: PropellantPreset::Kerolox,
             complexity: 8,
@@ -97,6 +99,7 @@ pub fn generate_starter_engines(_seed: &GameSeed) -> Vec<ThirdPartyEngine> {
                     PropellantFraction { propellant: Propellant::NTO, mass_fraction: 0.57 },
                     PropellantFraction { propellant: Propellant::UDMH, mass_fraction: 0.43 },
                 ],
+                power_draw_w: 0.0,
             },
             preset: PropellantPreset::Hypergolic,
             complexity: 5,

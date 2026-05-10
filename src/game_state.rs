@@ -1579,15 +1579,27 @@ impl GameState {
 
         // Success or partial failure — create a flight in transit
         let rocket_mass = sim.degraded_design.total_mass_kg() + total_payload_kg;
-        let first_group_thrust = sim.degraded_design.group_thrust_n(0);
+        // Effective thrust: derate electric engines by available power.
+        // Earth surface = 1 AU; we use takeoff power for the whole flight
+        // (Phase 2a). Per-leg derate based on current sun_au is Phase 2b.
+        let avail_power_at_takeoff = sim.degraded_design.power_for_engines_w(1.0);
+        let first_group_thrust = sim.degraded_design
+            .group_effective_thrust_n(0, avail_power_at_takeoff);
 
         let path = crate::location::DELTA_V_MAP
             .shortest_path_for_rocket(
                 "earth_surface", destination, &sim.degraded_design, total_payload_kg,
             );
-        let route = match path {
-            Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, false),
-            None => vec![],
+        // If the active group's electric engines have no power available,
+        // effective thrust is zero — refuse to launch. (Chemical engines
+        // always produce nominal thrust regardless of power.)
+        let route = if first_group_thrust <= 0.0 {
+            Vec::new()
+        } else {
+            match path {
+                Some((path, _)) => crate::flight::build_route(&path, rocket_mass, first_group_thrust, false),
+                None => vec![],
+            }
         };
 
         let flight_id = FlightId(self.next_flight_id);
@@ -2335,9 +2347,23 @@ impl GameState {
         sc.rocket.payload_mass_kg = payload_mass;
 
         let rocket_mass = sc.design.total_mass_kg() + payload_mass;
-        let first_group_thrust = sc.design.group_thrust_n(0);
+        // Derate effective thrust by available electrical power at the
+        // spacecraft's current location (Phase 2a — takeoff sun_au only).
+        let sun_au_at_takeoff = crate::location::DELTA_V_MAP
+            .location(&sc.location)
+            .map_or(1.0, |l| l.sun_distance_au());
+        let avail_power = sc.design.power_for_engines_w(sun_au_at_takeoff);
+        let first_group_thrust = sc.design
+            .group_effective_thrust_n(0, avail_power);
         let low_thrust = sc.rocket.is_current_stage_low_thrust(&sc.design);
 
+        // If electric engines lack the power to produce any thrust,
+        // refuse the flight (effectively stranding the spacecraft until
+        // it recharges or gets more panels).
+        if first_group_thrust <= 0.0 {
+            self.spacecraft.insert(spacecraft_index, sc);
+            return;
+        }
         let path = crate::location::DELTA_V_MAP
             .shortest_path_for_rocket(
                 &sc.location, destination, &sc.design, payload_mass,
@@ -2601,6 +2627,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.6 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
             ],
+            power_draw_w: 0.0,
         };
 
         let engine2 = EngineDesign {
@@ -2616,6 +2643,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.6 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
             ],
+            power_draw_w: 0.0,
         };
 
         let stage1 = Stage {
@@ -3049,6 +3077,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.73 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.27 },
             ],
+            power_draw_w: 0.0,
         };
         let stage1 = Stage {
             id: StageId(1), name: "S1".into(),
@@ -3078,6 +3107,7 @@ mod tests {
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::Xenon, mass_fraction: 1.0 },
             ],
+            power_draw_w: 0.0,
         };
         let ion_stage = Stage {
             id: StageId(3), name: "Ion".into(),
@@ -3101,6 +3131,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::NTO, mass_fraction: 0.57 },
                 PropellantFraction { propellant: Propellant::UDMH, mass_fraction: 0.43 },
             ],
+            power_draw_w: 0.0,
         };
         let lander_stage = Stage {
             id: StageId(4), name: "Lander".into(),
@@ -3350,6 +3381,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
             ],
+            power_draw_w: 0.0,
         };
         let stage = Stage {
             id: StageId(id), name: format!("S{}", id),
@@ -3510,6 +3542,7 @@ mod tests {
             propellant_mix: vec![PropellantFraction {
                 propellant: Propellant::LOX, mass_fraction: 1.0,
             }],
+            power_draw_w: 0.0,
         };
         let stage = Stage {
             id: StageId(id), name: "S".into(),

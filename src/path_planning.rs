@@ -420,6 +420,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
+            power_draw_w: 0.0,
         }
     }
 
@@ -432,6 +433,7 @@ mod tests {
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::Xenon, mass_fraction: 1.0 },
             ],
+            power_draw_w: 0.0,
         }
     }
 

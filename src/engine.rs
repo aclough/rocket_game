@@ -43,6 +43,13 @@ pub struct EngineDesign {
     pub exit_pressure_pa: f64,
     pub needs_atmosphere: bool,
     pub propellant_mix: Vec<PropellantFraction>,
+    /// Electrical power required (watts) to operate at full rated thrust.
+    /// Default 0 — chemical, nuclear-thermal, and solar-sail engines
+    /// don't consume electrical power. Set for ElectricPropulsion at
+    /// engine-design time. When positive, the rocket's available power
+    /// (supply minus housekeeping) caps the engine's effective thrust.
+    #[serde(default)]
+    pub power_draw_w: f64,
 }
 
 impl EngineDesign {
@@ -163,6 +170,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
+            power_draw_w: 0.0,
         }
     }
 
@@ -180,6 +188,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.833 },
                 PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.167 },
             ],
+            power_draw_w: 0.0,
         }
     }
 

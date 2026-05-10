@@ -347,6 +347,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.6 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
             ],
+            power_draw_w: 0.0,
         }
     }
 

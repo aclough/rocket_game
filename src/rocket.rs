@@ -75,6 +75,67 @@ impl RocketDesign {
             .unwrap_or(0.0)
     }
 
+    /// Total electrical power supply (watts) at the given heliocentric
+    /// distance. Sums steady output of every power source on every stage
+    /// — assumes all stages full / attached / charged.
+    pub fn total_power_supply_w(&self, sun_distance_au: f64) -> f64 {
+        let mut total = 0.0;
+        for group in &self.stage_groups {
+            for stage in group {
+                for src in &stage.power_sources {
+                    total += src.steady_output_w(sun_distance_au);
+                }
+            }
+        }
+        total
+    }
+
+    /// Total housekeeping demand (watts) across all stages.
+    pub fn total_housekeeping_w(&self) -> f64 {
+        let mut total = 0.0;
+        for group in &self.stage_groups {
+            for stage in group {
+                total += stage.housekeeping_w();
+            }
+        }
+        total
+    }
+
+    /// Power available for engines (after housekeeping is subtracted) at
+    /// the given heliocentric distance. Negative supply clamps to zero.
+    pub fn power_for_engines_w(&self, sun_distance_au: f64) -> f64 {
+        (self.total_power_supply_w(sun_distance_au) - self.total_housekeeping_w()).max(0.0)
+    }
+
+    /// Effective combined thrust of a group, derated by available
+    /// electrical power. Self-powered engines (power_draw_w == 0) always
+    /// produce nominal thrust; electric engines scale down by
+    /// `min(1, available / required)` and consume their share of the
+    /// available pool. Power is allocated to stages in their order
+    /// within the group.
+    pub fn group_effective_thrust_n(&self, group_index: usize, available_power_w: f64) -> f64 {
+        let group = match self.stage_groups.get(group_index) {
+            Some(g) => g,
+            None => return 0.0,
+        };
+        let mut total = 0.0;
+        let mut remaining = available_power_w;
+        for stage in group {
+            let nominal = stage.total_thrust_n();
+            let required = stage.engine.power_draw_w * stage.engine_count as f64;
+            if required <= 0.0 {
+                total += nominal;
+            } else if remaining <= 0.0 {
+                // Out of electrical power for this stage.
+            } else {
+                let fraction = (remaining / required).min(1.0);
+                total += nominal * fraction;
+                remaining -= required * fraction;
+            }
+        }
+        total
+    }
+
     /// Validate the design. Returns a list of problems (empty = valid).
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
@@ -859,6 +920,7 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
+            power_draw_w: 0.0,
         }
     }
 
@@ -875,6 +937,7 @@ mod tests {
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::SolidMix, mass_fraction: 1.0 },
             ],
+            power_draw_w: 0.0,
         }
     }
 
@@ -1247,6 +1310,7 @@ mod tests {
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 1.0 },
             ],
+            power_draw_w: 0.0,
         };
         let lander_engine = kerolox_engine(11, 50_000.0, 100.0, 320.0);
 
@@ -1601,5 +1665,99 @@ mod tests {
         for _ in 0..1000 {
             assert!(!rocket.run_daily_power_tick(&design, 30.0)); // way out
         }
+    }
+
+    // ─── Effective thrust derate tests ────────────────────────────────
+
+    fn ion_engine_design(thrust_n: f64, power_draw_w: f64) -> EngineDesign {
+        EngineDesign {
+            id: EngineId(1), name: "Ion".into(),
+            cycle: EngineCycle::ElectricPropulsion,
+            thrust_n, mass_kg: 35.0, isp_s: 3000.0,
+            exit_pressure_pa: 0.0, needs_atmosphere: false,
+            propellant_mix: vec![PropellantFraction {
+                propellant: Propellant::Xenon, mass_fraction: 1.0,
+            }],
+            power_draw_w,
+        }
+    }
+
+    fn ion_stage_design(thrust_n: f64, power_draw_w: f64, panel_w: f64) -> RocketDesign {
+        use crate::power::PowerSource;
+        let mut stage = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: ion_engine_design(thrust_n, power_draw_w),
+            engine_count: 1,
+            propellant_mass_kg: 1_000.0, structural_mass_kg: 100.0,
+            fairing: None, power_sources: Vec::new(),
+        };
+        if panel_w > 0.0 {
+            stage.power_sources.push(PowerSource::new_solar_panel(panel_w));
+        }
+        RocketDesign {
+            id: RocketDesignId(1), name: "Ion".into(),
+            stage_groups: vec![vec![stage]],
+        }
+    }
+
+    #[test]
+    fn chemical_engine_thrust_unchanged_by_power() {
+        let design = powered_design(0.0, 0.0); // no panels at all
+        // Chemical engine: power_draw_w = 0, so derate is a no-op.
+        let nominal = design.group_thrust_n(0);
+        let effective = design.group_effective_thrust_n(0, 0.0);
+        assert!((nominal - effective).abs() < 1e-6,
+            "chemical thrust should not depend on power");
+    }
+
+    #[test]
+    fn ion_engine_full_thrust_with_ample_power() {
+        // 10 N ion engine drawing 300 kW; provide a 500 kW panel at 1 AU.
+        let design = ion_stage_design(10.0, 300_000.0, 500_000.0);
+        let avail = design.power_for_engines_w(1.0);
+        let effective = design.group_effective_thrust_n(0, avail);
+        let nominal = design.group_thrust_n(0);
+        assert!((effective - nominal).abs() < 1e-6, "expected full thrust");
+    }
+
+    #[test]
+    fn ion_engine_half_thrust_with_half_power() {
+        // 10 N ion at 300 kW. Provide a panel that delivers half the
+        // need after housekeeping. Housekeeping ≈ structural * 0.1 W/kg
+        // = 100 kg * 0.1 = 10 W (negligible vs. 300 kW). So a 150 kW
+        // panel covers half the engine's draw → ~half thrust.
+        let design = ion_stage_design(10.0, 300_000.0, 150_000.0);
+        let avail = design.power_for_engines_w(1.0);
+        let effective = design.group_effective_thrust_n(0, avail);
+        let nominal = design.group_thrust_n(0);
+        assert!(effective < nominal * 0.6 && effective > nominal * 0.4,
+            "expected ~half thrust, got {} of nominal {}", effective, nominal);
+    }
+
+    #[test]
+    fn ion_engine_zero_thrust_with_no_panel() {
+        // No power source at all → zero thrust.
+        let design = ion_stage_design(10.0, 300_000.0, 0.0);
+        let avail = design.power_for_engines_w(1.0);
+        assert_eq!(avail, 0.0);
+        let effective = design.group_effective_thrust_n(0, avail);
+        assert_eq!(effective, 0.0);
+    }
+
+    #[test]
+    fn ion_engine_thrust_falls_off_with_distance() {
+        // Same 500 kW panel, 300 kW engine. At 1 AU full thrust; at 3 AU
+        // panel delivers 500/9 ≈ 55 kW, well below 300 kW → strongly
+        // derated thrust.
+        let design = ion_stage_design(10.0, 300_000.0, 500_000.0);
+        let avail_1au = design.power_for_engines_w(1.0);
+        let avail_3au = design.power_for_engines_w(3.0);
+        let t_1au = design.group_effective_thrust_n(0, avail_1au);
+        let t_3au = design.group_effective_thrust_n(0, avail_3au);
+        let nominal = design.group_thrust_n(0);
+        assert!((t_1au - nominal).abs() < 1e-6,
+            "1 AU should be full thrust, got {} of nominal {}", t_1au, nominal);
+        assert!(t_3au < nominal * 0.3,
+            "3 AU should be heavily derated, got {} of nominal {}", t_3au, nominal);
     }
 }

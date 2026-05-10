@@ -308,11 +308,18 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 project.design.thrust_n / 1000.0,
                 project.design.isp_s,
             )));
+            let power_str = if project.design.power_draw_w > 0.0 {
+                format!("    Power: {}",
+                    format_power(project.design.power_draw_w))
+            } else {
+                String::new()
+            };
             lines.push(Line::from(format!(
-                "      Mass: {:.0} kg    Teams: {}    Scale: {:.2}x",
+                "      Mass: {:.0} kg    Teams: {}    Scale: {:.2}x{}",
                 project.design.mass_kg,
                 project.teams_assigned,
                 project.scale,
+                power_str,
             )));
 
             // Show inventory count for engines in Testing or later
@@ -1137,6 +1144,40 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                         Style::default().fg(Color::DarkGray),
                     )));
                 }
+            }
+
+            // Current acceleration of the active stage group (with the
+            // power derate applied at the spacecraft's current sun
+            // distance — a Mars-bound ion craft will read lower than at
+            // Earth).
+            let active_group = (0..total_groups)
+                .find(|&gi| sc.rocket.stage_states.get(gi)
+                    .map(|ss| ss.iter().any(|s| s.attached))
+                    .unwrap_or(false));
+            if let Some(gi) = active_group {
+                let stage_mass: f64 = sc.design.stage_groups.iter().enumerate()
+                    .flat_map(|(gj, group)| {
+                        let states = &sc.rocket.stage_states;
+                        group.iter().enumerate().filter_map(move |(sj, stage)| {
+                            let attached = states.get(gj).and_then(|g| g.get(sj))
+                                .map_or(false, |s| s.attached);
+                            if !attached { return None; }
+                            let prop = states[gj][sj].propellant_remaining_kg;
+                            Some(stage.dry_mass_kg() + prop)
+                        })
+                    })
+                    .sum();
+                let payload_mass: f64 = sc.payloads.iter().map(|p| p.mass_kg()).sum();
+                let total_mass = stage_mass + payload_mass;
+                let sun_au = DELTA_V_MAP.location(&sc.location)
+                    .map_or(1.0, |l| l.sun_distance_au());
+                let avail_power = sc.design.power_for_engines_w(sun_au);
+                let thrust = sc.design.group_effective_thrust_n(gi, avail_power);
+                let accel = if total_mass > 0.0 { thrust / total_mass } else { 0.0 };
+                lines.push(Line::from(Span::styled(
+                    format!("      Accel: {}", format_accel(accel)),
+                    Style::default().fg(Color::DarkGray),
+                )));
             }
 
             // Show payloads still aboard (e.g. CSM still carrying LEM).
@@ -2589,6 +2630,34 @@ fn format_mass(kg: f64) -> String {
     }
 }
 
+/// Format a power draw in watts, picking W / kW / MW for readability.
+fn format_power(watts: f64) -> String {
+    if watts >= 1_000_000.0 {
+        format!("{:.1} MW", watts / 1_000_000.0)
+    } else if watts >= 1_000.0 {
+        format!("{:.1} kW", watts / 1_000.0)
+    } else {
+        format!("{:.0} W", watts)
+    }
+}
+
+/// Format an acceleration in m/s² as a multiple of standard gravity,
+/// scaling down to mg / μg / ng for low-thrust craft.
+fn format_accel(a_m_s2: f64) -> String {
+    let g = a_m_s2 / 9.80665;
+    if g >= 1.0 {
+        format!("{:.2} g", g)
+    } else if g >= 1e-3 {
+        format!("{:.0} mg", g * 1e3)
+    } else if g >= 1e-6 {
+        format!("{:.0} μg", g * 1e6)
+    } else if g > 0.0 {
+        format!("{:.0} ng", g * 1e9)
+    } else {
+        "0".to_string()
+    }
+}
+
 fn format_money_signed(amount: f64) -> String {
     if amount >= 0.0 {
         format!("+{}", format_money(amount))
@@ -2693,23 +2762,39 @@ fn draw_power_editor_modal(
     let group_len = state.stage_groups[group_index].len();
     let stage_label = RocketDesignerState::stage_name(group_index, stage_index, group_len);
 
-    // Live totals for the header — supply at 1 AU, housekeeping demand,
-    // total battery capacity.
+    // Live totals for the header. Two demands:
+    //   - idle = housekeeping only (always-on draw).
+    //   - thrust = housekeeping + engines at full power_draw_w * count.
+    // For a chemical engine the two are equal; for an ion stage the
+    // thrust draw can be orders of magnitude higher than housekeeping.
     let supply_w: f64 = stage.power_sources.iter()
         .map(|p| p.steady_output_w(1.0)).sum();
-    let demand_w = stage.housekeeping_w();
+    let idle_demand_w = stage.housekeeping_w();
+    let engine_draw_w = stage.engine.power_draw_w * stage.engine_count as f64;
+    let thrust_demand_w = idle_demand_w + engine_draw_w;
     let battery_kwd: f64 = stage.power_sources.iter()
         .filter_map(|p| match p.kind {
             crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
             _ => None,
         }).sum();
 
+    let supply_color = if supply_w < idle_demand_w {
+        Color::Red
+    } else if supply_w < thrust_demand_w {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
     let mut lines = vec![
         Line::from(""),
         Line::from(format!("  Power editor — stage {}", stage_label)),
-        Line::from(format!(
-            "  Supply @ 1 AU: {:.0} W   Demand: {:.0} W   Battery: {:.2} kWd",
-            supply_w, demand_w, battery_kwd,
+        Line::from(Span::styled(
+            format!(
+                "  Supply @ 1 AU: {:.0} W    Idle demand: {:.0} W    Thrust demand: {:.0} W    Battery: {:.2} kWd",
+                supply_w, idle_demand_w, thrust_demand_w, battery_kwd,
+            ),
+            Style::default().fg(supply_color),
         )),
         Line::from(""),
     ];

@@ -124,6 +124,7 @@ mod tests {
                 propellant_mix: vec![PropellantFraction {
                     propellant: Propellant::LOX, mass_fraction: 1.0,
                 }],
+                power_draw_w: 0.0,
             };
             let stage = Stage {
                 id: StageId(id), name: "S".into(),
