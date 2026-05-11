@@ -1,4 +1,5 @@
 [] Solar-panel cost/mass scaling tuning pass once the editor is in.
+    [] Also scale reactors
 [] A way to tranfer mission payloads between rockets to get them to their destination
 [] Add crew support and modules
 [] Propellant boiloff
