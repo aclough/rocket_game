@@ -83,6 +83,7 @@ pub fn technology_for_preset(preset: crate::engine_project::PropellantPreset) ->
 
 pub const TECH_METHALOX: TechnologyId = TechnologyId(1);
 pub const TECH_NUCLEAR_THERMAL: TechnologyId = TechnologyId(2);
+pub const TECH_FISSION_REACTOR: TechnologyId = TechnologyId(3);
 
 /// Generate technologies for a new game.
 pub fn generate_technologies(seed: &GameSeed) -> Vec<Technology> {
@@ -100,6 +101,15 @@ pub fn generate_technologies(seed: &GameSeed) -> Vec<Technology> {
             TECH_NUCLEAR_THERMAL,
             "Nuclear Thermal",
             "Nuclear reactor heating hydrogen propellant — very high Isp but experimental",
+            false, // unlocked by event
+            2,     // difficulty 2 (high risk)
+        ),
+        generate_technology(
+            seed,
+            TECH_FISSION_REACTOR,
+            "Fission Reactor",
+            "Compact space-rated nuclear reactor producing electricity continuously — \
+             enables high-power probes beyond reach of solar panels",
             false, // unlocked by event
             2,     // difficulty 2 (high risk)
         ),

@@ -1949,8 +1949,12 @@ impl App {
         }
         let n_equipped = state.stage_groups[group_index][stage_index]
             .power_sources.len();
-        let presets = crate::power::power_presets();
-        let n_total = n_equipped + presets.len();
+        // Filter the preset catalog to only those whose tech is unlocked.
+        let available_presets: Vec<&crate::power::PowerPreset> =
+            crate::power::power_presets().iter()
+                .filter(|p| crate::power::preset_available(p, &self.game.technologies))
+                .collect();
+        let n_total = n_equipped + available_presets.len();
 
         match key {
             KeyCode::Esc => {
@@ -1967,7 +1971,7 @@ impl App {
                 // Add preset if cursor is on the preset block.
                 if cursor >= n_equipped {
                     let pi = cursor - n_equipped;
-                    let new_src = (presets[pi].build)();
+                    let new_src = (available_presets[pi].build)();
                     state.stage_groups[group_index][stage_index]
                         .power_sources.push(new_src);
                     // Move cursor onto the just-added source for clarity.

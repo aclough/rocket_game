@@ -1997,7 +1997,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
         }
         InputMode::PowerEditor { state, group_index, stage_index, cursor } => {
             draw_power_editor_modal(
-                frame, state, *group_index, *stage_index, *cursor, modal_area,
+                frame, app, state, *group_index, *stage_index, *cursor, modal_area,
             );
         }
         InputMode::RocketPayloadInput { buffer, .. } => {
@@ -2744,13 +2744,14 @@ fn render_gauges(
 
 fn draw_power_editor_modal(
     frame: &mut Frame,
+    app: &App,
     state: &RocketDesignerState,
     group_index: usize,
     stage_index: usize,
     cursor: usize,
     area: Rect,
 ) {
-    use crate::power::{power_presets, source_summary};
+    use crate::power::{power_presets, preset_available, source_summary};
 
     let stage = match state.stage_groups
         .get(group_index)
@@ -2800,7 +2801,10 @@ fn draw_power_editor_modal(
     ];
 
     let n_equipped = stage.power_sources.len();
-    let presets = power_presets();
+    // Filter the preset catalog to only those whose tech is unlocked.
+    let presets: Vec<&crate::power::PowerPreset> = power_presets().iter()
+        .filter(|p| preset_available(p, &app.game.technologies))
+        .collect();
     let mut row = 0usize;
 
     // Equipped sources

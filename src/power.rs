@@ -147,6 +147,29 @@ impl PowerSource {
         }
     }
 
+    /// Build a fixed-size space-rated fission reactor. Three classes
+    /// reflect different power tiers; higher-power tiers run hotter and
+    /// thus need proportionally less radiator mass per kilowatt (the
+    /// Stefan-Boltzmann ∝ T⁴ story — captured roughly in the bundled
+    /// radiator mass rather than modelled separately). Radiator is
+    /// included in `mass_kg`; the `radiator` field is exposed for future
+    /// work that might let players size it independently.
+    pub fn new_reactor(class: ReactorClass) -> Self {
+        let (steady_w, temperature_k, reactor_mass, radiator_mass, material_cost) = match class {
+            ReactorClass::Small => (5_000.0, 1200.0, 800.0, 200.0, 5_000_000.0),
+            ReactorClass::Medium => (50_000.0, 1400.0, 4200.0, 800.0, 30_000_000.0),
+            ReactorClass::Large => (500_000.0, 1600.0, 26_000.0, 4_000.0, 150_000_000.0),
+        };
+        let radiator = Radiator { kind: RadiatorKind::Standard, mass_kg: radiator_mass };
+        PowerSource {
+            kind: PowerSourceKind::Reactor { steady_w, temperature_k, radiator },
+            mass_kg: reactor_mass + radiator_mass,
+            material_cost,
+            stored_kwd: 0.0,
+            capacity_kwd: 0.0,
+        }
+    }
+
     /// Build a fuel cell rated at `peak_w` watts. Burns the stage's own
     /// propellant at `kg_per_kwd` kg per kilowatt-day of output. Mass
     /// scales linearly at ~30 kg/kW (PEM-class), with material cost
@@ -209,42 +232,89 @@ impl RtgClass {
     }
 }
 
+/// Space-rated fission reactor sizes. Larger units run hotter and
+/// achieve better mass-per-kW than smaller ones (better radiator
+/// efficiency at higher temperature).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReactorClass {
+    /// ~5 kW, Topaz-II class.
+    Small,
+    /// ~50 kW, SAFE-400 class.
+    Medium,
+    /// ~500 kW, SP-100 follow-on class.
+    Large,
+}
+
 /// Preset power sources surfaced in the rocket designer's power editor.
-/// Each preset has a label and a way to construct the underlying
-/// `PowerSource`. We keep this list short and human-friendly for the
-/// first-cut UI; future work will let the player pick custom sizes.
+/// Each preset has a label, a constructor for the underlying
+/// `PowerSource`, and an optional technology gate — presets whose
+/// `tech_required` isn't unlocked are filtered out of the editor.
 pub struct PowerPreset {
     pub label: &'static str,
     pub build: fn() -> PowerSource,
+    pub tech_required: Option<crate::technology::TechnologyId>,
 }
 
 pub fn power_presets() -> &'static [PowerPreset] {
     &[
         PowerPreset { label: "Small Battery (0.5 kWd)",
-            build: || PowerSource::new_battery(0.5) },
+            build: || PowerSource::new_battery(0.5),
+            tech_required: None },
         PowerPreset { label: "Medium Battery (2 kWd)",
-            build: || PowerSource::new_battery(2.0) },
+            build: || PowerSource::new_battery(2.0),
+            tech_required: None },
         PowerPreset { label: "Large Battery (10 kWd)",
-            build: || PowerSource::new_battery(10.0) },
+            build: || PowerSource::new_battery(10.0),
+            tech_required: None },
         PowerPreset { label: "Small Solar Panel (500 W @ 1 AU)",
-            build: || PowerSource::new_solar_panel(500.0) },
+            build: || PowerSource::new_solar_panel(500.0),
+            tech_required: None },
         PowerPreset { label: "Medium Solar Panel (2 kW @ 1 AU)",
-            build: || PowerSource::new_solar_panel(2_000.0) },
+            build: || PowerSource::new_solar_panel(2_000.0),
+            tech_required: None },
         PowerPreset { label: "Large Solar Panel (10 kW @ 1 AU)",
-            build: || PowerSource::new_solar_panel(10_000.0) },
+            build: || PowerSource::new_solar_panel(10_000.0),
+            tech_required: None },
         PowerPreset { label: "Small RTG (40 W)",
-            build: || PowerSource::new_rtg(RtgClass::Small) },
+            build: || PowerSource::new_rtg(RtgClass::Small),
+            tech_required: None },
         PowerPreset { label: "MMRTG (120 W)",
-            build: || PowerSource::new_rtg(RtgClass::Mmrtg) },
+            build: || PowerSource::new_rtg(RtgClass::Mmrtg),
+            tech_required: None },
         PowerPreset { label: "Cassini-class RTG (290 W)",
-            build: || PowerSource::new_rtg(RtgClass::Cassini) },
+            build: || PowerSource::new_rtg(RtgClass::Cassini),
+            tech_required: None },
         PowerPreset { label: "Small Fuel Cell (1 kW)",
-            build: || PowerSource::new_fuel_cell(1_000.0) },
+            build: || PowerSource::new_fuel_cell(1_000.0),
+            tech_required: None },
         PowerPreset { label: "Medium Fuel Cell (5 kW)",
-            build: || PowerSource::new_fuel_cell(5_000.0) },
+            build: || PowerSource::new_fuel_cell(5_000.0),
+            tech_required: None },
         PowerPreset { label: "Large Fuel Cell (20 kW)",
-            build: || PowerSource::new_fuel_cell(20_000.0) },
+            build: || PowerSource::new_fuel_cell(20_000.0),
+            tech_required: None },
+        PowerPreset { label: "Small Reactor (5 kW)",
+            build: || PowerSource::new_reactor(ReactorClass::Small),
+            tech_required: Some(crate::technology::TECH_FISSION_REACTOR) },
+        PowerPreset { label: "Medium Reactor (50 kW)",
+            build: || PowerSource::new_reactor(ReactorClass::Medium),
+            tech_required: Some(crate::technology::TECH_FISSION_REACTOR) },
+        PowerPreset { label: "Large Reactor (500 kW)",
+            build: || PowerSource::new_reactor(ReactorClass::Large),
+            tech_required: Some(crate::technology::TECH_FISSION_REACTOR) },
     ]
+}
+
+/// True iff this preset's tech requirement (if any) is unlocked in
+/// `technologies`. Presets with no gate always pass.
+pub fn preset_available(
+    preset: &PowerPreset,
+    technologies: &[crate::technology::Technology],
+) -> bool {
+    match preset.tech_required {
+        None => true,
+        Some(req) => technologies.iter().any(|t| t.id == req && t.unlocked),
+    }
 }
 
 /// True if the engine's propellant mix is something a fuel cell can
@@ -316,5 +386,77 @@ mod tests {
         assert!(mass_ratio < 10.0, "expected sub-linear, got {}", mass_ratio);
         // But still bigger.
         assert!(mass_ratio > 1.0);
+    }
+
+    #[test]
+    fn reactor_output_is_constant_with_sun_distance() {
+        let r = PowerSource::new_reactor(ReactorClass::Medium);
+        assert!((r.steady_output_w(1.0) - 50_000.0).abs() < 1.0);
+        assert!((r.steady_output_w(10.0) - 50_000.0).abs() < 1.0);
+        // Total mass includes both reactor and radiator.
+        if let PowerSourceKind::Reactor { radiator, .. } = &r.kind {
+            assert!(r.mass_kg > radiator.mass_kg,
+                "total mass should include both reactor + radiator");
+        } else {
+            panic!("expected Reactor kind");
+        }
+    }
+
+    #[test]
+    fn larger_reactors_have_better_mass_per_kw() {
+        // Higher-temp reactors radiate heat more efficiently → less
+        // radiator mass per kW. Encoded in the bundled radiator mass.
+        let small = PowerSource::new_reactor(ReactorClass::Small);
+        let large = PowerSource::new_reactor(ReactorClass::Large);
+        let small_kg_per_kw = small.mass_kg / 5.0;       // 5 kW class
+        let large_kg_per_kw = large.mass_kg / 500.0;     // 500 kW class
+        assert!(large_kg_per_kw < small_kg_per_kw,
+            "expected larger reactor to have lower kg/kW: small={} large={}",
+            small_kg_per_kw, large_kg_per_kw);
+    }
+
+    #[test]
+    fn reactor_preset_locked_until_tech_unlocked() {
+        use crate::technology::{Technology, TECH_FISSION_REACTOR};
+        // Construct a technology list with the reactor tech LOCKED.
+        let locked = vec![Technology {
+            id: TECH_FISSION_REACTOR, name: "Fission Reactor".into(),
+            description: "".into(),
+            unlocked: false, difficulty: 2, deficiencies: vec![],
+        }];
+        let presets = power_presets();
+        let reactor_preset = presets.iter()
+            .find(|p| p.tech_required == Some(TECH_FISSION_REACTOR))
+            .expect("at least one reactor preset");
+        assert!(!preset_available(reactor_preset, &locked),
+            "reactor should be unavailable when tech is locked");
+
+        // Now unlock it.
+        let unlocked = vec![Technology {
+            id: TECH_FISSION_REACTOR, name: "Fission Reactor".into(),
+            description: "".into(),
+            unlocked: true, difficulty: 2, deficiencies: vec![],
+        }];
+        assert!(preset_available(reactor_preset, &unlocked));
+
+        // Non-tech-gated presets always pass.
+        let battery = presets.iter().find(|p| p.tech_required.is_none()).unwrap();
+        assert!(preset_available(battery, &locked));
+        assert!(preset_available(battery, &[]));
+    }
+
+    /// New games include the fission-reactor tech entry (locked by
+    /// default). This is the path that lets a player eventually research
+    /// reactors — if the entry is missing the unlock event can't fire.
+    #[test]
+    fn new_game_includes_fission_reactor_tech() {
+        use crate::seed::GameSeed;
+        let seed = GameSeed::new(42);
+        let techs = crate::technology::generate_technologies(&seed);
+        let reactor_tech = techs.iter()
+            .find(|t| t.id == crate::technology::TECH_FISSION_REACTOR);
+        let reactor_tech = reactor_tech.expect("fission reactor tech missing");
+        assert!(!reactor_tech.unlocked,
+            "reactor tech should start locked");
     }
 }
