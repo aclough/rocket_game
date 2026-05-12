@@ -1,5 +1,11 @@
-[] Solar-panel cost/mass scaling tuning pass once the editor is in.
-    [] Also scale reactors
+[] Integrated Rocket Design
+    [] Go back and forth between tweaking rocket designs and engine designs to see what works for a reference trajectory.
+    [] Both rocket and engines enter "In Design" at once
+[] Modify rocket designs after they're laid down
+    [] Increase tankage as engines improve
+    [] Add more batteries for a long flight
+[] Make reactors researchable
+[] Engine flaw to add more power draw
 [] A way to tranfer mission payloads between rockets to get them to their destination
 [] Add crew support and modules
 [] Propellant boiloff

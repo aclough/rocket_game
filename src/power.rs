@@ -125,6 +125,18 @@ impl PowerSource {
         }
     }
 
+    /// Resize an existing solar panel in place: update the peak watts
+    /// and recompute mass + material cost from the same sub-linear
+    /// curve as `new_solar_panel`. No-op on non-solar sources.
+    pub fn resize_solar_panel(&mut self, new_peak_w_at_1au: f64) {
+        if let PowerSourceKind::SolarPanel { peak_w_at_1au } = &mut self.kind {
+            *peak_w_at_1au = new_peak_w_at_1au.max(1.0);
+            let resized = PowerSource::new_solar_panel(*peak_w_at_1au);
+            self.mass_kg = resized.mass_kg;
+            self.material_cost = resized.material_cost;
+        }
+    }
+
     /// Build a solar panel rated at the given peak watts at 1 AU. Mass and
     /// material cost scale sub-linearly with size (mild economies of
     /// scale): mass ∝ peak^0.9, cost ∝ peak^0.85. No upper bound.
@@ -249,59 +261,63 @@ pub enum ReactorClass {
 /// Each preset has a label, a constructor for the underlying
 /// `PowerSource`, and an optional technology gate — presets whose
 /// `tech_required` isn't unlocked are filtered out of the editor.
+///
+/// `auto_size_solar` is a marker the editor uses to know "ignore the
+/// build closure and instead size the solar panel to the current stage's
+/// demand." Set on the lone solar-panel preset.
 pub struct PowerPreset {
     pub label: &'static str,
     pub build: fn() -> PowerSource,
     pub tech_required: Option<crate::technology::TechnologyId>,
+    pub auto_size_solar: bool,
 }
 
 pub fn power_presets() -> &'static [PowerPreset] {
     &[
         PowerPreset { label: "Small Battery (0.5 kWd)",
             build: || PowerSource::new_battery(0.5),
-            tech_required: None },
+            tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Medium Battery (2 kWd)",
             build: || PowerSource::new_battery(2.0),
-            tech_required: None },
+            tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Large Battery (10 kWd)",
             build: || PowerSource::new_battery(10.0),
-            tech_required: None },
-        PowerPreset { label: "Small Solar Panel (500 W @ 1 AU)",
-            build: || PowerSource::new_solar_panel(500.0),
-            tech_required: None },
-        PowerPreset { label: "Medium Solar Panel (2 kW @ 1 AU)",
-            build: || PowerSource::new_solar_panel(2_000.0),
-            tech_required: None },
-        PowerPreset { label: "Large Solar Panel (10 kW @ 1 AU)",
-            build: || PowerSource::new_solar_panel(10_000.0),
-            tech_required: None },
+            tech_required: None, auto_size_solar: false },
+        // Solar panels are sized by the editor to cover the current
+        // stage's demand at 1 AU; the player tunes them up/down with
+        // +/- once installed. The `build` here is a sentinel that
+        // returns a placeholder; the editor swaps it for a properly
+        // sized panel at add time.
+        PowerPreset { label: "Solar Panel (auto-sized to stage demand)",
+            build: || PowerSource::new_solar_panel(1.0),
+            tech_required: None, auto_size_solar: true },
         PowerPreset { label: "Small RTG (40 W)",
             build: || PowerSource::new_rtg(RtgClass::Small),
-            tech_required: None },
+            tech_required: None, auto_size_solar: false },
         PowerPreset { label: "MMRTG (120 W)",
             build: || PowerSource::new_rtg(RtgClass::Mmrtg),
-            tech_required: None },
+            tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Cassini-class RTG (290 W)",
             build: || PowerSource::new_rtg(RtgClass::Cassini),
-            tech_required: None },
+            tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Small Fuel Cell (1 kW)",
             build: || PowerSource::new_fuel_cell(1_000.0),
-            tech_required: None },
+            tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Medium Fuel Cell (5 kW)",
             build: || PowerSource::new_fuel_cell(5_000.0),
-            tech_required: None },
+            tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Large Fuel Cell (20 kW)",
             build: || PowerSource::new_fuel_cell(20_000.0),
-            tech_required: None },
+            tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Small Reactor (5 kW)",
             build: || PowerSource::new_reactor(ReactorClass::Small),
-            tech_required: Some(crate::technology::TECH_FISSION_REACTOR) },
+            tech_required: Some(crate::technology::TECH_FISSION_REACTOR), auto_size_solar: false },
         PowerPreset { label: "Medium Reactor (50 kW)",
             build: || PowerSource::new_reactor(ReactorClass::Medium),
-            tech_required: Some(crate::technology::TECH_FISSION_REACTOR) },
+            tech_required: Some(crate::technology::TECH_FISSION_REACTOR), auto_size_solar: false },
         PowerPreset { label: "Large Reactor (500 kW)",
             build: || PowerSource::new_reactor(ReactorClass::Large),
-            tech_required: Some(crate::technology::TECH_FISSION_REACTOR) },
+            tech_required: Some(crate::technology::TECH_FISSION_REACTOR), auto_size_solar: false },
     ]
 }
 
@@ -315,6 +331,21 @@ pub fn preset_available(
         None => true,
         Some(req) => technologies.iter().any(|t| t.id == req && t.unlocked),
     }
+}
+
+/// Synthesize a SolarPanel sized to cover this stage's full electrical
+/// demand at 1 AU (housekeeping + engine.power_draw_w × engine_count).
+/// Used at design time when a new stage is created and as the
+/// "Solar Panel (auto-sized)" preset in the editor.
+///
+/// The returned `PowerSource` is just a regular `SolarPanel` — there's
+/// nothing special tagging it as "auto" once it's in the stage's
+/// `power_sources` vec. The player adjusts its size from there via the
+/// editor's +/- controls.
+pub fn solar_panel_for_stage_demand(stage: &crate::stage::Stage) -> PowerSource {
+    let demand = stage.housekeeping_w()
+        + stage.engine.power_draw_w * stage.engine_count as f64;
+    PowerSource::new_solar_panel(demand.max(1.0))
 }
 
 /// True if the engine's propellant mix is something a fuel cell can
@@ -443,6 +474,118 @@ mod tests {
         let battery = presets.iter().find(|p| p.tech_required.is_none()).unwrap();
         assert!(preset_available(battery, &locked));
         assert!(preset_available(battery, &[]));
+    }
+
+    fn make_stage(power_draw_w: f64, engine_count: u32) -> crate::stage::Stage {
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::propellant::Propellant;
+        use crate::stage::{Stage, StageId};
+        let engine = EngineDesign {
+            id: EngineId(1), name: "E".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 1.0, mass_kg: 100.0, isp_s: 300.0,
+            exit_pressure_pa: 1.0, needs_atmosphere: false,
+            propellant_mix: vec![PropellantFraction {
+                propellant: Propellant::LOX, mass_fraction: 1.0,
+            }],
+            power_draw_w,
+        };
+        Stage {
+            id: StageId(1), name: "S".into(),
+            engine, engine_count,
+            propellant_mass_kg: 1000.0, structural_mass_kg: 200.0,
+            fairing: None,
+            power_sources: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn auto_sized_solar_covers_chemical_stage_housekeeping() {
+        // No engine power draw → panel covers just housekeeping.
+        let stage = make_stage(0.0, 1);
+        let panel = solar_panel_for_stage_demand(&stage);
+        let expected = stage.housekeeping_w();
+        match panel.kind {
+            PowerSourceKind::SolarPanel { peak_w_at_1au } => {
+                assert!((peak_w_at_1au - expected).abs() < 1e-6,
+                    "expected {} W, got {}", expected, peak_w_at_1au);
+            }
+            _ => panic!("expected SolarPanel"),
+        }
+    }
+
+    #[test]
+    fn auto_sized_solar_covers_ion_stage_with_engine_draw() {
+        // Ion-class power draw: panel covers housekeeping + engine.
+        let stage = make_stage(150_000.0, 1);
+        let panel = solar_panel_for_stage_demand(&stage);
+        let expected = stage.housekeeping_w() + 150_000.0;
+        match panel.kind {
+            PowerSourceKind::SolarPanel { peak_w_at_1au } => {
+                assert!((peak_w_at_1au - expected).abs() < 1e-6,
+                    "expected {} W, got {}", expected, peak_w_at_1au);
+            }
+            _ => panic!("expected SolarPanel"),
+        }
+        // Should produce enough at 1 AU to power the engine.
+        assert!(panel.steady_output_w(1.0) >= 150_000.0);
+    }
+
+    #[test]
+    fn auto_sized_solar_scales_with_engine_count() {
+        // 4× engines → 4× engine demand.
+        let stage = make_stage(10_000.0, 4);
+        let panel = solar_panel_for_stage_demand(&stage);
+        let expected = stage.housekeeping_w() + 40_000.0;
+        match panel.kind {
+            PowerSourceKind::SolarPanel { peak_w_at_1au } => {
+                assert!((peak_w_at_1au - expected).abs() < 1e-6);
+            }
+            _ => panic!("expected SolarPanel"),
+        }
+    }
+
+    #[test]
+    fn resize_solar_panel_updates_mass_and_cost() {
+        let mut p = PowerSource::new_solar_panel(1_000.0);
+        let mass_1k = p.mass_kg;
+        let cost_1k = p.material_cost;
+        p.resize_solar_panel(10_000.0);
+        // Sub-linear scaling: mass ratio < 10× for 10× the power.
+        assert!(p.mass_kg > mass_1k);
+        assert!(p.mass_kg < mass_1k * 10.0);
+        assert!(p.material_cost > cost_1k);
+        match p.kind {
+            PowerSourceKind::SolarPanel { peak_w_at_1au } => {
+                assert!((peak_w_at_1au - 10_000.0).abs() < 1e-6);
+            }
+            _ => panic!("resize should preserve variant"),
+        }
+    }
+
+    #[test]
+    fn resize_solar_panel_is_noop_on_other_kinds() {
+        let mut b = PowerSource::new_battery(2.0);
+        let mass = b.mass_kg;
+        b.resize_solar_panel(10_000.0);
+        // Battery is unchanged.
+        assert!((b.mass_kg - mass).abs() < 1e-9);
+        assert!(matches!(b.kind, PowerSourceKind::Battery));
+    }
+
+    #[test]
+    fn solar_preset_is_marked_auto_size() {
+        // Exactly one solar preset, flagged auto_size_solar = true.
+        let solar: Vec<&PowerPreset> = power_presets().iter()
+            .filter(|p| p.label.contains("Solar"))
+            .collect();
+        assert_eq!(solar.len(), 1, "expected one Solar preset");
+        assert!(solar[0].auto_size_solar);
+        // Non-solar presets are not auto-size.
+        let non_solar: Vec<&PowerPreset> = power_presets().iter()
+            .filter(|p| !p.label.contains("Solar"))
+            .collect();
+        assert!(non_solar.iter().all(|p| !p.auto_size_solar));
     }
 
     /// New games include the fission-reactor tech entry (locked by

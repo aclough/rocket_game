@@ -2849,7 +2849,7 @@ fn draw_power_editor_modal(
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  [↑↓] Navigate  [Space] Add  [X/Del] Remove  [Esc] Done",
+        "  [↑↓] Navigate  [Space] Add  [+/-] Resize Panel  [X/Del] Remove  [Esc] Done",
         Style::default().fg(Color::DarkGray),
     )));
 

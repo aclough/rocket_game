@@ -1971,7 +1971,16 @@ impl App {
                 // Add preset if cursor is on the preset block.
                 if cursor >= n_equipped {
                     let pi = cursor - n_equipped;
-                    let new_src = (available_presets[pi].build)();
+                    let preset = available_presets[pi];
+                    // Solar-panel preset: size to the current stage's
+                    // demand instead of using the placeholder closure.
+                    let new_src = if preset.auto_size_solar {
+                        crate::power::solar_panel_for_stage_demand(
+                            &state.stage_groups[group_index][stage_index],
+                        )
+                    } else {
+                        (preset.build)()
+                    };
                     state.stage_groups[group_index][stage_index]
                         .power_sources.push(new_src);
                     // Move cursor onto the just-added source for clarity.
@@ -1986,6 +1995,28 @@ impl App {
                         .power_sources.len();
                     if cursor >= new_n_equipped && cursor > 0 {
                         cursor -= 1;
+                    }
+                }
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                // Resize a solar panel up by √2 (two presses = 2×).
+                if cursor < n_equipped {
+                    let src = &mut state.stage_groups[group_index][stage_index]
+                        .power_sources[cursor];
+                    if let crate::power::PowerSourceKind::SolarPanel { peak_w_at_1au } = src.kind {
+                        src.resize_solar_panel(peak_w_at_1au * std::f64::consts::SQRT_2);
+                    }
+                }
+            }
+            KeyCode::Char('-') | KeyCode::Char('_') => {
+                // Resize a solar panel down by 1/√2 (symmetric with +).
+                if cursor < n_equipped {
+                    let src = &mut state.stage_groups[group_index][stage_index]
+                        .power_sources[cursor];
+                    if let crate::power::PowerSourceKind::SolarPanel { peak_w_at_1au } = src.kind {
+                        src.resize_solar_panel(
+                            (peak_w_at_1au / std::f64::consts::SQRT_2).max(1.0),
+                        );
                     }
                 }
             }
