@@ -570,10 +570,19 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 engine_list.join(", "),
             )));
 
+            // Initial acceleration at takeoff: stage 0, full propellant,
+            // 0 payload, 1 AU.
+            let avail_power = project.design.power_for_engines_w(1.0);
+            let initial_thrust = project.design.group_effective_thrust_n(0, avail_power);
+            let initial_mass = project.design.total_mass_kg();
+            let initial_accel = if initial_mass > 0.0 {
+                initial_thrust / initial_mass
+            } else { 0.0 };
             lines.push(Line::from(format!(
-                "      Total mass: {:.0} kg    dV: {:.0} m/s (0 payload)",
+                "      Total mass: {:.0} kg    dV: {:.0} m/s (0 payload)    Initial accel: {}",
                 project.design.total_mass_kg(),
                 project.design.total_delta_v(0.0),
+                format_accel(initial_accel),
             )));
 
             // Show payload table for destinations served by active markets
@@ -1062,6 +1071,38 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                         Style::default().fg(Color::DarkGray),
                     )));
                 }
+            }
+
+            // Current acceleration of the active stage group (with the
+            // power derate applied at the flight's current sun distance).
+            let active_group = (0..flight.design.stage_groups.len())
+                .find(|&gi| flight.rocket.stage_states.get(gi)
+                    .map(|ss| ss.iter().any(|s| s.attached))
+                    .unwrap_or(false));
+            if let Some(gi) = active_group {
+                let stage_mass: f64 = flight.design.stage_groups.iter().enumerate()
+                    .flat_map(|(gj, group)| {
+                        let states = &flight.rocket.stage_states;
+                        group.iter().enumerate().filter_map(move |(sj, stage)| {
+                            let attached = states.get(gj).and_then(|g| g.get(sj))
+                                .map_or(false, |s| s.attached);
+                            if !attached { return None; }
+                            let prop = states[gj][sj].propellant_remaining_kg;
+                            Some(stage.dry_mass_kg() + prop)
+                        })
+                    })
+                    .sum();
+                let payload_mass: f64 = flight.payloads.iter().map(|p| p.mass_kg()).sum();
+                let total_mass = stage_mass + payload_mass;
+                let sun_au = DELTA_V_MAP.location(&flight.current_location)
+                    .map_or(1.0, |l| l.sun_distance_au());
+                let avail_power = flight.design.power_for_engines_w(sun_au);
+                let thrust = flight.design.group_effective_thrust_n(gi, avail_power);
+                let accel = if total_mass > 0.0 { thrust / total_mass } else { 0.0 };
+                lines.push(Line::from(Span::styled(
+                    format!("      Accel: {}", format_accel(accel)),
+                    Style::default().fg(Color::DarkGray),
+                )));
             }
 
             // Per-leg Δv plan: which stage(s) burn for each remaining leg.
@@ -1732,6 +1773,16 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
         lines.push(Line::from(format!(
             "  Total mass: {}",
             format_mass(total_mass),
+        )));
+        // Initial acceleration: stage 0 firing at 1 AU with all stages
+        // attached and full propellant. Captures the power derate so
+        // ion designs read low.
+        let avail_power = temp_design.power_for_engines_w(1.0);
+        let initial_thrust = temp_design.group_effective_thrust_n(0, avail_power);
+        let initial_accel = if total_mass > 0.0 { initial_thrust / total_mass } else { 0.0 };
+        lines.push(Line::from(format!(
+            "  Initial accel: {}",
+            format_accel(initial_accel),
         )));
 
         // Electrical summary. Read-only for now; editing UI is a follow-up.
