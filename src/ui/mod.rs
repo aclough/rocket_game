@@ -354,6 +354,17 @@ pub struct DvPlannerState {
     pub payload_kg: f64,
 }
 
+/// When the engine-design wizard is kicked off from inside the rocket
+/// designer, we stash the designer's in-progress state here so we can
+/// restore it after the wizard finishes (or is cancelled).
+pub struct PendingDesignerReturn {
+    pub state: Box<RocketDesignerState>,
+    pub target_index: Option<usize>,
+    pub inner_index: Option<usize>,
+    pub editing: bool,
+    pub booster: bool,
+}
+
 /// Application state wrapping the game and UI concerns.
 pub struct App {
     pub game: GameState,
@@ -367,6 +378,11 @@ pub struct App {
     pub selected_item: usize,
     /// Speed before entering a modal, so we can restore on exit.
     pub pre_modal_speed: Option<GameSpeed>,
+    /// Set when the engine wizard is launched from inside the rocket
+    /// designer. After the wizard finishes (success or cancel) we
+    /// restore the designer modal with this saved state instead of
+    /// returning to Normal.
+    pub pending_designer_return: Option<PendingDesignerReturn>,
 }
 
 /// Compute reachable destinations using the stage-aware path planner.
@@ -419,6 +435,7 @@ impl App {
             input_mode: InputMode::Normal,
             selected_item: 0,
             pre_modal_speed: None,
+            pending_designer_return: None,
         }
     }
 
@@ -434,6 +451,25 @@ impl App {
         self.input_mode = InputMode::Normal;
         if let Some(s) = self.pre_modal_speed.take() {
             self.game.speed = s;
+        }
+    }
+
+    /// Exit the engine-design wizard. If a rocket designer was waiting
+    /// (the wizard was kicked off from the rocket designer's engine
+    /// picker), restore that modal so the player can pick the new
+    /// engine. Otherwise behave like `exit_modal`.
+    fn exit_engine_wizard(&mut self) {
+        if let Some(pending) = self.pending_designer_return.take() {
+            self.input_mode = InputMode::RocketPickEngine {
+                state: pending.state,
+                target_index: pending.target_index,
+                inner_index: pending.inner_index,
+                editing: pending.editing,
+                booster: pending.booster,
+                selected: 0,
+            };
+        } else {
+            self.exit_modal();
         }
     }
 
@@ -946,11 +982,11 @@ impl App {
             InputMode::Normal => unreachable!(),
             InputMode::EngineName { buffer } => {
                 match key {
-                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Esc => { self.exit_engine_wizard(); }
                     KeyCode::Enter => {
                         if buffer.is_empty() {
                             self.status_message = Some("Name cannot be empty".into());
-                            self.exit_modal();
+                            self.exit_engine_wizard();
                         } else {
                             let name = buffer.clone();
                             self.input_mode = InputMode::SelectCycle {
@@ -982,7 +1018,7 @@ impl App {
                 cycles.push(EngineCycle::SolarSail);
                 let num_options = cycles.len() + 1; // +1 for Solid Rocket Motor
                 match key {
-                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Esc => { self.exit_engine_wizard(); }
                     KeyCode::Up => { if *selected > 0 { *selected -= 1; } }
                     KeyCode::Down => { if *selected + 1 < num_options { *selected += 1; } }
                     KeyCode::Enter => {
@@ -1017,7 +1053,7 @@ impl App {
                     .copied()
                     .collect();
                 match key {
-                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Esc => { self.exit_engine_wizard(); }
                     KeyCode::Up => { if *selected > 0 { *selected -= 1; } }
                     KeyCode::Down => { if *selected + 1 < presets.len() { *selected += 1; } }
                     KeyCode::Enter => {
@@ -1039,7 +1075,7 @@ impl App {
             }
             InputMode::SelectScale { name, cycle, preset, scale, use_vacuum, vacuum_only } => {
                 match key {
-                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Esc => { self.exit_engine_wizard(); }
                     KeyCode::Up | KeyCode::Right => {
                         *scale = (*scale + crate::engine_project::SCALE_STEP)
                             .min(crate::engine_project::MAX_SCALE);
@@ -1055,7 +1091,7 @@ impl App {
                         let preset = *preset;
                         let scale = *scale;
                         let use_vacuum = *use_vacuum;
-                        self.exit_modal();
+                        self.exit_engine_wizard();
 
                         let tech_id = crate::technology::technology_for_preset(preset);
                         if let Some(evt) = self.game.player_company.start_engine_project(
@@ -1798,9 +1834,13 @@ impl App {
         booster: bool,
         mut selected: usize,
     ) {
-        // Build combined engine list
+        // Build combined engine list. The picker shows engines plus a
+        // trailing "+ Design new engine…" row that opens the standard
+        // engine wizard and returns here when finished.
         let engines = self.available_engines();
         let num_engines = engines.len();
+        let new_engine_idx = num_engines;
+        let total_rows = num_engines + 1; // +1 for "Design new engine" entry
 
         match key {
             KeyCode::Esc => {
@@ -1814,13 +1854,23 @@ impl App {
                 };
             }
             KeyCode::Down => {
-                if selected + 1 < num_engines { selected += 1; }
+                if selected + 1 < total_rows { selected += 1; }
                 self.input_mode = InputMode::RocketPickEngine {
                     state, target_index, inner_index, editing, booster, selected,
                 };
             }
             KeyCode::Enter => {
-                if num_engines == 0 {
+                if selected == new_engine_idx {
+                    // "Design new engine…" — stash the rocket designer
+                    // state and kick off the standard engine wizard.
+                    // When the wizard completes (Esc or finish), we'll
+                    // restore the rocket designer with the same target
+                    // indices so the player can pick the new engine.
+                    self.pending_designer_return = Some(PendingDesignerReturn {
+                        state, target_index, inner_index, editing, booster,
+                    });
+                    self.input_mode = InputMode::EngineName { buffer: String::new() };
+                } else if num_engines == 0 {
                     self.status_message = Some("No engines available".into());
                     self.input_mode = InputMode::RocketPickEngine {
                         state, target_index, inner_index, editing, booster, selected,
@@ -2027,13 +2077,17 @@ impl App {
         };
     }
 
-    /// Build the list of available engines (player Testing + contracted).
+    /// Build the list of engines pickable in the rocket designer.
+    /// Includes every player engine project (regardless of design /
+    /// testing / revising status) so rocket designers can be started in
+    /// parallel with engine design — both can sit in `InDesign` while
+    /// teams work on each. Manufacturing still gates on the rocket
+    /// reaching `Testing`; by that point the engine has typically caught
+    /// up, but the design phase can run concurrently.
     pub fn available_engines(&self) -> Vec<(EngineSource, EngineDesign)> {
         let mut engines: Vec<(EngineSource, EngineDesign)> = Vec::new();
         for ep in &self.game.player_company.engine_projects {
-            if matches!(ep.status, EngineDesignStatus::Testing { .. }) {
-                engines.push((EngineSource::PlayerDesign(ep.project_id), ep.design.clone()));
-            }
+            engines.push((EngineSource::PlayerDesign(ep.project_id), ep.design.clone()));
         }
         for ce in &self.game.player_company.contracted_engines {
             engines.push((EngineSource::Contracted(ce.id), ce.design.clone()));

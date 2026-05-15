@@ -1602,6 +1602,17 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
 
             let tag = match state.engine_sources.get(gi).and_then(|g| g.get(si)) {
                 Some(EngineSource::Contracted(_)) => "[3P]",
+                Some(EngineSource::PlayerDesign(pid)) => {
+                    // Annotate engines that are still in design so the
+                    // player can tell their rocket will wait on them.
+                    let ep = app.game.player_company.engine_projects.iter()
+                        .find(|ep| ep.project_id == *pid);
+                    match ep.map(|ep| &ep.status) {
+                        Some(crate::engine_project::EngineDesignStatus::InDesign { .. }) => "[id]",
+                        Some(crate::engine_project::EngineDesignStatus::Revising { .. }) => "[rev]",
+                        _ => "",
+                    }
+                }
                 _ => "",
             };
             let engine_label = format!("{}{}", stage.engine.name, tag);
@@ -2616,16 +2627,27 @@ fn draw_rocket_pick_engine_modal(
         Line::from(""),
     ];
 
-    if engines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  No engines ready! Design and test an engine first, or contract a 3rd-party engine.",
-            Style::default().fg(Color::Red),
-        )));
-    }
+    // Helper: tag an engine source with its current status so the
+    // player can tell in-design from testing engines at a glance.
+    let status_tag = |source: &EngineSource| -> &'static str {
+        match source {
+            EngineSource::Contracted(_) => " [3P]",
+            EngineSource::PlayerDesign(pid) => {
+                app.game.player_company.engine_projects.iter()
+                    .find(|ep| ep.project_id == *pid)
+                    .map(|ep| match ep.status {
+                        crate::engine_project::EngineDesignStatus::InDesign { .. } => " [in design]",
+                        crate::engine_project::EngineDesignStatus::Revising { .. } => " [revising]",
+                        crate::engine_project::EngineDesignStatus::Testing { .. } => "",
+                    })
+                    .unwrap_or("")
+            }
+        }
+    };
 
     for (i, (source, design)) in engines.iter().enumerate() {
         let marker = if i == selected { "▶" } else { " " };
-        let tag = if matches!(source, EngineSource::Contracted(_)) { " [3P]" } else { "" };
+        let tag = status_tag(source);
         let style = if i == selected {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else {
@@ -2637,6 +2659,20 @@ fn draw_rocket_pick_engine_modal(
             style,
         )));
     }
+
+    // "Design new engine" sentinel row — picking it opens the standard
+    // engine-design wizard and returns to the rocket designer after.
+    let new_engine_idx = engines.len();
+    let marker = if selected == new_engine_idx { "▶" } else { " " };
+    let style = if selected == new_engine_idx {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Cyan)
+    };
+    lines.push(Line::from(Span::styled(
+        format!("  {} + Design new engine…", marker),
+        style,
+    )));
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(

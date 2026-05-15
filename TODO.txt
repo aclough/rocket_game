@@ -1,6 +1,5 @@
 [] Integrated Rocket Design
     [] Go back and forth between tweaking rocket designs and engine designs to see what works for a reference trajectory.
-    [] Both rocket and engines enter "In Design" at once
 [] Modify rocket designs after they're laid down
     [] Increase tankage as engines improve
     [] Add more batteries for a long flight
@@ -13,7 +12,6 @@
 [] Add competitor company, DinoSoar
 [] Automation of bidding on contracts for any that cost less than marginal cost + selected profit margin.
 [] Modify existing rocket designs
-[] Design rocket and engines at the same time?
 
 Later tuning:
 [] Rocket construction time
