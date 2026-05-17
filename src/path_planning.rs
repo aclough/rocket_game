@@ -234,7 +234,72 @@ struct HistoryEntry {
     parent: Option<usize>,
 }
 
+/// Result of `plan_mission` — either a feasible route, or a classified
+/// reason the rocket can't make it. The fallback diagnosis runs the
+/// class-restricted Dijkstra (low-thrust subgraph for ion designs, full
+/// graph for chemical) so the Δv shortfall is measured against the
+/// cheapest route the rocket *could* actually fly.
+#[derive(Debug, Clone)]
+pub enum MissionPlan {
+    /// A feasible stage-aware route was found.
+    Reachable { path: Vec<&'static str>, dv: f64 },
+    /// No path exists in the Δv graph between origin and destination
+    /// at all (disconnected nodes).
+    NoGraphPath,
+    /// A class-compatible path exists but its Δv cost exceeds what the
+    /// rocket can deliver. The rocket needs more fuel / better Isp.
+    DvShortfall { min_required_dv: f64, available_dv: f64 },
+    /// No class-compatible path exists: the rocket's engine type
+    /// (low-thrust vs high-thrust) can't fly any route to the
+    /// destination. The player needs to change engine type.
+    ClassMismatch { available_dv: f64 },
+}
+
 impl DeltaVMap {
+    /// Plan a mission and classify the failure if any. Wraps
+    /// `shortest_path_for_rocket` with a fall-back diagnosis so the
+    /// caller can tell *why* a destination is unreachable.
+    pub fn plan_mission(
+        &self,
+        from: &str,
+        to: &str,
+        design: &RocketDesign,
+        payload_mass_kg: f64,
+    ) -> MissionPlan {
+        if let Some((path, dv)) = self.shortest_path_for_rocket(from, to, design, payload_mass_kg) {
+            return MissionPlan::Reachable { path, dv };
+        }
+        let rocket_mass = design.total_mass_kg() + payload_mass_kg;
+        // Disconnected in the underlying graph?
+        if self.shortest_path(from, to, rocket_mass).is_none() {
+            return MissionPlan::NoGraphPath;
+        }
+        let available_dv = design.total_delta_v(payload_mass_kg);
+        // Cheapest route restricted to the rocket's thrust class. For
+        // low-thrust designs (always single-stage by designer rule) this
+        // is the low-thrust subgraph. For chemical-only designs every
+        // edge is high-thrust-feasible, so the unconstrained mass-only
+        // path is the right answer.
+        let class_route = if design.is_low_thrust() {
+            self.shortest_path_constrained(from, to, rocket_mass, true)
+        } else {
+            self.shortest_path(from, to, rocket_mass)
+        };
+        match class_route {
+            None => MissionPlan::ClassMismatch { available_dv },
+            Some((_, min_dv)) if available_dv < min_dv =>
+                MissionPlan::DvShortfall { min_required_dv: min_dv, available_dv },
+            Some((_, min_dv)) =>
+                // Class-compatible path exists and the rocket has enough
+                // total Δv, but the stage-aware planner still failed.
+                // After the "no staging for low-thrust" rule this should
+                // only happen via narrow stage-ordering edge cases on
+                // mixed designs — call it DvShortfall for the cleanest
+                // message rather than inventing a new variant.
+                MissionPlan::DvShortfall { min_required_dv: min_dv, available_dv },
+        }
+    }
+
     /// Stage-aware shortest-path planner.
     ///
     /// Walks the delta-v graph using A* with a Dijkstra-precomputed

@@ -193,6 +193,14 @@ impl RocketDesign {
         phased_parallel_delta_v(group, payload_above_kg)
     }
 
+    /// True if any stage in this design uses a low-thrust engine. By
+    /// designer rule, low-thrust designs are always single-stage, so this
+    /// is equivalent to "the design's thrust class is low-thrust."
+    pub fn is_low_thrust(&self) -> bool {
+        self.stage_groups.iter().flatten()
+            .any(|s| s.engine.is_low_thrust())
+    }
+
     /// Total delta-v across all stage groups for a given payload.
     /// Each group's "payload" is everything above it: upper groups + actual payload.
     pub fn total_delta_v(&self, payload_kg: f64) -> f64 {
@@ -907,6 +915,8 @@ pub fn compute_stage_stats(
     }
 
     let surface_props = DELTA_V_MAP.surface_properties(launch_from);
+    // Surface gravity (for TWR reference) — fall back to Earth so TWR
+    // numbers stay readable when launching from a non-surface location.
     let surface_g = surface_props.map_or(9.81, |p| p.gravity_m_s2);
     let has_atmosphere = surface_props.map_or(false, |p| p.has_atmosphere);
     let ambient_pressure = surface_props.map_or(0.0, |p| p.ambient_pressure_pa);
@@ -923,8 +933,14 @@ pub fn compute_stage_stats(
     }
 
     let total_mass = design.total_mass_kg() + payload_kg;
-    let body_radius = surface_props.map_or(6_371_000.0, |p| p.radius_m);
-    let gravity_losses = location::simulate_gravity_losses(surface_g, body_radius, &stage_params, total_mass);
+    // Gravity losses only apply to surface-launch profiles. For
+    // in-orbit / free-space "launch sites" (e.g. LEO depot) there's no
+    // vertical ascent against a body, so the loss is zero per group.
+    let gravity_losses: Vec<f64> = if let Some(props) = surface_props {
+        location::simulate_gravity_losses(props.gravity_m_s2, props.radius_m, &stage_params, total_mass)
+    } else {
+        vec![0.0; n]
+    };
 
     // Compute aero drag loss for first stage only
     let first_stage_aero = if has_atmosphere {

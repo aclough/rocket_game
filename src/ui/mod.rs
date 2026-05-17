@@ -14,7 +14,7 @@ use ratatui::prelude::*;
 use crate::engine::{EngineCycle, EngineDesign};
 use crate::engine_project::{EngineDesignStatus, EngineSource, PropellantPreset};
 use crate::game_state::{GameSpeed, GameState};
-use crate::location::{self, DELTA_V_MAP};
+use crate::location::DELTA_V_MAP;
 use crate::rocket_project::RocketDesignStatus;
 use crate::save;
 use crate::stage::{Stage, StageId};
@@ -78,6 +78,11 @@ pub struct RocketDesignerState {
     pub selected_inner: usize,
     pub payload_kg: f64,
     pub launch_from: &'static str,
+    /// Reference-trajectory destination for live feasibility readout.
+    /// Always set (defaults to LEO); the design-time mission scratchpad
+    /// only displays the route — the destination isn't carried onto the
+    /// resulting RocketProject.
+    pub destination: &'static str,
 }
 
 impl RocketDesignerState {
@@ -91,12 +96,22 @@ impl RocketDesignerState {
             selected_inner: 0,
             payload_kg: 1000.0,
             launch_from: "earth_surface",
+            destination: "leo",
         }
     }
 
     /// Total number of individual stages across all groups.
     fn total_stages(&self) -> usize {
         self.stage_groups.iter().map(|g| g.len()).sum()
+    }
+
+    /// True if any stage in the design uses a low-thrust engine.
+    /// Low-thrust engines (ion drives) are restricted to single-stage
+    /// designs — booster duty is handled by carrying the ion rocket as a
+    /// payload on a separate chemical rocket.
+    fn has_low_thrust_stage(&self) -> bool {
+        self.stage_groups.iter().flatten()
+            .any(|s| s.engine.is_low_thrust())
     }
 
     /// Whether the selection cursor is on the "add stage" slot.
@@ -234,6 +249,16 @@ pub enum InputMode {
         state: Box<RocketDesignerState>,
         buffer: String,
     },
+    /// Picking a launch site or mission destination for the rocket
+    /// designer. The picker lists every location in the delta-v map;
+    /// `target` controls which RocketDesignerState field is updated on
+    /// confirm.
+    RocketDesignerLocationPicker {
+        state: Box<RocketDesignerState>,
+        target: LocationPickerTarget,
+        locations: Vec<(&'static str, &'static str)>,
+        selected: usize,
+    },
     /// Building the launch manifest: pick contracts and/or inventory
     /// rockets (as Spacecraft payloads) to fly together. Empty manifest =
     /// test launch to LEO.
@@ -301,6 +326,13 @@ pub enum InputMode {
     DvPlanner {
         state: Box<DvPlannerState>,
     },
+}
+
+/// Which RocketDesignerState field a location picker should update.
+#[derive(Debug, Clone, Copy)]
+pub enum LocationPickerTarget {
+    LaunchSite,
+    MissionDestination,
 }
 
 /// An action in the delta-v planner.
@@ -1147,6 +1179,7 @@ impl App {
             InputMode::RocketDesigner { .. }
             | InputMode::RocketPickEngine { .. }
             | InputMode::RocketPayloadInput { .. }
+            | InputMode::RocketDesignerLocationPicker { .. }
             | InputMode::PowerEditor { .. } => {
                 // Extract all data from the enum variant before calling handlers,
                 // to avoid holding a mutable borrow on self.input_mode.
@@ -1162,6 +1195,11 @@ impl App {
                     }
                     InputMode::RocketPayloadInput { state, buffer } => {
                         self.handle_rocket_payload_input_key(key, state, buffer);
+                    }
+                    InputMode::RocketDesignerLocationPicker { state, target, locations, selected } => {
+                        self.handle_rocket_designer_location_picker_key(
+                            key, state, target, locations, selected,
+                        );
                     }
                     InputMode::PowerEditor { state, group_index, stage_index, cursor } => {
                         self.handle_power_editor_key(
@@ -1607,14 +1645,20 @@ impl App {
             KeyCode::Enter => {
                 if state.on_add_slot() {
                     // Same as 'a' — add stage at end
-                    self.input_mode = InputMode::RocketPickEngine {
-                        state,
-                        target_index: None,
-                        inner_index: None,
-                        editing: false,
-                        booster: false,
-                        selected: 0,
-                    };
+                    if state.has_low_thrust_stage() {
+                        self.status_message = Some(
+                            "Low-thrust designs must be single-stage — carry as payload instead".into());
+                        self.input_mode = InputMode::RocketDesigner { state };
+                    } else {
+                        self.input_mode = InputMode::RocketPickEngine {
+                            state,
+                            target_index: None,
+                            inner_index: None,
+                            editing: false,
+                            booster: false,
+                            selected: 0,
+                        };
+                    }
                 } else {
                     // Edit the selected inner stage
                     let gi = state.selected_group;
@@ -1693,14 +1737,20 @@ impl App {
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 // Add stage at end (new group)
-                self.input_mode = InputMode::RocketPickEngine {
-                    state,
-                    target_index: None,
-                    inner_index: None,
-                    editing: false,
-                    booster: false,
-                    selected: 0,
-                };
+                if state.has_low_thrust_stage() {
+                    self.status_message = Some(
+                        "Low-thrust designs must be single-stage — carry as payload instead".into());
+                    self.input_mode = InputMode::RocketDesigner { state };
+                } else {
+                    self.input_mode = InputMode::RocketPickEngine {
+                        state,
+                        target_index: None,
+                        inner_index: None,
+                        editing: false,
+                        booster: false,
+                        selected: 0,
+                    };
+                }
             }
             KeyCode::Char('w') | KeyCode::Char('W') => {
                 // Open the power-source editor for the currently-selected
@@ -1718,15 +1768,21 @@ impl App {
             KeyCode::Char('i') | KeyCode::Char('I') => {
                 // Insert stage before selected group
                 if !state.on_add_slot() {
-                    let idx = state.selected_group;
-                    self.input_mode = InputMode::RocketPickEngine {
-                        state,
-                        target_index: Some(idx),
-                        inner_index: None,
-                        editing: false,
-                        booster: false,
-                        selected: 0,
-                    };
+                    if state.has_low_thrust_stage() {
+                        self.status_message = Some(
+                            "Low-thrust designs must be single-stage — carry as payload instead".into());
+                        self.input_mode = InputMode::RocketDesigner { state };
+                    } else {
+                        let idx = state.selected_group;
+                        self.input_mode = InputMode::RocketPickEngine {
+                            state,
+                            target_index: Some(idx),
+                            inner_index: None,
+                            editing: false,
+                            booster: false,
+                            selected: 0,
+                        };
+                    }
                 } else {
                     self.input_mode = InputMode::RocketDesigner { state };
                 }
@@ -1734,15 +1790,21 @@ impl App {
             KeyCode::Char('b') | KeyCode::Char('B') => {
                 // Add booster (parallel stage) to current group
                 if !state.on_add_slot() {
-                    let gi = state.selected_group;
-                    self.input_mode = InputMode::RocketPickEngine {
-                        state,
-                        target_index: Some(gi),
-                        inner_index: None,
-                        editing: false,
-                        booster: true,
-                        selected: 0,
-                    };
+                    if state.has_low_thrust_stage() {
+                        self.status_message = Some(
+                            "Low-thrust designs must be single-stage — carry as payload instead".into());
+                        self.input_mode = InputMode::RocketDesigner { state };
+                    } else {
+                        let gi = state.selected_group;
+                        self.input_mode = InputMode::RocketPickEngine {
+                            state,
+                            target_index: Some(gi),
+                            inner_index: None,
+                            editing: false,
+                            booster: true,
+                            selected: 0,
+                        };
+                    }
                 } else {
                     self.input_mode = InputMode::RocketDesigner { state };
                 }
@@ -1796,11 +1858,24 @@ impl App {
                 };
             }
             KeyCode::Char('l') | KeyCode::Char('L') => {
-                // Cycle launch site
-                let ids = location::surface_location_ids();
-                let current_idx = ids.iter().position(|&id| id == state.launch_from).unwrap_or(0);
-                state.launch_from = ids[(current_idx + 1) % ids.len()];
-                self.input_mode = InputMode::RocketDesigner { state };
+                // Pick launch site
+                let locations: Vec<(&'static str, &'static str)> = DELTA_V_MAP.locations().iter()
+                    .map(|loc| (loc.id, loc.display_name))
+                    .collect();
+                let selected = locations.iter().position(|(id, _)| *id == state.launch_from).unwrap_or(0);
+                self.input_mode = InputMode::RocketDesignerLocationPicker {
+                    state, target: LocationPickerTarget::LaunchSite, locations, selected,
+                };
+            }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                // Pick mission destination
+                let locations: Vec<(&'static str, &'static str)> = DELTA_V_MAP.locations().iter()
+                    .map(|loc| (loc.id, loc.display_name))
+                    .collect();
+                let selected = locations.iter().position(|(id, _)| *id == state.destination).unwrap_or(0);
+                self.input_mode = InputMode::RocketDesignerLocationPicker {
+                    state, target: LocationPickerTarget::MissionDestination, locations, selected,
+                };
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 // Done — finalize design
@@ -1877,6 +1952,19 @@ impl App {
                     };
                 } else {
                     let (source, engine) = engines[selected].clone();
+                    // Enforce: low-thrust engines may only appear in a
+                    // single-stage design. The 'a'/'i'/'b'/Enter gates
+                    // already block adding to a low-thrust design; this
+                    // also catches editing a stage in a multi-stage
+                    // design to a low-thrust engine.
+                    let other_stages = state.total_stages()
+                        .saturating_sub(if editing { 1 } else { 0 });
+                    if engine.is_low_thrust() && other_stages > 0 {
+                        self.status_message = Some(
+                            "Low-thrust engines must be in a single-stage design".into());
+                        self.input_mode = InputMode::RocketDesigner { state };
+                        return;
+                    }
                     let engine_count = 1u32;
                     // Initial propellant: ~120s burn time scaled to engine thrust
                     let propellant_mass_kg = engine.mass_flow_rate() * engine_count as f64 * 120.0;
@@ -1972,6 +2060,47 @@ impl App {
             }
             _ => {
                 self.input_mode = InputMode::RocketPayloadInput { state, buffer };
+            }
+        }
+    }
+
+    fn handle_rocket_designer_location_picker_key(
+        &mut self,
+        key: KeyCode,
+        mut state: Box<RocketDesignerState>,
+        target: LocationPickerTarget,
+        locations: Vec<(&'static str, &'static str)>,
+        mut selected: usize,
+    ) {
+        match key {
+            KeyCode::Esc => {
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Up => {
+                if selected > 0 { selected -= 1; }
+                self.input_mode = InputMode::RocketDesignerLocationPicker {
+                    state, target, locations, selected,
+                };
+            }
+            KeyCode::Down => {
+                if selected + 1 < locations.len() { selected += 1; }
+                self.input_mode = InputMode::RocketDesignerLocationPicker {
+                    state, target, locations, selected,
+                };
+            }
+            KeyCode::Enter => {
+                if let Some((id, _)) = locations.get(selected) {
+                    match target {
+                        LocationPickerTarget::LaunchSite => state.launch_from = id,
+                        LocationPickerTarget::MissionDestination => state.destination = id,
+                    }
+                }
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            _ => {
+                self.input_mode = InputMode::RocketDesignerLocationPicker {
+                    state, target, locations, selected,
+                };
             }
         }
     }

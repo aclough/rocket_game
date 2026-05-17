@@ -1540,7 +1540,7 @@ fn draw_rocket_designer_full(frame: &mut Frame, app: &App, state: &RocketDesigne
     let help_text = if let Some(ref msg) = app.status_message {
         format!(" {} ", msg)
     } else {
-        " [Enter] Edit  [←→] Engines  [+/-] Prop  [A] Add  [I] Ins  [B] Booster  [W] Power  [X] Rem  [P] Payload  [L] Site  [D] Done  [Esc] Cancel ".to_string()
+        " [Enter] Edit  [←→] Engines  [+/-] Prop  [A] Add  [I] Ins  [B] Booster  [W] Power  [X] Rem  [P] Payload  [L] Site  [M] Mission  [D] Done  [Esc] Cancel ".to_string()
     };
     let style = if app.status_message.is_some() {
         Style::default().fg(Color::Green)
@@ -1558,13 +1558,14 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
     // Launch site display name
     let launch_display = DELTA_V_MAP.location(state.launch_from)
         .map_or(state.launch_from, |l| l.display_name);
+    let destination_display = DELTA_V_MAP.location(state.destination)
+        .map_or(state.destination, |l| l.display_name);
 
     lines.push(Line::from(""));
     lines.push(Line::from(format!(
         "  Launch: {}    Payload: {:.0} kg",
         launch_display, state.payload_kg,
     )));
-    lines.push(Line::from(""));
 
     // Build a temporary RocketDesign to compute stats
     let temp_design = rocket::RocketDesign {
@@ -1572,6 +1573,64 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
         name: state.rocket_name.clone(),
         stage_groups: state.stage_groups.clone(),
     };
+
+    // Mission line: required dv / available dv / margin / ETA. Required
+    // dv and the route are derived from the stage-aware path planner so
+    // engine choice (low-thrust, etc) affects the answer. Available dv
+    // is Tsiolkovsky-total — both numbers bake in the same launch-leg
+    // loss budget (the transfer graph stores fueled-cost dv).
+    let mission_line = if state.stage_groups.is_empty() {
+        Line::from(Span::styled(
+            format!("  Mission: {} → {}    (add a stage to see feasibility)",
+                launch_display, destination_display),
+            Style::default().fg(Color::DarkGray),
+        ))
+    } else {
+        let plan = DELTA_V_MAP.plan_mission(
+            state.launch_from, state.destination, &temp_design, state.payload_kg,
+        );
+        match plan {
+            crate::path_planning::MissionPlan::NoGraphPath => Line::from(Span::styled(
+                format!("  Mission: {} → {}    UNREACHABLE — no route in Δv map",
+                    launch_display, destination_display),
+                Style::default().fg(Color::Red),
+            )),
+            crate::path_planning::MissionPlan::DvShortfall { min_required_dv, available_dv } => Line::from(Span::styled(
+                format!("  Mission: {} → {}    UNREACHABLE — Δv shortfall: need ≥ {:.0}, have {:.0} (short {:.0} m/s)",
+                    launch_display, destination_display,
+                    min_required_dv, available_dv, min_required_dv - available_dv),
+                Style::default().fg(Color::Red),
+            )),
+            crate::path_planning::MissionPlan::ClassMismatch { .. } => Line::from(Span::styled(
+                format!("  Mission: {} → {}    UNREACHABLE — no route exists for this engine type",
+                    launch_display, destination_display),
+                Style::default().fg(Color::Red),
+            )),
+            crate::path_planning::MissionPlan::Reachable { path, dv: required_dv } => {
+                let available_dv = temp_design.total_delta_v(state.payload_kg);
+                let margin = available_dv - required_dv;
+                let eta_days: u32 = path.windows(2)
+                    .filter_map(|w| DELTA_V_MAP.transfer(w[0], w[1]))
+                    .map(|t| t.transit_days)
+                    .sum();
+                let color = if margin < 0.0 { Color::Red }
+                    else if margin < 500.0 { Color::Yellow }
+                    else { Color::Green };
+                let eta_str = if eta_days == 0 { "<1 d".to_string() }
+                    else { format!("{} d", eta_days) };
+                Line::from(Span::styled(
+                    format!(
+                        "  Mission: {} → {}    Req Δv: {:.0}    Avail: {:.0}    Margin: {:+.0} m/s    ETA: {}",
+                        launch_display, destination_display,
+                        required_dv, available_dv, margin, eta_str,
+                    ),
+                    Style::default().fg(color),
+                ))
+            }
+        }
+    };
+    lines.push(mission_line);
+    lines.push(Line::from(""));
 
     let stats = if !state.stage_groups.is_empty() {
         rocket::compute_stage_stats(&temp_design, state.payload_kg, state.launch_from)
@@ -2605,6 +2664,37 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let block = Block::default().borders(Borders::ALL)
                 .title(" Undock — Pick Payload ")
                 .style(Style::default().fg(Color::Cyan));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::RocketDesignerLocationPicker { target, locations, selected, .. } => {
+            let title = match target {
+                crate::ui::LocationPickerTarget::LaunchSite => " Pick Launch Site ",
+                crate::ui::LocationPickerTarget::MissionDestination => " Pick Mission Destination ",
+            };
+            let mut lines = vec![Line::from("")];
+            // Visible window around the selected entry so long lists scroll.
+            let modal_inner_h = modal_area.height.saturating_sub(4) as usize;
+            let window = modal_inner_h.max(5);
+            let start = selected.saturating_sub(window / 2).min(locations.len().saturating_sub(window).max(0));
+            for (i, (_id, name)) in locations.iter().enumerate().skip(start).take(window) {
+                let marker = if i == *selected { " ▶ " } else { "   " };
+                let style = if i == *selected {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else { Style::default() };
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}", marker, name),
+                    style,
+                )));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [↑↓] Move  [Enter] Confirm  [Esc] Cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+            let block = Block::default().borders(Borders::ALL)
+                .title(title)
+                .style(Style::default().fg(Color::Yellow));
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
