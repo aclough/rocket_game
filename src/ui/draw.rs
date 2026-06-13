@@ -649,7 +649,8 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     if !company.rocket_projects.is_empty() {
         controls.extend_from_slice(&[
             "[+] Add team", "[-] Remove team",
-            "[R] Revise", "[O] Order build", "[M] Auto-build", "[E] Hire eng team",
+            "[R] Revise", "[O] Order build", "[m] Auto-build",
+            "[Shift+M] Modify", "[E] Hire eng team",
         ]);
     }
     lines.push(Line::from(Span::styled(
@@ -1921,7 +1922,11 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
         }
     }
 
-    let title = format!(" Rocket Designer: \"{}\" ", state.rocket_name);
+    let title = if state.is_modify() {
+        format!(" Rocket Designer — Modify \"{}\" ", state.rocket_name)
+    } else {
+        format!(" Rocket Designer: \"{}\" ", state.rocket_name)
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)

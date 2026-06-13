@@ -944,6 +944,64 @@ impl GameState {
         }
     }
 
+    /// Apply a modification (tankage / power tweak) to an existing
+    /// rocket project. Replaces the design's stage_groups, transitions
+    /// status back to `InDesign` with `MODIFICATION_WORK_FRACTION` of
+    /// the project's original work_required, and rolls a flat chance to
+    /// introduce one new undiscovered flaw. Caller is responsible for
+    /// only invoking this when the project's status is `InDesign` or
+    /// `Testing`; Revising is rejected. Returns Some(event) on success.
+    pub fn apply_rocket_modification(
+        &mut self,
+        project_id: crate::rocket_project::RocketProjectId,
+        new_stage_groups: Vec<Vec<crate::stage::Stage>>,
+    ) -> Option<GameEvent> {
+        use crate::rocket_project::RocketDesignStatus;
+        use rand::Rng;
+
+        let project = self.player_company.rocket_projects.iter_mut()
+            .find(|p| p.project_id == project_id)?;
+        if matches!(project.status, RocketDesignStatus::Revising { .. }) {
+            return None;
+        }
+        let work_required = crate::balance::rocket_design_work_required(project.complexity)
+            * crate::balance::ROCKET_MODIFICATION_WORK_FRACTION;
+        project.design.stage_groups = new_stage_groups;
+        project.status = RocketDesignStatus::InDesign {
+            work_completed: 0.0,
+            work_required,
+        };
+
+        // Roll for a new undiscovered flaw. Uses the per-flight trigger
+        // distribution from the engine flaw generator (it's the same
+        // schema for rocket flaws; existing rocket flaws are generated
+        // the same way via gaussian_sample over complexity).
+        let new_flaw = self.seed.contingent_rng.gen::<f64>()
+            < crate::balance::ROCKET_MODIFICATION_FLAW_PROB;
+        if new_flaw {
+            let id = crate::flaw::FlawId(self.player_company.next_flaw_id);
+            self.player_company.next_flaw_id += 1;
+            let trigger = if self.seed.contingent_rng.gen::<f64>() < 0.30 {
+                crate::flaw::FlawTrigger::PerDay
+            } else {
+                crate::flaw::FlawTrigger::PerFlight
+            };
+            let flaw = crate::flaw::generate_single_flaw(
+                id, trigger, &mut self.seed.contingent_rng, None,
+            );
+            // Re-borrow project (it was released across the rng calls).
+            let project = self.player_company.rocket_projects.iter_mut()
+                .find(|p| p.project_id == project_id)?;
+            project.flaws.push(flaw);
+        }
+        let project = self.player_company.rocket_projects.iter()
+            .find(|p| p.project_id == project_id)?;
+        Some(GameEvent::RocketDesignModified {
+            rocket_name: project.design.name.clone(),
+            new_flaw,
+        })
+    }
+
     /// Advance the game by one day. Returns events generated this tick.
     pub fn advance_day(&mut self) -> Vec<GameEvent> {
         let mut events = Vec::new();

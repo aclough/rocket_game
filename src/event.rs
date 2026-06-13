@@ -25,6 +25,10 @@ pub enum GameEvent {
     RocketDesignComplete { rocket_name: String, flaw_count: u32 },
     RocketFlawDiscovered { rocket_name: String, flaw_description: String },
     RocketRevisionComplete { rocket_name: String },
+    /// Player modified an existing rocket project's tankage / power
+    /// (post-Phase-3). `new_flaw` is true when the modification roll
+    /// introduced a fresh undiscovered flaw.
+    RocketDesignModified { rocket_name: String, new_flaw: bool },
     // Phase 3: Manufacturing events
     ManufacturingTeamHired { name: String },
     EngineBuilt { engine_name: String },
@@ -97,6 +101,13 @@ impl fmt::Display for GameEvent {
                 write!(f, "Rocket flaw in {}: {}", rocket_name, flaw_description),
             GameEvent::RocketRevisionComplete { rocket_name } =>
                 write!(f, "Rocket revision complete: {}", rocket_name),
+            GameEvent::RocketDesignModified { rocket_name, new_flaw } => {
+                if *new_flaw {
+                    write!(f, "Modified {} — introduced a new design flaw", rocket_name)
+                } else {
+                    write!(f, "Modified {}", rocket_name)
+                }
+            }
             GameEvent::ManufacturingTeamHired { name } =>
                 write!(f, "Hired manufacturing team: {}", name),
             GameEvent::EngineBuilt { engine_name } =>
@@ -186,6 +197,7 @@ impl GameEvent {
             | GameEvent::RocketDesignComplete { .. }
             | GameEvent::RocketFlawDiscovered { .. }
             | GameEvent::RocketRevisionComplete { .. }
+            | GameEvent::RocketDesignModified { .. }
             | GameEvent::ManufacturingTeamHired { .. }
             | GameEvent::EngineBuilt { .. }
             | GameEvent::StageBuilt { .. }

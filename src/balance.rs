@@ -87,6 +87,14 @@ pub fn rocket_design_work_required(complexity: u32) -> f64 {
     base_days * (complexity as f64 / 5.0)
 }
 
+/// Fraction of a rocket's full design work_required charged for an
+/// in-flight modification (tankage / power tweak).
+pub const ROCKET_MODIFICATION_WORK_FRACTION: f64 = 0.10;
+
+/// Flat probability that a single rocket modification introduces a new
+/// undiscovered flaw. Much lower than the per-design flaw distribution.
+pub const ROCKET_MODIFICATION_FLAW_PROB: f64 = 0.10;
+
 /// Work required in days for engine manufacturing.
 /// Function of engine complexity: base_days * (complexity / 5).
 pub fn engine_build_work(complexity: u32) -> f64 {

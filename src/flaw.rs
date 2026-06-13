@@ -140,7 +140,7 @@ pub fn generate_rocket_flaws(
     }).collect()
 }
 
-fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cycle: Option<crate::engine::EngineCycle>) -> Flaw {
+pub fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cycle: Option<crate::engine::EngineCycle>) -> Flaw {
     // Pick consequence type: weighted random
     // ~50% performance degradation, ~35% engine loss, ~15% stage loss
     let roll: f64 = rng.gen();

@@ -67,9 +67,21 @@ impl Tab {
     }
 }
 
+/// Whether the rocket designer is creating a brand-new design or
+/// modifying an existing project (post-Phase-3 tankage / power tweaks
+/// to a rocket the player has already started building).
+#[derive(Debug, Clone)]
+pub enum DesignerMode {
+    New,
+    Modify {
+        project_id: crate::rocket_project::RocketProjectId,
+    },
+}
+
 /// Shared state for the rocket designer screen.
 #[derive(Debug, Clone)]
 pub struct RocketDesignerState {
+    pub mode: DesignerMode,
     pub rocket_name: String,
     /// Stages, grouped — `stage_groups[gi][si]` is the `si`-th stage of
     /// group `gi`. **Index-aligned with `engine_sources`** (same outer
@@ -104,6 +116,7 @@ pub struct RocketDesignerState {
 impl RocketDesignerState {
     fn new(name: String) -> Self {
         Self {
+            mode: DesignerMode::New,
             rocket_name: name,
             stage_groups: Vec::new(),
             engine_sources: Vec::new(),
@@ -115,6 +128,44 @@ impl RocketDesignerState {
             destination: "leo",
             created_engine_projects: Vec::new(),
         }
+    }
+
+    /// Open the designer in `Modify` mode against an existing rocket
+    /// project — pre-fills stages, name, and the mission scratchpad
+    /// fields. EngineSources are recovered from the engine_id on each
+    /// stage by looking up the company's engine roster.
+    pub fn from_existing(
+        project: &crate::rocket_project::RocketProject,
+        company: &crate::game_state::Company,
+    ) -> Self {
+        let stage_groups = project.design.stage_groups.clone();
+        let max_id = stage_groups.iter().flatten()
+            .map(|s| s.id.0).max().unwrap_or(0);
+        let engine_sources: Vec<Vec<EngineSource>> = stage_groups.iter()
+            .map(|group| group.iter()
+                .map(|stage| company.engine_source_for_id(stage.engine.id)
+                    .unwrap_or(EngineSource::PlayerDesign(
+                        crate::engine_project::EngineProjectId(0))))
+                .collect())
+            .collect();
+        Self {
+            mode: DesignerMode::Modify { project_id: project.project_id },
+            rocket_name: project.design.name.clone(),
+            stage_groups,
+            engine_sources,
+            next_stage_id: max_id + 1,
+            selected_group: 0,
+            selected_inner: 0,
+            payload_kg: 1000.0,
+            launch_from: "earth_surface",
+            destination: "leo",
+            created_engine_projects: Vec::new(),
+        }
+    }
+
+    /// True when the designer is in Modify mode.
+    pub fn is_modify(&self) -> bool {
+        matches!(self.mode, DesignerMode::Modify { .. })
     }
 
     /// Total number of individual stages across all groups.
@@ -982,6 +1033,27 @@ impl App {
                     self.status_message = Some("Must be in Testing to order build".into());
                 }
             }
+            KeyCode::Char('M') => {
+                // Modify the selected rocket project — opens the rocket
+                // designer in Modify mode (only propellant + power
+                // editable). Only allowed for InDesign / Testing.
+                if self.selected_item >= self.game.player_company.rocket_projects.len() {
+                    return;
+                }
+                let project = &self.game.player_company.rocket_projects[self.selected_item];
+                match &project.status {
+                    RocketDesignStatus::Revising { .. } => {
+                        self.status_message = Some(
+                            "Can't modify while revising — finish flaws first".into());
+                        return;
+                    }
+                    _ => {}
+                }
+                let state = Box::new(RocketDesignerState::from_existing(
+                    project, &self.game.player_company,
+                ));
+                self.enter_modal(InputMode::RocketDesigner { state });
+            }
             KeyCode::Char('m') => {
                 // Cycle auto-build target: 0 → 1 → 2 → 3 → 0
                 if self.selected_item < self.game.player_company.rocket_projects.len() {
@@ -1754,7 +1826,11 @@ impl App {
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Enter => {
-                if state.on_add_slot() {
+                if state.is_modify() {
+                    self.status_message = Some(
+                        "Stage layout fixed in Modify mode — only propellant / power editable".into());
+                    self.input_mode = InputMode::RocketDesigner { state };
+                } else if state.on_add_slot() {
                     // Same as 'a' — add stage at end
                     if state.has_low_thrust_stage() {
                         self.status_message = Some(
@@ -1786,7 +1862,10 @@ impl App {
             }
             KeyCode::Left => {
                 // Decrease engine count on selected inner stage
-                if !state.on_add_slot() {
+                if state.is_modify() {
+                    self.status_message = Some(
+                        "Engine count fixed in Modify mode".into());
+                } else if !state.on_add_slot() {
                     let gi = state.selected_group;
                     let si = state.selected_inner;
                     let stage = &mut state.stage_groups[gi][si];
@@ -1801,7 +1880,10 @@ impl App {
             }
             KeyCode::Right => {
                 // Increase engine count on selected inner stage
-                if !state.on_add_slot() {
+                if state.is_modify() {
+                    self.status_message = Some(
+                        "Engine count fixed in Modify mode".into());
+                } else if !state.on_add_slot() {
                     let gi = state.selected_group;
                     let si = state.selected_inner;
                     let stage = &mut state.stage_groups[gi][si];
@@ -1848,7 +1930,11 @@ impl App {
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 // Add stage at end (new group)
-                if state.has_low_thrust_stage() {
+                if state.is_modify() {
+                    self.status_message = Some(
+                        "Stage layout fixed in Modify mode".into());
+                    self.input_mode = InputMode::RocketDesigner { state };
+                } else if state.has_low_thrust_stage() {
                     self.status_message = Some(
                         "Low-thrust designs must be single-stage — carry as payload instead".into());
                     self.input_mode = InputMode::RocketDesigner { state };
@@ -1878,7 +1964,11 @@ impl App {
             }
             KeyCode::Char('i') | KeyCode::Char('I') => {
                 // Insert stage before selected group
-                if !state.on_add_slot() {
+                if state.is_modify() {
+                    self.status_message = Some(
+                        "Stage layout fixed in Modify mode".into());
+                    self.input_mode = InputMode::RocketDesigner { state };
+                } else if !state.on_add_slot() {
                     if state.has_low_thrust_stage() {
                         self.status_message = Some(
                             "Low-thrust designs must be single-stage — carry as payload instead".into());
@@ -1900,7 +1990,11 @@ impl App {
             }
             KeyCode::Char('b') | KeyCode::Char('B') => {
                 // Add booster (parallel stage) to current group
-                if !state.on_add_slot() {
+                if state.is_modify() {
+                    self.status_message = Some(
+                        "Stage layout fixed in Modify mode".into());
+                    self.input_mode = InputMode::RocketDesigner { state };
+                } else if !state.on_add_slot() {
                     if state.has_low_thrust_stage() {
                         self.status_message = Some(
                             "Low-thrust designs must be single-stage — carry as payload instead".into());
@@ -1922,6 +2016,12 @@ impl App {
             }
             KeyCode::Char('x') | KeyCode::Char('X') => {
                 // Remove selected inner stage
+                if state.is_modify() {
+                    self.status_message = Some(
+                        "Stage layout fixed in Modify mode".into());
+                    self.input_mode = InputMode::RocketDesigner { state };
+                    return;
+                }
                 if !state.on_add_slot() && !state.stage_groups.is_empty() {
                     let gi = state.selected_group;
                     let si = state.selected_inner;
@@ -1981,6 +2081,16 @@ impl App {
                 if state.stage_groups.is_empty() {
                     self.status_message = Some("Must add at least one stage".into());
                     self.input_mode = InputMode::RocketDesigner { state };
+                } else if let DesignerMode::Modify { project_id } = state.mode {
+                    // Modify mode: rewrite the existing project's
+                    // stages and roll for a new flaw.
+                    let stage_groups = state.stage_groups.clone();
+                    self.exit_modal();
+                    if let Some(evt) = self.game.apply_rocket_modification(project_id, stage_groups) {
+                        let summary = format!("{}", evt);
+                        self.game.event_log.push(self.game.date, evt);
+                        self.status_message = Some(summary);
+                    }
                 } else {
                     let name = state.rocket_name.clone();
                     let stage_groups = state.stage_groups.clone();

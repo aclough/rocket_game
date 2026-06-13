@@ -1,6 +1,3 @@
-[] Modify rocket designs after they're laid down
-    [] Increase tankage as engines improve
-    [] Add more batteries for a long flight
 [] Make reactors researchable
 [] Engine flaw to add more power draw
 [] A way to tranfer mission payloads between rockets to get them to their destination
@@ -9,7 +6,6 @@
 [] Have player choose price for markets
 [] Add competitor company, DinoSoar
 [] Automation of bidding on contracts for any that cost less than marginal cost + selected profit margin.
-[] Modify existing rocket designs
 
 Later tuning:
 [] Rocket construction time
