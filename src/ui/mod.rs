@@ -71,7 +71,18 @@ impl Tab {
 #[derive(Debug, Clone)]
 pub struct RocketDesignerState {
     pub rocket_name: String,
+    /// Stages, grouped — `stage_groups[gi][si]` is the `si`-th stage of
+    /// group `gi`. **Index-aligned with `engine_sources`** (same outer
+    /// and inner shape). When adding, removing, or replacing stages,
+    /// always go through the lockstep methods on this struct
+    /// (`push_new_group`, `push_to_group`, `insert_new_group_at`,
+    /// `replace_stage`, `remove_group`, `remove_inner`) so the source
+    /// list stays in sync. Field-level mutation of an existing Stage
+    /// (engine count, propellant, power) is fine via direct access.
     pub stage_groups: Vec<Vec<Stage>>,
+    /// Where each stage's engine came from (player project /
+    /// contracted). Mirrors the shape of `stage_groups` — see the
+    /// invariant note there.
     pub engine_sources: Vec<Vec<EngineSource>>,
     pub next_stage_id: u64,
     pub selected_group: usize,
@@ -164,6 +175,52 @@ impl RocketDesignerState {
             let suffix = (b'a' + inner_index as u8) as char;
             format!("S{}{}", group_index + 1, suffix)
         }
+    }
+
+    // ── Lockstep mutators ────────────────────────────────────────────
+    //
+    // `stage_groups` and `engine_sources` are kept index-aligned (same
+    // outer/inner shape) — every Stage in `stage_groups[gi][si]` has its
+    // EngineSource at `engine_sources[gi][si]`. The methods below are
+    // the *only* sites that change the cardinality of either Vec; read
+    // access can use the fields directly. New mutation paths must use
+    // these methods (or grow new ones that update both lists atomically).
+
+    /// Append a new singleton group at the end of the layout.
+    pub fn push_new_group(&mut self, stage: Stage, source: EngineSource) {
+        self.stage_groups.push(vec![stage]);
+        self.engine_sources.push(vec![source]);
+    }
+
+    /// Append a stage to an existing group (used for boosters).
+    pub fn push_to_group(&mut self, gi: usize, stage: Stage, source: EngineSource) {
+        self.stage_groups[gi].push(stage);
+        self.engine_sources[gi].push(source);
+    }
+
+    /// Insert a new singleton group at position `gi`, shifting later
+    /// groups down.
+    pub fn insert_new_group_at(&mut self, gi: usize, stage: Stage, source: EngineSource) {
+        self.stage_groups.insert(gi, vec![stage]);
+        self.engine_sources.insert(gi, vec![source]);
+    }
+
+    /// Replace an existing stage's contents in place.
+    pub fn replace_stage(&mut self, gi: usize, si: usize, stage: Stage, source: EngineSource) {
+        self.stage_groups[gi][si] = stage;
+        self.engine_sources[gi][si] = source;
+    }
+
+    /// Remove an entire group.
+    pub fn remove_group(&mut self, gi: usize) {
+        self.stage_groups.remove(gi);
+        self.engine_sources.remove(gi);
+    }
+
+    /// Remove a single inner stage from a group.
+    pub fn remove_inner(&mut self, gi: usize, si: usize) {
+        self.stage_groups[gi].remove(si);
+        self.engine_sources[gi].remove(si);
     }
 }
 
@@ -471,26 +528,22 @@ fn apply_picked_engine_to_designer(
 
     match (editing, booster, inner_index, target_index) {
         (true, _, Some(ii), Some(gi)) => {
-            state.stage_groups[gi][ii] = stage;
-            state.engine_sources[gi][ii] = source;
+            state.replace_stage(gi, ii, stage, source);
             state.selected_group = gi;
             state.selected_inner = ii;
         }
         (false, true, _, Some(gi)) => {
-            state.stage_groups[gi].push(stage);
-            state.engine_sources[gi].push(source);
+            state.push_to_group(gi, stage, source);
             state.selected_group = gi;
             state.selected_inner = state.stage_groups[gi].len() - 1;
         }
         (false, false, _, Some(gi)) => {
-            state.stage_groups.insert(gi, vec![stage]);
-            state.engine_sources.insert(gi, vec![source]);
+            state.insert_new_group_at(gi, stage, source);
             state.selected_group = gi;
             state.selected_inner = 0;
         }
         (false, false, _, None) => {
-            state.stage_groups.push(vec![stage]);
-            state.engine_sources.push(vec![source]);
+            state.push_new_group(stage, source);
             state.selected_group = state.stage_groups.len() - 1;
             state.selected_inner = 0;
         }
@@ -1874,8 +1927,7 @@ impl App {
                     let si = state.selected_inner;
                     if state.stage_groups[gi].len() == 1 {
                         // Remove entire group
-                        state.stage_groups.remove(gi);
-                        state.engine_sources.remove(gi);
+                        state.remove_group(gi);
                         rename_all_stages(&mut state.stage_groups);
                         recompute_structural_masses(&mut state.stage_groups);
                         // Adjust selection
@@ -1886,8 +1938,7 @@ impl App {
                         self.status_message = Some(format!("Removed stage group {}", gi + 1));
                     } else {
                         // Remove just the inner stage
-                        state.stage_groups[gi].remove(si);
-                        state.engine_sources[gi].remove(si);
+                        state.remove_inner(gi, si);
                         rename_all_stages(&mut state.stage_groups);
                         recompute_structural_masses(&mut state.stage_groups);
                         if state.selected_inner >= state.stage_groups[gi].len() {
