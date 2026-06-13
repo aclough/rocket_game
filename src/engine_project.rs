@@ -302,6 +302,11 @@ pub const SCALE_STEP: f64 = 0.25;
 /// Status of an engine design project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EngineDesignStatus {
+    /// Tentative engine — created inside an in-progress rocket designer
+    /// session but not yet committed. Doesn't accrue work and is hidden
+    /// from the engine pane. Promoted to `InDesign` when the rocket is
+    /// finalised; deleted if the designer is cancelled.
+    Proposed { work_required: f64 },
     InDesign { work_completed: f64, work_required: f64 },
     Testing { work_completed: f64 },
     /// Revising discovered flaws, actualizing improvements, and attempting tech deficiency fixes.
@@ -413,6 +418,101 @@ impl EngineProject {
         })
     }
 
+    /// Create a tentative engine project in `Proposed` status. Used by
+    /// the rocket designer to spawn a draft engine that can be iterated
+    /// on; promoted to InDesign when the parent rocket is finalised.
+    pub fn new_proposed(
+        project_id: EngineProjectId,
+        engine_id: EngineId,
+        name: String,
+        cycle: EngineCycle,
+        preset: PropellantPreset,
+        scale: f64,
+        use_vacuum_isp: bool,
+    ) -> Option<Self> {
+        let mut p = Self::new(project_id, engine_id, name, cycle, preset, scale, use_vacuum_isp)?;
+        let work_required = match p.status {
+            EngineDesignStatus::InDesign { work_required, .. } => work_required,
+            _ => unreachable!(),
+        };
+        p.status = EngineDesignStatus::Proposed { work_required };
+        Some(p)
+    }
+
+    /// Rebuild the design from a fresh set of player choices. Used by
+    /// the engine editor for non-linear editing. Recomputes complexity
+    /// and work_required; for InDesign/Revising statuses, work_completed
+    /// is clamped to the new work_required so a player can't appear to
+    /// have over-completed a now-cheaper design.
+    pub fn apply_edit(
+        &mut self,
+        name: String,
+        cycle: EngineCycle,
+        preset: PropellantPreset,
+        scale: f64,
+        use_vacuum_isp: bool,
+    ) -> bool {
+        let baseline = match engine_baseline(cycle, preset) {
+            Some(b) => b,
+            None => return false,
+        };
+        let propellants = preset.propellants();
+        let complexity = balance::combined_complexity(cycle, &propellants);
+        let effective = balance::effective_complexity(cycle, &propellants);
+        let work_required = balance::design_work_required(effective);
+
+        let use_vacuum = if baseline.vacuum_only { true } else { use_vacuum_isp };
+        let isp = if use_vacuum { baseline.isp_vac_s } else { baseline.isp_sl_s };
+        let exit_pressure = if use_vacuum { baseline.exit_pressure_vac_pa } else { baseline.exit_pressure_sl_pa };
+
+        // Preserve engine id and re-derive everything else.
+        self.design = EngineDesign {
+            id: self.design.id,
+            name,
+            cycle,
+            thrust_n: baseline.thrust_n * scale,
+            mass_kg: baseline.mass_kg * scale,
+            isp_s: isp,
+            exit_pressure_pa: exit_pressure,
+            needs_atmosphere: !use_vacuum,
+            propellant_mix: preset.propellant_mix(),
+            power_draw_w: baseline.power_draw_w * scale,
+        };
+        self.preset = preset;
+        self.scale = scale;
+        self.complexity = complexity;
+
+        match &mut self.status {
+            EngineDesignStatus::Proposed { work_required: wr } => { *wr = work_required; }
+            EngineDesignStatus::InDesign { work_completed, work_required: wr } => {
+                *wr = work_required;
+                if *work_completed > *wr { *work_completed = *wr; }
+            }
+            EngineDesignStatus::Revising { work_completed, .. } => {
+                // Revising doesn't carry a work_required (it's a fixed
+                // per-flaw cost), but clamp any stored progress just in
+                // case future logic uses work_required as a ceiling.
+                let _ = work_required;
+                if *work_completed < 0.0 { *work_completed = 0.0; }
+            }
+            EngineDesignStatus::Testing { .. } => {
+                // Editor shouldn't be opened on Testing; defensive no-op.
+            }
+        }
+        true
+    }
+
+    /// Promote a `Proposed` engine to `InDesign` with no work completed.
+    /// No-op if not Proposed. Called when the parent rocket is finalised.
+    pub fn promote_to_in_design(&mut self) {
+        if let EngineDesignStatus::Proposed { work_required } = self.status {
+            self.status = EngineDesignStatus::InDesign {
+                work_completed: 0.0,
+                work_required,
+            };
+        }
+    }
+
     /// Apply one day of work. Returns any completed work events.
     pub fn apply_daily_work(&mut self, rng: &mut StdRng, next_flaw_id: &mut u64) -> Vec<WorkEvent> {
         if self.teams_assigned == 0 {
@@ -422,6 +522,10 @@ impl EngineProject {
         let mut events = Vec::new();
 
         match &mut self.status {
+            EngineDesignStatus::Proposed { .. } => {
+                // Proposed engines don't accrue work — they're tentative
+                // until the parent rocket designer commits.
+            }
             EngineDesignStatus::InDesign { work_completed, work_required } => {
                 *work_completed += work;
                 if *work_completed >= *work_required {

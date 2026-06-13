@@ -5,7 +5,7 @@ use serde::{Serialize, Deserialize};
 use crate::calendar::GameDate;
 use crate::contract::{self, Contract};
 use crate::engine::{EngineCycle, EngineId};
-use crate::engine_project::{EngineProject, EngineProjectId, EngineSource, PropellantPreset, WorkEvent};
+use crate::engine_project::{EngineDesignStatus, EngineProject, EngineProjectId, EngineSource, PropellantPreset, WorkEvent};
 use crate::flight::{Flight, FlightId, FlightStatus, Payload};
 use crate::event::{EventLog, GameEvent};
 use crate::manufacturing::{Manufacturing, ManufacturingOrder, InventoryEngine};
@@ -264,6 +264,58 @@ impl Company {
         project.technology_id = technology_id;
         self.engine_projects.push(project);
         Some(GameEvent::EngineDesignStarted { engine_name: name })
+    }
+
+    /// Start a tentative engine design in `Proposed` status. Used by the
+    /// rocket designer; the engine doesn't enter the regular project
+    /// queue until the parent rocket is finalised. Returns the new
+    /// project id on success.
+    pub fn start_proposed_engine_project(
+        &mut self,
+        name: String,
+        cycle: EngineCycle,
+        preset: PropellantPreset,
+        scale: f64,
+        use_vacuum_isp: bool,
+        technology_id: Option<crate::technology::TechnologyId>,
+    ) -> Option<EngineProjectId> {
+        let project_id = EngineProjectId(self.next_project_id);
+        let engine_id = EngineId(self.next_engine_id);
+        self.next_project_id += 1;
+        self.next_engine_id += 1;
+
+        let mut project = EngineProject::new_proposed(
+            project_id, engine_id, name,
+            cycle, preset, scale, use_vacuum_isp,
+        )?;
+        project.technology_id = technology_id;
+        self.engine_projects.push(project);
+        Some(project_id)
+    }
+
+    /// Promote a `Proposed` engine project to `InDesign`. Returns the
+    /// engine name on success (for logging). No-op if the id isn't found
+    /// or the engine isn't in Proposed status.
+    pub fn promote_proposed_engine(&mut self, id: EngineProjectId) -> Option<String> {
+        let ep = self.engine_projects.iter_mut().find(|ep| ep.project_id == id)?;
+        if !matches!(ep.status, EngineDesignStatus::Proposed { .. }) {
+            return None;
+        }
+        ep.promote_to_in_design();
+        Some(ep.design.name.clone())
+    }
+
+    /// Delete a `Proposed` engine project. Used to clean up when the
+    /// rocket designer is cancelled. Silently no-ops if the id is missing
+    /// or the project isn't Proposed (defensive — we never want to
+    /// accidentally delete real work).
+    pub fn delete_proposed_engine(&mut self, id: EngineProjectId) {
+        if let Some(pos) = self.engine_projects.iter().position(|ep|
+            ep.project_id == id
+            && matches!(ep.status, EngineDesignStatus::Proposed { .. }))
+        {
+            self.engine_projects.remove(pos);
+        }
     }
 
     /// Add a team to a project. Returns true if successful.

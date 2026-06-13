@@ -83,6 +83,11 @@ pub struct RocketDesignerState {
     /// only displays the route — the destination isn't carried onto the
     /// resulting RocketProject.
     pub destination: &'static str,
+    /// EngineProject ids that this designer session created (always in
+    /// `Proposed` status). Used to clean up Proposed engines if the
+    /// designer is cancelled, and to promote them to `InDesign` when
+    /// the rocket is committed.
+    pub created_engine_projects: Vec<crate::engine_project::EngineProjectId>,
 }
 
 impl RocketDesignerState {
@@ -97,6 +102,7 @@ impl RocketDesignerState {
             payload_kg: 1000.0,
             launch_from: "earth_surface",
             destination: "leo",
+            created_engine_projects: Vec::new(),
         }
     }
 
@@ -204,20 +210,30 @@ fn recompute_structural_masses(stage_groups: &mut [Vec<Stage>]) {
 #[derive(Debug, Clone)]
 pub enum InputMode {
     Normal,
-    /// Typing engine name.
-    EngineName { buffer: String },
-    /// Selecting cycle type.
-    SelectCycle { name: String, selected: usize },
-    /// Selecting propellant preset.
-    SelectPropellant { name: String, cycle: EngineCycle, selected: usize },
-    /// Selecting scale.
-    SelectScale {
-        name: String,
-        cycle: EngineCycle,
-        preset: PropellantPreset,
-        scale: f64,
-        use_vacuum: bool,
-        vacuum_only: bool,
+    /// Non-linear engine editor — edits an existing EngineProject in
+    /// place. The cursor walks a fixed field list; each field has its
+    /// own interaction (Left/Right cycles, +/- adjusts scale, Enter
+    /// opens a text sub-modal for name or scale). Only opened from
+    /// inside the rocket designer; the designer state travels with the
+    /// editor and is restored on Esc.
+    EngineEditor {
+        project_id: crate::engine_project::EngineProjectId,
+        cursor: usize,
+        state: Box<RocketDesignerState>,
+    },
+    /// Text-input sub-modal for the engine name.
+    EngineEditorNameInput {
+        project_id: crate::engine_project::EngineProjectId,
+        cursor: usize,
+        buffer: String,
+        state: Box<RocketDesignerState>,
+    },
+    /// Numeric sub-modal for the engine scale.
+    EngineEditorScaleInput {
+        project_id: crate::engine_project::EngineProjectId,
+        cursor: usize,
+        buffer: String,
+        state: Box<RocketDesignerState>,
     },
     /// Selecting from third-party catalog.
     SelectThirdParty { selected: usize },
@@ -386,17 +402,6 @@ pub struct DvPlannerState {
     pub payload_kg: f64,
 }
 
-/// When the engine-design wizard is kicked off from inside the rocket
-/// designer, we stash the designer's in-progress state here so we can
-/// restore it after the wizard finishes (or is cancelled).
-pub struct PendingDesignerReturn {
-    pub state: Box<RocketDesignerState>,
-    pub target_index: Option<usize>,
-    pub inner_index: Option<usize>,
-    pub editing: bool,
-    pub booster: bool,
-}
-
 /// Application state wrapping the game and UI concerns.
 pub struct App {
     pub game: GameState,
@@ -410,11 +415,6 @@ pub struct App {
     pub selected_item: usize,
     /// Speed before entering a modal, so we can restore on exit.
     pub pre_modal_speed: Option<GameSpeed>,
-    /// Set when the engine wizard is launched from inside the rocket
-    /// designer. After the wizard finishes (success or cancel) we
-    /// restore the designer modal with this saved state instead of
-    /// returning to Normal.
-    pub pending_designer_return: Option<PendingDesignerReturn>,
 }
 
 /// Compute reachable destinations using the stage-aware path planner.
@@ -424,6 +424,98 @@ pub struct App {
 /// reachability and dv numbers reflect what the rocket can still do.
 /// Otherwise falls back to the abstract single-stage planner using
 /// `rocket_mass`.
+/// Apply a picked engine to the rocket designer state — either by
+/// editing an existing stage or by inserting a new one in the right
+/// position. Renames stages and recomputes structural masses.
+fn apply_picked_engine_to_designer(
+    state: &mut RocketDesignerState,
+    source: EngineSource,
+    engine: EngineDesign,
+    target_index: Option<usize>,
+    inner_index: Option<usize>,
+    editing: bool,
+    booster: bool,
+) {
+    let engine_count = 1u32;
+    let propellant_mass_kg = engine.mass_flow_rate() * engine_count as f64 * 120.0;
+    let stage = Stage {
+        id: StageId(state.next_stage_id),
+        name: String::new(),
+        engine,
+        engine_count,
+        propellant_mass_kg,
+        structural_mass_kg: 0.0,
+        fairing: None,
+        power_sources: Vec::new(),
+    };
+    state.next_stage_id += 1;
+
+    match (editing, booster, inner_index, target_index) {
+        (true, _, Some(ii), Some(gi)) => {
+            state.stage_groups[gi][ii] = stage;
+            state.engine_sources[gi][ii] = source;
+            state.selected_group = gi;
+            state.selected_inner = ii;
+        }
+        (false, true, _, Some(gi)) => {
+            state.stage_groups[gi].push(stage);
+            state.engine_sources[gi].push(source);
+            state.selected_group = gi;
+            state.selected_inner = state.stage_groups[gi].len() - 1;
+        }
+        (false, false, _, Some(gi)) => {
+            state.stage_groups.insert(gi, vec![stage]);
+            state.engine_sources.insert(gi, vec![source]);
+            state.selected_group = gi;
+            state.selected_inner = 0;
+        }
+        (false, false, _, None) => {
+            state.stage_groups.push(vec![stage]);
+            state.engine_sources.push(vec![source]);
+            state.selected_group = state.stage_groups.len() - 1;
+            state.selected_inner = 0;
+        }
+        _ => {}
+    }
+
+    for (gi, group) in state.stage_groups.iter_mut().enumerate() {
+        let glen = group.len();
+        for (si, stage) in group.iter_mut().enumerate() {
+            stage.name = RocketDesignerState::stage_name(gi, si, glen);
+        }
+    }
+    recompute_structural_masses(&mut state.stage_groups);
+}
+
+/// Engine cycles available to the player based on unlocked tech.
+fn available_engine_cycles(game: &GameState) -> Vec<EngineCycle> {
+    let mut cycles = vec![
+        EngineCycle::PressureFed,
+        EngineCycle::GasGenerator,
+        EngineCycle::Expander,
+        EngineCycle::StagedCombustion,
+        EngineCycle::FullFlow,
+    ];
+    if game.technologies.iter().any(|t|
+        t.id == crate::technology::TECH_NUCLEAR_THERMAL && t.unlocked
+    ) {
+        cycles.push(EngineCycle::NuclearThermal);
+    }
+    cycles.push(EngineCycle::ElectricPropulsion);
+    cycles.push(EngineCycle::SolarSail);
+    cycles
+}
+
+/// Step through a slice of values, wrapping at either end. Direction
+/// is forward when `forward` is true, backward otherwise.
+fn wrap_cycle<T: Copy + PartialEq>(values: &[T], current: T, forward: bool) -> Option<T> {
+    let i = values.iter().position(|v| *v == current)?;
+    let n = values.len();
+    if n == 0 { return None; }
+    let next = if forward { (i + 1) % n } else { (i + n - 1) % n };
+    Some(values[next])
+}
+
 fn reachable_destinations_multistage(
     from: &str, remaining_dv: f64, rocket_mass: f64, _low_thrust: bool,
     rocket: Option<&crate::rocket::Rocket>,
@@ -467,7 +559,6 @@ impl App {
             input_mode: InputMode::Normal,
             selected_item: 0,
             pre_modal_speed: None,
-            pending_designer_return: None,
         }
     }
 
@@ -483,25 +574,6 @@ impl App {
         self.input_mode = InputMode::Normal;
         if let Some(s) = self.pre_modal_speed.take() {
             self.game.speed = s;
-        }
-    }
-
-    /// Exit the engine-design wizard. If a rocket designer was waiting
-    /// (the wizard was kicked off from the rocket designer's engine
-    /// picker), restore that modal so the player can pick the new
-    /// engine. Otherwise behave like `exit_modal`.
-    fn exit_engine_wizard(&mut self) {
-        if let Some(pending) = self.pending_designer_return.take() {
-            self.input_mode = InputMode::RocketPickEngine {
-                state: pending.state,
-                target_index: pending.target_index,
-                inner_index: pending.inner_index,
-                editing: pending.editing,
-                booster: pending.booster,
-                selected: 0,
-            };
-        } else {
-            self.exit_modal();
         }
     }
 
@@ -711,12 +783,28 @@ impl App {
         }
     }
 
+    /// Map the engine-pane's visible selection (which hides Proposed
+    /// projects) back to the underlying `engine_projects` index used by
+    /// every project-action API.
+    fn engine_pane_real_index(&self) -> Option<usize> {
+        let visible_idx = self.selected_item;
+        self.game.player_company.engine_projects.iter()
+            .enumerate()
+            .filter(|(_, ep)| !matches!(ep.status, EngineDesignStatus::Proposed { .. }))
+            .nth(visible_idx)
+            .map(|(real_idx, _)| real_idx)
+    }
+
     fn handle_engines_key(&mut self, key: KeyCode) {
+        // All engine-pane actions operate on the visible selection, so
+        // resolve it to a real index up front. None = no engines, the
+        // selection points past the end, or all hits are Proposed.
+        let real_idx = self.engine_pane_real_index();
         match key {
-            KeyCode::Char('n') => {
-                // Start new engine design flow
-                self.enter_modal(InputMode::EngineName { buffer: String::new() });
-            }
+            // Engine design no longer has its own entry point — players
+            // design engines inside the rocket designer's "+ Design new
+            // engine" picker entry, and the engine is promoted to InDesign
+            // when the rocket is committed.
             KeyCode::Char('b') => {
                 // Buy third-party engine
                 if !self.game.player_company.third_party_catalog.is_empty() {
@@ -725,9 +813,10 @@ impl App {
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 // Add team to selected project, or steal from busiest
-                if self.game.player_company.add_team_to_project(self.selected_item) {
+                let idx = real_idx.unwrap_or(usize::MAX);
+                if self.game.player_company.add_team_to_project(idx) {
                     self.status_message = Some("Team assigned".into());
-                } else if let Some(from) = self.game.player_company.steal_engineering_team_to_engine_project(self.selected_item) {
+                } else if let Some(from) = self.game.player_company.steal_engineering_team_to_engine_project(idx) {
                     self.status_message = Some(format!("Team reassigned from {}", from));
                 } else {
                     self.status_message = Some("No teams to reassign".into());
@@ -735,13 +824,15 @@ impl App {
             }
             KeyCode::Char('-') => {
                 // Remove team from selected project
-                if self.game.player_company.remove_team_from_project(self.selected_item) {
+                let idx = real_idx.unwrap_or(usize::MAX);
+                if self.game.player_company.remove_team_from_project(idx) {
                     self.status_message = Some("Team removed".into());
                 }
             }
             KeyCode::Char('o') => {
                 // Order standalone engine build
-                if let Some((cost, evt)) = self.game.player_company.order_engine_build(self.selected_item) {
+                let idx = real_idx.unwrap_or(usize::MAX);
+                if let Some((cost, evt)) = self.game.player_company.order_engine_build(idx) {
                     self.game.event_log.push(self.game.date, evt);
                     self.status_message = Some(format!("Engine build ordered ({})", crate::ui::draw::format_money(cost)));
                 } else {
@@ -750,8 +841,8 @@ impl App {
             }
             KeyCode::Char('r') => {
                 // Revise all discovered flaws and actualize pending improvements
-                if self.selected_item < self.game.player_company.engine_projects.len() {
-                    let project = &mut self.game.player_company.engine_projects[self.selected_item];
+                if let Some(idx) = real_idx {
+                    let project = &mut self.game.player_company.engine_projects[idx];
                     if project.start_revision() {
                         let (fc, ic) = match &project.status {
                             EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, .. } =>
@@ -1012,130 +1103,86 @@ impl App {
     fn handle_input_mode_key(&mut self, key: KeyCode) {
         match &mut self.input_mode {
             InputMode::Normal => unreachable!(),
-            InputMode::EngineName { buffer } => {
-                match key {
-                    KeyCode::Esc => { self.exit_engine_wizard(); }
-                    KeyCode::Enter => {
-                        if buffer.is_empty() {
-                            self.status_message = Some("Name cannot be empty".into());
-                            self.exit_engine_wizard();
-                        } else {
-                            let name = buffer.clone();
-                            self.input_mode = InputMode::SelectCycle {
-                                name,
-                                selected: 0,
-                            };
+            InputMode::EngineEditor { .. }
+            | InputMode::EngineEditorNameInput { .. }
+            | InputMode::EngineEditorScaleInput { .. } => {
+                // Extract and dispatch separately to avoid holding a
+                // mutable borrow on self.input_mode while calling self
+                // methods.
+                let old_mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
+                match old_mode {
+                    InputMode::EngineEditor { project_id, cursor, state } => {
+                        self.handle_engine_editor_key(key, project_id, cursor, state);
+                    }
+                    InputMode::EngineEditorNameInput { project_id, cursor, mut buffer, state } => {
+                        match key {
+                            KeyCode::Esc => {
+                                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+                            }
+                            KeyCode::Enter => {
+                                let new_name = buffer.trim().to_string();
+                                if !new_name.is_empty() {
+                                    if let Some(ep) = self.game.player_company.engine_projects.iter_mut()
+                                        .find(|ep| ep.project_id == project_id)
+                                    {
+                                        ep.design.name = new_name;
+                                    }
+                                }
+                                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+                            }
+                            KeyCode::Backspace => {
+                                buffer.pop();
+                                self.input_mode = InputMode::EngineEditorNameInput {
+                                    project_id, cursor, buffer, state,
+                                };
+                            }
+                            KeyCode::Char(c) => {
+                                buffer.push(c);
+                                self.input_mode = InputMode::EngineEditorNameInput {
+                                    project_id, cursor, buffer, state,
+                                };
+                            }
+                            _ => {
+                                self.input_mode = InputMode::EngineEditorNameInput {
+                                    project_id, cursor, buffer, state,
+                                };
+                            }
                         }
                     }
-                    KeyCode::Backspace => { buffer.pop(); }
-                    KeyCode::Char(c) => { buffer.push(c); }
-                    _ => {}
-                }
-            }
-            InputMode::SelectCycle { name, selected } => {
-                let mut cycles = vec![
-                    EngineCycle::PressureFed,
-                    EngineCycle::GasGenerator,
-                    EngineCycle::Expander,
-                    EngineCycle::StagedCombustion,
-                    EngineCycle::FullFlow,
-                ];
-                // Add NuclearThermal if the tech is unlocked
-                if self.game.technologies.iter().any(|t|
-                    t.id == crate::technology::TECH_NUCLEAR_THERMAL && t.unlocked
-                ) {
-                    cycles.push(EngineCycle::NuclearThermal);
-                }
-                cycles.push(EngineCycle::ElectricPropulsion);
-                cycles.push(EngineCycle::SolarSail);
-                let num_options = cycles.len() + 1; // +1 for Solid Rocket Motor
-                match key {
-                    KeyCode::Esc => { self.exit_engine_wizard(); }
-                    KeyCode::Up => { if *selected > 0 { *selected -= 1; } }
-                    KeyCode::Down => { if *selected + 1 < num_options { *selected += 1; } }
-                    KeyCode::Enter => {
-                        if *selected < cycles.len() {
-                            let cycle = cycles[*selected];
-                            let name = name.clone();
-                            self.input_mode = InputMode::SelectPropellant {
-                                name,
-                                cycle,
-                                selected: 0,
-                            };
-                        } else {
-                            // Solid Rocket Motor — skip propellant selection
-                            let name = name.clone();
-                            self.input_mode = InputMode::SelectScale {
-                                name,
-                                cycle: EngineCycle::PressureFed,
-                                preset: PropellantPreset::Solid,
-                                scale: crate::engine_project::DEFAULT_SCALE,
-                                use_vacuum: false,
-                                vacuum_only: false,
-                            };
+                    InputMode::EngineEditorScaleInput { project_id, cursor, mut buffer, state } => {
+                        match key {
+                            KeyCode::Esc => {
+                                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+                            }
+                            KeyCode::Enter => {
+                                if let Ok(parsed) = buffer.parse::<f64>() {
+                                    let clamped = parsed
+                                        .max(crate::engine_project::MIN_SCALE)
+                                        .min(crate::engine_project::MAX_SCALE);
+                                    self.apply_engine_scale(project_id, clamped);
+                                }
+                                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+                            }
+                            KeyCode::Backspace => {
+                                buffer.pop();
+                                self.input_mode = InputMode::EngineEditorScaleInput {
+                                    project_id, cursor, buffer, state,
+                                };
+                            }
+                            KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
+                                buffer.push(c);
+                                self.input_mode = InputMode::EngineEditorScaleInput {
+                                    project_id, cursor, buffer, state,
+                                };
+                            }
+                            _ => {
+                                self.input_mode = InputMode::EngineEditorScaleInput {
+                                    project_id, cursor, buffer, state,
+                                };
+                            }
                         }
                     }
-                    _ => {}
-                }
-            }
-            InputMode::SelectPropellant { name, cycle, selected } => {
-                let cycle = *cycle;
-                let presets: Vec<PropellantPreset> = PropellantPreset::ALL.iter()
-                    .filter(|p| p.compatible_cycles().contains(&cycle))
-                    .copied()
-                    .collect();
-                match key {
-                    KeyCode::Esc => { self.exit_engine_wizard(); }
-                    KeyCode::Up => { if *selected > 0 { *selected -= 1; } }
-                    KeyCode::Down => { if *selected + 1 < presets.len() { *selected += 1; } }
-                    KeyCode::Enter => {
-                        let preset = presets[*selected];
-                        let name = name.clone();
-                        // Expander and Nuclear Thermal are always vacuum-optimized
-                        let vacuum_only = matches!(cycle, EngineCycle::Expander | EngineCycle::NuclearThermal | EngineCycle::ElectricPropulsion | EngineCycle::SolarSail);
-                        self.input_mode = InputMode::SelectScale {
-                            name,
-                            cycle,
-                            preset,
-                            scale: crate::engine_project::DEFAULT_SCALE,
-                            use_vacuum: true,
-                            vacuum_only,
-                        };
-                    }
-                    _ => {}
-                }
-            }
-            InputMode::SelectScale { name, cycle, preset, scale, use_vacuum, vacuum_only } => {
-                match key {
-                    KeyCode::Esc => { self.exit_engine_wizard(); }
-                    KeyCode::Up | KeyCode::Right => {
-                        *scale = (*scale + crate::engine_project::SCALE_STEP)
-                            .min(crate::engine_project::MAX_SCALE);
-                    }
-                    KeyCode::Down | KeyCode::Left => {
-                        *scale = (*scale - crate::engine_project::SCALE_STEP)
-                            .max(crate::engine_project::MIN_SCALE);
-                    }
-                    KeyCode::Char('v') if !*vacuum_only => { *use_vacuum = !*use_vacuum; }
-                    KeyCode::Enter => {
-                        let name = name.clone();
-                        let cycle = *cycle;
-                        let preset = *preset;
-                        let scale = *scale;
-                        let use_vacuum = *use_vacuum;
-                        self.exit_engine_wizard();
-
-                        let tech_id = crate::technology::technology_for_preset(preset);
-                        if let Some(evt) = self.game.player_company.start_engine_project(
-                            name.clone(), cycle, preset, scale, use_vacuum, tech_id,
-                        ) {
-                            self.game.event_log.push(self.game.date, evt);
-                            self.status_message = Some(format!("Started design: {}", name));
-                        } else {
-                            self.status_message = Some("Invalid engine configuration".into());
-                        }
-                    }
-                    _ => {}
+                    _ => unreachable!(),
                 }
             }
             InputMode::SelectThirdParty { selected } => {
@@ -1885,12 +1932,46 @@ impl App {
                 } else {
                     let name = state.rocket_name.clone();
                     let stage_groups = state.stage_groups.clone();
+                    // Promote any Proposed engines this session created
+                    // that are actually referenced by a stage. Anything
+                    // created but unreferenced (e.g. the player started
+                    // designing an engine, then replaced its stage with
+                    // a different engine) is cleaned up.
+                    let referenced: std::collections::HashSet<crate::engine_project::EngineProjectId> =
+                        state.engine_sources.iter().flatten()
+                            .filter_map(|s| match s {
+                                EngineSource::PlayerDesign(id) => Some(*id),
+                                _ => None,
+                            })
+                            .collect();
+                    let created = state.created_engine_projects.clone();
                     self.exit_modal();
+                    for id in &created {
+                        if referenced.contains(id) {
+                            if let Some(engine_name) = self.game.player_company
+                                .promote_proposed_engine(*id)
+                            {
+                                self.game.event_log.push(
+                                    self.game.date,
+                                    crate::event::GameEvent::EngineDesignStarted {
+                                        engine_name,
+                                    },
+                                );
+                            }
+                        } else {
+                            self.game.player_company.delete_proposed_engine(*id);
+                        }
+                    }
                     self.create_rocket_project(name, stage_groups);
                 }
             }
             KeyCode::Esc => {
+                // Cancelled — delete any Proposed engines we created.
+                let created = state.created_engine_projects.clone();
                 self.exit_modal();
+                for id in created {
+                    self.game.player_company.delete_proposed_engine(id);
+                }
                 self.status_message = Some("Rocket design cancelled".into());
             }
             _ => {
@@ -1934,17 +2015,86 @@ impl App {
                     state, target_index, inner_index, editing, booster, selected,
                 };
             }
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                // Open the engine editor on the highlighted player engine.
+                // Only editable while Proposed, InDesign, or Revising.
+                if selected < num_engines {
+                    if let EngineSource::PlayerDesign(pid) = engines[selected].0 {
+                        let editable = self.game.player_company.engine_projects.iter()
+                            .find(|ep| ep.project_id == pid)
+                            .map(|ep| matches!(
+                                ep.status,
+                                EngineDesignStatus::Proposed { .. }
+                                | EngineDesignStatus::InDesign { .. }
+                                | EngineDesignStatus::Revising { .. }
+                            ))
+                            .unwrap_or(false);
+                        if editable {
+                            self.input_mode = InputMode::EngineEditor {
+                                project_id: pid, cursor: 0, state,
+                            };
+                            return;
+                        } else {
+                            self.status_message = Some(
+                                "Engine in Testing — wait or revise to edit".into());
+                        }
+                    } else {
+                        self.status_message = Some(
+                            "Can't edit a third-party engine".into());
+                    }
+                }
+                self.input_mode = InputMode::RocketPickEngine {
+                    state, target_index, inner_index, editing, booster, selected,
+                };
+            }
             KeyCode::Enter => {
                 if selected == new_engine_idx {
-                    // "Design new engine…" — stash the rocket designer
-                    // state and kick off the standard engine wizard.
-                    // When the wizard completes (Esc or finish), we'll
-                    // restore the rocket designer with the same target
-                    // indices so the player can pick the new engine.
-                    self.pending_designer_return = Some(PendingDesignerReturn {
-                        state, target_index, inner_index, editing, booster,
-                    });
-                    self.input_mode = InputMode::EngineName { buffer: String::new() };
+                    // "Design new engine…" — create a Proposed engine
+                    // with sensible defaults, apply it to the target
+                    // stage as if the player had just picked it, then
+                    // jump straight into the editor for tweaking. The
+                    // engine remains Proposed until the rocket is
+                    // committed; if the designer is cancelled, the
+                    // Proposed engine is cleaned up.
+                    let default_name = format!("{}-engine-{}",
+                        state.rocket_name,
+                        state.created_engine_projects.len() + 1);
+                    let cycle = EngineCycle::GasGenerator;
+                    let preset = PropellantPreset::Kerolox;
+                    let scale = crate::engine_project::DEFAULT_SCALE;
+                    let use_vacuum = false;
+                    let tech_id = crate::technology::technology_for_preset(preset);
+                    let project_id = match self.game.player_company
+                        .start_proposed_engine_project(
+                            default_name, cycle, preset, scale, use_vacuum, tech_id,
+                        )
+                    {
+                        Some(id) => id,
+                        None => {
+                            self.status_message = Some("Failed to create engine".into());
+                            self.input_mode = InputMode::RocketPickEngine {
+                                state, target_index, inner_index, editing, booster, selected,
+                            };
+                            return;
+                        }
+                    };
+                    state.created_engine_projects.push(project_id);
+                    // Apply the engine to the target stage now so the
+                    // player sees its effect as they edit. Re-use the
+                    // same plumbing as the engine-pick branch by
+                    // looking the engine back up.
+                    let engine = self.game.player_company.engine_projects.iter()
+                        .find(|ep| ep.project_id == project_id)
+                        .map(|ep| ep.design.clone());
+                    if let Some(engine) = engine {
+                        apply_picked_engine_to_designer(
+                            &mut state, EngineSource::PlayerDesign(project_id),
+                            engine, target_index, inner_index, editing, booster,
+                        );
+                    }
+                    self.input_mode = InputMode::EngineEditor {
+                        project_id, cursor: 0, state,
+                    };
                 } else if num_engines == 0 {
                     self.status_message = Some("No engines available".into());
                     self.input_mode = InputMode::RocketPickEngine {
@@ -1965,63 +2115,10 @@ impl App {
                         self.input_mode = InputMode::RocketDesigner { state };
                         return;
                     }
-                    let engine_count = 1u32;
-                    // Initial propellant: ~120s burn time scaled to engine thrust
-                    let propellant_mass_kg = engine.mass_flow_rate() * engine_count as f64 * 120.0;
-
-                    let stage = Stage {
-                        id: StageId(state.next_stage_id),
-                        name: String::new(),
-                        engine: engine.clone(),
-                        engine_count,
-                        propellant_mass_kg,
-                        structural_mass_kg: 0.0,
-                        fairing: None,
-                        power_sources: Vec::new(),
-                    };
-                    state.next_stage_id += 1;
-
-                    match (editing, booster, inner_index, target_index) {
-                        // Edit a specific inner stage
-                        (true, _, Some(ii), Some(gi)) => {
-                            state.stage_groups[gi][ii] = stage;
-                            state.engine_sources[gi][ii] = source;
-                            state.selected_group = gi;
-                            state.selected_inner = ii;
-                        }
-                        // Add booster (parallel stage) to existing group
-                        (false, true, _, Some(gi)) => {
-                            state.stage_groups[gi].push(stage);
-                            state.engine_sources[gi].push(source);
-                            state.selected_group = gi;
-                            state.selected_inner = state.stage_groups[gi].len() - 1;
-                        }
-                        // Insert new group before gi
-                        (false, false, _, Some(gi)) => {
-                            state.stage_groups.insert(gi, vec![stage]);
-                            state.engine_sources.insert(gi, vec![source]);
-                            state.selected_group = gi;
-                            state.selected_inner = 0;
-                        }
-                        // Append new group at end
-                        (false, false, _, None) => {
-                            state.stage_groups.push(vec![stage]);
-                            state.engine_sources.push(vec![source]);
-                            state.selected_group = state.stage_groups.len() - 1;
-                            state.selected_inner = 0;
-                        }
-                        _ => {}
-                    }
-
-                    // Rename all stages and recompute structural masses
-                    for (gi, group) in state.stage_groups.iter_mut().enumerate() {
-                        let glen = group.len();
-                        for (si, stage) in group.iter_mut().enumerate() {
-                            stage.name = RocketDesignerState::stage_name(gi, si, glen);
-                        }
-                    }
-                    recompute_structural_masses(&mut state.stage_groups);
-
+                    apply_picked_engine_to_designer(
+                        &mut state, source, engine,
+                        target_index, inner_index, editing, booster,
+                    );
                     self.input_mode = InputMode::RocketDesigner { state };
                 }
             }
@@ -2101,6 +2198,150 @@ impl App {
                 self.input_mode = InputMode::RocketDesignerLocationPicker {
                     state, target, locations, selected,
                 };
+            }
+        }
+    }
+
+    /// Snapshot of an engine project for editor display + mutation.
+    fn editor_snapshot(&self, project_id: crate::engine_project::EngineProjectId)
+        -> Option<(String, EngineCycle, PropellantPreset, f64, bool, bool)>
+    {
+        let ep = self.game.player_company.engine_projects.iter()
+            .find(|ep| ep.project_id == project_id)?;
+        let baseline = crate::engine_project::engine_baseline(ep.design.cycle, ep.preset)?;
+        Some((
+            ep.design.name.clone(),
+            ep.design.cycle,
+            ep.preset,
+            ep.scale,
+            !ep.design.needs_atmosphere,
+            baseline.vacuum_only,
+        ))
+    }
+
+    /// Apply an arbitrary scale to the engine project, rebuilding its
+    /// design through `apply_edit`.
+    fn apply_engine_scale(&mut self, project_id: crate::engine_project::EngineProjectId, scale: f64) {
+        let snap = match self.editor_snapshot(project_id) {
+            Some(s) => s, None => return,
+        };
+        let (name, cycle, preset, _, use_vacuum, _) = snap;
+        if let Some(ep) = self.game.player_company.engine_projects.iter_mut()
+            .find(|ep| ep.project_id == project_id)
+        {
+            ep.apply_edit(name, cycle, preset, scale, use_vacuum);
+        }
+    }
+
+    /// Engine editor key handler. Cursor walks: 0=Name, 1=Cycle,
+    /// 2=Preset, 3=Scale, 4=Vacuum (when not vacuum-only).
+    /// Left/Right cycles values on Cycle/Preset; +/- adjusts Scale by
+    /// ×√2 (and clamps to [MIN_SCALE, MAX_SCALE]); Space toggles Vacuum;
+    /// Enter on Name/Scale opens a text/number sub-modal.
+    fn handle_engine_editor_key(
+        &mut self,
+        key: KeyCode,
+        project_id: crate::engine_project::EngineProjectId,
+        mut cursor: usize,
+        state: Box<RocketDesignerState>,
+    ) {
+        let snap = match self.editor_snapshot(project_id) {
+            Some(s) => s,
+            None => {
+                // Project disappeared (shouldn't happen) — bail back to designer.
+                self.input_mode = InputMode::RocketDesigner { state };
+                return;
+            }
+        };
+        let (name, cycle, preset, scale, use_vacuum, vacuum_only) = snap;
+        // Number of editable rows: hide the vacuum toggle when fixed.
+        let row_count = if vacuum_only { 4 } else { 5 };
+        if cursor >= row_count { cursor = row_count - 1; }
+
+        match key {
+            KeyCode::Esc => {
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
+            KeyCode::Up => {
+                if cursor > 0 { cursor -= 1; }
+                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+            }
+            KeyCode::Down => {
+                if cursor + 1 < row_count { cursor += 1; }
+                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+            }
+            KeyCode::Enter if cursor == 0 => {
+                self.input_mode = InputMode::EngineEditorNameInput {
+                    project_id, cursor, buffer: name, state,
+                };
+            }
+            KeyCode::Enter if cursor == 3 => {
+                self.input_mode = InputMode::EngineEditorScaleInput {
+                    project_id, cursor, buffer: format!("{:.2}", scale), state,
+                };
+            }
+            KeyCode::Left | KeyCode::Right if cursor == 1 => {
+                let cycles = available_engine_cycles(&self.game);
+                let next = wrap_cycle(&cycles, cycle, matches!(key, KeyCode::Right))
+                    .unwrap_or(cycle);
+                // Keep current preset if it's still compatible with the
+                // new cycle; otherwise pick the first compatible preset.
+                let new_preset = if preset.compatible_cycles().contains(&next) {
+                    preset
+                } else {
+                    PropellantPreset::ALL.iter()
+                        .copied()
+                        .find(|p| p.compatible_cycles().contains(&next))
+                        .unwrap_or(preset)
+                };
+                let new_vacuum = if matches!(next,
+                    EngineCycle::Expander | EngineCycle::NuclearThermal
+                    | EngineCycle::ElectricPropulsion | EngineCycle::SolarSail) {
+                    true
+                } else { use_vacuum };
+                if let Some(ep) = self.game.player_company.engine_projects.iter_mut()
+                    .find(|ep| ep.project_id == project_id)
+                {
+                    ep.apply_edit(name, next, new_preset, scale, new_vacuum);
+                }
+                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+            }
+            KeyCode::Left | KeyCode::Right if cursor == 2 => {
+                let presets: Vec<PropellantPreset> = PropellantPreset::ALL.iter()
+                    .filter(|p| p.compatible_cycles().contains(&cycle))
+                    .copied()
+                    .collect();
+                let next = wrap_cycle(&presets, preset, matches!(key, KeyCode::Right))
+                    .unwrap_or(preset);
+                if let Some(ep) = self.game.player_company.engine_projects.iter_mut()
+                    .find(|ep| ep.project_id == project_id)
+                {
+                    ep.apply_edit(name, cycle, next, scale, use_vacuum);
+                }
+                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+            }
+            KeyCode::Right if cursor == 3 => {
+                let new_scale = (scale * std::f64::consts::SQRT_2)
+                    .min(crate::engine_project::MAX_SCALE);
+                self.apply_engine_scale(project_id, new_scale);
+                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+            }
+            KeyCode::Left if cursor == 3 => {
+                let new_scale = (scale / std::f64::consts::SQRT_2)
+                    .max(crate::engine_project::MIN_SCALE);
+                self.apply_engine_scale(project_id, new_scale);
+                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+            }
+            KeyCode::Left | KeyCode::Right if cursor == 4 && !vacuum_only => {
+                if let Some(ep) = self.game.player_company.engine_projects.iter_mut()
+                    .find(|ep| ep.project_id == project_id)
+                {
+                    ep.apply_edit(name, cycle, preset, scale, !use_vacuum);
+                }
+                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
+            }
+            _ => {
+                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
         }
     }
@@ -2258,7 +2499,14 @@ impl App {
             FocusedPane::Content => {
                 match self.current_tab() {
                     Tab::Engines => {
-                        let max = self.game.player_company.engine_projects.len().saturating_sub(1);
+                        // Bound by the visible (non-Proposed) count, since
+                        // selected_item indexes the displayed list.
+                        let visible_count = self.game.player_company.engine_projects.iter()
+                            .filter(|ep| !matches!(
+                                ep.status,
+                                EngineDesignStatus::Proposed { .. }))
+                            .count();
+                        let max = visible_count.saturating_sub(1);
                         if self.selected_item < max {
                             self.selected_item += 1;
                         }

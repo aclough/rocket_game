@@ -41,6 +41,14 @@ pub fn load_game(path: &Path) -> io::Result<GameState> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     // Re-initialize the contingent RNG (not serialized)
     state.seed.fix_after_load();
+    // Sweep stale `Proposed` engine projects — these belong to an
+    // unfinished rocket designer session that was running when the game
+    // was last saved (or quit/crashed before completion). They're
+    // hidden from the engine pane anyway, and there's no way to revive
+    // a sketch session, so drop them.
+    state.player_company.engine_projects.retain(|ep|
+        !matches!(ep.status, crate::engine_project::EngineDesignStatus::Proposed { .. })
+    );
     Ok(state)
 }
 

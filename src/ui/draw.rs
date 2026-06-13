@@ -3,7 +3,7 @@ use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph};
 
 use crate::contract::{self, Contract};
 use crate::engine::EngineCycle;
-use crate::engine_project::{self, EngineDesignStatus, EngineSource, PropellantPreset};
+use crate::engine_project::{EngineDesignStatus, EngineSource};
 use crate::game_state::Company;
 use crate::manufacturing::ManufacturingOrderType;
 use crate::rocket_project;
@@ -217,21 +217,29 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) 
 
 fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
     let company = &app.game.player_company;
+    // Hide Proposed engines — they belong to an in-progress rocket
+    // designer session and aren't real projects yet.
+    let visible_engines: Vec<(usize, &crate::engine_project::EngineProject)> = company.engine_projects.iter()
+        .enumerate()
+        .filter(|(_, ep)| !matches!(ep.status, EngineDesignStatus::Proposed { .. }))
+        .collect();
+
     let mut lines = vec![
-        Line::from(format!("  Engine Projects ({})", company.engine_projects.len())),
+        Line::from(format!("  Engine Projects ({})", visible_engines.len())),
         Line::from("  ─────────────────────────────────────────────"),
     ];
     let mut gauges: Vec<GaugeInfo> = Vec::new();
 
-    if company.engine_projects.is_empty() {
-        lines.push(Line::from("  No engine projects yet. Press [N] to start a new design."));
+    if visible_engines.is_empty() {
+        lines.push(Line::from("  No engine projects yet. Design one inside a rocket."));
     }
 
-    for (i, project) in company.engine_projects.iter().enumerate() {
+    for (i, (_orig_idx, project)) in visible_engines.iter().enumerate() {
         let selected = i == app.selected_item;
         let marker = if selected { "▶" } else { " " };
 
         let status_str = match &project.status {
+            EngineDesignStatus::Proposed { .. } => unreachable!("filtered above"),
             EngineDesignStatus::InDesign { .. } => "In Design".to_string(),
             EngineDesignStatus::Testing { .. } =>
                 format!("Testing  {}", project.testing_level()),
@@ -249,6 +257,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         // Track gauge data for this line
         let line_idx = lines.len();
         match &project.status {
+            EngineDesignStatus::Proposed { .. } => unreachable!("filtered above"),
             EngineDesignStatus::InDesign { work_completed, work_required } => {
                 let ratio = work_completed / work_required;
                 gauges.push(GaugeInfo {
@@ -473,6 +482,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         let marker = if selected { "▶" } else { " " };
 
         let status_str = match &project.status {
+            rocket_project::RocketDesignStatus::Proposed { .. } => "Proposed".to_string(),
             rocket_project::RocketDesignStatus::InDesign { .. } =>
                 "In Design".to_string(),
             rocket_project::RocketDesignStatus::Testing { .. } =>
@@ -496,6 +506,9 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         // Track gauge data for this line
         let line_idx = lines.len();
         match &project.status {
+            rocket_project::RocketDesignStatus::Proposed { .. } => {
+                // No gauge — Proposed rockets aren't accruing work.
+            }
             rocket_project::RocketDesignStatus::InDesign { work_completed, work_required } => {
                 let ratio = work_completed / work_required;
                 gauges.push(GaugeInfo {
@@ -1667,6 +1680,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                     let ep = app.game.player_company.engine_projects.iter()
                         .find(|ep| ep.project_id == *pid);
                     match ep.map(|ep| &ep.status) {
+                        Some(crate::engine_project::EngineDesignStatus::Proposed { .. }) => "[prop]",
                         Some(crate::engine_project::EngineDesignStatus::InDesign { .. }) => "[id]",
                         Some(crate::engine_project::EngineDesignStatus::Revising { .. }) => "[rev]",
                         _ => "",
@@ -1935,137 +1949,14 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
 
     match &app.input_mode {
         InputMode::Normal | InputMode::RocketDesigner { .. } => {}
-        InputMode::EngineName { buffer } => {
-            let lines = vec![
-                Line::from(""),
-                Line::from("  Enter engine name:"),
-                Line::from(""),
-                Line::from(format!("  > {}█", buffer)),
-            ];
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" New Engine Design ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+        InputMode::EngineEditor { project_id, cursor, .. } => {
+            draw_engine_editor_modal(frame, app, *project_id, *cursor, None, modal_area);
         }
-        InputMode::SelectCycle { name, selected } => {
-            let mut cycles = vec![
-                ("Pressure Fed", "Simple, reliable, lower performance"),
-                ("Gas Generator", "Good all-around, moderate complexity"),
-                ("Expander", "Efficient, limited thrust"),
-                ("Staged Combustion", "High performance, complex"),
-                ("Full Flow", "Maximum performance, most complex"),
-            ];
-            if app.game.technologies.iter().any(|t|
-                t.id == crate::technology::TECH_NUCLEAR_THERMAL && t.unlocked
-            ) {
-                cycles.push(("Nuclear Thermal", "Very high Isp, very heavy, hydrogen only"));
-            }
-            cycles.push(("Electric Propulsion", "Very high Isp, very low thrust, xenon"));
-            cycles.push(("Solar Sail", "No propellant, thrust from sunlight, very low thrust"));
-            cycles.push(("Solid Rocket Motor", "Simple, cheap, not throttleable"));
-            let mut lines = vec![
-                Line::from(format!("  Design: {}", name)),
-                Line::from(""),
-                Line::from("  Select cycle type:"),
-                Line::from(""),
-            ];
-            for (i, (name, desc)) in cycles.iter().enumerate() {
-                let marker = if i == *selected { "▶" } else { " " };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                lines.push(Line::from(Span::styled(
-                    format!("  {} {}  — {}", marker, name, desc),
-                    style,
-                )));
-            }
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Select Cycle ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+        InputMode::EngineEditorNameInput { project_id, cursor, buffer, .. } => {
+            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some(("Name", buffer.clone())), modal_area);
         }
-        InputMode::SelectPropellant { name, cycle, selected } => {
-            let presets: Vec<PropellantPreset> = PropellantPreset::ALL.iter()
-                .filter(|p| p.compatible_cycles().contains(cycle))
-                .copied()
-                .collect();
-            let mut lines = vec![
-                Line::from(format!("  Design: {}  Cycle: {:?}", name, cycle)),
-                Line::from(""),
-                Line::from("  Select propellant:"),
-                Line::from(""),
-            ];
-            for (i, preset) in presets.iter().enumerate() {
-                let marker = if i == *selected { "▶" } else { " " };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                lines.push(Line::from(Span::styled(
-                    format!("  {} {}", marker, preset.name()),
-                    style,
-                )));
-            }
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Select Propellant ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
-        }
-        InputMode::SelectScale { name, cycle, preset, scale, use_vacuum, vacuum_only } => {
-            let baseline = engine_project::engine_baseline(*cycle, *preset);
-            let mut lines = vec![
-                Line::from(format!("  Design: {}  {:?}  {}", name, cycle, preset.name())),
-                Line::from(""),
-            ];
-            if let Some(b) = baseline {
-                let thrust = b.thrust_n * scale;
-                let mass = b.mass_kg * scale;
-                let isp = if *use_vacuum { b.isp_vac_s } else { b.isp_sl_s };
-                let exit_p = if *use_vacuum { b.exit_pressure_vac_pa } else { b.exit_pressure_sl_pa };
-                lines.push(Line::from(format!("  Scale: {:.2}x  [↑↓ to adjust]", scale)));
-                lines.push(Line::from(""));
-                lines.push(Line::from(format!("  Thrust: {:.0} kN", thrust / 1000.0)));
-                lines.push(Line::from(format!("  Mass:   {:.0} kg", mass)));
-                lines.push(Line::from(format!(
-                    "  Isp:    {:.0} s ({})",
-                    isp,
-                    if *use_vacuum { "vacuum" } else { "sea level" },
-                )));
-                lines.push(Line::from(format!("  Exit P: {:.0} kPa", exit_p / 1000.0)));
-                if *use_vacuum && !*vacuum_only {
-                    lines.push(Line::from(Span::styled(
-                        "  ⚠ Low exit pressure — risk of flow separation at sea level",
-                        Style::default().fg(Color::Yellow),
-                    )));
-                }
-                lines.push(Line::from(""));
-                if *vacuum_only {
-                    lines.push(Line::from(Span::styled(
-                        "  Vacuum only (expander cycle)  [Enter] Confirm",
-                        Style::default().fg(Color::Cyan),
-                    )));
-                } else {
-                    lines.push(Line::from(Span::styled(
-                        "  [V] Toggle vacuum/sea-level  [Enter] Confirm",
-                        Style::default().fg(Color::Cyan),
-                    )));
-                }
-            }
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Set Scale ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+        InputMode::EngineEditorScaleInput { project_id, cursor, buffer, .. } => {
+            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some(("Scale", buffer.clone())), modal_area);
         }
         InputMode::SelectThirdParty { selected } => {
             let catalog = &app.game.player_company.third_party_catalog;
@@ -2701,6 +2592,133 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// Non-linear engine editor. The cursor walks five rows:
+/// 0=Name, 1=Cycle, 2=Preset, 3=Scale, 4=Vacuum. When `text_input` is
+/// Some, a sub-modal text/number entry is overlaid (for Name or Scale).
+fn draw_engine_editor_modal(
+    frame: &mut Frame,
+    app: &App,
+    project_id: crate::engine_project::EngineProjectId,
+    cursor: usize,
+    text_input: Option<(&str, String)>,
+    area: Rect,
+) {
+    let ep = match app.game.player_company.engine_projects.iter()
+        .find(|ep| ep.project_id == project_id)
+    {
+        Some(ep) => ep,
+        None => return,
+    };
+    let baseline = crate::engine_project::engine_baseline(ep.design.cycle, ep.preset);
+    let vacuum_only = baseline.map_or(false, |b| b.vacuum_only);
+    let use_vacuum = !ep.design.needs_atmosphere;
+    let row_count = if vacuum_only { 4 } else { 5 };
+    let cursor = cursor.min(row_count - 1);
+
+    let row_label = |row: usize, sel: bool| -> &'static str {
+        if sel && cursor == row { "▶" } else { " " }
+    };
+    let row_style = |row: usize| -> Style {
+        if cursor == row {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else { Style::default() }
+    };
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(" Status: {}", match &ep.status {
+                crate::engine_project::EngineDesignStatus::Proposed { .. } => "Proposed",
+                crate::engine_project::EngineDesignStatus::InDesign { .. } => "In Design",
+                crate::engine_project::EngineDesignStatus::Testing { .. } => "Testing (read-only)",
+                crate::engine_project::EngineDesignStatus::Revising { .. } => "Revising",
+            }),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+    ];
+
+    lines.push(Line::from(Span::styled(
+        format!(" {} Name:   {}", row_label(0, true), ep.design.name),
+        row_style(0),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!(" {} Cycle:  {:?}", row_label(1, true), ep.design.cycle),
+        row_style(1),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!(" {} Preset: {}", row_label(2, true), ep.preset.name()),
+        row_style(2),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!(" {} Scale:  {:.3}×", row_label(3, true), ep.scale),
+        row_style(3),
+    )));
+    if !vacuum_only {
+        lines.push(Line::from(Span::styled(
+            format!(" {} Vacuum: {}",
+                row_label(4, true),
+                if use_vacuum { "yes" } else { "no" }),
+            row_style(4),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "   Vacuum: yes  (fixed)".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    // Live + baseline derived stats.
+    lines.push(Line::from(""));
+    if let Some(b) = baseline {
+        lines.push(Line::from(Span::styled(
+            format!(" Baseline ({:?} / {}):  thrust {:.0} kN  mass {:.0} kg  Isp {:.0} s",
+                ep.design.cycle, ep.preset.name(),
+                b.thrust_n / 1000.0, b.mass_kg,
+                if use_vacuum { b.isp_vac_s } else { b.isp_sl_s }),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines.push(Line::from(format!(
+        " Scaled:    thrust {:.0} kN  mass {:.0} kg  Isp {:.0} s  power {:.0} W",
+        ep.design.thrust_n / 1000.0, ep.design.mass_kg, ep.design.isp_s, ep.design.power_draw_w,
+    )));
+    let (work_completed, work_required) = match &ep.status {
+        crate::engine_project::EngineDesignStatus::Proposed { work_required } => (0.0, *work_required),
+        crate::engine_project::EngineDesignStatus::InDesign { work_completed, work_required } => (*work_completed, *work_required),
+        crate::engine_project::EngineDesignStatus::Revising { work_completed, .. } => (*work_completed, 0.0),
+        crate::engine_project::EngineDesignStatus::Testing { work_completed } => (*work_completed, 0.0),
+    };
+    lines.push(Line::from(format!(
+        " Complexity: {}    Work: {:.0} / {:.0}",
+        ep.complexity, work_completed, work_required,
+    )));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " [↑↓] Move  [←→] Change  [Enter] Edit text  [Esc] Done",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    if let Some((field, buffer)) = text_input {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(" Edit {}:  > {}█", field, buffer),
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(Span::styled(
+            " [Enter] Apply   [Esc] Cancel".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Engine Editor ")
+        .style(Style::default().fg(Color::Yellow));
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
 fn draw_rocket_pick_engine_modal(
     frame: &mut Frame,
     app: &App,
@@ -2726,6 +2744,7 @@ fn draw_rocket_pick_engine_modal(
                 app.game.player_company.engine_projects.iter()
                     .find(|ep| ep.project_id == *pid)
                     .map(|ep| match ep.status {
+                        crate::engine_project::EngineDesignStatus::Proposed { .. } => " [proposed]",
                         crate::engine_project::EngineDesignStatus::InDesign { .. } => " [in design]",
                         crate::engine_project::EngineDesignStatus::Revising { .. } => " [revising]",
                         crate::engine_project::EngineDesignStatus::Testing { .. } => "",
@@ -2766,7 +2785,7 @@ fn draw_rocket_pick_engine_modal(
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  [Enter] Select  [Esc] Back",
+        "  [Enter] Select  [E] Edit  [Esc] Back",
         Style::default().fg(Color::Cyan),
     )));
 

@@ -15,6 +15,10 @@ pub struct RocketProjectId(pub u64);
 /// Status of a rocket design project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RocketDesignStatus {
+    /// Tentative rocket — created during an in-progress rocket designer
+    /// session but not yet committed. Not currently used; reserved for a
+    /// future "save sketch and resume" feature. Doesn't accrue work.
+    Proposed { work_required: f64 },
     InDesign { work_completed: f64, work_required: f64 },
     Testing { work_completed: f64 },
     Revising { remaining_indices: Vec<usize>, work_completed: f64 },
@@ -82,6 +86,9 @@ impl RocketProject {
         let mut events = Vec::new();
 
         match &mut self.status {
+            RocketDesignStatus::Proposed { .. } => {
+                // Proposed rockets don't accrue work.
+            }
             RocketDesignStatus::InDesign { work_completed, work_required } => {
                 *work_completed += work;
                 if *work_completed >= *work_required {

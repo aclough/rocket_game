@@ -1,5 +1,3 @@
-[] Integrated Rocket Design
-    [] In-place engine tweaking from inside the rocket designer (Phase 3)
 [] Modify rocket designs after they're laid down
     [] Increase tankage as engines improve
     [] Add more batteries for a long flight
