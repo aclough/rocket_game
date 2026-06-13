@@ -173,10 +173,18 @@ fn is_solid_engine(engine: &EngineDesign) -> bool {
         && engine.propellant_mix[0].propellant == crate::propellant::Propellant::SolidMix
 }
 
+/// Burn-time used as a default when a stage is first created — the
+/// initial propellant load is sized for this many seconds of full-thrust
+/// firing. Easy starting point that the player can grow with `+`.
+const NEW_STAGE_BURN_SECONDS: f64 = 120.0;
+/// Step size for inline propellant adjustments (`+`/`-` in the
+/// designer): ~10 seconds of burn time per press.
+const PROPELLANT_STEP_BURN_SECONDS: f64 = 10.0;
+
 /// Compute thrust-scaled propellant step size for inline adjustments.
-/// ~10s of burn time, rounded to nearest 100 kg, min 100 kg.
+/// Rounded to nearest 100 kg, min 100 kg.
 fn propellant_step(engine: &EngineDesign, engine_count: u32) -> f64 {
-    let raw = engine.mass_flow_rate() * engine_count as f64 * 10.0;
+    let raw = engine.mass_flow_rate() * engine_count as f64 * PROPELLANT_STEP_BURN_SECONDS;
     (raw / 100.0).round().max(1.0) * 100.0
 }
 
@@ -424,6 +432,17 @@ pub struct App {
 /// reachability and dv numbers reflect what the rocket can still do.
 /// Otherwise falls back to the abstract single-stage planner using
 /// `rocket_mass`.
+/// Rename every stage based on its position in `stage_groups`, using
+/// the project's S1 / S1a / S1b conventions.
+fn rename_all_stages(stage_groups: &mut [Vec<Stage>]) {
+    for (gi, group) in stage_groups.iter_mut().enumerate() {
+        let glen = group.len();
+        for (si, stage) in group.iter_mut().enumerate() {
+            stage.name = RocketDesignerState::stage_name(gi, si, glen);
+        }
+    }
+}
+
 /// Apply a picked engine to the rocket designer state — either by
 /// editing an existing stage or by inserting a new one in the right
 /// position. Renames stages and recomputes structural masses.
@@ -437,7 +456,7 @@ fn apply_picked_engine_to_designer(
     booster: bool,
 ) {
     let engine_count = 1u32;
-    let propellant_mass_kg = engine.mass_flow_rate() * engine_count as f64 * 120.0;
+    let propellant_mass_kg = engine.mass_flow_rate() * engine_count as f64 * NEW_STAGE_BURN_SECONDS;
     let stage = Stage {
         id: StageId(state.next_stage_id),
         name: String::new(),
@@ -478,12 +497,7 @@ fn apply_picked_engine_to_designer(
         _ => {}
     }
 
-    for (gi, group) in state.stage_groups.iter_mut().enumerate() {
-        let glen = group.len();
-        for (si, stage) in group.iter_mut().enumerate() {
-            stage.name = RocketDesignerState::stage_name(gi, si, glen);
-        }
-    }
+    rename_all_stages(&mut state.stage_groups);
     recompute_structural_masses(&mut state.stage_groups);
 }
 
@@ -787,11 +801,8 @@ impl App {
     /// projects) back to the underlying `engine_projects` index used by
     /// every project-action API.
     fn engine_pane_real_index(&self) -> Option<usize> {
-        let visible_idx = self.selected_item;
-        self.game.player_company.engine_projects.iter()
-            .enumerate()
-            .filter(|(_, ep)| !matches!(ep.status, EngineDesignStatus::Proposed { .. }))
-            .nth(visible_idx)
+        self.game.player_company.visible_engine_projects()
+            .nth(self.selected_item)
             .map(|(real_idx, _)| real_idx)
     }
 
@@ -1122,8 +1133,8 @@ impl App {
                             KeyCode::Enter => {
                                 let new_name = buffer.trim().to_string();
                                 if !new_name.is_empty() {
-                                    if let Some(ep) = self.game.player_company.engine_projects.iter_mut()
-                                        .find(|ep| ep.project_id == project_id)
+                                    if let Some(ep) = self.game.player_company
+                                        .find_engine_project_mut(project_id)
                                     {
                                         ep.design.name = new_name;
                                     }
@@ -1865,13 +1876,7 @@ impl App {
                         // Remove entire group
                         state.stage_groups.remove(gi);
                         state.engine_sources.remove(gi);
-                        // Rename remaining stages
-                        for (gj, group) in state.stage_groups.iter_mut().enumerate() {
-                            let glen = group.len();
-                            for (sj, stage) in group.iter_mut().enumerate() {
-                                stage.name = RocketDesignerState::stage_name(gj, sj, glen);
-                            }
-                        }
+                        rename_all_stages(&mut state.stage_groups);
                         recompute_structural_masses(&mut state.stage_groups);
                         // Adjust selection
                         if state.selected_group >= state.stage_groups.len() && state.selected_group > 0 {
@@ -1883,11 +1888,7 @@ impl App {
                         // Remove just the inner stage
                         state.stage_groups[gi].remove(si);
                         state.engine_sources[gi].remove(si);
-                        // Rename stages in this group
-                        let glen = state.stage_groups[gi].len();
-                        for (sj, stage) in state.stage_groups[gi].iter_mut().enumerate() {
-                            stage.name = RocketDesignerState::stage_name(gi, sj, glen);
-                        }
+                        rename_all_stages(&mut state.stage_groups);
                         recompute_structural_masses(&mut state.stage_groups);
                         if state.selected_inner >= state.stage_groups[gi].len() {
                             state.selected_inner = state.stage_groups[gi].len() - 1;
@@ -2020,8 +2021,8 @@ impl App {
                 // Only editable while Proposed, InDesign, or Revising.
                 if selected < num_engines {
                     if let EngineSource::PlayerDesign(pid) = engines[selected].0 {
-                        let editable = self.game.player_company.engine_projects.iter()
-                            .find(|ep| ep.project_id == pid)
+                        let editable = self.game.player_company
+                            .find_engine_project(pid)
                             .map(|ep| matches!(
                                 ep.status,
                                 EngineDesignStatus::Proposed { .. }
@@ -2083,8 +2084,8 @@ impl App {
                     // player sees its effect as they edit. Re-use the
                     // same plumbing as the engine-pick branch by
                     // looking the engine back up.
-                    let engine = self.game.player_company.engine_projects.iter()
-                        .find(|ep| ep.project_id == project_id)
+                    let engine = self.game.player_company
+                        .find_engine_project(project_id)
                         .map(|ep| ep.design.clone());
                     if let Some(engine) = engine {
                         apply_picked_engine_to_designer(
@@ -2206,8 +2207,7 @@ impl App {
     fn editor_snapshot(&self, project_id: crate::engine_project::EngineProjectId)
         -> Option<(String, EngineCycle, PropellantPreset, f64, bool, bool)>
     {
-        let ep = self.game.player_company.engine_projects.iter()
-            .find(|ep| ep.project_id == project_id)?;
+        let ep = self.game.player_company.find_engine_project(project_id)?;
         let baseline = crate::engine_project::engine_baseline(ep.design.cycle, ep.preset)?;
         Some((
             ep.design.name.clone(),
@@ -2226,9 +2226,7 @@ impl App {
             Some(s) => s, None => return,
         };
         let (name, cycle, preset, _, use_vacuum, _) = snap;
-        if let Some(ep) = self.game.player_company.engine_projects.iter_mut()
-            .find(|ep| ep.project_id == project_id)
-        {
+        if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
             ep.apply_edit(name, cycle, preset, scale, use_vacuum);
         }
     }
@@ -2299,9 +2297,7 @@ impl App {
                     | EngineCycle::ElectricPropulsion | EngineCycle::SolarSail) {
                     true
                 } else { use_vacuum };
-                if let Some(ep) = self.game.player_company.engine_projects.iter_mut()
-                    .find(|ep| ep.project_id == project_id)
-                {
+                if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
                     ep.apply_edit(name, next, new_preset, scale, new_vacuum);
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
@@ -2313,9 +2309,7 @@ impl App {
                     .collect();
                 let next = wrap_cycle(&presets, preset, matches!(key, KeyCode::Right))
                     .unwrap_or(preset);
-                if let Some(ep) = self.game.player_company.engine_projects.iter_mut()
-                    .find(|ep| ep.project_id == project_id)
-                {
+                if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
                     ep.apply_edit(name, cycle, next, scale, use_vacuum);
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
@@ -2333,9 +2327,7 @@ impl App {
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Left | KeyCode::Right if cursor == 4 && !vacuum_only => {
-                if let Some(ep) = self.game.player_company.engine_projects.iter_mut()
-                    .find(|ep| ep.project_id == project_id)
-                {
+                if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
                     ep.apply_edit(name, cycle, preset, scale, !use_vacuum);
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
@@ -2501,12 +2493,8 @@ impl App {
                     Tab::Engines => {
                         // Bound by the visible (non-Proposed) count, since
                         // selected_item indexes the displayed list.
-                        let visible_count = self.game.player_company.engine_projects.iter()
-                            .filter(|ep| !matches!(
-                                ep.status,
-                                EngineDesignStatus::Proposed { .. }))
-                            .count();
-                        let max = visible_count.saturating_sub(1);
+                        let max = self.game.player_company.visible_engine_projects()
+                            .count().saturating_sub(1);
                         if self.selected_item < max {
                             self.selected_item += 1;
                         }

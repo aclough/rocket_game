@@ -217,12 +217,8 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) 
 
 fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
     let company = &app.game.player_company;
-    // Hide Proposed engines — they belong to an in-progress rocket
-    // designer session and aren't real projects yet.
-    let visible_engines: Vec<(usize, &crate::engine_project::EngineProject)> = company.engine_projects.iter()
-        .enumerate()
-        .filter(|(_, ep)| !matches!(ep.status, EngineDesignStatus::Proposed { .. }))
-        .collect();
+    let visible_engines: Vec<(usize, &crate::engine_project::EngineProject)> =
+        company.visible_engine_projects().collect();
 
     let mut lines = vec![
         Line::from(format!("  Engine Projects ({})", visible_engines.len())),
@@ -482,7 +478,6 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         let marker = if selected { "▶" } else { " " };
 
         let status_str = match &project.status {
-            rocket_project::RocketDesignStatus::Proposed { .. } => "Proposed".to_string(),
             rocket_project::RocketDesignStatus::InDesign { .. } =>
                 "In Design".to_string(),
             rocket_project::RocketDesignStatus::Testing { .. } =>
@@ -506,9 +501,6 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         // Track gauge data for this line
         let line_idx = lines.len();
         match &project.status {
-            rocket_project::RocketDesignStatus::Proposed { .. } => {
-                // No gauge — Proposed rockets aren't accruing work.
-            }
             rocket_project::RocketDesignStatus::InDesign { work_completed, work_required } => {
                 let ratio = work_completed / work_required;
                 gauges.push(GaugeInfo {
@@ -1677,8 +1669,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                 Some(EngineSource::PlayerDesign(pid)) => {
                     // Annotate engines that are still in design so the
                     // player can tell their rocket will wait on them.
-                    let ep = app.game.player_company.engine_projects.iter()
-                        .find(|ep| ep.project_id == *pid);
+                    let ep = app.game.player_company.find_engine_project(*pid);
                     match ep.map(|ep| &ep.status) {
                         Some(crate::engine_project::EngineDesignStatus::Proposed { .. }) => "[prop]",
                         Some(crate::engine_project::EngineDesignStatus::InDesign { .. }) => "[id]",
@@ -2603,9 +2594,7 @@ fn draw_engine_editor_modal(
     text_input: Option<(&str, String)>,
     area: Rect,
 ) {
-    let ep = match app.game.player_company.engine_projects.iter()
-        .find(|ep| ep.project_id == project_id)
-    {
+    let ep = match app.game.player_company.find_engine_project(project_id) {
         Some(ep) => ep,
         None => return,
     };
@@ -2741,8 +2730,7 @@ fn draw_rocket_pick_engine_modal(
         match source {
             EngineSource::Contracted(_) => " [3P]",
             EngineSource::PlayerDesign(pid) => {
-                app.game.player_company.engine_projects.iter()
-                    .find(|ep| ep.project_id == *pid)
+                app.game.player_company.find_engine_project(*pid)
                     .map(|ep| match ep.status {
                         crate::engine_project::EngineDesignStatus::Proposed { .. } => " [proposed]",
                         crate::engine_project::EngineDesignStatus::InDesign { .. } => " [in design]",

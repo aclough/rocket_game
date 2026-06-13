@@ -293,6 +293,25 @@ impl Company {
         Some(project_id)
     }
 
+    /// Iterator over engine projects that should be visible in the
+    /// engines pane — everything except `Proposed`, which belongs to an
+    /// in-progress rocket designer session.
+    pub fn visible_engine_projects(&self) -> impl Iterator<Item = (usize, &EngineProject)> {
+        self.engine_projects.iter()
+            .enumerate()
+            .filter(|(_, ep)| !matches!(ep.status, EngineDesignStatus::Proposed { .. }))
+    }
+
+    /// Look up an engine project by id.
+    pub fn find_engine_project(&self, id: EngineProjectId) -> Option<&EngineProject> {
+        self.engine_projects.iter().find(|ep| ep.project_id == id)
+    }
+
+    /// Look up an engine project by id, mutably.
+    pub fn find_engine_project_mut(&mut self, id: EngineProjectId) -> Option<&mut EngineProject> {
+        self.engine_projects.iter_mut().find(|ep| ep.project_id == id)
+    }
+
     /// Promote a `Proposed` engine project to `InDesign`. Returns the
     /// engine name on success (for logging). No-op if the id isn't found
     /// or the engine isn't in Proposed status.
