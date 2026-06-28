@@ -29,6 +29,11 @@ pub enum GameEvent {
     /// (post-Phase-3). `new_flaw` is true when the modification roll
     /// introduced a fresh undiscovered flaw.
     RocketDesignModified { rocket_name: String, new_flaw: bool },
+    // Reactor research events (mirrors the engine ones).
+    ReactorDesignStarted { reactor_name: String },
+    ReactorDesignComplete { reactor_name: String, flaw_count: u32 },
+    ReactorFlawDiscovered { reactor_name: String, flaw_description: String },
+    ReactorRevisionComplete { reactor_name: String },
     // Phase 3: Manufacturing events
     ManufacturingTeamHired { name: String },
     EngineBuilt { engine_name: String },
@@ -108,6 +113,14 @@ impl fmt::Display for GameEvent {
                     write!(f, "Modified {}", rocket_name)
                 }
             }
+            GameEvent::ReactorDesignStarted { reactor_name } =>
+                write!(f, "Started reactor design: {}", reactor_name),
+            GameEvent::ReactorDesignComplete { reactor_name, flaw_count } =>
+                write!(f, "Reactor design complete: {} ({} flaws)", reactor_name, flaw_count),
+            GameEvent::ReactorFlawDiscovered { reactor_name, flaw_description } =>
+                write!(f, "Reactor flaw in {}: {}", reactor_name, flaw_description),
+            GameEvent::ReactorRevisionComplete { reactor_name } =>
+                write!(f, "Reactor revision complete: {}", reactor_name),
             GameEvent::ManufacturingTeamHired { name } =>
                 write!(f, "Hired manufacturing team: {}", name),
             GameEvent::EngineBuilt { engine_name } =>
@@ -198,6 +211,10 @@ impl GameEvent {
             | GameEvent::RocketFlawDiscovered { .. }
             | GameEvent::RocketRevisionComplete { .. }
             | GameEvent::RocketDesignModified { .. }
+            | GameEvent::ReactorDesignStarted { .. }
+            | GameEvent::ReactorDesignComplete { .. }
+            | GameEvent::ReactorFlawDiscovered { .. }
+            | GameEvent::ReactorRevisionComplete { .. }
             | GameEvent::ManufacturingTeamHired { .. }
             | GameEvent::EngineBuilt { .. }
             | GameEvent::StageBuilt { .. }

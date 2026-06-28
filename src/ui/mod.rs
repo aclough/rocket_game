@@ -32,6 +32,7 @@ pub enum FocusedPane {
 pub enum Tab {
     Overview,
     Engines,
+    Reactors,
     Rockets,
     Manufacturing,
     Contracts,
@@ -42,7 +43,7 @@ pub enum Tab {
 
 impl Tab {
     pub const ALL: &[Tab] = &[
-        Tab::Overview, Tab::Engines,
+        Tab::Overview, Tab::Engines, Tab::Reactors,
         Tab::Rockets, Tab::Manufacturing, Tab::Contracts,
         Tab::Launches, Tab::Finance, Tab::Events,
     ];
@@ -51,6 +52,7 @@ impl Tab {
         match self {
             Tab::Overview => "Overview",
             Tab::Engines => "Engines",
+            Tab::Reactors => "Reactors",
             Tab::Rockets => "Rockets",
             Tab::Manufacturing => "Mfg",
             Tab::Contracts => "Contracts",
@@ -62,8 +64,8 @@ impl Tab {
 
     /// Whether this tab uses a list-style selection (vs scrollable content).
     pub fn is_list_tab(&self) -> bool {
-        matches!(self, Tab::Engines | Tab::Rockets | Tab::Manufacturing
-            | Tab::Contracts | Tab::Launches)
+        matches!(self, Tab::Engines | Tab::Reactors | Tab::Rockets
+            | Tab::Manufacturing | Tab::Contracts | Tab::Launches)
     }
 }
 
@@ -2656,6 +2658,12 @@ impl App {
                         // selected_item indexes the displayed list.
                         let max = self.game.player_company.visible_engine_projects()
                             .count().saturating_sub(1);
+                        if self.selected_item < max {
+                            self.selected_item += 1;
+                        }
+                    }
+                    Tab::Reactors => {
+                        let max = self.game.player_company.reactor_projects.len().saturating_sub(1);
                         if self.selected_item < max {
                             self.selected_item += 1;
                         }

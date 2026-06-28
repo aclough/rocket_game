@@ -105,10 +105,20 @@ pub struct Company {
     pub next_flaw_id: u64,
     pub next_rocket_project_id: u64,
     pub next_contracted_engine_id: u64,
+    /// Allocator for `ReactorProjectId`.
+    #[serde(default)]
+    pub next_reactor_project_id: u64,
+    /// Allocator for `ReactorId` (the design's identity, used like
+    /// `next_engine_id` for engine designs).
+    #[serde(default)]
+    pub next_reactor_id: u64,
     pub teams: Vec<EngineeringTeam>,
     pub manufacturing_teams: Vec<ManufacturingTeam>,
     pub engine_projects: Vec<EngineProject>,
     pub rocket_projects: Vec<RocketProject>,
+    /// Player-researched reactor designs and their workflow state.
+    #[serde(default)]
+    pub reactor_projects: Vec<crate::reactor_project::ReactorProject>,
     pub third_party_catalog: Vec<ThirdPartyEngine>,
     pub contracted_engines: Vec<ContractedEngine>,
     pub rocket_designs: Vec<RocketDesign>,
@@ -167,10 +177,13 @@ impl Company {
             next_flaw_id: 1,
             next_rocket_project_id: 1,
             next_contracted_engine_id: 1,
+            next_reactor_project_id: 1,
+            next_reactor_id: 1,
             teams: Vec::new(),
             manufacturing_teams: Vec::new(),
             engine_projects: Vec::new(),
             rocket_projects: Vec::new(),
+            reactor_projects: Vec::new(),
             third_party_catalog: catalog,
             contracted_engines: Vec::new(),
             rocket_designs: Vec::new(),
@@ -1062,6 +1075,28 @@ impl GameState {
                 }
             }
 
+            // Reactor projects accrue daily work just like engine projects.
+            // Phase 1 only fires DesignComplete; testing/revision events
+            // arrive in Phase 3.
+            for project in &mut self.player_company.reactor_projects {
+                let reactor_name = project.design.name.clone();
+                let work_events = project.apply_daily_work(rng, next_flaw_id);
+                for we in work_events {
+                    let evt = match we {
+                        crate::reactor_project::ReactorWorkEvent::DesignComplete { flaw_count } =>
+                            GameEvent::ReactorDesignComplete { reactor_name: reactor_name.clone(), flaw_count },
+                        crate::reactor_project::ReactorWorkEvent::TestingCycleComplete => continue,
+                        crate::reactor_project::ReactorWorkEvent::FlawDiscovered { flaw_description } =>
+                            GameEvent::ReactorFlawDiscovered { reactor_name: reactor_name.clone(), flaw_description },
+                        crate::reactor_project::ReactorWorkEvent::RevisionComplete =>
+                            GameEvent::ReactorRevisionComplete { reactor_name: reactor_name.clone() },
+                        crate::reactor_project::ReactorWorkEvent::TechDeficiencyAttempted { .. } => continue,
+                    };
+                    self.event_log.push(self.date, evt.clone());
+                    events.push(evt);
+                }
+            }
+
             // Accumulate NRE (engineering salary) on active projects
             let daily_salary = ENGINEERING_MONTHLY_SALARY / 30.0;
             for project in &mut self.player_company.engine_projects {
@@ -1070,6 +1105,11 @@ impl GameState {
                 }
             }
             for project in &mut self.player_company.rocket_projects {
+                if project.teams_assigned > 0 {
+                    project.nre_cost += project.teams_assigned as f64 * daily_salary;
+                }
+            }
+            for project in &mut self.player_company.reactor_projects {
                 if project.teams_assigned > 0 {
                     project.nre_cost += project.teams_assigned as f64 * daily_salary;
                 }
@@ -3823,5 +3863,47 @@ mod tests {
             }
             _ => panic!("expected nested Spacecraft payload"),
         }
+    }
+
+    /// End-to-end Phase-1 reactor pipeline check: programmatic project
+    /// → daily ticks accrue work → status transitions to Testing → a
+    /// `ReactorDesignComplete` event reaches the game's event stream.
+    #[test]
+    fn test_reactor_project_advances_to_testing() {
+        use crate::reactor::{EnrichmentLevel, ReactorId};
+        use crate::reactor_project::{
+            ReactorDesignStatus, ReactorProject, ReactorProjectId,
+        };
+
+        let mut gs = GameState::new("Reactor Test".into(), 100_000_000.0, 7);
+        let mut project = ReactorProject::new(
+            ReactorProjectId(1),
+            ReactorId(1),
+            "Mk1 Reactor".into(),
+            1.0,
+            EnrichmentLevel::Leu,
+        );
+        project.teams_assigned = 4;
+        gs.player_company.reactor_projects.push(project);
+
+        let mut saw_complete = false;
+        // Cap iterations so a regression fails the test rather than the
+        // process; reactor design at scale 1.0 / complexity 8 = ~192
+        // work-days, which 4 teams should clear well under this bound.
+        for _ in 0..5_000 {
+            let events = gs.advance_day();
+            if events.iter().any(|e| matches!(
+                e,
+                GameEvent::ReactorDesignComplete { .. },
+            )) {
+                saw_complete = true;
+                break;
+            }
+        }
+        assert!(saw_complete, "reactor project should reach Testing");
+        let p = &gs.player_company.reactor_projects[0];
+        assert!(matches!(p.status, ReactorDesignStatus::Testing { .. }));
+        // NRE accrued because teams_assigned > 0 throughout.
+        assert!(p.nre_cost > 0.0);
     }
 }

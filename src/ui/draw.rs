@@ -159,6 +159,7 @@ fn draw_content(frame: &mut Frame, app: &App, area: Rect) {
     match app.current_tab() {
         Tab::Overview => draw_overview(frame, app, area, border_style),
         Tab::Engines => draw_engines_tab(frame, app, area, border_style),
+        Tab::Reactors => draw_reactors_tab(frame, app, area, border_style),
         Tab::Rockets => draw_rockets_tab(frame, app, area, border_style),
         Tab::Manufacturing => draw_manufacturing_tab(frame, app, area, border_style),
         Tab::Contracts => draw_contracts_tab(frame, app, area, border_style),
@@ -456,6 +457,101 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(" Engines ");
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+    render_gauges(frame, area, &gauges);
+}
+
+fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
+    use crate::reactor_project::{ReactorDesignStatus, ReactorProject};
+
+    let company = &app.game.player_company;
+    let projects: &[ReactorProject] = &company.reactor_projects;
+
+    let mut lines = vec![
+        Line::from(format!("  Reactor Projects ({})", projects.len())),
+        Line::from("  ─────────────────────────────────────────────"),
+    ];
+    let mut gauges: Vec<GaugeInfo> = Vec::new();
+
+    if projects.is_empty() {
+        lines.push(Line::from("  No reactor projects yet."));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Phase 1: read-only pane. Phase 2 will add the reactor editor.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    for (i, project) in projects.iter().enumerate() {
+        // Hide drafts the same way the engines pane hides Proposed.
+        if matches!(project.status, ReactorDesignStatus::Proposed { .. }) {
+            continue;
+        }
+        let selected = i == app.selected_item;
+        let marker = if selected { "▶" } else { " " };
+
+        let status_str = match &project.status {
+            ReactorDesignStatus::Proposed { .. } => unreachable!("filtered above"),
+            ReactorDesignStatus::InDesign { .. } => "In Design".to_string(),
+            ReactorDesignStatus::Testing { .. } => "Testing".to_string(),
+            ReactorDesignStatus::Revising { remaining_flaw_indices, .. } =>
+                format!("Revising {} flaw(s)", remaining_flaw_indices.len()),
+        };
+
+        let line_text = format!(
+            "  {} {} (Rev {})  {}",
+            marker, project.design.name, project.revision, status_str,
+        );
+        let text_width = line_text.len() as u16;
+
+        let line_idx = lines.len();
+        if let ReactorDesignStatus::InDesign { work_completed, work_required } = &project.status {
+            let ratio = work_completed / work_required;
+            gauges.push(GaugeInfo {
+                line_index: line_idx, ratio,
+                label: format!("{:.0}/{:.0}", work_completed, work_required),
+                fill_color: Color::Rgb(0, 140, 140), text_width, right_aligned: false,
+            });
+        }
+
+        let style = if selected {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(line_text, style)));
+
+        if selected {
+            let d = &project.design;
+            lines.push(Line::from(format!(
+                "      {} • scale {:.2} • {:.0} W • {:.0} K",
+                d.enrichment.display_name(),
+                d.scale,
+                d.steady_w,
+                d.temperature_k,
+            )));
+            lines.push(Line::from(format!(
+                "      mass {:.0} kg (reactor {:.0} + radiator {:.0}) • ${:.1}M",
+                d.mass_kg, d.reactor_mass_kg, d.radiator.mass_kg, d.material_cost / 1_000_000.0,
+            )));
+            lines.push(Line::from(format!(
+                "      Teams: {}  NRE: ${:.0}",
+                project.teams_assigned, project.nre_cost,
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  (Phase 2 will add: [N] New design, team assignment, revisions)",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(" Reactors ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
     render_gauges(frame, area, &gauges);

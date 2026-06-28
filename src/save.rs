@@ -49,6 +49,12 @@ pub fn load_game(path: &Path) -> io::Result<GameState> {
     state.player_company.engine_projects.retain(|ep|
         !matches!(ep.status, crate::engine_project::EngineDesignStatus::Proposed { .. })
     );
+    // Same sweep for reactor projects — Phase 2 will surface a
+    // designer that can create Proposed reactors, but any survivor
+    // here is a draft from an aborted session.
+    state.player_company.reactor_projects.retain(|rp|
+        !matches!(rp.status, crate::reactor_project::ReactorDesignStatus::Proposed { .. })
+    );
     Ok(state)
 }
 

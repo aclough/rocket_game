@@ -4,8 +4,11 @@
 [] Add crew support and modules
 [] Propellant boiloff
 [] Have player choose price for markets
-[] Add competitor company, DinoSoar
 [] Automation of bidding on contracts for any that cost less than marginal cost + selected profit margin.
+[] Add competitor company, DinoSoar
+[] Mid-route payload detach — drop a Spacecraft payload at a waypoint and
+   have the carrier continue with reduced mass (e.g. Falcon 9 drops Dragon
+   at LEO and the upper stage flies on).
 
 Later tuning:
 [] Rocket construction time
@@ -14,7 +17,8 @@ Later tuning:
 [] Replace high/low thrust binary and asteroid-landing rules with a principled
    acceleration / gravity comparison (so an ion drive can land on Bennu but not
    Phobos based on numbers, not hand-tagged edge flags).
-[] Mid-route payload detach — drop a Spacecraft payload at a waypoint and
-   have the carrier continue with reduced mass (e.g. Falcon 9 drops Dragon
-   at LEO and the upper stage flies on).
+[] Government trust gates for missions, technologies
+[] Split reputation into prestige, trust, other factors.
+[] Reactor temperature/size scaling?
+
 

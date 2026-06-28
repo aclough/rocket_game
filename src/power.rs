@@ -36,15 +36,13 @@ pub enum PowerSourceKind {
     /// Fuel cell — burns a tiny fraction of stage propellant for power.
     /// Phase 2.
     FuelCell { peak_w: f64, kg_per_kwd: f64 },
-    /// Nuclear reactor — large constant power. The radiator is rolled in
-    /// for now (the UI shows reactor mass alone) but exposed so future
-    /// work can let the player size it independently. Higher
-    /// `temperature_k` ⇒ smaller radiator for the same heat rejection
-    /// (Stefan-Boltzmann ∝ T⁴). Phase 3.
+    /// Nuclear reactor — owns a cloned snapshot of the [`ReactorDesign`]
+    /// the player researched. Mirrors how `Stage::engine` carries a
+    /// cloned `EngineDesign`. The bundled radiator's heat-rejection
+    /// efficiency comes from the design's `temperature_k`
+    /// (Stefan-Boltzmann ∝ T⁴).
     Reactor {
-        steady_w: f64,
-        temperature_k: f64,
-        radiator: Radiator,
+        design: crate::reactor::ReactorDesign,
     },
 }
 
@@ -88,7 +86,7 @@ impl PowerSource {
             }
             PowerSourceKind::Rtg { steady_w } => *steady_w,
             PowerSourceKind::FuelCell { peak_w, .. } => *peak_w,
-            PowerSourceKind::Reactor { steady_w, .. } => *steady_w,
+            PowerSourceKind::Reactor { design } => design.steady_w,
         }
     }
 
@@ -159,23 +157,44 @@ impl PowerSource {
         }
     }
 
-    /// Build a fixed-size space-rated fission reactor. Three classes
-    /// reflect different power tiers; higher-power tiers run hotter and
-    /// thus need proportionally less radiator mass per kilowatt (the
-    /// Stefan-Boltzmann ∝ T⁴ story — captured roughly in the bundled
-    /// radiator mass rather than modelled separately). Radiator is
-    /// included in `mass_kg`; the `radiator` field is exposed for future
-    /// work that might let players size it independently.
+    /// Build a fixed-size space-rated fission reactor at one of the
+    /// three legacy preset scales. Phase 1 keeps these so the existing
+    /// power editor still works; Phase 2 will retire `new_reactor` in
+    /// favour of installing player-designed reactors by id.
+    ///
+    /// Preset → scale mapping (anchored to the historical Medium
+    /// preset = `scale = 1.0`):
+    ///   Small  → scale 0.1   (~5 kW)
+    ///   Medium → scale 1.0   (~50 kW)
+    ///   Large  → scale 10.0  (~500 kW)
     pub fn new_reactor(class: ReactorClass) -> Self {
-        let (steady_w, temperature_k, reactor_mass, radiator_mass, material_cost) = match class {
-            ReactorClass::Small => (5_000.0, 1200.0, 800.0, 200.0, 5_000_000.0),
-            ReactorClass::Medium => (50_000.0, 1400.0, 4200.0, 800.0, 30_000_000.0),
-            ReactorClass::Large => (500_000.0, 1600.0, 26_000.0, 4_000.0, 150_000_000.0),
+        use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
+        let (scale, label) = match class {
+            ReactorClass::Small => (0.1, "Preset Small Reactor"),
+            ReactorClass::Medium => (1.0, "Preset Medium Reactor"),
+            ReactorClass::Large => (10.0, "Preset Large Reactor"),
         };
-        let radiator = Radiator { kind: RadiatorKind::Standard, mass_kg: radiator_mass };
+        // ReactorId(0) marks "preset, not from a player project".
+        let design = ReactorDesign::new(ReactorId(0), label.into(), scale, EnrichmentLevel::Leu);
+        let mass_kg = design.mass_kg;
+        let material_cost = design.material_cost;
         PowerSource {
-            kind: PowerSourceKind::Reactor { steady_w, temperature_k, radiator },
-            mass_kg: reactor_mass + radiator_mass,
+            kind: PowerSourceKind::Reactor { design },
+            mass_kg,
+            material_cost,
+            stored_kwd: 0.0,
+            capacity_kwd: 0.0,
+        }
+    }
+
+    /// Build a power source backed by a player-researched reactor
+    /// design. Mass and material cost come from the design itself.
+    pub fn from_reactor_design(design: crate::reactor::ReactorDesign) -> Self {
+        let mass_kg = design.mass_kg;
+        let material_cost = design.material_cost;
+        PowerSource {
+            kind: PowerSourceKind::Reactor { design },
+            mass_kg,
             material_cost,
             stored_kwd: 0.0,
             capacity_kwd: 0.0,
@@ -370,8 +389,9 @@ pub fn source_summary(src: &PowerSource) -> String {
             "RTG ({:.0} W, {:.1} kg)", steady_w, src.mass_kg),
         PowerSourceKind::FuelCell { peak_w, .. } => format!(
             "Fuel Cell ({:.0} W, {:.1} kg)", peak_w, src.mass_kg),
-        PowerSourceKind::Reactor { steady_w, temperature_k, .. } => format!(
-            "Reactor ({:.0} W, {} K, {:.1} kg)", steady_w, temperature_k, src.mass_kg),
+        PowerSourceKind::Reactor { design } => format!(
+            "Reactor ({:.0} W, {:.0} K, {:.1} kg)",
+            design.steady_w, design.temperature_k, src.mass_kg),
     }
 }
 
@@ -425,8 +445,8 @@ mod tests {
         assert!((r.steady_output_w(1.0) - 50_000.0).abs() < 1.0);
         assert!((r.steady_output_w(10.0) - 50_000.0).abs() < 1.0);
         // Total mass includes both reactor and radiator.
-        if let PowerSourceKind::Reactor { radiator, .. } = &r.kind {
-            assert!(r.mass_kg > radiator.mass_kg,
+        if let PowerSourceKind::Reactor { design } = &r.kind {
+            assert!(r.mass_kg > design.radiator.mass_kg,
                 "total mass should include both reactor + radiator");
         } else {
             panic!("expected Reactor kind");
