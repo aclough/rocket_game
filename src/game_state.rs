@@ -94,6 +94,16 @@ impl Spacecraft {
     }
 }
 
+/// Which engineering pool a project lives in. Used by the
+/// donor-search helpers to identify a specific project across the
+/// three lists (engines / rockets / reactors).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectKind {
+    Engine(usize),
+    Rocket(usize),
+    Reactor(usize),
+}
+
 /// A player's rocket company.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Company {
@@ -875,79 +885,86 @@ impl Company {
         }
     }
 
-    /// Steal an engineering team from the busiest project and assign to the target engine project.
-    /// Returns the name of the project stolen from, or None if no team can be stolen.
-    pub fn steal_engineering_team_to_engine_project(&mut self, target: usize) -> Option<String> {
-        if target >= self.engine_projects.len() {
-            return None;
-        }
-        // Find the engine or rocket project with the most teams assigned (>0, not target engine project)
-        let mut best_source: Option<(&str, u32)> = None;
-        let mut best_kind: Option<(bool, usize)> = None; // (is_engine, index)
-
+    /// Find the busiest engineering project across the three pools
+    /// (engines / rockets / reactors), excluding `exclude`. Returns the
+    /// donor's kind, index, and name; caller decrements teams_assigned
+    /// and credits the target.
+    fn busiest_engineering_donor(
+        &self,
+        exclude: ProjectKind,
+    ) -> Option<(ProjectKind, usize, String)> {
+        let mut best: Option<(ProjectKind, usize, u32, String)> = None;
         for (i, ep) in self.engine_projects.iter().enumerate() {
-            if i == target || ep.teams_assigned == 0 { continue; }
-            if best_source.is_none() || ep.teams_assigned > best_source.unwrap().1 {
-                best_source = Some((&ep.design.name, ep.teams_assigned));
-                best_kind = Some((true, i));
+            if ep.teams_assigned == 0 { continue; }
+            if matches!(exclude, ProjectKind::Engine(j) if j == i) { continue; }
+            if best.as_ref().map_or(true, |b| ep.teams_assigned > b.2) {
+                best = Some((ProjectKind::Engine(i), i, ep.teams_assigned, ep.design.name.clone()));
             }
         }
         for (i, rp) in self.rocket_projects.iter().enumerate() {
             if rp.teams_assigned == 0 { continue; }
-            if best_source.is_none() || rp.teams_assigned > best_source.unwrap().1 {
-                best_source = Some((&rp.design.name, rp.teams_assigned));
-                best_kind = Some((false, i));
+            if matches!(exclude, ProjectKind::Rocket(j) if j == i) { continue; }
+            if best.as_ref().map_or(true, |b| rp.teams_assigned > b.2) {
+                best = Some((ProjectKind::Rocket(i), i, rp.teams_assigned, rp.design.name.clone()));
             }
         }
+        for (i, rp) in self.reactor_projects.iter().enumerate() {
+            if rp.teams_assigned == 0 { continue; }
+            if matches!(exclude, ProjectKind::Reactor(j) if j == i) { continue; }
+            if best.as_ref().map_or(true, |b| rp.teams_assigned > b.2) {
+                best = Some((ProjectKind::Reactor(i), i, rp.teams_assigned, rp.design.name.clone()));
+            }
+        }
+        best.map(|(kind, _, _, name)| (kind, 0, name))
+    }
 
-        let (is_engine, idx) = best_kind?;
-        let name = if is_engine {
-            let n = self.engine_projects[idx].design.name.clone();
-            self.engine_projects[idx].teams_assigned -= 1;
-            n
-        } else {
-            let n = self.rocket_projects[idx].design.name.clone();
-            self.rocket_projects[idx].teams_assigned -= 1;
-            n
-        };
-        self.engine_projects[target].teams_assigned += 1;
+    /// Move one team from `donor` to the project at `(target_kind,
+    /// target_index)`. Callers have already confirmed the donor is
+    /// valid via `busiest_engineering_donor`.
+    fn move_engineering_team(&mut self, donor: ProjectKind, target_kind: ProjectKind) {
+        match donor {
+            ProjectKind::Engine(i) => self.engine_projects[i].teams_assigned -= 1,
+            ProjectKind::Rocket(i) => self.rocket_projects[i].teams_assigned -= 1,
+            ProjectKind::Reactor(i) => self.reactor_projects[i].teams_assigned -= 1,
+        }
+        match target_kind {
+            ProjectKind::Engine(i) => self.engine_projects[i].teams_assigned += 1,
+            ProjectKind::Rocket(i) => self.rocket_projects[i].teams_assigned += 1,
+            ProjectKind::Reactor(i) => self.reactor_projects[i].teams_assigned += 1,
+        }
+    }
+
+    /// Steal an engineering team from the busiest engineering project
+    /// (excluding the target) and assign it to the target engine
+    /// project. Returns the donor's display name on success.
+    pub fn steal_engineering_team_to_engine_project(&mut self, target: usize) -> Option<String> {
+        if target >= self.engine_projects.len() {
+            return None;
+        }
+        let (donor, _, name) = self.busiest_engineering_donor(ProjectKind::Engine(target))?;
+        self.move_engineering_team(donor, ProjectKind::Engine(target));
         Some(name)
     }
 
-    /// Steal an engineering team from the busiest project and assign to the target rocket project.
+    /// Steal an engineering team and assign to the target rocket project.
     pub fn steal_engineering_team_to_rocket_project(&mut self, target: usize) -> Option<String> {
         if target >= self.rocket_projects.len() {
             return None;
         }
-        let mut best_source: Option<(&str, u32)> = None;
-        let mut best_kind: Option<(bool, usize)> = None;
+        let (donor, _, name) = self.busiest_engineering_donor(ProjectKind::Rocket(target))?;
+        self.move_engineering_team(donor, ProjectKind::Rocket(target));
+        Some(name)
+    }
 
-        for (i, ep) in self.engine_projects.iter().enumerate() {
-            if ep.teams_assigned == 0 { continue; }
-            if best_source.is_none() || ep.teams_assigned > best_source.unwrap().1 {
-                best_source = Some((&ep.design.name, ep.teams_assigned));
-                best_kind = Some((true, i));
-            }
+    /// Steal an engineering team and assign to the target reactor
+    /// project. Mirrors the engine/rocket variants so the Reactors
+    /// pane's `+` key behaves the same as the others.
+    pub fn steal_engineering_team_to_reactor_project(&mut self, target: usize) -> Option<String> {
+        if target >= self.reactor_projects.len() {
+            return None;
         }
-        for (i, rp) in self.rocket_projects.iter().enumerate() {
-            if i == target || rp.teams_assigned == 0 { continue; }
-            if best_source.is_none() || rp.teams_assigned > best_source.unwrap().1 {
-                best_source = Some((&rp.design.name, rp.teams_assigned));
-                best_kind = Some((false, i));
-            }
-        }
-
-        let (is_engine, idx) = best_kind?;
-        let name = if is_engine {
-            let n = self.engine_projects[idx].design.name.clone();
-            self.engine_projects[idx].teams_assigned -= 1;
-            n
-        } else {
-            let n = self.rocket_projects[idx].design.name.clone();
-            self.rocket_projects[idx].teams_assigned -= 1;
-            n
-        };
-        self.rocket_projects[target].teams_assigned += 1;
+        let (donor, _, name) = self.busiest_engineering_donor(ProjectKind::Reactor(target))?;
+        self.move_engineering_team(donor, ProjectKind::Reactor(target));
         Some(name)
     }
 
@@ -4026,6 +4043,62 @@ mod tests {
         );
         gs.player_company.delete_proposed_reactor(pid);
         assert!(gs.player_company.find_reactor_project(pid).is_none());
+    }
+
+    /// Cross-pool team stealing. `+` on the Reactors pane should be
+    /// able to pull a team from a busy engine project; symmetric for
+    /// engines/rockets pulling from reactors.
+    #[test]
+    fn test_cross_pool_engineering_team_steal() {
+        use crate::reactor::EnrichmentLevel;
+        let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
+        // Hire two more teams so the engine project can carry a load
+        // worth stealing from.
+        gs.player_company.hire_team("Team 2".into());
+        gs.player_company.hire_team("Team 3".into());
+
+        // Start an engine project; load it with 3 teams.
+        let pid = gs.player_company.start_proposed_engine_project(
+            "E1".into(),
+            crate::engine::EngineCycle::GasGenerator,
+            crate::engine_project::PropellantPreset::Kerolox,
+            1.0, false, None,
+        ).expect("create engine project");
+        gs.player_company.promote_proposed_engine(pid);
+        for _ in 0..3 {
+            assert!(gs.player_company.add_team_to_project(0));
+        }
+        assert_eq!(gs.player_company.unassigned_team_count(), 0);
+
+        // Start a reactor project with no teams.
+        let _ = gs.player_company.start_proposed_reactor(
+            "R1".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        gs.player_company.promote_proposed_reactor(
+            crate::reactor_project::ReactorProjectId(1));
+
+        // No free teams, so a plain add fails — then the steal helper
+        // should pull one from the busy engine project.
+        assert!(!gs.player_company.add_team_to_reactor_project(0));
+        let donor_name = gs.player_company
+            .steal_engineering_team_to_reactor_project(0);
+        assert_eq!(donor_name.as_deref(), Some("E1"));
+        assert_eq!(gs.player_company.engine_projects[0].teams_assigned, 2);
+        assert_eq!(gs.player_company.reactor_projects[0].teams_assigned, 1);
+
+        // Symmetric: now the reactor is the smaller pool. Adding a
+        // second team to the engine should pull from the reactor only
+        // if the reactor is the busiest donor (it's not — engine still
+        // has 2). So no movement.
+        let before_engine = gs.player_company.engine_projects[0].teams_assigned;
+        let before_reactor = gs.player_company.reactor_projects[0].teams_assigned;
+        gs.player_company.steal_engineering_team_to_engine_project(0);
+        // Donor search includes the target's own project too if it's
+        // not excluded; here the target IS the engine project so the
+        // engine's own teams are excluded → steal pulls from the
+        // reactor.
+        assert_eq!(gs.player_company.reactor_projects[0].teams_assigned, before_reactor - 1);
+        assert_eq!(gs.player_company.engine_projects[0].teams_assigned, before_engine + 1);
     }
 
     /// Phase 2a — team helpers respect the unassigned-team budget and

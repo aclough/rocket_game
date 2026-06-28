@@ -986,8 +986,12 @@ impl App {
                 let idx = real_idx.unwrap_or(usize::MAX);
                 if self.game.player_company.add_team_to_reactor_project(idx) {
                     self.status_message = Some("Team assigned".into());
+                } else if let Some(from) = self.game.player_company
+                    .steal_engineering_team_to_reactor_project(idx)
+                {
+                    self.status_message = Some(format!("Team reassigned from {}", from));
                 } else {
-                    self.status_message = Some("No teams available".into());
+                    self.status_message = Some("No teams to reassign".into());
                 }
             }
             KeyCode::Char('-') => {
