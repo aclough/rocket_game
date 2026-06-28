@@ -2879,13 +2879,14 @@ fn draw_reactor_editor_modal(
     text_input: Option<(&str, String)>,
     area: Rect,
 ) {
+    use crate::reactor::EnrichmentLevel;
     use crate::reactor_project::ReactorDesignStatus;
 
     let rp = match app.game.player_company.find_reactor_project(project_id) {
         Some(rp) => rp,
         None => return,
     };
-    const ROW_COUNT: usize = 2; // Name, Scale (Phase 2b adds Enrichment)
+    const ROW_COUNT: usize = 3; // Name, Scale, Enrichment
     let cursor = cursor.min(ROW_COUNT - 1);
 
     let row_label = |row: usize| -> &'static str {
@@ -2904,6 +2905,28 @@ fn draw_reactor_editor_modal(
         ReactorDesignStatus::Revising { .. } => "Revising",
     };
 
+    // Enrichment row: list the levels, dim ones still gated by
+    // reputation, mark the current pick, and annotate the row's tail
+    // with the next reputation gate so the player sees what they're
+    // working toward.
+    let reputation = app.game.player_company.reputation.total();
+    let enrichment_segments: Vec<String> = EnrichmentLevel::ALL.iter().map(|lvl| {
+        let mark_l = if *lvl == rp.design.enrichment { "[" } else { " " };
+        let mark_r = if *lvl == rp.design.enrichment { "]" } else { " " };
+        format!("{}{}{}", mark_l, lvl.display_name(), mark_r)
+    }).collect();
+    let next_gate_hint = EnrichmentLevel::ALL.iter()
+        .find(|lvl| !lvl.available_at(reputation))
+        .map(|lvl| format!("(next: {} at {:.0} rep, you have {:.0})",
+            lvl.display_name(), lvl.min_reputation(), reputation))
+        .unwrap_or_else(|| "(all enrichments unlocked)".into());
+    let enrichment_row = format!(
+        " {} Enrichment: {}  {}",
+        row_label(2),
+        enrichment_segments.join(" "),
+        next_gate_hint,
+    );
+
     let mut lines = vec![
         Line::from(Span::styled(
             format!(" Status: {}", status_label),
@@ -2918,11 +2941,7 @@ fn draw_reactor_editor_modal(
             format!(" {} Scale: {:.3}×", row_label(1), rp.design.scale),
             row_style(1),
         )),
-        Line::from(Span::styled(
-            format!("   Enrichment: {}  (Phase 2b unlocks MEU/HEU)",
-                rp.design.enrichment.display_name()),
-            Style::default().fg(Color::DarkGray),
-        )),
+        Line::from(Span::styled(enrichment_row, row_style(2))),
         Line::from(""),
         Line::from(format!(
             " Output:  {}   Temperature: {:.0} K",
@@ -2954,9 +2973,9 @@ fn draw_reactor_editor_modal(
 
     lines.push(Line::from(""));
     let footer = if matches!(rp.status, ReactorDesignStatus::Proposed { .. }) {
-        " [↑↓] Field  [←→] Scale  [Enter] Edit text  [D] Done  [Esc] Cancel"
+        " [↑↓] Field  [←→] Change  [Enter] Edit text  [D] Done  [Esc] Cancel"
     } else {
-        " [↑↓] Field  [←→] Scale  [Enter] Edit text  [Esc] Close"
+        " [↑↓] Field  [←→] Change  [Enter] Edit text  [Esc] Close"
     };
     lines.push(Line::from(Span::styled(
         footer.to_string(),

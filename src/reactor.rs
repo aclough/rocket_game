@@ -41,6 +41,15 @@ pub enum EnrichmentLevel {
 }
 
 impl EnrichmentLevel {
+    /// Display order for the editor picker — LEU at the cheap end, HEU
+    /// at the expensive one. Iterate this when filtering for available
+    /// enrichments or building a UI list.
+    pub const ALL: &'static [EnrichmentLevel] = &[
+        EnrichmentLevel::Leu,
+        EnrichmentLevel::Meu,
+        EnrichmentLevel::Heu,
+    ];
+
     pub fn display_name(self) -> &'static str {
         match self {
             EnrichmentLevel::Leu => "LEU",
@@ -57,6 +66,31 @@ impl EnrichmentLevel {
             EnrichmentLevel::Heu => 0.30,
         }
     }
+
+    /// Total reputation required to design at this enrichment. LEU is
+    /// always available; MEU and HEU sit behind serious prestige walls.
+    pub fn min_reputation(self) -> f64 {
+        match self {
+            EnrichmentLevel::Leu => 0.0,
+            EnrichmentLevel::Meu => crate::balance::REACTOR_MEU_MIN_REPUTATION,
+            EnrichmentLevel::Heu => crate::balance::REACTOR_HEU_MIN_REPUTATION,
+        }
+    }
+
+    /// Is this enrichment currently selectable by the player at
+    /// `current_reputation`?
+    pub fn available_at(self, current_reputation: f64) -> bool {
+        current_reputation >= self.min_reputation()
+    }
+}
+
+/// Enrichments the player can currently pick from in the editor,
+/// returned in display order (LEU → HEU).
+pub fn available_enrichments(current_reputation: f64) -> Vec<EnrichmentLevel> {
+    EnrichmentLevel::ALL.iter()
+        .copied()
+        .filter(|e| e.available_at(current_reputation))
+        .collect()
 }
 
 /// Snapshot of a reactor's physical parameters. Lives inside a
@@ -214,6 +248,56 @@ mod tests {
     fn scale_is_clamped_to_minimum() {
         let tiny = ReactorDesign::new(ReactorId(1), "a".into(), 0.001, EnrichmentLevel::Leu);
         assert!((tiny.scale - MIN_SCALE).abs() < 1e-9);
+    }
+
+    /// Union helper match: a player who *already has* an HEU reactor
+    /// must keep it pickable in the editor even if their reputation
+    /// later drops below the HEU gate. This pins the helper-list shape
+    /// the editor relies on (current + unlocked, deduped, sorted by
+    /// enum order).
+    #[test]
+    fn editor_cycle_preserves_current_when_reputation_drops() {
+        // Reputation way below HEU gate.
+        let reputation = 0.0;
+        let current = EnrichmentLevel::Heu;
+        let mut levels = available_enrichments(reputation);
+        if !levels.contains(&current) {
+            levels.push(current);
+            levels.sort_by_key(|e| *e as u32);
+        }
+        // HEU is in the list even though reputation says it's locked,
+        // and LEU is still there too.
+        assert!(levels.contains(&EnrichmentLevel::Leu));
+        assert!(levels.contains(&EnrichmentLevel::Heu));
+        // MEU was neither current nor unlocked → omitted.
+        assert!(!levels.contains(&EnrichmentLevel::Meu));
+    }
+
+    #[test]
+    fn enrichment_availability_follows_reputation() {
+        // LEU is always free; MEU and HEU sit behind reputation gates.
+        let none = available_enrichments(0.0);
+        assert_eq!(none, vec![EnrichmentLevel::Leu]);
+
+        // Just under the MEU gate.
+        let just_under_meu = available_enrichments(
+            crate::balance::REACTOR_MEU_MIN_REPUTATION - 0.1,
+        );
+        assert_eq!(just_under_meu, vec![EnrichmentLevel::Leu]);
+
+        // Exactly at the MEU gate — both LEU and MEU.
+        let at_meu = available_enrichments(crate::balance::REACTOR_MEU_MIN_REPUTATION);
+        assert_eq!(at_meu, vec![EnrichmentLevel::Leu, EnrichmentLevel::Meu]);
+
+        // HEU comes online at its threshold.
+        let at_heu = available_enrichments(crate::balance::REACTOR_HEU_MIN_REPUTATION);
+        assert_eq!(at_heu, EnrichmentLevel::ALL.to_vec());
+
+        // HEU < MEU < LEU on mass-per-kW.
+        assert!(EnrichmentLevel::Heu.mass_multiplier()
+            < EnrichmentLevel::Meu.mass_multiplier());
+        assert!(EnrichmentLevel::Meu.mass_multiplier()
+            < EnrichmentLevel::Leu.mass_multiplier());
     }
 
     #[test]

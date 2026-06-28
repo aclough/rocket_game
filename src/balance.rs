@@ -95,6 +95,16 @@ pub const ROCKET_MODIFICATION_WORK_FRACTION: f64 = 0.10;
 /// undiscovered flaw. Much lower than the per-design flaw distribution.
 pub const ROCKET_MODIFICATION_FLAW_PROB: f64 = 0.10;
 
+/// Total reputation required to design a medium-enriched-uranium
+/// reactor. Naval / research-reactor territory — a serious unlock the
+/// player has to earn through demonstrated competence.
+pub const REACTOR_MEU_MIN_REPUTATION: f64 = 60.0;
+
+/// Total reputation required to design a highly-enriched-uranium
+/// reactor. Kilopower / weapons-grade — a hard-to-reach unlock that
+/// pays off with substantially better kg-per-kW.
+pub const REACTOR_HEU_MIN_REPUTATION: f64 = 150.0;
+
 /// Work required in days for engine manufacturing.
 /// Function of engine complexity: base_days * (complexity / 5).
 pub fn engine_build_work(complexity: u32) -> f64 {

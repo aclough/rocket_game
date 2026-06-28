@@ -2605,19 +2605,38 @@ impl App {
         }
     }
 
-    /// Reactor editor key handler. Cursor: 0 = Name, 1 = Scale.
-    /// Left/Right adjusts scale by ×√2 (clamped to [MIN_SCALE,
-    /// MAX_SCALE]); Enter opens a sub-modal on the focused field. D
-    /// promotes a Proposed reactor to InDesign and closes the modal;
-    /// Esc closes — deleting the project if it was still Proposed.
+    /// Apply a new enrichment to a reactor project, preserving its
+    /// name and scale.
+    fn apply_reactor_enrichment(
+        &mut self,
+        project_id: crate::reactor_project::ReactorProjectId,
+        enrichment: crate::reactor::EnrichmentLevel,
+    ) {
+        let snap = match self.game.player_company.find_reactor_project(project_id) {
+            Some(rp) => (rp.design.name.clone(), rp.design.scale),
+            None => return,
+        };
+        let (name, scale) = snap;
+        if let Some(rp) = self.game.player_company.find_reactor_project_mut(project_id) {
+            rp.apply_edit(name, scale, enrichment);
+        }
+    }
+
+    /// Reactor editor key handler. Cursor: 0 = Name, 1 = Scale,
+    /// 2 = Enrichment. Left/Right adjusts the scalar on Scale (×√2)
+    /// or cycles through reputation-unlocked enrichments. Enter opens
+    /// a sub-modal on Name/Scale. D promotes a Proposed reactor to
+    /// InDesign and closes the modal; Esc closes — deleting the
+    /// project if it was still Proposed.
     fn handle_reactor_editor_key(
         &mut self,
         key: KeyCode,
         project_id: crate::reactor_project::ReactorProjectId,
         mut cursor: usize,
     ) {
+        use crate::reactor::available_enrichments;
         use crate::reactor_project::ReactorDesignStatus;
-        const ROW_COUNT: usize = 2; // Name, Scale (Phase 2b will add Enrichment)
+        const ROW_COUNT: usize = 3; // Name, Scale, Enrichment
 
         // If the project disappeared underneath us, bail cleanly.
         let snap = match self.game.player_company.find_reactor_project(project_id) {
@@ -2628,7 +2647,7 @@ impl App {
                 return;
             }
         };
-        let (name, scale, _enrichment, is_proposed) = snap;
+        let (name, scale, enrichment, is_proposed) = snap;
 
         if cursor >= ROW_COUNT { cursor = ROW_COUNT - 1; }
 
@@ -2682,6 +2701,25 @@ impl App {
                 let new_scale = (scale / std::f64::consts::SQRT_2)
                     .max(crate::reactor::MIN_SCALE);
                 self.apply_reactor_scale(project_id, new_scale);
+                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
+            }
+            KeyCode::Left | KeyCode::Right if cursor == 2 => {
+                // Cycle through reputation-unlocked enrichments. The
+                // current enrichment is always considered "in the list"
+                // even if reputation has since fallen below the gate,
+                // so a player who built an HEU reactor doesn't get the
+                // editor refusing to display HEU when re-opened later.
+                let reputation = self.game.player_company.reputation.total();
+                let mut levels = available_enrichments(reputation);
+                if !levels.contains(&enrichment) {
+                    levels.push(enrichment);
+                    levels.sort_by_key(|e| *e as u32);
+                }
+                if levels.len() > 1 {
+                    let next = wrap_cycle(&levels, enrichment, matches!(key, KeyCode::Right))
+                        .unwrap_or(enrichment);
+                    self.apply_reactor_enrichment(project_id, next);
+                }
                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
             }
             _ => {
