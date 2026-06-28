@@ -42,6 +42,36 @@ fn format_dv(dv: f64) -> String {
     else { format!("{:.0} m/s", dv) }
 }
 
+/// Electrical power in human-readable units. Switches to kW above
+/// 1 kW and MW above 1 MW so reactor outputs don't read as
+/// "500000 W".
+fn format_power_w(w: f64) -> String {
+    if w.abs() >= 1_000_000.0 {
+        format!("{:.2} MW", w / 1_000_000.0)
+    } else if w.abs() >= 10_000.0 {
+        format!("{:.0} kW", w / 1_000.0)
+    } else if w.abs() >= 1_000.0 {
+        format!("{:.1} kW", w / 1_000.0)
+    } else {
+        format!("{:.0} W", w)
+    }
+}
+
+/// Mass in kilograms with thousands-separator commas. Reactor masses
+/// hit five+ figures at scale 1.0; the unspaced number is hard to read.
+fn format_kg(kg: f64) -> String {
+    let int = kg.round() as i64;
+    let sign = if int < 0 { "-" } else { "" };
+    let mut digits = int.unsigned_abs().to_string();
+    // Insert commas every 3 digits from the right.
+    let mut i = digits.len();
+    while i > 3 {
+        i -= 3;
+        digits.insert(i, ',');
+    }
+    format!("{}{} kg", sign, digits)
+}
+
 fn format_flaw_rate(flaw: &Flaw) -> String {
     match flaw.trigger {
         FlawTrigger::PerFlight => format!("{:.0}%/flight", flaw.activation_chance * 100.0),
@@ -466,28 +496,24 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
     use crate::reactor_project::{ReactorDesignStatus, ReactorProject};
 
     let company = &app.game.player_company;
-    let projects: &[ReactorProject] = &company.reactor_projects;
+    let visible: Vec<(usize, &ReactorProject)> = company.visible_reactor_projects().collect();
 
     let mut lines = vec![
-        Line::from(format!("  Reactor Projects ({})", projects.len())),
+        Line::from(format!("  Reactor Projects ({})", visible.len())),
         Line::from("  ─────────────────────────────────────────────"),
     ];
     let mut gauges: Vec<GaugeInfo> = Vec::new();
 
-    if projects.is_empty() {
+    if visible.is_empty() {
         lines.push(Line::from("  No reactor projects yet."));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "  Phase 1: read-only pane. Phase 2 will add the reactor editor.",
+            "  Press [N] to design one.",
             Style::default().fg(Color::DarkGray),
         )));
     }
 
-    for (i, project) in projects.iter().enumerate() {
-        // Hide drafts the same way the engines pane hides Proposed.
-        if matches!(project.status, ReactorDesignStatus::Proposed { .. }) {
-            continue;
-        }
+    for (i, (_real_idx, project)) in visible.iter().enumerate() {
         let selected = i == app.selected_item;
         let marker = if selected { "▶" } else { " " };
 
@@ -525,15 +551,18 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
         if selected {
             let d = &project.design;
             lines.push(Line::from(format!(
-                "      {} • scale {:.2} • {:.0} W • {:.0} K",
+                "      {} • scale {:.2} • {} • {:.0} K",
                 d.enrichment.display_name(),
                 d.scale,
-                d.steady_w,
+                format_power_w(d.steady_w),
                 d.temperature_k,
             )));
             lines.push(Line::from(format!(
-                "      mass {:.0} kg (reactor {:.0} + radiator {:.0}) • ${:.1}M",
-                d.mass_kg, d.reactor_mass_kg, d.radiator.mass_kg, d.material_cost / 1_000_000.0,
+                "      mass {} (reactor {} + radiator {}) • ${:.1}M",
+                format_kg(d.mass_kg),
+                format_kg(d.reactor_mass_kg),
+                format_kg(d.radiator.mass_kg),
+                d.material_cost / 1_000_000.0,
             )));
             lines.push(Line::from(format!(
                 "      Teams: {}  NRE: ${:.0}",
@@ -543,9 +572,14 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
     }
 
     lines.push(Line::from(""));
+    let controls: Vec<&str> = if visible.is_empty() {
+        vec!["[N] New design"]
+    } else {
+        vec!["[N] New design", "[+] Add team", "[-] Remove team", "[E] Edit"]
+    };
     lines.push(Line::from(Span::styled(
-        "  (Phase 2 will add: [N] New design, team assignment, revisions)",
-        Style::default().fg(Color::DarkGray),
+        format!("  {}", controls.join("  ")),
+        Style::default().fg(Color::Cyan),
     )));
 
     let block = Block::default()
@@ -2050,6 +2084,15 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
         InputMode::EngineEditorScaleInput { project_id, cursor, buffer, .. } => {
             draw_engine_editor_modal(frame, app, *project_id, *cursor, Some(("Scale", buffer.clone())), modal_area);
         }
+        InputMode::ReactorEditor { project_id, cursor } => {
+            draw_reactor_editor_modal(frame, app, *project_id, *cursor, None, modal_area);
+        }
+        InputMode::ReactorEditorNameInput { project_id, cursor, buffer } => {
+            draw_reactor_editor_modal(frame, app, *project_id, *cursor, Some(("Name", buffer.clone())), modal_area);
+        }
+        InputMode::ReactorEditorScaleInput { project_id, cursor, buffer } => {
+            draw_reactor_editor_modal(frame, app, *project_id, *cursor, Some(("Scale", buffer.clone())), modal_area);
+        }
         InputMode::SelectThirdParty { selected } => {
             let catalog = &app.game.player_company.third_party_catalog;
             let mut lines = vec![
@@ -2809,6 +2852,118 @@ fn draw_engine_editor_modal(
     frame.render_widget(paragraph, area);
 }
 
+fn draw_reactor_editor_modal(
+    frame: &mut Frame,
+    app: &App,
+    project_id: crate::reactor_project::ReactorProjectId,
+    cursor: usize,
+    text_input: Option<(&str, String)>,
+    area: Rect,
+) {
+    use crate::reactor_project::ReactorDesignStatus;
+
+    let rp = match app.game.player_company.find_reactor_project(project_id) {
+        Some(rp) => rp,
+        None => return,
+    };
+    const ROW_COUNT: usize = 2; // Name, Scale (Phase 2b adds Enrichment)
+    let cursor = cursor.min(ROW_COUNT - 1);
+
+    let row_label = |row: usize| -> &'static str {
+        if cursor == row { "▶" } else { " " }
+    };
+    let row_style = |row: usize| -> Style {
+        if cursor == row {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else { Style::default() }
+    };
+
+    let status_label = match &rp.status {
+        ReactorDesignStatus::Proposed { .. } => "Proposed (new draft)",
+        ReactorDesignStatus::InDesign { .. } => "In Design",
+        ReactorDesignStatus::Testing { .. } => "Testing (read-only)",
+        ReactorDesignStatus::Revising { .. } => "Revising",
+    };
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(" Status: {}", status_label),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!(" {} Name:  {}", row_label(0), rp.design.name),
+            row_style(0),
+        )),
+        Line::from(Span::styled(
+            format!(" {} Scale: {:.3}×", row_label(1), rp.design.scale),
+            row_style(1),
+        )),
+        Line::from(Span::styled(
+            format!("   Enrichment: {}  (Phase 2b unlocks MEU/HEU)",
+                rp.design.enrichment.display_name()),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(format!(
+            " Output:  {}   Temperature: {:.0} K",
+            format_power_w(rp.design.steady_w), rp.design.temperature_k,
+        )),
+        Line::from(format!(
+            " Mass:    {} (reactor {} + radiator {})",
+            format_kg(rp.design.mass_kg),
+            format_kg(rp.design.reactor_mass_kg),
+            format_kg(rp.design.radiator.mass_kg),
+        )),
+        Line::from(format!(
+            " Material: ${:.1}M",
+            rp.design.material_cost / 1_000_000.0,
+        )),
+    ];
+
+    let (work_completed, work_required) = match &rp.status {
+        ReactorDesignStatus::Proposed { work_required } => (0.0, *work_required),
+        ReactorDesignStatus::InDesign { work_completed, work_required } =>
+            (*work_completed, *work_required),
+        ReactorDesignStatus::Testing { work_completed } => (*work_completed, 0.0),
+        ReactorDesignStatus::Revising { work_completed, .. } => (*work_completed, 0.0),
+    };
+    lines.push(Line::from(format!(
+        " Complexity: {}    Work: {:.0} / {:.0}",
+        rp.complexity, work_completed, work_required,
+    )));
+
+    lines.push(Line::from(""));
+    let footer = if matches!(rp.status, ReactorDesignStatus::Proposed { .. }) {
+        " [↑↓] Field  [←→] Scale  [Enter] Edit text  [D] Done  [Esc] Cancel"
+    } else {
+        " [↑↓] Field  [←→] Scale  [Enter] Edit text  [Esc] Close"
+    };
+    lines.push(Line::from(Span::styled(
+        footer.to_string(),
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    if let Some((field, buffer)) = text_input {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(" Edit {}:  > {}█", field, buffer),
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(Span::styled(
+            " [Enter] Apply   [Esc] Cancel".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Reactor Editor ")
+        .style(Style::default().fg(Color::Yellow));
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
 fn draw_rocket_pick_engine_modal(
     frame: &mut Frame,
     app: &App,
@@ -3086,6 +3241,8 @@ fn draw_power_editor_modal(
     ];
 
     let n_equipped = stage.power_sources.len();
+    let player_reactors: Vec<&crate::reactor_project::ReactorProject> =
+        app.game.player_company.installable_reactor_projects().collect();
     // Filter the preset catalog to only those whose tech is unlocked.
     let presets: Vec<&crate::power::PowerPreset> = power_presets().iter()
         .filter(|p| preset_available(p, &app.game.technologies))
@@ -3116,6 +3273,31 @@ fn draw_power_editor_modal(
     }
     lines.push(Line::from(""));
 
+    // Player-researched reactors (installable when Testing+).
+    if !player_reactors.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  ── Player Reactors ──",
+            Style::default().fg(Color::DarkGray),
+        )));
+        for rp in &player_reactors {
+            let mark = if cursor == row { " ▶ " } else { "   " };
+            let style = if cursor == row {
+                Style::default().fg(Color::Yellow)
+            } else { Style::default() };
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{}{}  ({}, {})",
+                    mark, rp.design.name,
+                    format_power_w(rp.design.steady_w),
+                    format_kg(rp.design.mass_kg),
+                ),
+                style,
+            )));
+            row += 1;
+        }
+        lines.push(Line::from(""));
+    }
+
     // Add presets
     lines.push(Line::from(Span::styled(
         "  ── Add ──",
@@ -3144,4 +3326,44 @@ fn draw_power_editor_modal(
         .style(Style::default().fg(Color::Cyan));
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod format_helpers_tests {
+    use super::*;
+
+    #[test]
+    fn power_w_below_1k() {
+        assert_eq!(format_power_w(500.0), "500 W");
+        assert_eq!(format_power_w(999.0), "999 W");
+    }
+
+    #[test]
+    fn power_kw_single_digit_keeps_decimal() {
+        assert_eq!(format_power_w(1_000.0), "1.0 kW");
+        assert_eq!(format_power_w(5_000.0), "5.0 kW");
+        assert_eq!(format_power_w(9_999.0), "10.0 kW");
+    }
+
+    #[test]
+    fn power_kw_double_digit_drops_decimal() {
+        assert_eq!(format_power_w(10_000.0), "10 kW");
+        assert_eq!(format_power_w(50_000.0), "50 kW");
+        assert_eq!(format_power_w(500_000.0), "500 kW");
+    }
+
+    #[test]
+    fn power_mw_uses_two_decimals() {
+        assert_eq!(format_power_w(1_000_000.0), "1.00 MW");
+        assert_eq!(format_power_w(5_500_000.0), "5.50 MW");
+    }
+
+    #[test]
+    fn kg_with_commas() {
+        assert_eq!(format_kg(0.0), "0 kg");
+        assert_eq!(format_kg(800.0), "800 kg");
+        assert_eq!(format_kg(4_200.0), "4,200 kg");
+        assert_eq!(format_kg(33_348.0), "33,348 kg");
+        assert_eq!(format_kg(1_234_567.0), "1,234,567 kg");
+    }
 }

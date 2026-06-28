@@ -353,6 +353,24 @@ pub enum InputMode {
         buffer: String,
         state: Box<RocketDesignerState>,
     },
+    /// Standalone reactor editor — opened from the Reactors pane.
+    /// Operates on an existing `ReactorProject` by id; the new-design
+    /// flow seeds a `Proposed` project first so cancelling can delete it
+    /// cleanly. Cursor: 0 = name, 1 = scale.
+    ReactorEditor {
+        project_id: crate::reactor_project::ReactorProjectId,
+        cursor: usize,
+    },
+    ReactorEditorNameInput {
+        project_id: crate::reactor_project::ReactorProjectId,
+        cursor: usize,
+        buffer: String,
+    },
+    ReactorEditorScaleInput {
+        project_id: crate::reactor_project::ReactorProjectId,
+        cursor: usize,
+        buffer: String,
+    },
     /// Selecting from third-party catalog.
     SelectThirdParty { selected: usize },
     /// Typing rocket name.
@@ -895,10 +913,68 @@ impl App {
     fn handle_tab_key(&mut self, key: KeyCode) {
         match self.current_tab() {
             Tab::Engines => self.handle_engines_key(key),
+            Tab::Reactors => self.handle_reactors_key(key),
             Tab::Rockets => self.handle_rockets_key(key),
             Tab::Manufacturing => self.handle_manufacturing_key(key),
             Tab::Contracts => self.handle_contracts_key(key),
             Tab::Launches => self.handle_launches_key(key),
+            _ => {}
+        }
+    }
+
+    /// Map the reactor-pane's visible selection (which hides Proposed
+    /// drafts) back to the underlying `reactor_projects` index.
+    fn reactor_pane_real_index(&self) -> Option<usize> {
+        self.game.player_company.visible_reactor_projects()
+            .nth(self.selected_item)
+            .map(|(real_idx, _)| real_idx)
+    }
+
+    fn handle_reactors_key(&mut self, key: KeyCode) {
+        use crate::reactor::{EnrichmentLevel, DEFAULT_SCALE};
+        use crate::reactor_project::ReactorDesignStatus;
+
+        let real_idx = self.reactor_pane_real_index();
+        match key {
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                // Pick a fresh default name based on how many projects
+                // exist; the player can rename inside the editor.
+                let n = self.game.player_company.reactor_projects.len() + 1;
+                let name = format!("Reactor Mk{}", n);
+                let pid = self.game.player_company.start_proposed_reactor(
+                    name, DEFAULT_SCALE, EnrichmentLevel::Leu,
+                );
+                self.enter_modal(InputMode::ReactorEditor { project_id: pid, cursor: 0 });
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                let idx = real_idx.unwrap_or(usize::MAX);
+                if self.game.player_company.add_team_to_reactor_project(idx) {
+                    self.status_message = Some("Team assigned".into());
+                } else {
+                    self.status_message = Some("No teams available".into());
+                }
+            }
+            KeyCode::Char('-') => {
+                let idx = real_idx.unwrap_or(usize::MAX);
+                if self.game.player_company.remove_team_from_reactor_project(idx) {
+                    self.status_message = Some("Team removed".into());
+                }
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                // Re-open the editor on an InDesign reactor. Testing /
+                // Revising / Proposed don't make sense here:
+                // Testing is read-only; Revising is for Phase 3; the
+                // pane hides Proposed.
+                let idx = match real_idx { Some(i) => i, None => return };
+                let project = &self.game.player_company.reactor_projects[idx];
+                let pid = project.project_id;
+                if matches!(project.status, ReactorDesignStatus::InDesign { .. }) {
+                    self.enter_modal(InputMode::ReactorEditor { project_id: pid, cursor: 0 });
+                } else {
+                    self.status_message = Some(
+                        "Editor only available on In Design reactors".into());
+                }
+            }
             _ => {}
         }
     }
@@ -1241,6 +1317,85 @@ impl App {
     fn handle_input_mode_key(&mut self, key: KeyCode) {
         match &mut self.input_mode {
             InputMode::Normal => unreachable!(),
+            InputMode::ReactorEditor { .. }
+            | InputMode::ReactorEditorNameInput { .. }
+            | InputMode::ReactorEditorScaleInput { .. } => {
+                let old_mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
+                match old_mode {
+                    InputMode::ReactorEditor { project_id, cursor } => {
+                        self.handle_reactor_editor_key(key, project_id, cursor);
+                    }
+                    InputMode::ReactorEditorNameInput { project_id, cursor, mut buffer } => {
+                        match key {
+                            KeyCode::Esc => {
+                                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
+                            }
+                            KeyCode::Enter => {
+                                let new_name = buffer.trim().to_string();
+                                if !new_name.is_empty() {
+                                    if let Some(rp) = self.game.player_company
+                                        .find_reactor_project_mut(project_id)
+                                    {
+                                        rp.design.name = new_name;
+                                    }
+                                }
+                                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
+                            }
+                            KeyCode::Backspace => {
+                                buffer.pop();
+                                self.input_mode = InputMode::ReactorEditorNameInput {
+                                    project_id, cursor, buffer,
+                                };
+                            }
+                            KeyCode::Char(c) => {
+                                buffer.push(c);
+                                self.input_mode = InputMode::ReactorEditorNameInput {
+                                    project_id, cursor, buffer,
+                                };
+                            }
+                            _ => {
+                                self.input_mode = InputMode::ReactorEditorNameInput {
+                                    project_id, cursor, buffer,
+                                };
+                            }
+                        }
+                    }
+                    InputMode::ReactorEditorScaleInput { project_id, cursor, mut buffer } => {
+                        match key {
+                            KeyCode::Esc => {
+                                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
+                            }
+                            KeyCode::Enter => {
+                                if let Ok(parsed) = buffer.parse::<f64>() {
+                                    let clamped = parsed
+                                        .max(crate::reactor::MIN_SCALE)
+                                        .min(crate::reactor::MAX_SCALE);
+                                    self.apply_reactor_scale(project_id, clamped);
+                                }
+                                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
+                            }
+                            KeyCode::Backspace => {
+                                buffer.pop();
+                                self.input_mode = InputMode::ReactorEditorScaleInput {
+                                    project_id, cursor, buffer,
+                                };
+                            }
+                            KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
+                                buffer.push(c);
+                                self.input_mode = InputMode::ReactorEditorScaleInput {
+                                    project_id, cursor, buffer,
+                                };
+                            }
+                            _ => {
+                                self.input_mode = InputMode::ReactorEditorScaleInput {
+                                    project_id, cursor, buffer,
+                                };
+                            }
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
             InputMode::EngineEditor { .. }
             | InputMode::EngineEditorNameInput { .. }
             | InputMode::EngineEditorScaleInput { .. } => {
@@ -2394,6 +2549,109 @@ impl App {
         }
     }
 
+    /// Apply a new `scale` to a reactor project, preserving its name
+    /// and enrichment. Snapshots the design first so we can rebuild
+    /// without taking two overlapping borrows on the project.
+    fn apply_reactor_scale(
+        &mut self,
+        project_id: crate::reactor_project::ReactorProjectId,
+        scale: f64,
+    ) {
+        let snap = match self.game.player_company.find_reactor_project(project_id) {
+            Some(rp) => (rp.design.name.clone(), rp.design.enrichment),
+            None => return,
+        };
+        let (name, enrichment) = snap;
+        if let Some(rp) = self.game.player_company.find_reactor_project_mut(project_id) {
+            rp.apply_edit(name, scale, enrichment);
+        }
+    }
+
+    /// Reactor editor key handler. Cursor: 0 = Name, 1 = Scale.
+    /// Left/Right adjusts scale by ×√2 (clamped to [MIN_SCALE,
+    /// MAX_SCALE]); Enter opens a sub-modal on the focused field. D
+    /// promotes a Proposed reactor to InDesign and closes the modal;
+    /// Esc closes — deleting the project if it was still Proposed.
+    fn handle_reactor_editor_key(
+        &mut self,
+        key: KeyCode,
+        project_id: crate::reactor_project::ReactorProjectId,
+        mut cursor: usize,
+    ) {
+        use crate::reactor_project::ReactorDesignStatus;
+        const ROW_COUNT: usize = 2; // Name, Scale (Phase 2b will add Enrichment)
+
+        // If the project disappeared underneath us, bail cleanly.
+        let snap = match self.game.player_company.find_reactor_project(project_id) {
+            Some(rp) => (rp.design.name.clone(), rp.design.scale, rp.design.enrichment,
+                         matches!(rp.status, ReactorDesignStatus::Proposed { .. })),
+            None => {
+                self.exit_modal();
+                return;
+            }
+        };
+        let (name, scale, _enrichment, is_proposed) = snap;
+
+        if cursor >= ROW_COUNT { cursor = ROW_COUNT - 1; }
+
+        match key {
+            KeyCode::Esc => {
+                // Cancel: drop a draft we created; leave real work
+                // alone. Proposed reactors only ever exist for the
+                // lifetime of the editor session that birthed them.
+                if is_proposed {
+                    self.game.player_company.delete_proposed_reactor(project_id);
+                }
+                self.exit_modal();
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                // Done: promote Proposed → InDesign and log the event,
+                // then close. No-op for projects already past Proposed
+                // (they only land here via the "edit existing" path).
+                if let Some(rname) = self.game.player_company.promote_proposed_reactor(project_id) {
+                    let evt = crate::event::GameEvent::ReactorDesignStarted {
+                        reactor_name: rname,
+                    };
+                    self.game.event_log.push(self.game.date, evt);
+                }
+                self.exit_modal();
+            }
+            KeyCode::Up => {
+                if cursor > 0 { cursor -= 1; }
+                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
+            }
+            KeyCode::Down => {
+                if cursor + 1 < ROW_COUNT { cursor += 1; }
+                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
+            }
+            KeyCode::Enter if cursor == 0 => {
+                self.input_mode = InputMode::ReactorEditorNameInput {
+                    project_id, cursor, buffer: name,
+                };
+            }
+            KeyCode::Enter if cursor == 1 => {
+                self.input_mode = InputMode::ReactorEditorScaleInput {
+                    project_id, cursor, buffer: format!("{:.2}", scale),
+                };
+            }
+            KeyCode::Right if cursor == 1 => {
+                let new_scale = (scale * std::f64::consts::SQRT_2)
+                    .min(crate::reactor::MAX_SCALE);
+                self.apply_reactor_scale(project_id, new_scale);
+                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
+            }
+            KeyCode::Left if cursor == 1 => {
+                let new_scale = (scale / std::f64::consts::SQRT_2)
+                    .max(crate::reactor::MIN_SCALE);
+                self.apply_reactor_scale(project_id, new_scale);
+                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
+            }
+            _ => {
+                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
+            }
+        }
+    }
+
     /// Engine editor key handler. Cursor walks: 0=Name, 1=Cycle,
     /// 2=Preset, 3=Scale, 4=Vacuum (when not vacuum-only).
     /// Left/Right cycles values on Cycle/Preset; +/- adjusts Scale by
@@ -2524,12 +2782,26 @@ impl App {
         }
         let n_equipped = state.stage_groups[group_index][stage_index]
             .power_sources.len();
+        // Reactor designs the player has researched at least to
+        // Testing. Snapshot the design now so the cursor-region math
+        // and the install step agree (no second borrow on Company).
+        let player_reactor_designs: Vec<crate::reactor::ReactorDesign> =
+            self.game.player_company.installable_reactor_projects()
+                .map(|rp| rp.design.clone())
+                .collect();
+        let n_reactors = player_reactor_designs.len();
         // Filter the preset catalog to only those whose tech is unlocked.
         let available_presets: Vec<&crate::power::PowerPreset> =
             crate::power::power_presets().iter()
                 .filter(|p| crate::power::preset_available(p, &self.game.technologies))
                 .collect();
-        let n_total = n_equipped + available_presets.len();
+        let n_total = n_equipped + n_reactors + available_presets.len();
+        // Cursor regions:
+        //   [0, n_equipped)                          equipped sources
+        //   [n_equipped, n_equipped + n_reactors)    player reactors
+        //   [..n_total)                              presets
+        let reactor_start = n_equipped;
+        let preset_start = n_equipped + n_reactors;
 
         match key {
             KeyCode::Esc => {
@@ -2543,9 +2815,8 @@ impl App {
                 if cursor + 1 < n_total { cursor += 1; }
             }
             KeyCode::Char(' ') => {
-                // Add preset if cursor is on the preset block.
-                if cursor >= n_equipped {
-                    let pi = cursor - n_equipped;
+                if cursor >= preset_start {
+                    let pi = cursor - preset_start;
                     let preset = available_presets[pi];
                     // Solar-panel preset: size to the current stage's
                     // demand instead of using the placeholder closure.
@@ -2558,7 +2829,13 @@ impl App {
                     };
                     state.stage_groups[group_index][stage_index]
                         .power_sources.push(new_src);
-                    // Move cursor onto the just-added source for clarity.
+                    cursor = n_equipped;
+                } else if cursor >= reactor_start {
+                    let ri = cursor - reactor_start;
+                    let design = player_reactor_designs[ri].clone();
+                    let new_src = crate::power::PowerSource::from_reactor_design(design);
+                    state.stage_groups[group_index][stage_index]
+                        .power_sources.push(new_src);
                     cursor = n_equipped;
                 }
             }
@@ -2663,7 +2940,8 @@ impl App {
                         }
                     }
                     Tab::Reactors => {
-                        let max = self.game.player_company.reactor_projects.len().saturating_sub(1);
+                        let max = self.game.player_company.visible_reactor_projects()
+                            .count().saturating_sub(1);
                         if self.selected_item < max {
                             self.selected_item += 1;
                         }

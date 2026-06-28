@@ -228,6 +228,9 @@ impl Company {
             .sum::<u32>()
             + self.rocket_projects.iter()
                 .map(|p| p.teams_assigned)
+                .sum::<u32>()
+            + self.reactor_projects.iter()
+                .map(|p| p.teams_assigned)
                 .sum::<u32>();
         (self.teams.len() as u32).saturating_sub(assigned)
     }
@@ -348,6 +351,120 @@ impl Company {
         {
             self.engine_projects.remove(pos);
         }
+    }
+
+    // ── Reactor project lifecycle (mirrors the engine helpers above) ──
+
+    /// Spawn a `Proposed` reactor project the editor can iterate on
+    /// without committing the player to real work. Promoted to
+    /// `InDesign` via `promote_proposed_reactor` when the player hits
+    /// Done; deleted via `delete_proposed_reactor` on cancel.
+    pub fn start_proposed_reactor(
+        &mut self,
+        name: String,
+        scale: f64,
+        enrichment: crate::reactor::EnrichmentLevel,
+    ) -> crate::reactor_project::ReactorProjectId {
+        let project_id = crate::reactor_project::ReactorProjectId(self.next_reactor_project_id);
+        let reactor_id = crate::reactor::ReactorId(self.next_reactor_id);
+        self.next_reactor_project_id += 1;
+        self.next_reactor_id += 1;
+        let project = crate::reactor_project::ReactorProject::new_proposed(
+            project_id, reactor_id, name, scale, enrichment,
+        );
+        self.reactor_projects.push(project);
+        project_id
+    }
+
+    pub fn find_reactor_project(
+        &self,
+        id: crate::reactor_project::ReactorProjectId,
+    ) -> Option<&crate::reactor_project::ReactorProject> {
+        self.reactor_projects.iter().find(|rp| rp.project_id == id)
+    }
+
+    pub fn find_reactor_project_mut(
+        &mut self,
+        id: crate::reactor_project::ReactorProjectId,
+    ) -> Option<&mut crate::reactor_project::ReactorProject> {
+        self.reactor_projects.iter_mut().find(|rp| rp.project_id == id)
+    }
+
+    /// Visible reactor projects (everything not Proposed). Mirrors
+    /// `visible_engine_projects`.
+    pub fn visible_reactor_projects(
+        &self,
+    ) -> impl Iterator<Item = (usize, &crate::reactor_project::ReactorProject)> {
+        self.reactor_projects.iter().enumerate().filter(|(_, rp)|
+            !matches!(rp.status, crate::reactor_project::ReactorDesignStatus::Proposed { .. })
+        )
+    }
+
+    /// Promote a `Proposed` reactor to `InDesign`. Returns the reactor
+    /// name on success (for logging). No-op if the id isn't found or
+    /// the reactor isn't Proposed.
+    pub fn promote_proposed_reactor(
+        &mut self,
+        id: crate::reactor_project::ReactorProjectId,
+    ) -> Option<String> {
+        let rp = self.reactor_projects.iter_mut().find(|rp| rp.project_id == id)?;
+        if !matches!(rp.status, crate::reactor_project::ReactorDesignStatus::Proposed { .. }) {
+            return None;
+        }
+        rp.promote_to_in_design();
+        Some(rp.design.name.clone())
+    }
+
+    /// Delete a `Proposed` reactor. Defensive — silently no-ops on
+    /// non-Proposed ids so we never lose real work.
+    pub fn delete_proposed_reactor(
+        &mut self,
+        id: crate::reactor_project::ReactorProjectId,
+    ) {
+        if let Some(pos) = self.reactor_projects.iter().position(|rp|
+            rp.project_id == id
+            && matches!(rp.status, crate::reactor_project::ReactorDesignStatus::Proposed { .. }))
+        {
+            self.reactor_projects.remove(pos);
+        }
+    }
+
+    /// Reactor projects that are usable in a rocket — anything past
+    /// design, i.e. Testing or Revising. (Phase 3 will tighten "usable"
+    /// to "no discovered un-revised flaws"; for now any Testing+ design
+    /// installs.)
+    pub fn installable_reactor_projects(
+        &self,
+    ) -> impl Iterator<Item = &crate::reactor_project::ReactorProject> {
+        self.reactor_projects.iter().filter(|rp| matches!(
+            rp.status,
+            crate::reactor_project::ReactorDesignStatus::Testing { .. }
+            | crate::reactor_project::ReactorDesignStatus::Revising { .. },
+        ))
+    }
+
+    /// Add a team to the reactor project at `project_index`. True on
+    /// success.
+    pub fn add_team_to_reactor_project(&mut self, project_index: usize) -> bool {
+        if self.unassigned_team_count() == 0 || project_index >= self.reactor_projects.len() {
+            return false;
+        }
+        self.reactor_projects[project_index].teams_assigned += 1;
+        true
+    }
+
+    /// Remove a team from the reactor project at `project_index`. True
+    /// on success.
+    pub fn remove_team_from_reactor_project(&mut self, project_index: usize) -> bool {
+        if project_index >= self.reactor_projects.len() {
+            return false;
+        }
+        let p = &mut self.reactor_projects[project_index];
+        if p.teams_assigned == 0 {
+            return false;
+        }
+        p.teams_assigned -= 1;
+        true
     }
 
     /// Add a team to a project. Returns true if successful.
@@ -3863,6 +3980,97 @@ mod tests {
             }
             _ => panic!("expected nested Spacecraft payload"),
         }
+    }
+
+    /// Phase 2a — start_proposed_reactor + promote_proposed_reactor
+    /// + delete_proposed_reactor round-trip. Mirrors the assertions for
+    /// engine projects in the engine-pipeline tests.
+    #[test]
+    fn test_reactor_proposed_lifecycle() {
+        use crate::reactor::EnrichmentLevel;
+        use crate::reactor_project::ReactorDesignStatus;
+
+        let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
+        let pid = gs.player_company.start_proposed_reactor(
+            "Draft".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        let rp = gs.player_company.find_reactor_project(pid).unwrap();
+        assert!(matches!(rp.status, ReactorDesignStatus::Proposed { .. }));
+        // Hidden from the Reactors pane.
+        assert_eq!(gs.player_company.visible_reactor_projects().count(), 0);
+
+        // Promote: now in InDesign and visible.
+        let name = gs.player_company.promote_proposed_reactor(pid);
+        assert_eq!(name.as_deref(), Some("Draft"));
+        assert_eq!(gs.player_company.visible_reactor_projects().count(), 1);
+        let rp = gs.player_company.find_reactor_project(pid).unwrap();
+        assert!(matches!(rp.status, ReactorDesignStatus::InDesign { .. }));
+
+        // Re-promoting an already-promoted project is a no-op.
+        assert!(gs.player_company.promote_proposed_reactor(pid).is_none());
+
+        // Delete-proposed on a non-Proposed project leaves real work
+        // alone (defensive).
+        gs.player_company.delete_proposed_reactor(pid);
+        assert!(gs.player_company.find_reactor_project(pid).is_some());
+    }
+
+    /// Phase 2a — cancelling the editor (delete_proposed_reactor on a
+    /// still-Proposed project) removes it from the company.
+    #[test]
+    fn test_reactor_proposed_can_be_deleted() {
+        use crate::reactor::EnrichmentLevel;
+        let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
+        let pid = gs.player_company.start_proposed_reactor(
+            "Cancelled".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        gs.player_company.delete_proposed_reactor(pid);
+        assert!(gs.player_company.find_reactor_project(pid).is_none());
+    }
+
+    /// Phase 2a — team helpers respect the unassigned-team budget and
+    /// don't decrement past zero.
+    #[test]
+    fn test_reactor_team_helpers() {
+        use crate::reactor::EnrichmentLevel;
+        let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
+        let _pid = gs.player_company.start_proposed_reactor(
+            "Mk1".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        // Defaults: 1 engineering team (created in Company::new), all
+        // unassigned. Adding once succeeds; the second add fails (no
+        // free teams).
+        assert!(gs.player_company.add_team_to_reactor_project(0));
+        assert_eq!(gs.player_company.reactor_projects[0].teams_assigned, 1);
+        assert!(!gs.player_company.add_team_to_reactor_project(0));
+
+        // Remove the team; second remove is a no-op (already at zero).
+        assert!(gs.player_company.remove_team_from_reactor_project(0));
+        assert!(!gs.player_company.remove_team_from_reactor_project(0));
+    }
+
+    /// Phase 2a — completed reactors (Testing+) appear in the
+    /// installable list.
+    #[test]
+    fn test_installable_reactors_filter() {
+        use crate::reactor::EnrichmentLevel;
+        use crate::reactor_project::ReactorDesignStatus;
+
+        let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
+        let pid = gs.player_company.start_proposed_reactor(
+            "Mk1".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        // Proposed: not installable.
+        assert_eq!(gs.player_company.installable_reactor_projects().count(), 0);
+
+        gs.player_company.promote_proposed_reactor(pid);
+        // InDesign: not yet installable (design not finished).
+        assert_eq!(gs.player_company.installable_reactor_projects().count(), 0);
+
+        // Force into Testing for the test.
+        let rp = gs.player_company.find_reactor_project_mut(pid).unwrap();
+        rp.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
+        assert_eq!(gs.player_company.installable_reactor_projects().count(), 1);
     }
 
     /// End-to-end Phase-1 reactor pipeline check: programmatic project
