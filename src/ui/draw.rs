@@ -57,6 +57,22 @@ fn format_power_w(w: f64) -> String {
     }
 }
 
+/// Engine thrust in human-readable units. Ion thrusters live in the
+/// 1 N range; chemical engines in kN; superheavy boosters in MN.
+fn format_thrust_n(n: f64) -> String {
+    if n.abs() >= 1_000_000.0 {
+        format!("{:.2} MN", n / 1_000_000.0)
+    } else if n.abs() >= 10_000.0 {
+        format!("{:.0} kN", n / 1_000.0)
+    } else if n.abs() >= 1_000.0 {
+        format!("{:.1} kN", n / 1_000.0)
+    } else if n.abs() >= 10.0 {
+        format!("{:.0} N", n)
+    } else {
+        format!("{:.1} N", n)
+    }
+}
+
 /// Mass in kilograms with thousands-separator commas. Reactor masses
 /// hit five+ figures at scale 1.0; the unspaced number is hard to read.
 fn format_kg(kg: f64) -> String {
@@ -338,21 +354,21 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 .collect();
 
             lines.push(Line::from(format!(
-                "      {}  {}  {:.0}kN  {:.0}s",
+                "      {}  {}  {}  {:.0}s",
                 cycle_name,
                 prop_str.join(" / "),
-                project.design.thrust_n / 1000.0,
+                format_thrust_n(project.design.thrust_n),
                 project.design.isp_s,
             )));
             let power_str = if project.design.power_draw_w > 0.0 {
                 format!("    Power: {}",
-                    format_power(project.design.power_draw_w))
+                    format_power_w(project.design.power_draw_w))
             } else {
                 String::new()
             };
             lines.push(Line::from(format!(
-                "      Mass: {:.0} kg    Teams: {}    Scale: {:.2}x{}",
-                project.design.mass_kg,
+                "      Mass: {}    Teams: {}    Scale: {:.2}x{}",
+                format_kg(project.design.mass_kg),
                 project.teams_assigned,
                 project.scale,
                 power_str,
@@ -565,8 +581,8 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                 d.material_cost / 1_000_000.0,
             )));
             lines.push(Line::from(format!(
-                "      Teams: {}  NRE: ${:.0}",
-                project.teams_assigned, project.nre_cost,
+                "      Teams: {}  NRE: {}",
+                project.teams_assigned, format_money(project.nre_cost),
             )));
         }
     }
@@ -2804,16 +2820,19 @@ fn draw_engine_editor_modal(
     lines.push(Line::from(""));
     if let Some(b) = baseline {
         lines.push(Line::from(Span::styled(
-            format!(" Baseline ({:?} / {}):  thrust {:.0} kN  mass {:.0} kg  Isp {:.0} s",
+            format!(" Baseline ({:?} / {}):  thrust {}  mass {}  Isp {:.0} s",
                 ep.design.cycle, ep.preset.name(),
-                b.thrust_n / 1000.0, b.mass_kg,
+                format_thrust_n(b.thrust_n), format_kg(b.mass_kg),
                 if use_vacuum { b.isp_vac_s } else { b.isp_sl_s }),
             Style::default().fg(Color::DarkGray),
         )));
     }
     lines.push(Line::from(format!(
-        " Scaled:    thrust {:.0} kN  mass {:.0} kg  Isp {:.0} s  power {:.0} W",
-        ep.design.thrust_n / 1000.0, ep.design.mass_kg, ep.design.isp_s, ep.design.power_draw_w,
+        " Scaled:    thrust {}  mass {}  Isp {:.0} s  power {}",
+        format_thrust_n(ep.design.thrust_n),
+        format_kg(ep.design.mass_kg),
+        ep.design.isp_s,
+        format_power_w(ep.design.power_draw_w),
     )));
     let (work_completed, work_required) = match &ep.status {
         crate::engine_project::EngineDesignStatus::Proposed { work_required } => (0.0, *work_required),
@@ -3071,16 +3090,6 @@ fn format_mass(kg: f64) -> String {
 }
 
 /// Format a power draw in watts, picking W / kW / MW for readability.
-fn format_power(watts: f64) -> String {
-    if watts >= 1_000_000.0 {
-        format!("{:.1} MW", watts / 1_000_000.0)
-    } else if watts >= 1_000.0 {
-        format!("{:.1} kW", watts / 1_000.0)
-    } else {
-        format!("{:.0} W", watts)
-    }
-}
-
 /// Format an acceleration in m/s² as a multiple of standard gravity,
 /// scaling down to mg / μg / ng for low-thrust craft.
 fn format_accel(a_m_s2: f64) -> String {
@@ -3232,8 +3241,11 @@ fn draw_power_editor_modal(
         Line::from(format!("  Power editor — stage {}", stage_label)),
         Line::from(Span::styled(
             format!(
-                "  Supply @ 1 AU: {:.0} W    Idle demand: {:.0} W    Thrust demand: {:.0} W    Battery: {:.2} kWd",
-                supply_w, idle_demand_w, thrust_demand_w, battery_kwd,
+                "  Supply @ 1 AU: {}    Idle demand: {}    Thrust demand: {}    Battery: {:.2} kWd",
+                format_power_w(supply_w),
+                format_power_w(idle_demand_w),
+                format_power_w(thrust_demand_w),
+                battery_kwd,
             ),
             Style::default().fg(supply_color),
         )),
