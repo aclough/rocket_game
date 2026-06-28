@@ -3026,8 +3026,10 @@ fn draw_rocket_pick_engine_modal(
             Style::default()
         };
         lines.push(Line::from(Span::styled(
-            format!("  {} {}{}  {:.0}kN  {:.0}s  {:.0}kg",
-                marker, design.name, tag, design.thrust_n / 1000.0, design.isp_s, design.mass_kg),
+            format!("  {} {}{}  {}  {:.0}s  {}",
+                marker, design.name, tag,
+                format_thrust_n(design.thrust_n), design.isp_s,
+                format_kg(design.mass_kg)),
             style,
         )));
     }

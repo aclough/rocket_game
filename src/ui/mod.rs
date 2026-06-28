@@ -301,6 +301,42 @@ fn propellant_step(engine: &EngineDesign, engine_count: u32) -> f64 {
 /// Recompute structural masses for all stage groups based on their position.
 /// Aero shell depends on being group 0 (exposed to airflow).
 /// Interstage depends on whether the stage is the last group.
+/// Refresh every player-designed stage engine from its source engine
+/// project, then re-derive the per-stage propellant mass (using the
+/// same `NEW_STAGE_BURN_SECONDS` formula as the engine picker) and
+/// recompute structural masses (which depend on engine mass). Call
+/// after any engine-editor mutation that touched a project's
+/// `EngineDesign` so the rocket designer's thrust / Isp / power_draw_w
+/// — and the propellant load that determines burn time — don't go
+/// stale against the project's current numbers.
+///
+/// Mirrors the lockstep invariant: `stage_groups[gi][si]` and
+/// `engine_sources[gi][si]` always describe the same stage, so we walk
+/// them in parallel.
+fn sync_stages_to_projects(state: &mut RocketDesignerState, company: &crate::game_state::Company) {
+    for (group, sources) in state.stage_groups.iter_mut()
+        .zip(state.engine_sources.iter())
+    {
+        for (stage, source) in group.iter_mut().zip(sources.iter()) {
+            if let EngineSource::PlayerDesign(pid) = source {
+                if let Some(ep) = company.engine_projects.iter()
+                    .find(|ep| ep.project_id == *pid)
+                {
+                    stage.engine = ep.design.clone();
+                    // Re-derive propellant mass the same way the engine
+                    // picker does for a fresh stage, so swapping cycle
+                    // (e.g. Kerolox → Ion) doesn't strand a kerolox-
+                    // sized tank on an ion engine.
+                    stage.propellant_mass_kg = stage.engine.mass_flow_rate()
+                        * stage.engine_count as f64
+                        * NEW_STAGE_BURN_SECONDS;
+                }
+            }
+        }
+    }
+    recompute_structural_masses(&mut state.stage_groups);
+}
+
 fn recompute_structural_masses(stage_groups: &mut [Vec<Stage>]) {
     let n = stage_groups.len();
     for (gi, group) in stage_groups.iter_mut().enumerate() {
@@ -1407,7 +1443,7 @@ impl App {
                     InputMode::EngineEditor { project_id, cursor, state } => {
                         self.handle_engine_editor_key(key, project_id, cursor, state);
                     }
-                    InputMode::EngineEditorNameInput { project_id, cursor, mut buffer, state } => {
+                    InputMode::EngineEditorNameInput { project_id, cursor, mut buffer, mut state } => {
                         match key {
                             KeyCode::Esc => {
                                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
@@ -1420,6 +1456,7 @@ impl App {
                                     {
                                         ep.design.name = new_name;
                                     }
+                                    sync_stages_to_projects(&mut state, &self.game.player_company);
                                 }
                                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
                             }
@@ -1442,7 +1479,7 @@ impl App {
                             }
                         }
                     }
-                    InputMode::EngineEditorScaleInput { project_id, cursor, mut buffer, state } => {
+                    InputMode::EngineEditorScaleInput { project_id, cursor, mut buffer, mut state } => {
                         match key {
                             KeyCode::Esc => {
                                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
@@ -1453,6 +1490,7 @@ impl App {
                                         .max(crate::engine_project::MIN_SCALE)
                                         .min(crate::engine_project::MAX_SCALE);
                                     self.apply_engine_scale(project_id, clamped);
+                                    sync_stages_to_projects(&mut state, &self.game.player_company);
                                 }
                                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
                             }
@@ -2662,7 +2700,7 @@ impl App {
         key: KeyCode,
         project_id: crate::engine_project::EngineProjectId,
         mut cursor: usize,
-        state: Box<RocketDesignerState>,
+        mut state: Box<RocketDesignerState>,
     ) {
         let snap = match self.editor_snapshot(project_id) {
             Some(s) => s,
@@ -2721,6 +2759,7 @@ impl App {
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
                     ep.apply_edit(name, next, new_preset, scale, new_vacuum);
                 }
+                sync_stages_to_projects(&mut state, &self.game.player_company);
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Left | KeyCode::Right if cursor == 2 => {
@@ -2733,24 +2772,28 @@ impl App {
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
                     ep.apply_edit(name, cycle, next, scale, use_vacuum);
                 }
+                sync_stages_to_projects(&mut state, &self.game.player_company);
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Right if cursor == 3 => {
                 let new_scale = (scale * std::f64::consts::SQRT_2)
                     .min(crate::engine_project::MAX_SCALE);
                 self.apply_engine_scale(project_id, new_scale);
+                sync_stages_to_projects(&mut state, &self.game.player_company);
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Left if cursor == 3 => {
                 let new_scale = (scale / std::f64::consts::SQRT_2)
                     .max(crate::engine_project::MIN_SCALE);
                 self.apply_engine_scale(project_id, new_scale);
+                sync_stages_to_projects(&mut state, &self.game.player_company);
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Left | KeyCode::Right if cursor == 4 && !vacuum_only => {
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
                     ep.apply_edit(name, cycle, preset, scale, !use_vacuum);
                 }
+                sync_stages_to_projects(&mut state, &self.game.player_company);
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             _ => {
@@ -3007,5 +3050,92 @@ impl App {
                 self.status_message = Some(format!("Save failed: {}", e));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+    use crate::engine::EngineId;
+    use crate::engine_project::{EngineProject, EngineProjectId, PropellantPreset};
+    use crate::stage::StageId;
+
+    /// The original bug: opening "+ Design new engine…" in the rocket
+    /// designer creates a kerolox engine snapshot on the stage. Switching
+    /// the cycle to ElectricPropulsion inside the editor updates the
+    /// engine project, but until sync_stages_to_projects runs, the
+    /// stage's `engine` clone is stale — so the simulation sees the
+    /// kerolox thrust + zero power_draw_w and the player gets a wildly
+    /// wrong TWR. This test pins that the sync helper fixes it.
+    #[test]
+    fn sync_refreshes_stage_engine_after_project_edit() {
+        let mut company = crate::game_state::Company::new(
+            "Test".into(), 10_000_000.0, &crate::seed::GameSeed::new(1),
+        );
+        // Player designs a kerolox engine.
+        let ep = EngineProject::new(
+            EngineProjectId(1), EngineId(1), "E1".into(),
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox,
+            1.0, false,
+        ).unwrap();
+        company.engine_projects.push(ep);
+
+        // Simulate the rocket designer having installed a stage with a
+        // clone of the kerolox design.
+        let stage = Stage {
+            id: StageId(1),
+            name: "S1".into(),
+            engine: company.engine_projects[0].design.clone(),
+            engine_count: 1,
+            propellant_mass_kg: 40_000.0,
+            structural_mass_kg: 100.0,
+            fairing: None,
+            power_sources: Vec::new(),
+        };
+        let mut state = RocketDesignerState {
+            mode: DesignerMode::New,
+            rocket_name: "R1".into(),
+            stage_groups: vec![vec![stage]],
+            engine_sources: vec![vec![EngineSource::PlayerDesign(EngineProjectId(1))]],
+            next_stage_id: 2,
+            selected_group: 0,
+            selected_inner: 0,
+            payload_kg: 0.0,
+            launch_from: "lc-39",
+            destination: "leo",
+            created_engine_projects: Vec::new(),
+        };
+
+        // Player opens the editor, switches cycle to ElectricPropulsion.
+        company.engine_projects[0].apply_edit(
+            "E1".into(),
+            EngineCycle::ElectricPropulsion,
+            PropellantPreset::Xenon,
+            1.0,
+            true,
+        );
+
+        // Before sync: stage still has kerolox numbers.
+        assert!(state.stage_groups[0][0].engine.thrust_n > 100_000.0,
+            "stage engine should still be kerolox-sized before sync");
+        assert_eq!(state.stage_groups[0][0].engine.power_draw_w, 0.0,
+            "stage engine should have zero power draw before sync");
+        let kerolox_prop = state.stage_groups[0][0].propellant_mass_kg;
+
+        sync_stages_to_projects(&mut state, &company);
+
+        // After sync: stage reflects the ion design.
+        assert!(state.stage_groups[0][0].engine.thrust_n < 100.0,
+            "stage engine thrust should be ~1 N (ion) after sync, got {}",
+            state.stage_groups[0][0].engine.thrust_n);
+        assert!(state.stage_groups[0][0].engine.power_draw_w > 1000.0,
+            "stage engine power_draw_w should reflect ion engine after sync, got {}",
+            state.stage_groups[0][0].engine.power_draw_w);
+        // Propellant should drop drastically — ion engines have a tiny
+        // mass flow rate, so a 120-second burn needs grams, not tonnes.
+        let ion_prop = state.stage_groups[0][0].propellant_mass_kg;
+        assert!(ion_prop < 1.0,
+            "ion-engine propellant should be << 1 kg for a 120 s burn, got {} kg (was {} kg)",
+            ion_prop, kerolox_prop);
     }
 }
