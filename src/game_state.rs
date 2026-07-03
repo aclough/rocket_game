@@ -2248,6 +2248,8 @@ impl GameState {
         let mut events = Vec::new();
         let mut arrived_indices = Vec::new();
         let mut stranded_indices = Vec::new();
+        // Flights destroyed mid-flight by a catastrophic stage loss.
+        let mut lost_indices: Vec<usize> = Vec::new();
 
         // Snapshot engine flaws keyed by engine_id for lookup during flight iteration.
         // Each entry: (engine_id, engine_name, flaw_index_in_project, flaw_data, source)
@@ -2352,6 +2354,11 @@ impl GameState {
                 continue;
             }
 
+            // Set to the flaw description if a catastrophic StageLoss
+            // activates this tick — the vehicle is destroyed (broke apart)
+            // rather than merely stranded.
+            let mut flight_lost: Option<String> = None;
+
             if flight.leg_days_remaining > 0 {
                 flight.leg_days_remaining -= 1;
             }
@@ -2407,6 +2414,9 @@ impl GameState {
                         &rf.consequence,
                         gi, si,
                     );
+                    if matches!(rf.consequence, FlawConsequence::StageLoss) {
+                        flight_lost = Some(rf.description.clone());
+                    }
 
                     let evt = GameEvent::MidFlightFlawActivated {
                         rocket_name: flight.rocket_name.clone(),
@@ -2460,6 +2470,9 @@ impl GameState {
                                 &rf.consequence,
                                 gi, si, reactor_id,
                             );
+                            if matches!(rf.consequence, FlawConsequence::StageLoss) {
+                                flight_lost = Some(rf.description.clone());
+                            }
                             let evt = GameEvent::MidFlightFlawActivated {
                                 rocket_name: flight.rocket_name.clone(),
                                 flaw_description: rf.description.clone(),
@@ -2471,6 +2484,15 @@ impl GameState {
                     }
                 }
                 flight.reactor_flaws_rolled = true;
+            }
+
+            // A catastrophic stage loss during the daily rolls destroys
+            // the vehicle — fail it now rather than letting the downstream
+            // dv check report it as merely stranded.
+            if let Some(reason) = flight_lost.take() {
+                flight.status = FlightStatus::Failed { reason };
+                lost_indices.push(i);
+                continue;
             }
 
             if flight.leg_days_remaining == 0 {
@@ -2573,6 +2595,9 @@ impl GameState {
                                         gi,
                                         si,
                                     );
+                                    if matches!(flaw_ref.consequence, FlawConsequence::StageLoss) {
+                                        flight_lost = Some(flaw_ref.description.clone());
+                                    }
 
                                     let evt = GameEvent::MidFlightFlawActivated {
                                         rocket_name: flight.rocket_name.clone(),
@@ -2588,6 +2613,13 @@ impl GameState {
                                     ));
                                 }
                             }
+                        }
+
+                        // A stage loss during the burn destroys the vehicle.
+                        if let Some(reason) = flight_lost.take() {
+                            flight.status = FlightStatus::Failed { reason };
+                            lost_indices.push(i);
+                            continue;
                         }
 
                         // After flaw application, recheck remaining dv for stranding
@@ -2684,29 +2716,53 @@ impl GameState {
             }
         }
 
-        // Resolve stranded and arrived flights (process in reverse to preserve indices)
-        // Combine and sort in reverse order so we can remove safely
-        let mut remove_indices: Vec<(usize, bool)> = Vec::new(); // (index, is_arrived)
-        for &i in &stranded_indices {
-            remove_indices.push((i, false));
-        }
+        // Resolve arrived / stranded / lost flights. Process in reverse
+        // index order so removals don't shift the indices still to remove.
+        enum FlightEnd { Arrived, Stranded, Lost }
+        let mut remove_indices: Vec<(usize, FlightEnd)> = Vec::new();
         for &i in &arrived_indices {
-            remove_indices.push((i, true));
+            remove_indices.push((i, FlightEnd::Arrived));
+        }
+        for &i in &stranded_indices {
+            remove_indices.push((i, FlightEnd::Stranded));
+        }
+        for &i in &lost_indices {
+            remove_indices.push((i, FlightEnd::Lost));
         }
         remove_indices.sort_by(|a, b| b.0.cmp(&a.0));
 
-        for (i, is_arrived) in remove_indices {
+        for (i, end) in remove_indices {
             let flight = self.active_flights.remove(i);
-            if is_arrived {
-                let arrival_events = self.resolve_arrived_flight(flight);
-                events.extend(arrival_events);
-            } else {
-                let location = crate::contract::destination_display_name(&flight.current_location);
-                let evt = GameEvent::SpacecraftStranded {
-                    rocket_name: flight.rocket_name.clone(),
-                    location: location.to_string(),
-                };
-                events.push(evt);
+            let location = crate::contract::destination_display_name(&flight.current_location)
+                .to_string();
+            match end {
+                FlightEnd::Arrived => {
+                    let arrival_events = self.resolve_arrived_flight(flight);
+                    events.extend(arrival_events);
+                }
+                FlightEnd::Stranded => {
+                    let evt = GameEvent::SpacecraftStranded {
+                        rocket_name: flight.rocket_name.clone(),
+                        location,
+                    };
+                    events.push(evt);
+                }
+                FlightEnd::Lost => {
+                    // Vehicle destroyed mid-flight — the mission (and any
+                    // payload) is a total loss, and it dents reputation
+                    // like a launch failure.
+                    let reason = match &flight.status {
+                        FlightStatus::Failed { reason } => reason.clone(),
+                        _ => "stage loss".to_string(),
+                    };
+                    self.player_company.reputation.on_launch_failure();
+                    let evt = GameEvent::SpacecraftLost {
+                        rocket_name: flight.rocket_name.clone(),
+                        location,
+                        reason,
+                    };
+                    events.push(evt);
+                }
             }
         }
 
@@ -4647,6 +4703,89 @@ mod tests {
         let rp = gs.player_company.reactor_projects.iter()
             .find(|rp| rp.design.id == reactor_id).unwrap();
         assert!(rp.flaws[0].discovered);
+    }
+
+    /// A catastrophic StageLoss flaw mid-flight destroys the vehicle:
+    /// it's reported as lost (not stranded) and dents reputation.
+    #[test]
+    fn test_mid_flight_stage_loss_destroys_vehicle() {
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawTrigger};
+        use crate::power::PowerSource;
+        use crate::propellant::Propellant;
+        use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
+        use crate::reactor_project::{ReactorProject, ReactorProjectId};
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+        use crate::stage::{Stage, StageId};
+
+        let mut gs = GameState::new("Reactor Flight".into(), 200_000_000.0, 9);
+        let reactor_id = ReactorId(50);
+        let mut rproj = ReactorProject::new(
+            ReactorProjectId(1), reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        rproj.status = crate::reactor_project::ReactorDesignStatus::Testing { work_completed: 0.0 };
+        rproj.flaws = vec![Flaw {
+            id: FlawId(1),
+            description: "Uncontrolled criticality excursion".into(),
+            consequence: FlawConsequence::StageLoss,
+            activation_chance: 1.0, // PerDay daily_rate → 1.0
+            discovery_probability: 1.0,
+            discovered: false,
+            trigger: FlawTrigger::PerDay,
+        }];
+        gs.player_company.reactor_projects.push(rproj);
+
+        let engine = EngineDesign {
+            id: EngineId(1), name: "E".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 100_000.0, mass_kg: 200.0, isp_s: 350.0,
+            exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
+            ],
+            power_draw_w: 0.0,
+        };
+        let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu);
+        let stage = Stage {
+            id: StageId(1), name: "S".into(),
+            engine, engine_count: 1,
+            propellant_mass_kg: 40_000.0, structural_mass_kg: 1_000.0,
+            fairing: None,
+            power_sources: vec![PowerSource::from_reactor_design(reactor_design)],
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(1), name: "Doomed".into(),
+            stage_groups: vec![vec![stage]],
+        };
+        let rocket = design.instantiate(RocketId(1), "leo", 0.0);
+        gs.spacecraft.push(Spacecraft {
+            id: SpacecraftId(1), name: "Doomed".into(),
+            rocket, design, location: "leo".into(),
+            rocket_project_id: RocketProjectId(0),
+            payloads: Vec::new(),
+        });
+
+        let rep_before = gs.player_company.reputation.total();
+        gs.fly_spacecraft(0, "geo");
+        assert_eq!(gs.active_flights.len(), 1);
+
+        // Advance until the flight ends; collect all events.
+        let mut all_events = Vec::new();
+        for _ in 0..30 {
+            all_events.extend(gs.advance_day());
+            if gs.active_flights.is_empty() {
+                break;
+            }
+        }
+
+        assert!(gs.active_flights.is_empty(), "destroyed flight should be removed");
+        assert!(all_events.iter().any(|e| matches!(e, GameEvent::SpacecraftLost { .. })),
+            "should report the vehicle as lost");
+        assert!(!all_events.iter().any(|e| matches!(e, GameEvent::SpacecraftStranded { .. })),
+            "a destroyed vehicle must not also be reported as stranded");
+        assert!(gs.player_company.reputation.total() < rep_before,
+            "destroying a vehicle should hit reputation");
     }
 
     /// Phase 3: the real daily loop surfaces reactor flaw discovery and

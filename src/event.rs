@@ -64,6 +64,9 @@ pub enum GameEvent {
     SpacecraftDocked { small: String, large: String, location: String },
     SpacecraftUndocked { payload: String, carrier: String, location: String },
     SpacecraftStranded { rocket_name: String, location: String },
+    /// Vehicle destroyed mid-flight (a catastrophic stage loss broke the
+    /// stack apart), as distinct from merely stranded.
+    SpacecraftLost { rocket_name: String, location: String, reason: String },
     PowerLost { rocket_name: String, location: String },
     MidFlightFlawActivated { rocket_name: String, flaw_description: String, consequence: String },
     /// Improvement discovered during testing.
@@ -176,6 +179,8 @@ impl fmt::Display for GameEvent {
                 write!(f, "Undocked: {} from {} at {}", payload, carrier, location),
             GameEvent::SpacecraftStranded { rocket_name, location } =>
                 write!(f, "Spacecraft stranded: {} at {}", rocket_name, location),
+            GameEvent::SpacecraftLost { rocket_name, location, reason } =>
+                write!(f, "Vehicle destroyed: {} at {} ({})", rocket_name, location, reason),
             GameEvent::PowerLost { rocket_name, location } =>
                 write!(f, "Power lost: {} stranded at {} (battery exhausted)",
                     rocket_name, location),
@@ -256,7 +261,8 @@ impl GameEvent {
             | GameEvent::ImprovementDiscovered { .. }
             | GameEvent::ImprovementActualized { .. }
             | GameEvent::TechDeficienciesFound { .. } => EventImportance::Notable,
-            GameEvent::EconomicShift { .. } => EventImportance::Critical,
+            GameEvent::SpacecraftLost { .. }
+            | GameEvent::EconomicShift { .. } => EventImportance::Critical,
         }
     }
 }
