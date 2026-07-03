@@ -346,7 +346,7 @@ pub struct EngineProject {
     pub nre_cost: f64,
     /// Improvements discovered during testing. Pending ones need a revision to actualize.
     #[serde(default)]
-    pub improvements: Vec<Improvement>,
+    pub improvements: Vec<EngineImprovement>,
     /// Cumulative work spent in testing (persists across revisions).
     #[serde(default)]
     pub cumulative_testing_work: f64,
@@ -583,13 +583,13 @@ impl EngineProject {
                         imp.actualized = true;
                         // Apply the improvement to the engine design
                         match &imp.kind {
-                            ImprovementKind::Isp(frac) => {
+                            EngineImprovementKind::Isp(frac) => {
                                 self.design.isp_s *= 1.0 + frac;
                             }
-                            ImprovementKind::Mass(frac) => {
+                            EngineImprovementKind::Mass(frac) => {
                                 self.design.mass_kg *= 1.0 - frac;
                             }
-                            ImprovementKind::Thrust(frac) => {
+                            EngineImprovementKind::Thrust(frac) => {
                                 self.design.thrust_n *= 1.0 + frac;
                             }
                         }
@@ -668,18 +668,19 @@ impl EngineProject {
     }
 }
 
-/// A potential improvement discovered during testing.
+/// A potential engine improvement discovered during testing. The
+/// reactor counterpart is `reactor_project::ReactorImprovement`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Improvement {
+pub struct EngineImprovement {
     pub description: String,
-    pub kind: ImprovementKind,
+    pub kind: EngineImprovementKind,
     /// Whether this improvement has been actualized via revision.
     pub actualized: bool,
 }
 
-/// What an improvement affects.
+/// What an engine improvement affects.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ImprovementKind {
+pub enum EngineImprovementKind {
     /// Increase Isp by this fraction (e.g. 0.02 = +2%).
     Isp(f64),
     /// Reduce mass by this fraction (e.g. 0.03 = -3%).
@@ -688,12 +689,12 @@ pub enum ImprovementKind {
     Thrust(f64),
 }
 
-impl std::fmt::Display for ImprovementKind {
+impl std::fmt::Display for EngineImprovementKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ImprovementKind::Isp(frac) => write!(f, "+{:.0}% Isp", frac * 100.0),
-            ImprovementKind::Mass(frac) => write!(f, "-{:.0}% mass", frac * 100.0),
-            ImprovementKind::Thrust(frac) => write!(f, "+{:.0}% thrust", frac * 100.0),
+            EngineImprovementKind::Isp(frac) => write!(f, "+{:.0}% Isp", frac * 100.0),
+            EngineImprovementKind::Mass(frac) => write!(f, "-{:.0}% mass", frac * 100.0),
+            EngineImprovementKind::Thrust(frac) => write!(f, "+{:.0}% thrust", frac * 100.0),
         }
     }
 }
@@ -702,7 +703,7 @@ impl std::fmt::Display for ImprovementKind {
 const IMPROVEMENT_DISCOVERY_CHANCE: f64 = 0.08;
 
 /// Generate a random improvement appropriate for the engine cycle.
-fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle) -> Improvement {
+fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle) -> EngineImprovement {
     let roll: f64 = rng.gen();
 
     let (kind, description) = match cycle {
@@ -710,14 +711,14 @@ fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle) -> Improvement {
             // Solar sails: mass reduction or thrust improvement (reflectivity)
             if roll < 0.50 {
                 let frac = rng.gen_range(0.02..0.06);
-                (ImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
                     0 => "Lighter boom material",
                     1 => "Thinner sail substrate",
                     _ => "Optimized deployment mechanism",
                 })
             } else {
                 let frac = rng.gen_range(0.02..0.05);
-                (ImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
                     0 => "Higher reflectivity coating",
                     1 => "Improved sail flatness",
                     _ => "Better attitude control vane geometry",
@@ -727,21 +728,21 @@ fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle) -> Improvement {
         EngineCycle::ElectricPropulsion => {
             if roll < 0.40 {
                 let frac = rng.gen_range(0.01..0.04);
-                (ImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
                     0 => "Optimized ion grid spacing",
                     1 => "Improved beam focusing",
                     _ => "Better discharge chamber geometry",
                 })
             } else if roll < 0.70 {
                 let frac = rng.gen_range(0.02..0.06);
-                (ImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
                     0 => "Lighter power processing unit",
                     1 => "Reduced thruster head mass",
                     _ => "Compact xenon feed system",
                 })
             } else {
                 let frac = rng.gen_range(0.01..0.04);
-                (ImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
                     0 => "Higher discharge current achievable",
                     1 => "Improved ion extraction efficiency",
                     _ => "Better magnetic field confinement",
@@ -751,21 +752,21 @@ fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle) -> Improvement {
         EngineCycle::NuclearThermal => {
             if roll < 0.40 {
                 let frac = rng.gen_range(0.01..0.04);
-                (ImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
                     0 => "Higher reactor operating temperature",
                     1 => "Improved fuel element heat transfer",
                     _ => "Better hydrogen flow distribution",
                 })
             } else if roll < 0.70 {
                 let frac = rng.gen_range(0.02..0.06);
-                (ImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
                     0 => "Lighter radiation shielding",
                     1 => "Compact reactor core design",
                     _ => "Reduced turbopump mass",
                 })
             } else {
                 let frac = rng.gen_range(0.01..0.04);
-                (ImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
                     0 => "Higher reactor power output",
                     1 => "Improved propellant heating efficiency",
                     _ => "Better nozzle thermal management",
@@ -776,21 +777,21 @@ fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle) -> Improvement {
             // Chemical engines (default)
             if roll < 0.40 {
                 let frac = rng.gen_range(0.01..0.04);
-                (ImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
                     0 => "Optimized injector pattern",
                     1 => "Improved propellant mixing efficiency",
                     _ => "Better nozzle contour",
                 })
             } else if roll < 0.70 {
                 let frac = rng.gen_range(0.02..0.06);
-                (ImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
                     0 => "Lighter turbopump housing",
                     1 => "Thinner chamber wall design",
                     _ => "Reduced gimbal mechanism mass",
                 })
             } else {
                 let frac = rng.gen_range(0.01..0.04);
-                (ImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
+                (EngineImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
                     0 => "Higher chamber pressure achievable",
                     1 => "Improved injector throughput",
                     _ => "Better regenerative cooling allows hotter burn",
@@ -799,7 +800,7 @@ fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle) -> Improvement {
         }
     };
 
-    Improvement {
+    EngineImprovement {
         description: description.to_string(),
         kind,
         actualized: false,

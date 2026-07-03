@@ -93,7 +93,7 @@ pub enum ManufacturingOrderType {
         /// Flaw snapshot at time of order placement.
         flaws: Vec<crate::flaw::Flaw>,
         /// Actualized improvements at time of order placement.
-        improvements: Vec<crate::engine_project::Improvement>,
+        improvements: Vec<crate::engine_project::EngineImprovement>,
     },
     /// Build a single stage (tank + structure).
     Stage {
@@ -189,7 +189,7 @@ impl ManufacturingOrder {
         prior_builds: u32,
         revision: u32,
         flaws: Vec<crate::flaw::Flaw>,
-        improvements: Vec<crate::engine_project::Improvement>,
+        improvements: Vec<crate::engine_project::EngineImprovement>,
     ) -> Self {
         let base_work = balance::engine_build_work(complexity);
         let learning = balance::learning_curve_multiplier(prior_builds);
@@ -351,7 +351,7 @@ pub struct InventoryEngine {
     pub flaws: Vec<crate::flaw::Flaw>,
     /// Snapshot of actualized improvements at build time.
     #[serde(default)]
-    pub improvements: Vec<crate::engine_project::Improvement>,
+    pub improvements: Vec<crate::engine_project::EngineImprovement>,
 }
 
 /// A built stage in inventory.

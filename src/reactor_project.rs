@@ -20,7 +20,7 @@ const REACTOR_IMPROVEMENT_DISCOVERY_CHANCE: f64 = 0.08;
 
 /// A potential improvement to a reactor design, discovered during
 /// testing and actualized via revision. Reactor-specific counterpart to
-/// the engine's `Improvement` (reactors have no Isp/thrust to improve).
+/// the engine's `EngineImprovement` (reactors have no Isp/thrust to improve).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReactorImprovement {
     pub description: String,
