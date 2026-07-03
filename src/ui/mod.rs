@@ -370,24 +370,28 @@ pub enum InputMode {
     /// opens a text sub-modal for name or scale). Only opened from
     /// inside the rocket designer; the designer state travels with the
     /// editor and is restored on Esc.
+    /// `state` is `Some` when opened from the rocket designer (Esc
+    /// returns there, edits sync to the stage clone); `None` when opened
+    /// standalone from the Engines pane (Esc cancels the draft, `d`
+    /// commits it).
     EngineEditor {
         project_id: crate::engine_project::EngineProjectId,
         cursor: usize,
-        state: Box<RocketDesignerState>,
+        state: Option<Box<RocketDesignerState>>,
     },
     /// Text-input sub-modal for the engine name.
     EngineEditorNameInput {
         project_id: crate::engine_project::EngineProjectId,
         cursor: usize,
         buffer: String,
-        state: Box<RocketDesignerState>,
+        state: Option<Box<RocketDesignerState>>,
     },
     /// Numeric sub-modal for the engine scale.
     EngineEditorScaleInput {
         project_id: crate::engine_project::EngineProjectId,
         cursor: usize,
         buffer: String,
-        state: Box<RocketDesignerState>,
+        state: Option<Box<RocketDesignerState>>,
     },
     /// Standalone reactor editor — opened from the Reactors pane.
     /// Operates on an existing `ReactorProject` by id; the new-design
@@ -1064,10 +1068,31 @@ impl App {
         // selection points past the end, or all hits are Proposed.
         let real_idx = self.engine_pane_real_index();
         match key {
-            // Engine design no longer has its own entry point — players
-            // design engines inside the rocket designer's "+ Design new
-            // engine" picker entry, and the engine is promoted to InDesign
-            // when the rocket is committed.
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                // Design a new engine standalone (parity with the Reactors
+                // pane). Seeds a Proposed engine with sensible defaults and
+                // opens the editor with no designer state; 'd' commits it
+                // to InDesign, Esc discards the draft. Engines can also
+                // still be designed inside the rocket designer.
+                use crate::engine::EngineCycle;
+                use crate::engine_project::{PropellantPreset, DEFAULT_SCALE};
+                let n = self.game.player_company.engine_projects.len() + 1;
+                let name = format!("Engine Mk{}", n);
+                let preset = PropellantPreset::Kerolox;
+                let tech_id = crate::technology::technology_for_preset(preset);
+                match self.game.player_company.start_proposed_engine_project(
+                    name, EngineCycle::GasGenerator, preset, DEFAULT_SCALE, false, tech_id,
+                ) {
+                    Some(pid) => {
+                        self.enter_modal(InputMode::EngineEditor {
+                            project_id: pid, cursor: 0, state: None,
+                        });
+                    }
+                    None => {
+                        self.status_message = Some("Failed to create engine".into());
+                    }
+                }
+            }
             KeyCode::Char('b') => {
                 // Buy third-party engine
                 if !self.game.player_company.third_party_catalog.is_empty() {
@@ -1490,7 +1515,9 @@ impl App {
                                     {
                                         ep.design.name = new_name;
                                     }
-                                    sync_stages_to_projects(&mut state, &self.game.player_company);
+                                    if let Some(s) = state.as_mut() {
+                                        sync_stages_to_projects(s, &self.game.player_company);
+                                    }
                                 }
                                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
                             }
@@ -1524,7 +1551,9 @@ impl App {
                                         .max(crate::engine_project::MIN_SCALE)
                                         .min(crate::engine_project::MAX_SCALE);
                                     self.apply_engine_scale(project_id, clamped);
-                                    sync_stages_to_projects(&mut state, &self.game.player_company);
+                                    if let Some(s) = state.as_mut() {
+                                        sync_stages_to_projects(s, &self.game.player_company);
+                                    }
                                 }
                                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
                             }
@@ -2422,7 +2451,7 @@ impl App {
                             .unwrap_or(false);
                         if editable {
                             self.input_mode = InputMode::EngineEditor {
-                                project_id: pid, cursor: 0, state,
+                                project_id: pid, cursor: 0, state: Some(state),
                             };
                             return;
                         } else {
@@ -2484,7 +2513,7 @@ impl App {
                         );
                     }
                     self.input_mode = InputMode::EngineEditor {
-                        project_id, cursor: 0, state,
+                        project_id, cursor: 0, state: Some(state),
                     };
                 } else if num_engines == 0 {
                     self.status_message = Some("No engines available".into());
@@ -2772,13 +2801,17 @@ impl App {
         key: KeyCode,
         project_id: crate::engine_project::EngineProjectId,
         mut cursor: usize,
-        mut state: Box<RocketDesignerState>,
+        mut state: Option<Box<RocketDesignerState>>,
     ) {
         let snap = match self.editor_snapshot(project_id) {
             Some(s) => s,
             None => {
-                // Project disappeared (shouldn't happen) — bail back to designer.
-                self.input_mode = InputMode::RocketDesigner { state };
+                // Project disappeared (shouldn't happen) — bail back to
+                // wherever we came from.
+                match state {
+                    Some(s) => self.input_mode = InputMode::RocketDesigner { state: s },
+                    None => self.exit_modal(),
+                }
                 return;
             }
         };
@@ -2789,7 +2822,24 @@ impl App {
 
         match key {
             KeyCode::Esc => {
-                self.input_mode = InputMode::RocketDesigner { state };
+                match state {
+                    // From the rocket designer: return there (the engine
+                    // stays as edited; it commits with the rocket).
+                    Some(s) => self.input_mode = InputMode::RocketDesigner { state: s },
+                    // Standalone: cancel the draft we created.
+                    None => {
+                        self.game.player_company.delete_proposed_engine(project_id);
+                        self.exit_modal();
+                    }
+                }
+            }
+            // Standalone only: commit the draft to InDesign.
+            KeyCode::Char('d') | KeyCode::Char('D') if state.is_none() => {
+                if let Some(name) = self.game.player_company.promote_proposed_engine(project_id) {
+                    let evt = crate::event::GameEvent::EngineDesignStarted { engine_name: name };
+                    self.game.event_log.push(self.game.date, evt);
+                }
+                self.exit_modal();
             }
             KeyCode::Up => {
                 if cursor > 0 { cursor -= 1; }
@@ -2831,7 +2881,9 @@ impl App {
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
                     ep.apply_edit(name, next, new_preset, scale, new_vacuum);
                 }
-                sync_stages_to_projects(&mut state, &self.game.player_company);
+                if let Some(s) = state.as_mut() {
+                    sync_stages_to_projects(s, &self.game.player_company);
+                }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Left | KeyCode::Right if cursor == 2 => {
@@ -2844,28 +2896,36 @@ impl App {
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
                     ep.apply_edit(name, cycle, next, scale, use_vacuum);
                 }
-                sync_stages_to_projects(&mut state, &self.game.player_company);
+                if let Some(s) = state.as_mut() {
+                    sync_stages_to_projects(s, &self.game.player_company);
+                }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Right if cursor == 3 => {
                 let new_scale = (scale * std::f64::consts::SQRT_2)
                     .min(crate::engine_project::MAX_SCALE);
                 self.apply_engine_scale(project_id, new_scale);
-                sync_stages_to_projects(&mut state, &self.game.player_company);
+                if let Some(s) = state.as_mut() {
+                    sync_stages_to_projects(s, &self.game.player_company);
+                }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Left if cursor == 3 => {
                 let new_scale = (scale / std::f64::consts::SQRT_2)
                     .max(crate::engine_project::MIN_SCALE);
                 self.apply_engine_scale(project_id, new_scale);
-                sync_stages_to_projects(&mut state, &self.game.player_company);
+                if let Some(s) = state.as_mut() {
+                    sync_stages_to_projects(s, &self.game.player_company);
+                }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Left | KeyCode::Right if cursor == 4 && !vacuum_only => {
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
                     ep.apply_edit(name, cycle, preset, scale, !use_vacuum);
                 }
-                sync_stages_to_projects(&mut state, &self.game.player_company);
+                if let Some(s) = state.as_mut() {
+                    sync_stages_to_projects(s, &self.game.player_company);
+                }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             _ => {
@@ -3280,5 +3340,63 @@ mod reactor_render_tests {
         assert!(text.contains("power loss"), "reactor-flavored flaw consequence should render");
         assert!(text.contains("Tech deficiencies"), "deficiency block should render");
         assert!(text.contains("Revise"), "[R] Revise control should render");
+    }
+}
+
+#[cfg(test)]
+mod engine_pane_tests {
+    use super::*;
+    use crate::engine_project::EngineDesignStatus;
+
+    fn engines_app() -> App {
+        let game = crate::game_state::GameState::new("Test".into(), 100_000_000.0, 1);
+        let mut app = App::new(game);
+        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Engines).unwrap();
+        app.selected_item = 0;
+        app
+    }
+
+    /// Pressing 'n' in the Engines pane opens the standalone engine
+    /// builder on a fresh Proposed engine; 'd' commits it to InDesign.
+    #[test]
+    fn n_opens_builder_and_d_commits() {
+        let mut app = engines_app();
+        let before = app.game.player_company.engine_projects.len();
+
+        app.handle_key(KeyCode::Char('n'));
+        assert_eq!(app.game.player_company.engine_projects.len(), before + 1,
+            "a draft engine should be created");
+        let pid = match &app.input_mode {
+            InputMode::EngineEditor { project_id, state, .. } => {
+                assert!(state.is_none(), "standalone editor should carry no designer state");
+                *project_id
+            }
+            _ => panic!("expected the engine editor to open"),
+        };
+        // The draft is Proposed until committed.
+        let ep = app.game.player_company.find_engine_project(pid).unwrap();
+        assert!(matches!(ep.status, EngineDesignStatus::Proposed { .. }));
+
+        // 'd' commits: Proposed → InDesign, modal closes.
+        app.handle_key(KeyCode::Char('d'));
+        assert!(matches!(app.input_mode, InputMode::Normal), "editor should close on commit");
+        let ep = app.game.player_company.find_engine_project(pid).unwrap();
+        assert!(matches!(ep.status, EngineDesignStatus::InDesign { .. }),
+            "committed engine should be InDesign");
+    }
+
+    /// Esc from the standalone builder discards the draft entirely.
+    #[test]
+    fn esc_discards_the_draft() {
+        let mut app = engines_app();
+        let before = app.game.player_company.engine_projects.len();
+
+        app.handle_key(KeyCode::Char('n'));
+        assert_eq!(app.game.player_company.engine_projects.len(), before + 1);
+
+        app.handle_key(KeyCode::Esc);
+        assert!(matches!(app.input_mode, InputMode::Normal));
+        assert_eq!(app.game.player_company.engine_projects.len(), before,
+            "cancelling should delete the Proposed draft");
     }
 }

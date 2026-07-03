@@ -2196,14 +2196,14 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
 
     match &app.input_mode {
         InputMode::Normal | InputMode::RocketDesigner { .. } => {}
-        InputMode::EngineEditor { project_id, cursor, .. } => {
-            draw_engine_editor_modal(frame, app, *project_id, *cursor, None, modal_area);
+        InputMode::EngineEditor { project_id, cursor, state } => {
+            draw_engine_editor_modal(frame, app, *project_id, *cursor, None, state.is_none(), modal_area);
         }
-        InputMode::EngineEditorNameInput { project_id, cursor, buffer, .. } => {
-            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some(("Name", buffer.clone())), modal_area);
+        InputMode::EngineEditorNameInput { project_id, cursor, buffer, state } => {
+            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some(("Name", buffer.clone())), state.is_none(), modal_area);
         }
-        InputMode::EngineEditorScaleInput { project_id, cursor, buffer, .. } => {
-            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some(("Scale", buffer.clone())), modal_area);
+        InputMode::EngineEditorScaleInput { project_id, cursor, buffer, state } => {
+            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some(("Scale", buffer.clone())), state.is_none(), modal_area);
         }
         InputMode::ReactorEditor { project_id, cursor } => {
             draw_reactor_editor_modal(frame, app, *project_id, *cursor, None, modal_area);
@@ -2857,6 +2857,7 @@ fn draw_engine_editor_modal(
     project_id: crate::engine_project::EngineProjectId,
     cursor: usize,
     text_input: Option<(&str, String)>,
+    standalone: bool,
     area: Rect,
 ) {
     let ep = match app.game.player_company.find_engine_project(project_id) {
@@ -2951,10 +2952,12 @@ fn draw_engine_editor_modal(
     )));
 
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        " [↑↓] Move  [←→] Change  [Enter] Edit text  [Esc] Done",
-        Style::default().fg(Color::DarkGray),
-    )));
+    let footer = if standalone {
+        " [↑↓] Move  [←→] Change  [Enter] Edit text  [D] Done  [Esc] Cancel"
+    } else {
+        " [↑↓] Move  [←→] Change  [Enter] Edit text  [Esc] Done"
+    };
+    lines.push(Line::from(Span::styled(footer, Style::default().fg(Color::DarkGray))));
 
     if let Some((field, buffer)) = text_input {
         lines.push(Line::from(""));
