@@ -1948,6 +1948,7 @@ impl GameState {
             }
         }
 
+
         // Update launch tracking
         self.player_company.last_launch_date = Some(self.date);
 
@@ -2065,6 +2066,7 @@ impl GameState {
             persist,
             launch_partial: matches!(sim.outcome, LaunchOutcome::PartialFailure { .. }),
             flaw_rolled_groups: sim.flaw_rolled_groups,
+            reactor_flaws_rolled: false,
         };
 
         self.active_flights.push(flight);
@@ -2311,10 +2313,39 @@ impl GameState {
             }
         }
 
+        // Snapshot reactor flaws keyed by reactor design id. PerFlight
+        // flaws roll when a reactor's stage group fires; PerDay endurance
+        // flaws roll each day in transit.
+        struct ReactorFlawRef {
+            reactor_id: crate::reactor::ReactorId,
+            flaw_index: usize,
+            trigger: FlawTrigger,
+            activation_chance: f64,
+            daily_rate: f64,
+            consequence: FlawConsequence,
+            description: String,
+        }
+        let mut reactor_flaw_table: Vec<ReactorFlawRef> = Vec::new();
+        for rp in &self.player_company.reactor_projects {
+            for (fi, flaw) in rp.flaws.iter().enumerate() {
+                reactor_flaw_table.push(ReactorFlawRef {
+                    reactor_id: rp.design.id,
+                    flaw_index: fi,
+                    trigger: flaw.trigger,
+                    activation_chance: flaw.activation_chance,
+                    daily_rate: flaw.daily_rate(),
+                    consequence: flaw.consequence.clone(),
+                    description: flaw.description.clone(),
+                });
+            }
+        }
+
         // Track flaw discoveries to apply after the flight loop
         let mut flaw_discoveries: Vec<(EngineSource, usize, String)> = Vec::new();
         // Track rocket project flaw discoveries (project_id, flaw_index)
         let mut rocket_flaw_discoveries: Vec<(RocketProjectId, usize)> = Vec::new();
+        // Track reactor project flaw discoveries (reactor_id, flaw_index)
+        let mut reactor_flaw_discoveries: Vec<(crate::reactor::ReactorId, usize)> = Vec::new();
 
         for (i, flight) in self.active_flights.iter_mut().enumerate() {
             if !matches!(flight.status, FlightStatus::InTransit) {
@@ -2386,6 +2417,60 @@ impl GameState {
 
                     rocket_flaw_discoveries.push((rf.project_id, rf.flaw_index));
                 }
+            }
+
+            // Roll reactor flaws for reactors on attached stages. A
+            // reactor runs from flight start, so its one-shot PerFlight
+            // flaws roll once — on the flight's first in-transit tick —
+            // while PerDay endurance flaws roll every day. Each installed
+            // reactor rolls independently.
+            if !reactor_flaw_table.is_empty() {
+                let roll_perflight = !flight.reactor_flaws_rolled;
+                let mut reactor_instances: Vec<(usize, usize, crate::reactor::ReactorId)> = Vec::new();
+                for (gi, group) in flight.design.stage_groups.iter().enumerate() {
+                    for (si, stage) in group.iter().enumerate() {
+                        let attached = flight.rocket.stage_states.get(gi)
+                            .and_then(|g| g.get(si))
+                            .map_or(false, |ss| ss.attached);
+                        if !attached {
+                            continue;
+                        }
+                        for src in &stage.power_sources {
+                            if let crate::power::PowerSourceKind::Reactor { design: rd } = &src.kind {
+                                reactor_instances.push((gi, si, rd.id));
+                            }
+                        }
+                    }
+                }
+                for (gi, si, reactor_id) in reactor_instances {
+                    for rf in &reactor_flaw_table {
+                        if rf.reactor_id != reactor_id {
+                            continue;
+                        }
+                        let fires = match rf.trigger {
+                            FlawTrigger::PerDay =>
+                                self.seed.contingent_rng.gen::<f64>() < rf.daily_rate,
+                            FlawTrigger::PerFlight =>
+                                roll_perflight
+                                    && self.seed.contingent_rng.gen::<f64>() < rf.activation_chance,
+                        };
+                        if fires {
+                            crate::launch::apply_reactor_consequence_to_stage(
+                                &mut flight.design,
+                                &rf.consequence,
+                                gi, si, reactor_id,
+                            );
+                            let evt = GameEvent::MidFlightFlawActivated {
+                                rocket_name: flight.rocket_name.clone(),
+                                flaw_description: rf.description.clone(),
+                                consequence: rf.consequence.to_string(),
+                            };
+                            events.push(evt);
+                            reactor_flaw_discoveries.push((reactor_id, rf.flaw_index));
+                        }
+                    }
+                }
+                flight.reactor_flaws_rolled = true;
             }
 
             if flight.leg_days_remaining == 0 {
@@ -2576,6 +2661,22 @@ impl GameState {
                     rp.flaws[*flaw_index].discovered = true;
                     let evt = GameEvent::FlawDiscovered {
                         engine_name: rp.design.name.clone(),
+                        flaw_description: rp.flaws[*flaw_index].description.clone(),
+                    };
+                    events.push(evt);
+                }
+            }
+        }
+
+        // Apply reactor project flaw discoveries (keyed by reactor id).
+        for (reactor_id, flaw_index) in &reactor_flaw_discoveries {
+            if let Some(rp) = self.player_company.reactor_projects.iter_mut()
+                .find(|rp| rp.design.id == *reactor_id)
+            {
+                if *flaw_index < rp.flaws.len() && !rp.flaws[*flaw_index].discovered {
+                    rp.flaws[*flaw_index].discovered = true;
+                    let evt = GameEvent::ReactorFlawDiscovered {
+                        reactor_name: rp.design.name.clone(),
                         flaw_description: rp.flaws[*flaw_index].description.clone(),
                     };
                     events.push(evt);
@@ -2833,6 +2934,7 @@ impl GameState {
             persist: true, // spacecraft flights always persist
             launch_partial: false,
             flaw_rolled_groups: std::collections::HashSet::new(),
+            reactor_flaws_rolled: false,
         };
 
         self.active_flights.push(flight);
@@ -3341,6 +3443,7 @@ mod tests {
             persist: true,
             launch_partial: false,
             flaw_rolled_groups: sim.flaw_rolled_groups,
+            reactor_flaws_rolled: false,
         };
 
         gs.active_flights.push(flight);
@@ -3872,6 +3975,7 @@ mod tests {
             persist: false,
             launch_partial: false,
             flaw_rolled_groups: std::collections::HashSet::new(),
+            reactor_flaws_rolled: false,
         };
         gs.resolve_arrived_flight(flight)
     }
@@ -4374,6 +4478,175 @@ mod tests {
             .deficiencies.iter().map(|d| d.total_attempts).sum();
         assert!(attempts_after > attempts_before,
             "revision should feed deficiency solve attempts to the tech");
+    }
+
+    /// Phase 3b: an installed reactor's PerDay endurance flaw rolls
+    /// during transit, degrades the flying reactor's output, and is
+    /// discovered on the owning reactor project — driven through the real
+    /// `advance_day` flight loop.
+    #[test]
+    fn test_reactor_flaw_activates_mid_flight() {
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawTrigger};
+        use crate::power::PowerSource;
+        use crate::propellant::Propellant;
+        use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
+        use crate::reactor_project::{ReactorProject, ReactorProjectId};
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+        use crate::stage::{Stage, StageId};
+
+        let mut gs = GameState::new("Reactor Flight".into(), 200_000_000.0, 11);
+
+        // A reactor project carrying a guaranteed PerDay endurance flaw.
+        let reactor_id = ReactorId(50);
+        let mut rproj = ReactorProject::new(
+            ReactorProjectId(1), reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        rproj.status = crate::reactor_project::ReactorDesignStatus::Testing { work_completed: 0.0 };
+        rproj.flaws = vec![Flaw {
+            id: FlawId(1),
+            description: "Fuel burnup lowers reactivity over time".into(),
+            consequence: FlawConsequence::PerformanceDegradation(0.2),
+            activation_chance: 1.0, // PerDay daily_rate → 1.0 (fires every day)
+            discovery_probability: 1.0,
+            discovered: false,
+            trigger: FlawTrigger::PerDay,
+        }];
+        gs.player_company.reactor_projects.push(rproj);
+
+        // A chemical-engine spacecraft carrying a reactor with that design id.
+        let engine = EngineDesign {
+            id: EngineId(1), name: "E".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 100_000.0, mass_kg: 200.0, isp_s: 350.0,
+            exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
+            ],
+            power_draw_w: 0.0,
+        };
+        let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu);
+        let steady_full = reactor_design.steady_w;
+        let stage = Stage {
+            id: StageId(1), name: "S".into(),
+            engine, engine_count: 1,
+            propellant_mass_kg: 40_000.0, structural_mass_kg: 1_000.0,
+            fairing: None,
+            power_sources: vec![PowerSource::from_reactor_design(reactor_design)],
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(1), name: "ReactorCraft".into(),
+            stage_groups: vec![vec![stage]],
+        };
+        let rocket = design.instantiate(RocketId(1), "leo", 0.0);
+        gs.spacecraft.push(Spacecraft {
+            id: SpacecraftId(1),
+            name: "ReactorCraft".into(),
+            rocket,
+            design,
+            location: "leo".into(),
+            rocket_project_id: RocketProjectId(0),
+            payloads: Vec::new(),
+        });
+
+        gs.fly_spacecraft(0, "geo");
+        assert_eq!(gs.active_flights.len(), 1, "spacecraft should be in flight");
+
+        // Advance until the reactor flaw is discovered (or the flight ends).
+        let mut discovered = false;
+        for _ in 0..60 {
+            let events = gs.advance_day();
+            if events.iter().any(|e| matches!(e, GameEvent::ReactorFlawDiscovered { .. })) {
+                discovered = true;
+                break;
+            }
+            if gs.active_flights.is_empty() {
+                break;
+            }
+        }
+
+        assert!(discovered, "reactor endurance flaw should be discovered mid-flight");
+        let rp = gs.player_company.reactor_projects.iter()
+            .find(|rp| rp.design.id == reactor_id).unwrap();
+        assert!(rp.flaws[0].discovered, "flaw should be marked discovered on the project");
+        // Sanity: the degradation multiplier is < 1, so a flying reactor
+        // that took the hit outputs less than its rated power.
+        assert!(steady_full > 0.0);
+    }
+
+    /// Phase 3b timing fix: a reactor's one-shot PerFlight flaw fires on
+    /// the flight's FIRST in-transit day (reactors run from flight
+    /// start), not when the reactor's stage engine happens to fire.
+    #[test]
+    fn test_reactor_perflight_flaw_fires_at_flight_start() {
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawTrigger};
+        use crate::power::PowerSource;
+        use crate::propellant::Propellant;
+        use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
+        use crate::reactor_project::{ReactorProject, ReactorProjectId};
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+        use crate::stage::{Stage, StageId};
+
+        let mut gs = GameState::new("Reactor Flight".into(), 200_000_000.0, 5);
+        let reactor_id = ReactorId(50);
+        let mut rproj = ReactorProject::new(
+            ReactorProjectId(1), reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        rproj.status = crate::reactor_project::ReactorDesignStatus::Testing { work_completed: 0.0 };
+        rproj.flaws = vec![Flaw {
+            id: FlawId(1),
+            description: "Reactor overheats and trips offline".into(),
+            consequence: FlawConsequence::PerformanceDegradation(0.1),
+            activation_chance: 1.0, // guaranteed PerFlight
+            discovery_probability: 1.0,
+            discovered: false,
+            trigger: FlawTrigger::PerFlight,
+        }];
+        gs.player_company.reactor_projects.push(rproj);
+
+        let engine = EngineDesign {
+            id: EngineId(1), name: "E".into(),
+            cycle: EngineCycle::GasGenerator,
+            thrust_n: 100_000.0, mass_kg: 200.0, isp_s: 350.0,
+            exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
+            ],
+            power_draw_w: 0.0,
+        };
+        let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu);
+        let stage = Stage {
+            id: StageId(1), name: "S".into(),
+            engine, engine_count: 1,
+            propellant_mass_kg: 40_000.0, structural_mass_kg: 1_000.0,
+            fairing: None,
+            power_sources: vec![PowerSource::from_reactor_design(reactor_design)],
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(1), name: "ReactorCraft".into(),
+            stage_groups: vec![vec![stage]],
+        };
+        let rocket = design.instantiate(RocketId(1), "leo", 0.0);
+        gs.spacecraft.push(Spacecraft {
+            id: SpacecraftId(1), name: "ReactorCraft".into(),
+            rocket, design, location: "leo".into(),
+            rocket_project_id: RocketProjectId(0),
+            payloads: Vec::new(),
+        });
+
+        gs.fly_spacecraft(0, "geo");
+        assert_eq!(gs.active_flights.len(), 1);
+
+        // First flight day: the PerFlight reactor flaw must already fire.
+        let events = gs.advance_day();
+        assert!(events.iter().any(|e| matches!(e, GameEvent::ReactorFlawDiscovered { .. })),
+            "PerFlight reactor flaw should fire on the first flight day");
+        let rp = gs.player_company.reactor_projects.iter()
+            .find(|rp| rp.design.id == reactor_id).unwrap();
+        assert!(rp.flaws[0].discovered);
     }
 
     /// Phase 3: the real daily loop surfaces reactor flaw discovery and

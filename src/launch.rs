@@ -7,6 +7,7 @@ use crate::contract::ContractId;
 use crate::engine::EngineId;
 use crate::engine_project::{EngineProject, EngineSource};
 use crate::flaw::FlawConsequence;
+use crate::reactor::ReactorId;
 use crate::rocket::RocketDesign;
 use crate::third_party::ContractedEngine;
 
@@ -153,6 +154,11 @@ pub fn simulate_launch(
                     ));
                 }
             }
+
+            // Reactor flaws are NOT rolled here: a reactor runs from
+            // flight start, so its flaws roll in the flight loop (once at
+            // flight start for PerFlight, daily for PerDay) rather than at
+            // stage ignition.
         }
     }
 
@@ -316,6 +322,59 @@ pub fn apply_consequence_to_stage(
             group[stage_index].engine.thrust_n = 0.0;
             group[stage_index].engine.isp_s = 0.0;
             group[stage_index].propellant_mass_kg = 0.0;
+        }
+    }
+}
+
+/// Apply a flaw consequence to a specific reactor on a stage.
+///
+/// `PerformanceDegradation(f)` scales the reactor's steady output by
+/// `1-f`; `EngineLoss` ("reactor shutdown") zeroes it; `StageLoss`
+/// disables the whole stage. Reduced power output cascades through the
+/// flight power model on its own — `run_daily_power_tick` strands the
+/// flight on brownout, and `group_effective_thrust_n` derates any
+/// electric engine drawing that power.
+pub fn apply_reactor_consequence_to_stage(
+    design: &mut RocketDesign,
+    consequence: &FlawConsequence,
+    group_index: usize,
+    stage_index: usize,
+    reactor_id: ReactorId,
+) {
+    let group = match design.stage_groups.get_mut(group_index) {
+        Some(g) => g,
+        None => return,
+    };
+    let stage = match group.get_mut(stage_index) {
+        Some(s) => s,
+        None => return,
+    };
+    match consequence {
+        FlawConsequence::PerformanceDegradation(frac) => {
+            for src in stage.power_sources.iter_mut() {
+                if let crate::power::PowerSourceKind::Reactor { design: rd } = &mut src.kind {
+                    if rd.id == reactor_id {
+                        rd.steady_w *= 1.0 - frac;
+                    }
+                }
+            }
+        }
+        FlawConsequence::EngineLoss => {
+            // Reactor shutdown — zero its output. The power cascade does
+            // the rest (brownout stranding / electric-thrust derating).
+            for src in stage.power_sources.iter_mut() {
+                if let crate::power::PowerSourceKind::Reactor { design: rd } = &mut src.kind {
+                    if rd.id == reactor_id {
+                        rd.steady_w = 0.0;
+                    }
+                }
+            }
+        }
+        FlawConsequence::StageLoss => {
+            stage.engine_count = 0;
+            stage.engine.thrust_n = 0.0;
+            stage.engine.isp_s = 0.0;
+            stage.propellant_mass_kg = 0.0;
         }
     }
 }
@@ -488,6 +547,58 @@ mod tests {
 
         assert_eq!(result.flaws_activated.len(), 1);
         assert_eq!(result.rocket_flaw_discoveries.len(), 1);
+    }
+
+    fn reactor_stage(engine_id: u64, reactor_id: u64) -> Stage {
+        use crate::power::PowerSource;
+        use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
+        let design = ReactorDesign::new(ReactorId(reactor_id), "R".into(), 1.0, EnrichmentLevel::Leu);
+        let mut stage = make_stage(engine_id);
+        stage.power_sources = vec![PowerSource::from_reactor_design(design)];
+        stage
+    }
+
+    #[test]
+    fn test_apply_reactor_consequence() {
+        use crate::power::PowerSourceKind;
+        use crate::reactor::ReactorId;
+        let mut design = RocketDesign {
+            id: RocketDesignId(1),
+            name: "R".into(),
+            stage_groups: vec![vec![reactor_stage(1, 50)]],
+        };
+        let steady_before = match &design.stage_groups[0][0].power_sources[0].kind {
+            PowerSourceKind::Reactor { design } => design.steady_w,
+            _ => panic!("expected reactor"),
+        };
+        assert!(steady_before > 0.0);
+
+        // PerformanceDegradation scales the output.
+        apply_reactor_consequence_to_stage(
+            &mut design, &FlawConsequence::PerformanceDegradation(0.25), 0, 0, ReactorId(50),
+        );
+        let steady_after = match &design.stage_groups[0][0].power_sources[0].kind {
+            PowerSourceKind::Reactor { design } => design.steady_w,
+            _ => unreachable!(),
+        };
+        assert!((steady_after - steady_before * 0.75).abs() < 1.0);
+
+        // EngineLoss (shutdown) zeroes the output.
+        apply_reactor_consequence_to_stage(
+            &mut design, &FlawConsequence::EngineLoss, 0, 0, ReactorId(50),
+        );
+        let steady_dead = match &design.stage_groups[0][0].power_sources[0].kind {
+            PowerSourceKind::Reactor { design } => design.steady_w,
+            _ => unreachable!(),
+        };
+        assert_eq!(steady_dead, 0.0);
+
+        // StageLoss zeroes the whole stage.
+        apply_reactor_consequence_to_stage(
+            &mut design, &FlawConsequence::StageLoss, 0, 0, ReactorId(50),
+        );
+        assert_eq!(design.stage_groups[0][0].engine_count, 0);
+        assert_eq!(design.stage_groups[0][0].propellant_mass_kg, 0.0);
     }
 
     #[test]

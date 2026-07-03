@@ -125,6 +125,12 @@ pub struct Flight {
     /// Stage groups that have already had flaws rolled (to avoid rolling per-leg).
     #[serde(default)]
     pub flaw_rolled_groups: std::collections::HashSet<usize>,
+    /// Whether this flight's reactors have had their one-shot `PerFlight`
+    /// flaws rolled yet. Reactors run from flight start, so their
+    /// per-flight flaws roll once on the first in-transit tick rather
+    /// than when a stage's engine happens to fire.
+    #[serde(default)]
+    pub reactor_flaws_rolled: bool,
 }
 
 /// Sub-phase of the current leg, used for status display.
@@ -505,6 +511,7 @@ mod tests {
             persist: false,
             launch_partial: false,
             flaw_rolled_groups: std::collections::HashSet::new(),
+            reactor_flaws_rolled: false,
         };
         // On leg 0 with 1 day remaining + leg 1 has 0+1=1 day
         assert_eq!(flight.eta_days(), 2);
@@ -591,6 +598,7 @@ mod tests {
             persist: false,
             launch_partial: false,
             flaw_rolled_groups: std::collections::HashSet::new(),
+            reactor_flaws_rolled: false,
         }
     }
 

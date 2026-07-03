@@ -8,8 +8,36 @@ away, tech deficiencies rolled and fixed — but those flaws carry a
 consequence for *display only*. This phase makes them actually bite in
 the flight sim, building the first power-source flight-failure path.
 
-> Status: **stub** — flesh out when Phase 3 lands. Captured here (per
-> USER) so it's a real planned phase, not a loose TODO.
+> Status: **implemented (pending commit).** 377 tests green, stable
+> across 12 full-suite runs. Reactor flaws now roll at ignition
+> (PerFlight) and daily in transit (PerDay), degrade/shut down the
+> flying reactor, cascade through the existing power model (brownout
+> stranding + electric-thrust derating), and are discovered on the
+> owning reactor project.
+
+## Resolved decisions
+
+- **When flaws roll (USER):** *burst + endurance mix.* Reactor flaws are
+  generated as a mix — ~30% `PerDay` (endurance, roll daily in transit),
+  the rest `PerFlight` (one-shot). **A reactor runs from flight start**,
+  so its `PerFlight` flaws roll **once, on the flight's first in-transit
+  tick** — not when a stage's engine fires (that was the initial
+  implementation and produced a confusing delay between launch and
+  activation). All reactor rolling lives in the flight loop; the launch
+  sim doesn't roll reactors. Tracked per-flight by `reactor_flaws_rolled`.
+- **Shutdown mapping (USER):** *zero power output.* `EngineLoss` sets the
+  reactor's `steady_w` to 0. `PerformanceDegradation(f)` scales
+  `steady_w` by `1-f`. `StageLoss` zeroes the whole stage.
+- **The cascade is already wired.** Dropping a reactor's `steady_w`
+  flows through the existing power model automatically:
+  `run_daily_power_tick` strands the flight on brownout (housekeeping
+  unmet), and `group_effective_thrust_n` derates any electric engine
+  drawing that power. No new cascade code needed.
+- **Coverage.** Deployed spacecraft become `Flight`s in the same
+  `active_flights` loop, so the daily-tick + burned-group roll sites
+  cover both rocket launches and ion cruisers.
+- **Discovery writeback** keyed by `ReactorId` (installed reactor
+  snapshot's `design.id` → owning `ReactorProject`).
 
 ---
 

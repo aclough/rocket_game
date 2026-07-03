@@ -165,14 +165,20 @@ fn roll_flaw_core(rng: &mut StdRng) -> (FlawConsequence, f64, f64) {
     (consequence, activation_chance, discovery_probability)
 }
 
+/// Fraction of reactor flaws that are `PerDay` endurance flaws (the rest
+/// are `PerFlight`). Reactors run continuously in flight, so a share of
+/// their failure modes accumulate risk over a long mission rather than
+/// biting once at ignition. Matches the rocket-flaw endurance share.
+const REACTOR_ENDURANCE_FRACTION: f64 = 0.30;
+
 /// Generate flaws for a newly completed reactor design.
 ///
 /// Mirrors `generate_flaws` (count ~ gaussian around effective
 /// complexity) but uses reactor-flavored descriptions and a
 /// reactor-appropriate consequence reading (performance degradation =
-/// power loss, engine loss = reactor shutdown). All `PerFlight` for v1 —
-/// reactor endurance (`PerDay`) flaws are deferred to Phase 3b along
-/// with the flight-wiring itself.
+/// power loss, engine loss = reactor shutdown). ~30% are `PerDay`
+/// endurance flaws (roll daily in transit); the rest are `PerFlight`
+/// (roll when the reactor's stage group fires).
 pub fn generate_reactor_flaws(
     effective_complexity: u32,
     rng: &mut StdRng,
@@ -186,15 +192,24 @@ pub fn generate_reactor_flaws(
     (0..count).map(|_| {
         let id = FlawId(*next_flaw_id);
         *next_flaw_id += 1;
-        generate_single_reactor_flaw(id, rng)
+        let trigger = if rng.gen::<f64>() < REACTOR_ENDURANCE_FRACTION {
+            FlawTrigger::PerDay
+        } else {
+            FlawTrigger::PerFlight
+        };
+        generate_single_reactor_flaw(id, trigger, rng)
     }).collect()
 }
 
 /// Build one reactor flaw. Reuses the shared probability core with a
-/// reactor-specific description.
-pub fn generate_single_reactor_flaw(id: FlawId, rng: &mut StdRng) -> Flaw {
+/// reactor-specific description; `PerDay` flaws get endurance-flavored
+/// text (gradual wear) and `PerFlight` ones get event-flavored text.
+pub fn generate_single_reactor_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng) -> Flaw {
     let (consequence, activation_chance, discovery_probability) = roll_flaw_core(rng);
-    let description = generate_reactor_flaw_description(&consequence, rng);
+    let description = match trigger {
+        FlawTrigger::PerDay => generate_reactor_endurance_flaw_description(&consequence, rng),
+        FlawTrigger::PerFlight => generate_reactor_flaw_description(&consequence, rng),
+    };
     Flaw {
         id,
         description,
@@ -202,7 +217,7 @@ pub fn generate_single_reactor_flaw(id: FlawId, rng: &mut StdRng) -> Flaw {
         activation_chance,
         discovery_probability,
         discovered: false,
-        trigger: FlawTrigger::PerFlight,
+        trigger,
     }
 }
 
@@ -233,6 +248,42 @@ fn generate_reactor_flaw_description(consequence: &FlawConsequence, rng: &mut St
             "Coolant flash-boil breaches the stage",
             "Thermal runaway destroys the stage",
             "Reactor debris severs stage structure",
+        ][..],
+    };
+
+    let idx = rng.gen_range(0..descriptions.len());
+    descriptions[idx].to_string()
+}
+
+/// Endurance (`PerDay`) reactor flaw text — gradual, cumulative failure
+/// modes that develop over a long mission rather than at ignition.
+fn generate_reactor_endurance_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
+    let descriptions = match consequence {
+        // Gradual power loss over the mission.
+        FlawConsequence::PerformanceDegradation(_) => &[
+            "Radiator coating erosion degrades heat rejection",
+            "Fuel burnup lowers reactivity over time",
+            "Neutron embrittlement of core structure",
+            "Coolant loop fouling accumulates",
+            "Thermoelectric junction degradation",
+            "Control drum bearing wear derates output",
+        ][..],
+        // Reactor trips offline after prolonged operation.
+        FlawConsequence::EngineLoss => &[
+            "Fuel cladding creep-ruptures after prolonged heat",
+            "Coolant pump bearing wears out and seizes",
+            "Cumulative xenon poisoning stalls the core",
+            "Control-drum actuator fails from thermal cycling",
+            "Primary loop develops a slow coolant leak",
+            "Reactor trips offline on degraded shielding sensors",
+        ][..],
+        FlawConsequence::StageLoss => &[
+            "Coolant embrittlement leads to pressure-vessel failure",
+            "Long-term radiation damage collapses the structure",
+            "Cumulative thermal fatigue cracks the reactor mount",
+            "Shielding degradation triggers a runaway excursion",
+            "Radiator manifold fatigue ruptures the coolant loop",
+            "Structural creep severs the stage under load",
         ][..],
     };
 
@@ -648,14 +699,27 @@ mod tests {
     }
 
     #[test]
-    fn test_reactor_flaws_all_per_flight() {
-        let mut rng = test_rng();
-        let mut next_id = 0u64;
-        let flaws = generate_reactor_flaws(10, &mut rng, &mut next_id);
-        for flaw in &flaws {
-            assert_eq!(flaw.trigger, FlawTrigger::PerFlight,
-                "Reactor flaws should all be PerFlight in v1");
+    fn test_reactor_flaws_have_endurance_mix() {
+        // Reactors run continuously, so ~30% of their flaws are PerDay
+        // endurance flaws and the rest PerFlight. Aggregate over seeds so
+        // the statistical split is reliable.
+        let mut per_day = 0usize;
+        let mut per_flight = 0usize;
+        for seed in 0..200 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut next_id = 0u64;
+            for flaw in generate_reactor_flaws(10, &mut rng, &mut next_id) {
+                match flaw.trigger {
+                    FlawTrigger::PerDay => per_day += 1,
+                    FlawTrigger::PerFlight => per_flight += 1,
+                }
+            }
         }
+        assert!(per_day > 0, "reactors should have some PerDay endurance flaws");
+        assert!(per_flight > 0, "reactors should have some PerFlight flaws too");
+        // Roughly 30% endurance — allow a wide band for randomness.
+        let frac = per_day as f64 / (per_day + per_flight) as f64;
+        assert!(frac > 0.15 && frac < 0.45, "endurance fraction {} should be ~0.30", frac);
     }
 
     #[test]
