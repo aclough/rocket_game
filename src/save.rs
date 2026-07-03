@@ -78,9 +78,14 @@ mod tests {
     use std::fs;
 
     fn temp_path() -> std::path::PathBuf {
+        // Unique per call so save tests running in parallel never share a
+        // file (they'd otherwise read each other's data intermittently).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join("rocket_tycoon_test");
         fs::create_dir_all(&dir).unwrap();
-        dir.join(format!("test_save_{}.json", std::process::id()))
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        dir.join(format!("test_save_{}_{}.json", std::process::id(), n))
     }
 
     #[test]
