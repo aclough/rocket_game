@@ -1159,6 +1159,9 @@ impl GameState {
         let mut newly_designed_engines: Vec<usize> = Vec::new();
         // (engine_project_index, deficiency_id)
         let mut tech_def_attempts: Vec<(usize, crate::technology::TechDeficiencyId)> = Vec::new();
+        // Reactor equivalents (mirror the engine tech-deficiency flow).
+        let mut newly_designed_reactors: Vec<usize> = Vec::new();
+        let mut reactor_tech_def_attempts: Vec<(usize, crate::technology::TechDeficiencyId)> = Vec::new();
         {
             let rng = &mut self.seed.contingent_rng;
             let next_flaw_id = &mut self.player_company.next_flaw_id;
@@ -1212,19 +1215,28 @@ impl GameState {
             // Reactor projects accrue daily work just like engine projects.
             // Phase 1 only fires DesignComplete; testing/revision events
             // arrive in Phase 3.
-            for project in &mut self.player_company.reactor_projects {
+            for (pi, project) in self.player_company.reactor_projects.iter_mut().enumerate() {
                 let reactor_name = project.design.name.clone();
                 let work_events = project.apply_daily_work(rng, next_flaw_id);
                 for we in work_events {
                     let evt = match we {
-                        crate::reactor_project::ReactorWorkEvent::DesignComplete { flaw_count } =>
-                            GameEvent::ReactorDesignComplete { reactor_name: reactor_name.clone(), flaw_count },
+                        crate::reactor_project::ReactorWorkEvent::DesignComplete { flaw_count } => {
+                            newly_designed_reactors.push(pi);
+                            GameEvent::ReactorDesignComplete { reactor_name: reactor_name.clone(), flaw_count }
+                        }
                         crate::reactor_project::ReactorWorkEvent::TestingCycleComplete => continue,
                         crate::reactor_project::ReactorWorkEvent::FlawDiscovered { flaw_description } =>
                             GameEvent::ReactorFlawDiscovered { reactor_name: reactor_name.clone(), flaw_description },
+                        crate::reactor_project::ReactorWorkEvent::ImprovementDiscovered { description } =>
+                            GameEvent::ReactorImprovementDiscovered { reactor_name: reactor_name.clone(), description },
+                        crate::reactor_project::ReactorWorkEvent::ImprovementActualized { description } =>
+                            GameEvent::ReactorImprovementActualized { reactor_name: reactor_name.clone(), description },
                         crate::reactor_project::ReactorWorkEvent::RevisionComplete =>
                             GameEvent::ReactorRevisionComplete { reactor_name: reactor_name.clone() },
-                        crate::reactor_project::ReactorWorkEvent::TechDeficiencyAttempted { .. } => continue,
+                        crate::reactor_project::ReactorWorkEvent::TechDeficiencyAttempted { deficiency_id } => {
+                            reactor_tech_def_attempts.push((pi, deficiency_id));
+                            continue;
+                        }
                     };
                     self.event_log.push(self.date, evt.clone());
                     events.push(evt);
@@ -1279,6 +1291,9 @@ impl GameState {
                             crate::technology::TechDeficiencyKind::ComplexityPenalty(n) => {
                                 project.complexity = project.complexity.saturating_sub(*n);
                             }
+                            // Engine techs never generate PowerPenalty
+                            // (that's reactor-domain, handled separately).
+                            crate::technology::TechDeficiencyKind::PowerPenalty(_) => {}
                         }
                         let evt = GameEvent::RevisionComplete { engine_name: engine_name.clone() };
                         self.event_log.push(self.date, evt.clone());
@@ -1324,6 +1339,9 @@ impl GameState {
                             crate::technology::TechDeficiencyKind::ComplexityPenalty(n) => {
                                 project.complexity += n;
                             }
+                            // Engine techs never generate PowerPenalty
+                            // (that's reactor-domain, handled separately).
+                            crate::technology::TechDeficiencyKind::PowerPenalty(_) => {}
                         }
                     }
                     project.tech_deficiency_ids = deficiency_ids;
@@ -1336,6 +1354,107 @@ impl GameState {
                         let evt = GameEvent::TechDeficienciesFound {
                             engine_name: engine_name.clone(),
                             tech_name: tech_name.clone(),
+                            deficiencies: desc.join(", "),
+                        };
+                        self.event_log.push(self.date, evt.clone());
+                        events.push(evt);
+                    }
+                }
+            }
+        }
+
+        // Process reactor tech-deficiency revision attempts (mirrors the
+        // engine flow above, applied to reactor stats).
+        for (pi, def_id) in reactor_tech_def_attempts {
+            let project = &mut self.player_company.reactor_projects[pi];
+            let tech_id = match project.technology_id {
+                Some(id) => id,
+                None => continue,
+            };
+            if let Some(tech) = self.technologies.iter_mut().find(|t| t.id == tech_id) {
+                if let Some(def) = tech.deficiencies.iter_mut().find(|d| d.id == def_id) {
+                    let already_solved = def.solved;
+                    let reactor_name = project.design.name.clone();
+                    let def_desc = format!("{}: {}", def.description, def.kind);
+
+                    if crate::technology::attempt_solve(def, already_solved, &mut self.seed.contingent_rng) {
+                        // Success — remove from reactor and restore stats.
+                        project.tech_deficiency_ids.retain(|id| *id != def_id);
+                        match &def.kind {
+                            crate::technology::TechDeficiencyKind::PowerPenalty(frac) => {
+                                project.design.steady_w /= 1.0 - frac;
+                            }
+                            crate::technology::TechDeficiencyKind::MassPenalty(frac) => {
+                                project.design.reactor_mass_kg /= 1.0 + frac;
+                                project.design.mass_kg =
+                                    project.design.reactor_mass_kg + project.design.radiator.mass_kg;
+                            }
+                            crate::technology::TechDeficiencyKind::ComplexityPenalty(n) => {
+                                project.complexity = project.complexity.saturating_sub(*n);
+                            }
+                            // Reactor techs never generate Isp/Thrust penalties.
+                            crate::technology::TechDeficiencyKind::IspPenalty(_)
+                            | crate::technology::TechDeficiencyKind::ThrustPenalty(_) => {}
+                        }
+                        let evt = GameEvent::ReactorRevisionComplete { reactor_name };
+                        self.event_log.push(self.date, evt.clone());
+                        events.push(evt);
+                    } else {
+                        // Failed — report attempt count.
+                        let hint = crate::technology::failure_hint(def.total_attempts);
+                        let msg = if let Some(h) = hint {
+                            format!("Failed to resolve {}: {}. {}", reactor_name, def_desc, h)
+                        } else {
+                            format!("Failed to resolve {} deficiency: {}", reactor_name, def_desc)
+                        };
+                        let evt = GameEvent::ReactorFlawDiscovered {
+                            reactor_name,
+                            flaw_description: msg,
+                        };
+                        self.event_log.push(self.date, evt.clone());
+                        events.push(evt);
+                    }
+                }
+            }
+        }
+
+        // Apply tech deficiencies to newly completed reactor designs
+        // (Option 2 gating — deficiencies roll on every reactor project,
+        // no create-time tech gate).
+        for pi in newly_designed_reactors {
+            let project = &mut self.player_company.reactor_projects[pi];
+            if let Some(tech_id) = project.technology_id {
+                if let Some(tech) = self.technologies.iter().find(|t| t.id == tech_id) {
+                    let deficiency_ids: Vec<crate::technology::TechDeficiencyId> =
+                        tech.deficiencies.iter().map(|d| d.id).collect();
+                    for def in &tech.deficiencies {
+                        match &def.kind {
+                            crate::technology::TechDeficiencyKind::PowerPenalty(frac) => {
+                                project.design.steady_w *= 1.0 - frac;
+                            }
+                            crate::technology::TechDeficiencyKind::MassPenalty(frac) => {
+                                project.design.reactor_mass_kg *= 1.0 + frac;
+                                project.design.mass_kg =
+                                    project.design.reactor_mass_kg + project.design.radiator.mass_kg;
+                            }
+                            crate::technology::TechDeficiencyKind::ComplexityPenalty(n) => {
+                                project.complexity += n;
+                            }
+                            // Reactor techs never generate Isp/Thrust penalties.
+                            crate::technology::TechDeficiencyKind::IspPenalty(_)
+                            | crate::technology::TechDeficiencyKind::ThrustPenalty(_) => {}
+                        }
+                    }
+                    project.tech_deficiency_ids = deficiency_ids;
+                    let reactor_name = project.design.name.clone();
+                    let tech_name = tech.name.clone();
+                    let desc: Vec<String> = tech.deficiencies.iter()
+                        .map(|d| format!("{}: {}", d.description, d.kind))
+                        .collect();
+                    if !desc.is_empty() {
+                        let evt = GameEvent::ReactorTechDeficienciesFound {
+                            reactor_name,
+                            tech_name,
                             deficiencies: desc.join(", "),
                         };
                         self.event_log.push(self.date, evt.clone());
@@ -4186,5 +4305,145 @@ mod tests {
         assert!(matches!(p.status, ReactorDesignStatus::Testing { .. }));
         // NRE accrued because teams_assigned > 0 throughout.
         assert!(p.nre_cost > 0.0);
+    }
+
+    /// Phase 3: on design completion the fission-reactor tech's
+    /// deficiencies roll onto the project (Option-2 gating), applying
+    /// power/mass/complexity penalties, and a subsequent revision feeds
+    /// solve attempts back to the technology.
+    #[test]
+    fn test_reactor_tech_deficiencies_apply_and_revise() {
+        use crate::reactor::{EnrichmentLevel, ReactorId, REF_STEADY_W};
+        use crate::reactor_project::{ReactorDesignStatus, ReactorProject, ReactorProjectId};
+        use crate::technology::TECH_FISSION_REACTOR;
+
+        let mut gs = GameState::new("Reactor Test".into(), 100_000_000.0, 7);
+        let mut project = ReactorProject::new(
+            ReactorProjectId(1), ReactorId(1), "Mk1 Reactor".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        project.teams_assigned = 4;
+        gs.player_company.reactor_projects.push(project);
+
+        let mut saw_deficiencies_evt = false;
+        for _ in 0..5_000 {
+            let events = gs.advance_day();
+            if events.iter().any(|e| matches!(e, GameEvent::ReactorTechDeficienciesFound { .. })) {
+                saw_deficiencies_evt = true;
+            }
+            if matches!(
+                gs.player_company.reactor_projects[0].status,
+                ReactorDesignStatus::Testing { .. }
+            ) {
+                break;
+            }
+        }
+
+        let tech = gs.technologies.iter().find(|t| t.id == TECH_FISSION_REACTOR).unwrap();
+        let def_count = tech.deficiencies.len();
+        // Difficulty-2 tech always has at least two deficiencies.
+        assert!(def_count >= 2);
+        assert!(saw_deficiencies_evt, "should log a ReactorTechDeficienciesFound event");
+
+        let p = &gs.player_company.reactor_projects[0];
+        assert_eq!(p.tech_deficiency_ids.len(), def_count,
+            "all reactor-tech deficiencies should attach to the design");
+        // Penalties only ever reduce power / raise mass / raise complexity.
+        assert!(p.design.steady_w <= REF_STEADY_W + 1.0);
+        assert!(p.design.mass_kg >= 5_000.0 - 1.0);
+        assert!(p.complexity >= crate::reactor_project::REACTOR_BASE_COMPLEXITY);
+        // Mass invariant holds after penalty application.
+        let expected = p.design.reactor_mass_kg + p.design.radiator.mass_kg;
+        assert!((p.design.mass_kg - expected).abs() < 1e-6);
+
+        // Kick off a revision and confirm solve attempts reach the tech.
+        let attempts_before: u32 = gs.technologies.iter()
+            .find(|t| t.id == TECH_FISSION_REACTOR).unwrap()
+            .deficiencies.iter().map(|d| d.total_attempts).sum();
+        assert!(gs.player_company.reactor_projects[0].start_revision());
+        for _ in 0..400 {
+            gs.advance_day();
+            if matches!(
+                gs.player_company.reactor_projects[0].status,
+                ReactorDesignStatus::Testing { .. }
+            ) {
+                break;
+            }
+        }
+        let attempts_after: u32 = gs.technologies.iter()
+            .find(|t| t.id == TECH_FISSION_REACTOR).unwrap()
+            .deficiencies.iter().map(|d| d.total_attempts).sum();
+        assert!(attempts_after > attempts_before,
+            "revision should feed deficiency solve attempts to the tech");
+    }
+
+    /// Phase 3: the real daily loop surfaces reactor flaw discovery and
+    /// flaw-removal revision events (not just the deficiency path).
+    #[test]
+    fn test_reactor_flaw_discovery_and_revision_through_daily_loop() {
+        use crate::reactor::{EnrichmentLevel, ReactorId};
+        use crate::reactor_project::{ReactorDesignStatus, ReactorProject, ReactorProjectId};
+
+        let mut gs = GameState::new("Reactor Test".into(), 100_000_000.0, 3);
+        let mut project = ReactorProject::new(
+            ReactorProjectId(1), ReactorId(1), "Mk1 Reactor".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        project.teams_assigned = 4;
+        gs.player_company.reactor_projects.push(project);
+
+        // Advance to Testing.
+        for _ in 0..5_000 {
+            gs.advance_day();
+            if matches!(
+                gs.player_company.reactor_projects[0].status,
+                ReactorDesignStatus::Testing { .. }
+            ) {
+                break;
+            }
+        }
+        // Force all flaws visible so testing surfaces them deterministically.
+        for f in &mut gs.player_company.reactor_projects[0].flaws {
+            f.discovery_probability = 0.99;
+        }
+        let total_flaws = gs.player_company.reactor_projects[0].flaws.len();
+
+        let mut saw_flaw_discovered = false;
+        for _ in 0..400 {
+            let events = gs.advance_day();
+            if events.iter().any(|e| matches!(e, GameEvent::ReactorFlawDiscovered { .. })) {
+                saw_flaw_discovered = true;
+            }
+            if gs.player_company.reactor_projects[0].discovered_flaw_count() == total_flaws {
+                break;
+            }
+        }
+        // (If the design happened to roll zero flaws, there's nothing to
+        // discover — only assert when flaws exist.)
+        if total_flaws > 0 {
+            assert!(saw_flaw_discovered, "daily loop should log flaw discovery");
+        }
+
+        // Revise: the loop should remove flaws and log revision completion.
+        let discovered_before = gs.player_company.reactor_projects[0].discovered_flaw_count();
+        if discovered_before > 0 {
+            assert!(gs.player_company.reactor_projects[0].start_revision());
+            let mut saw_revision = false;
+            for _ in 0..600 {
+                let events = gs.advance_day();
+                if events.iter().any(|e| matches!(e, GameEvent::ReactorRevisionComplete { .. })) {
+                    saw_revision = true;
+                }
+                if matches!(
+                    gs.player_company.reactor_projects[0].status,
+                    ReactorDesignStatus::Testing { .. }
+                ) {
+                    break;
+                }
+            }
+            assert!(saw_revision, "daily loop should log revision completion");
+            assert_eq!(
+                gs.player_company.reactor_projects[0].discovered_flaw_count(), 0,
+                "revision should clear discovered flaws",
+            );
+        }
     }
 }

@@ -34,6 +34,12 @@ pub enum GameEvent {
     ReactorDesignComplete { reactor_name: String, flaw_count: u32 },
     ReactorFlawDiscovered { reactor_name: String, flaw_description: String },
     ReactorRevisionComplete { reactor_name: String },
+    /// Reactor improvement discovered during testing.
+    ReactorImprovementDiscovered { reactor_name: String, description: String },
+    /// Reactor improvement actualized via revision.
+    ReactorImprovementActualized { reactor_name: String, description: String },
+    /// Tech deficiencies found on a newly designed reactor.
+    ReactorTechDeficienciesFound { reactor_name: String, tech_name: String, deficiencies: String },
     // Phase 3: Manufacturing events
     ManufacturingTeamHired { name: String },
     EngineBuilt { engine_name: String },
@@ -121,6 +127,12 @@ impl fmt::Display for GameEvent {
                 write!(f, "Reactor flaw in {}: {}", reactor_name, flaw_description),
             GameEvent::ReactorRevisionComplete { reactor_name } =>
                 write!(f, "Reactor revision complete: {}", reactor_name),
+            GameEvent::ReactorImprovementDiscovered { reactor_name, description } =>
+                write!(f, "Reactor improvement found for {}: {}", reactor_name, description),
+            GameEvent::ReactorImprovementActualized { reactor_name, description } =>
+                write!(f, "Reactor improvement applied to {}: {}", reactor_name, description),
+            GameEvent::ReactorTechDeficienciesFound { reactor_name, tech_name, deficiencies } =>
+                write!(f, "{} deficiencies on {}: {}", tech_name, reactor_name, deficiencies),
             GameEvent::ManufacturingTeamHired { name } =>
                 write!(f, "Hired manufacturing team: {}", name),
             GameEvent::EngineBuilt { engine_name } =>
@@ -215,6 +227,9 @@ impl GameEvent {
             | GameEvent::ReactorDesignComplete { .. }
             | GameEvent::ReactorFlawDiscovered { .. }
             | GameEvent::ReactorRevisionComplete { .. }
+            | GameEvent::ReactorImprovementDiscovered { .. }
+            | GameEvent::ReactorImprovementActualized { .. }
+            | GameEvent::ReactorTechDeficienciesFound { .. }
             | GameEvent::ManufacturingTeamHired { .. }
             | GameEvent::EngineBuilt { .. }
             | GameEvent::StageBuilt { .. }

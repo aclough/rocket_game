@@ -509,6 +509,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
 }
 
 fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
+    use crate::flaw::{FLAW_REVISION_WORK, TESTING_CYCLE_WORK};
     use crate::reactor_project::{ReactorDesignStatus, ReactorProject};
 
     let company = &app.game.player_company;
@@ -536,9 +537,18 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
         let status_str = match &project.status {
             ReactorDesignStatus::Proposed { .. } => unreachable!("filtered above"),
             ReactorDesignStatus::InDesign { .. } => "In Design".to_string(),
-            ReactorDesignStatus::Testing { .. } => "Testing".to_string(),
-            ReactorDesignStatus::Revising { remaining_flaw_indices, .. } =>
-                format!("Revising {} flaw(s)", remaining_flaw_indices.len()),
+            ReactorDesignStatus::Testing { .. } =>
+                format!("Testing  {}", project.testing_level()),
+            ReactorDesignStatus::Revising {
+                remaining_flaw_indices,
+                remaining_improvement_indices,
+                remaining_tech_deficiency_ids,
+                ..
+            } =>
+                format!("Revising {} flaw(s), {} improvement(s), {} deficiency(ies)",
+                    remaining_flaw_indices.len(),
+                    remaining_improvement_indices.len(),
+                    remaining_tech_deficiency_ids.len()),
         };
 
         let line_text = format!(
@@ -547,14 +557,35 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
         );
         let text_width = line_text.len() as u16;
 
+        // Progress gauge, matching the engine pane: teal for design work,
+        // green for the current testing cycle, amber for revision work.
         let line_idx = lines.len();
-        if let ReactorDesignStatus::InDesign { work_completed, work_required } = &project.status {
-            let ratio = work_completed / work_required;
-            gauges.push(GaugeInfo {
-                line_index: line_idx, ratio,
-                label: format!("{:.0}/{:.0}", work_completed, work_required),
-                fill_color: Color::Rgb(0, 140, 140), text_width, right_aligned: false,
-            });
+        match &project.status {
+            ReactorDesignStatus::Proposed { .. } => unreachable!("filtered above"),
+            ReactorDesignStatus::InDesign { work_completed, work_required } => {
+                let ratio = work_completed / work_required;
+                gauges.push(GaugeInfo {
+                    line_index: line_idx, ratio,
+                    label: format!("{:.0}/{:.0}", work_completed, work_required),
+                    fill_color: Color::Rgb(0, 140, 140), text_width, right_aligned: false,
+                });
+            }
+            ReactorDesignStatus::Testing { work_completed } => {
+                let ratio = work_completed / TESTING_CYCLE_WORK;
+                gauges.push(GaugeInfo {
+                    line_index: line_idx, ratio,
+                    label: format!("{:.0}/{:.0}", work_completed, TESTING_CYCLE_WORK),
+                    fill_color: Color::Green, text_width, right_aligned: false,
+                });
+            }
+            ReactorDesignStatus::Revising { work_completed, .. } => {
+                let ratio = work_completed / FLAW_REVISION_WORK;
+                gauges.push(GaugeInfo {
+                    line_index: line_idx, ratio,
+                    label: format!("{:.0}/{:.0}", work_completed, FLAW_REVISION_WORK),
+                    fill_color: Color::Rgb(180, 130, 0), text_width, right_aligned: false,
+                });
+            }
         }
 
         let style = if selected {
@@ -584,6 +615,80 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                 "      Teams: {}  NRE: {}",
                 project.teams_assigned, format_money(project.nre_cost),
             )));
+
+            // Testing progress (once past design).
+            if matches!(project.status,
+                ReactorDesignStatus::Testing { .. } | ReactorDesignStatus::Revising { .. })
+            {
+                lines.push(Line::from(format!("      Testing: {}", project.testing_level())));
+            }
+
+            // Discovered flaws — reactor-flavored consequence reading.
+            let discovered = project.discovered_flaw_count();
+            if discovered > 0 {
+                lines.push(Line::from(format!("      Flaws: {} discovered", discovered)));
+                for flaw in &project.flaws {
+                    if flaw.discovered {
+                        let consequence_str = match &flaw.consequence {
+                            FlawConsequence::PerformanceDegradation(frac) =>
+                                format!("{:.0}% power loss", frac * 100.0),
+                            FlawConsequence::EngineLoss => "reactor shutdown".to_string(),
+                            FlawConsequence::StageLoss => "stage loss".to_string(),
+                        };
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "        ⚠ {}: {} ({})",
+                                flaw.description, consequence_str, format_flaw_rate(flaw),
+                            ),
+                            Style::default().fg(Color::Red),
+                        )));
+                    }
+                }
+            }
+
+            // Improvements (actualized ✓ / pending ★).
+            let pending: Vec<_> = project.improvements.iter().filter(|i| !i.actualized).collect();
+            let actualized: Vec<_> = project.improvements.iter().filter(|i| i.actualized).collect();
+            for imp in &actualized {
+                lines.push(Line::from(Span::styled(
+                    format!("        ✓ {}: {}", imp.description, imp.kind),
+                    Style::default().fg(Color::Green),
+                )));
+            }
+            for imp in &pending {
+                lines.push(Line::from(Span::styled(
+                    format!("        ★ {}: {} (pending revision)", imp.description, imp.kind),
+                    Style::default().fg(Color::Cyan),
+                )));
+            }
+
+            // Tech deficiencies (fission-reactor tech).
+            if !project.tech_deficiency_ids.is_empty() {
+                if let Some(tech_id) = project.technology_id {
+                    if let Some(tech) = app.game.technologies.iter().find(|t| t.id == tech_id) {
+                        lines.push(Line::from(format!(
+                            "      Tech deficiencies ({}):", tech.name,
+                        )));
+                        for def_id in &project.tech_deficiency_ids {
+                            if let Some(def) = tech.deficiencies.iter().find(|d| d.id == *def_id) {
+                                let status = if def.solved {
+                                    "(solved elsewhere — easy fix)".to_string()
+                                } else if def.total_attempts > 0 {
+                                    format!("({} failed attempt{})",
+                                        def.total_attempts,
+                                        if def.total_attempts == 1 { "" } else { "s" })
+                                } else {
+                                    String::new()
+                                };
+                                lines.push(Line::from(Span::styled(
+                                    format!("        ◆ {}: {} {}", def.description, def.kind, status),
+                                    Style::default().fg(Color::Magenta),
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -591,7 +696,7 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
     let controls: Vec<&str> = if visible.is_empty() {
         vec!["[N] New design"]
     } else {
-        vec!["[N] New design", "[+] Add team", "[-] Remove team", "[E] Edit"]
+        vec!["[N] New design", "[+] Add team", "[-] Remove team", "[R] Revise", "[E] Edit"]
     };
     lines.push(Line::from(Span::styled(
         format!("  {}", controls.join("  ")),

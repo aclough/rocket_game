@@ -140,12 +140,16 @@ pub fn generate_rocket_flaws(
     }).collect()
 }
 
-pub fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cycle: Option<crate::engine::EngineCycle>) -> Flaw {
-    // Pick consequence type: weighted random
-    // ~50% performance degradation, ~35% engine loss, ~15% stage loss
+/// Roll the domain-agnostic core of a flaw: its consequence, activation
+/// chance, and discovery probability. Shared by engine, rocket, and
+/// reactor flaw generation so the probability model stays in one place.
+///
+/// Consequence weighting: ~50% performance degradation, ~35% engine/part
+/// loss, ~15% stage loss. Activation chance is random^2 (skewed low);
+/// discovery probability = uniform(0,1) * sqrt(activation_chance).
+fn roll_flaw_core(rng: &mut StdRng) -> (FlawConsequence, f64, f64) {
     let roll: f64 = rng.gen();
     let consequence = if roll < 0.50 {
-        // Performance degradation: 3-15% loss
         let degradation = rng.gen_range(0.03..0.15);
         FlawConsequence::PerformanceDegradation(degradation)
     } else if roll < 0.85 {
@@ -154,12 +158,90 @@ pub fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, 
         FlawConsequence::StageLoss
     };
 
-    // Activation chance: random^2, skewed toward low values (mean ~0.33)
     let activation_chance: f64 = rng.gen::<f64>().powi(2);
-
-    // Discovery probability = uniform(0,1) * sqrt(activation_chance)
     let uniform_roll: f64 = rng.gen();
     let discovery_probability = uniform_roll * activation_chance.sqrt();
+
+    (consequence, activation_chance, discovery_probability)
+}
+
+/// Generate flaws for a newly completed reactor design.
+///
+/// Mirrors `generate_flaws` (count ~ gaussian around effective
+/// complexity) but uses reactor-flavored descriptions and a
+/// reactor-appropriate consequence reading (performance degradation =
+/// power loss, engine loss = reactor shutdown). All `PerFlight` for v1 —
+/// reactor endurance (`PerDay`) flaws are deferred to Phase 3b along
+/// with the flight-wiring itself.
+pub fn generate_reactor_flaws(
+    effective_complexity: u32,
+    rng: &mut StdRng,
+    next_flaw_id: &mut u64,
+) -> Vec<Flaw> {
+    let mean = effective_complexity as f64;
+    let stddev = 1.5;
+    let count_f = gaussian_sample(mean, stddev, rng);
+    let count = count_f.round().max(0.0) as u32;
+
+    (0..count).map(|_| {
+        let id = FlawId(*next_flaw_id);
+        *next_flaw_id += 1;
+        generate_single_reactor_flaw(id, rng)
+    }).collect()
+}
+
+/// Build one reactor flaw. Reuses the shared probability core with a
+/// reactor-specific description.
+pub fn generate_single_reactor_flaw(id: FlawId, rng: &mut StdRng) -> Flaw {
+    let (consequence, activation_chance, discovery_probability) = roll_flaw_core(rng);
+    let description = generate_reactor_flaw_description(&consequence, rng);
+    Flaw {
+        id,
+        description,
+        consequence,
+        activation_chance,
+        discovery_probability,
+        discovered: false,
+        trigger: FlawTrigger::PerFlight,
+    }
+}
+
+fn generate_reactor_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
+    let descriptions = match consequence {
+        // Reads as a power-output loss on a reactor.
+        FlawConsequence::PerformanceDegradation(_) => &[
+            "Coolant loop flow restriction",
+            "Radiator fin degradation reduces heat rejection",
+            "Control drum drift derates output",
+            "Fuel element swelling reduces thermal transfer",
+            "Thermoelectric converter efficiency loss",
+            "Partial coolant channel blockage",
+        ][..],
+        // Reads as a reactor shutdown (the "part" is lost, not the stage).
+        FlawConsequence::EngineLoss => &[
+            "Control drum actuator seizure triggers SCRAM",
+            "Coolant pump failure forces reactor shutdown",
+            "Fuel element cladding breach",
+            "Reactor overheats and trips offline",
+            "Neutron poison buildup stalls the core",
+            "Primary coolant loop leak",
+        ][..],
+        FlawConsequence::StageLoss => &[
+            "Reactor pressure vessel rupture",
+            "Uncontrolled criticality excursion",
+            "Radiation shielding structural failure",
+            "Coolant flash-boil breaches the stage",
+            "Thermal runaway destroys the stage",
+            "Reactor debris severs stage structure",
+        ][..],
+    };
+
+    let idx = rng.gen_range(0..descriptions.len());
+    descriptions[idx].to_string()
+}
+
+pub fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cycle: Option<crate::engine::EngineCycle>) -> Flaw {
+    let (consequence, activation_chance, discovery_probability) = roll_flaw_core(rng);
 
     let use_electric = matches!(cycle, Some(crate::engine::EngineCycle::ElectricPropulsion));
     let use_nuclear = matches!(cycle, Some(crate::engine::EngineCycle::NuclearThermal));
@@ -563,6 +645,43 @@ mod tests {
         // With 30% chance and ~10 flaws, expect ~3 PerDay (allow 0-8 for randomness)
         assert!(per_day_count > 0, "Should have some PerDay flaws");
         assert!(per_day_count < flaws.len(), "Should have some PerFlight flaws too");
+    }
+
+    #[test]
+    fn test_reactor_flaws_all_per_flight() {
+        let mut rng = test_rng();
+        let mut next_id = 0u64;
+        let flaws = generate_reactor_flaws(10, &mut rng, &mut next_id);
+        for flaw in &flaws {
+            assert_eq!(flaw.trigger, FlawTrigger::PerFlight,
+                "Reactor flaws should all be PerFlight in v1");
+        }
+    }
+
+    #[test]
+    fn test_reactor_flaws_count_near_complexity() {
+        let mut total = 0u32;
+        let trials = 1000;
+        for seed in 0..trials {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut next_id = 0u64;
+            let flaws = generate_reactor_flaws(8, &mut rng, &mut next_id);
+            total += flaws.len() as u32;
+        }
+        let avg = total as f64 / trials as f64;
+        assert!((avg - 8.0).abs() < 1.0, "Average reactor flaw count {} should be near 8", avg);
+    }
+
+    #[test]
+    fn test_reactor_flaws_ids_sequential_and_undiscovered() {
+        let mut rng = test_rng();
+        let mut next_id = 5u64;
+        let flaws = generate_reactor_flaws(9, &mut rng, &mut next_id);
+        for (i, flaw) in flaws.iter().enumerate() {
+            assert_eq!(flaw.id, FlawId(5 + i as u64));
+            assert!(!flaw.discovered);
+        }
+        assert_eq!(next_id, 5 + flaws.len() as u64);
     }
 
     #[test]

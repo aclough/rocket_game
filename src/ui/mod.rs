@@ -1000,10 +1000,40 @@ impl App {
                     self.status_message = Some("Team removed".into());
                 }
             }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                // Revise all discovered flaws, actualize pending
+                // improvements, and attempt tech-deficiency fixes.
+                // Testing-only (mirrors the engine pane).
+                if let Some(idx) = real_idx {
+                    let project = &mut self.game.player_company.reactor_projects[idx];
+                    if project.start_revision() {
+                        let (fc, ic, dc) = match &project.status {
+                            ReactorDesignStatus::Revising {
+                                remaining_flaw_indices,
+                                remaining_improvement_indices,
+                                remaining_tech_deficiency_ids,
+                                ..
+                            } => (
+                                remaining_flaw_indices.len(),
+                                remaining_improvement_indices.len(),
+                                remaining_tech_deficiency_ids.len(),
+                            ),
+                            _ => (0, 0, 0),
+                        };
+                        self.status_message = Some(format!(
+                            "Revising {} flaw(s), {} improvement(s), {} deficiency(ies)",
+                            fc, ic, dc,
+                        ));
+                    } else {
+                        self.status_message = Some(
+                            "Nothing to revise (needs a Testing reactor with discovered flaws, improvements, or deficiencies)".into());
+                    }
+                }
+            }
             KeyCode::Char('e') | KeyCode::Char('E') => {
                 // Re-open the editor on an InDesign reactor. Testing /
                 // Revising / Proposed don't make sense here:
-                // Testing is read-only; Revising is for Phase 3; the
+                // Testing is read-only; Revising is handled by [R]; the
                 // pane hides Proposed.
                 let idx = match real_idx { Some(i) => i, None => return };
                 let project = &self.game.player_company.reactor_projects[idx];
@@ -3179,5 +3209,76 @@ mod sync_tests {
         assert!(ion_prop < 1.0,
             "ion-engine propellant should be << 1 kg for a 120 s burn, got {} kg (was {} kg)",
             ion_prop, kerolox_prop);
+    }
+}
+
+#[cfg(test)]
+mod reactor_render_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawTrigger};
+    use crate::reactor::{EnrichmentLevel, ReactorId};
+    use crate::reactor_project::{
+        ReactorDesignStatus, ReactorImprovement, ReactorImprovementKind, ReactorProject,
+        ReactorProjectId,
+    };
+
+    /// Headless render smoke test: the Reactors pane draws a project that
+    /// exercises every detail branch (discovered flaw, actualized +
+    /// pending improvement, tech deficiencies) without panicking, and the
+    /// reactor-flavored strings reach the buffer.
+    #[test]
+    fn reactors_pane_renders_full_detail() {
+        let mut game = crate::game_state::GameState::new("Render Test".into(), 100_000_000.0, 7);
+
+        let mut project = ReactorProject::new(
+            ReactorProjectId(1), ReactorId(1), "Mk1 Reactor".into(), 1.0, EnrichmentLevel::Leu,
+        );
+        project.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
+        project.cumulative_testing_work = 120.0;
+        project.flaws.push(Flaw {
+            id: FlawId(1),
+            description: "Coolant loop flow restriction".into(),
+            consequence: FlawConsequence::PerformanceDegradation(0.07),
+            activation_chance: 0.1,
+            discovery_probability: 0.5,
+            discovered: true,
+            trigger: FlawTrigger::PerFlight,
+        });
+        project.improvements.push(ReactorImprovement {
+            description: "Compact reactor core design".into(),
+            kind: ReactorImprovementKind::Mass(0.03),
+            actualized: true,
+        });
+        project.improvements.push(ReactorImprovement {
+            description: "Optimized coolant flow raises output".into(),
+            kind: ReactorImprovementKind::Power(0.02),
+            actualized: false,
+        });
+        // Attach the fission-reactor tech's real deficiency ids so the
+        // deficiency block renders against live technology data.
+        let def_ids: Vec<_> = game.technologies.iter()
+            .find(|t| t.id == crate::technology::TECH_FISSION_REACTOR).unwrap()
+            .deficiencies.iter().map(|d| d.id).collect();
+        project.tech_deficiency_ids = def_ids;
+        game.player_company.reactor_projects.push(project);
+
+        let mut app = App::new(game);
+        // Select the Reactors tab (index 2 in Tab::ALL) and the project.
+        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Reactors).unwrap();
+        app.selected_item = 0;
+
+        let backend = TestBackend::new(120, 50);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw::draw(frame, &app)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(text.contains("Reactors"), "pane title should render");
+        assert!(text.contains("Mk1 Reactor"), "reactor name should render");
+        assert!(text.contains("power loss"), "reactor-flavored flaw consequence should render");
+        assert!(text.contains("Tech deficiencies"), "deficiency block should render");
+        assert!(text.contains("Revise"), "[R] Revise control should render");
     }
 }

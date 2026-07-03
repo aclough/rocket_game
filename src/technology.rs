@@ -11,15 +11,17 @@ pub struct TechnologyId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TechDeficiencyId(pub u64);
 
-/// What a tech deficiency does to an engine.
+/// What a tech deficiency does to a designed part.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TechDeficiencyKind {
-    /// Isp reduced by this fraction (e.g. 0.10 = -10%).
+    /// Isp reduced by this fraction (e.g. 0.10 = -10%). Engine-only.
     IspPenalty(f64),
     /// Mass increased by this fraction (e.g. 0.15 = +15%).
     MassPenalty(f64),
-    /// Thrust reduced by this fraction.
+    /// Thrust reduced by this fraction. Engine-only.
     ThrustPenalty(f64),
+    /// Steady electrical output reduced by this fraction. Reactor-only.
+    PowerPenalty(f64),
     /// Adds to effective complexity (more flaws, harder testing).
     ComplexityPenalty(u32),
 }
@@ -30,9 +32,20 @@ impl std::fmt::Display for TechDeficiencyKind {
             TechDeficiencyKind::IspPenalty(frac) => write!(f, "-{:.0}% Isp", frac * 100.0),
             TechDeficiencyKind::MassPenalty(frac) => write!(f, "+{:.0}% mass", frac * 100.0),
             TechDeficiencyKind::ThrustPenalty(frac) => write!(f, "-{:.0}% thrust", frac * 100.0),
+            TechDeficiencyKind::PowerPenalty(frac) => write!(f, "-{:.0}% power", frac * 100.0),
             TechDeficiencyKind::ComplexityPenalty(n) => write!(f, "+{} complexity", n),
         }
     }
+}
+
+/// Which family of parts a technology's deficiencies apply to. Selects
+/// the pool of deficiency *kinds* generated at game start: engine techs
+/// draw from Isp/Mass/Thrust/Complexity, reactor techs from
+/// Power/Mass/Complexity (Isp/Thrust are meaningless for a power source).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TechDomain {
+    Engine,
+    Reactor,
 }
 
 /// A deficiency inherent to a technology, determined by the game seed.
@@ -95,6 +108,7 @@ pub fn generate_technologies(seed: &GameSeed) -> Vec<Technology> {
             "Liquid methane/LOX propulsion — promising but unproven in flight",
             true,  // unlocked at start
             0,     // difficulty 0 (low risk)
+            TechDomain::Engine,
         ),
         generate_technology(
             seed,
@@ -103,6 +117,7 @@ pub fn generate_technologies(seed: &GameSeed) -> Vec<Technology> {
             "Nuclear reactor heating hydrogen propellant — very high Isp but experimental",
             false, // unlocked by event
             2,     // difficulty 2 (high risk)
+            TechDomain::Engine,
         ),
         generate_technology(
             seed,
@@ -112,6 +127,7 @@ pub fn generate_technologies(seed: &GameSeed) -> Vec<Technology> {
              enables high-power probes beyond reach of solar panels",
             false, // unlocked by event
             2,     // difficulty 2 (high risk)
+            TechDomain::Reactor,
         ),
     ]
 }
@@ -123,11 +139,12 @@ fn generate_technology(
     description: &str,
     unlocked: bool,
     difficulty: u32,
+    domain: TechDomain,
 ) -> Technology {
     let query = format!("tech_{}_deficiencies", id.0);
     let mut rng = seed.world_query(&query);
 
-    let deficiencies = generate_deficiencies(&mut rng, difficulty, id);
+    let deficiencies = generate_deficiencies(&mut rng, difficulty, id, domain);
 
     Technology {
         id,
@@ -143,6 +160,7 @@ fn generate_deficiencies(
     rng: &mut rand::rngs::StdRng,
     difficulty: u32,
     tech_id: TechnologyId,
+    domain: TechDomain,
 ) -> Vec<TechDeficiency> {
     // Difficulty 0: 0-2 deficiencies, solvability 0.0-1.0
     // Difficulty 1: 1-3 deficiencies, solvability max(-0.1..0.9, 0.0)
@@ -170,31 +188,9 @@ fn generate_deficiencies(
         let magnitude = rng.gen_range(base_magnitude..(base_magnitude + 0.15));
 
         let roll: f64 = rng.gen();
-        let (kind, description) = if roll < 0.30 {
-            (TechDeficiencyKind::IspPenalty(magnitude), pick_description(rng, &[
-                "Incomplete combustion characteristics",
-                "Non-optimal mixture ratio range",
-                "Nozzle erosion from exhaust products",
-            ]))
-        } else if roll < 0.55 {
-            (TechDeficiencyKind::MassPenalty(magnitude), pick_description(rng, &[
-                "Heavier propellant handling systems required",
-                "Additional thermal management mass",
-                "Reinforced injector design needed",
-            ]))
-        } else if roll < 0.80 {
-            (TechDeficiencyKind::ThrustPenalty(magnitude), pick_description(rng, &[
-                "Chamber pressure limitations",
-                "Propellant feed instabilities",
-                "Reduced injector throughput",
-            ]))
-        } else {
-            let complexity_add = rng.gen_range(1..=2 + difficulty);
-            (TechDeficiencyKind::ComplexityPenalty(complexity_add), pick_description(rng, &[
-                "Immature manufacturing processes",
-                "Poorly understood failure modes",
-                "Materials compatibility issues",
-            ]))
+        let (kind, description) = match domain {
+            TechDomain::Engine => engine_deficiency_kind(roll, magnitude, difficulty, rng),
+            TechDomain::Reactor => reactor_deficiency_kind(roll, magnitude, difficulty, rng),
         };
 
         TechDeficiency {
@@ -206,6 +202,72 @@ fn generate_deficiencies(
             total_attempts: 0,
         }
     }).collect()
+}
+
+/// Engine-domain deficiency kinds: Isp / Mass / Thrust / Complexity.
+fn engine_deficiency_kind(
+    roll: f64,
+    magnitude: f64,
+    difficulty: u32,
+    rng: &mut rand::rngs::StdRng,
+) -> (TechDeficiencyKind, String) {
+    if roll < 0.30 {
+        (TechDeficiencyKind::IspPenalty(magnitude), pick_description(rng, &[
+            "Incomplete combustion characteristics",
+            "Non-optimal mixture ratio range",
+            "Nozzle erosion from exhaust products",
+        ]))
+    } else if roll < 0.55 {
+        (TechDeficiencyKind::MassPenalty(magnitude), pick_description(rng, &[
+            "Heavier propellant handling systems required",
+            "Additional thermal management mass",
+            "Reinforced injector design needed",
+        ]))
+    } else if roll < 0.80 {
+        (TechDeficiencyKind::ThrustPenalty(magnitude), pick_description(rng, &[
+            "Chamber pressure limitations",
+            "Propellant feed instabilities",
+            "Reduced injector throughput",
+        ]))
+    } else {
+        let complexity_add = rng.gen_range(1..=2 + difficulty);
+        (TechDeficiencyKind::ComplexityPenalty(complexity_add), pick_description(rng, &[
+            "Immature manufacturing processes",
+            "Poorly understood failure modes",
+            "Materials compatibility issues",
+        ]))
+    }
+}
+
+/// Reactor-domain deficiency kinds: Power / Mass / Complexity. Isp and
+/// thrust don't apply to a power source, so the primary-stat hit is a
+/// power penalty (weighted like Isp+Thrust combined for engines).
+fn reactor_deficiency_kind(
+    roll: f64,
+    magnitude: f64,
+    difficulty: u32,
+    rng: &mut rand::rngs::StdRng,
+) -> (TechDeficiencyKind, String) {
+    if roll < 0.55 {
+        (TechDeficiencyKind::PowerPenalty(magnitude), pick_description(rng, &[
+            "Neutron flux lower than predicted",
+            "Fuel element power density shortfall",
+            "Control-drum calibration limits output",
+        ]))
+    } else if roll < 0.80 {
+        (TechDeficiencyKind::MassPenalty(magnitude), pick_description(rng, &[
+            "Heavier radiation shielding required",
+            "Oversized radiator for thermal margin",
+            "Reinforced pressure vessel needed",
+        ]))
+    } else {
+        let complexity_add = rng.gen_range(1..=2 + difficulty);
+        (TechDeficiencyKind::ComplexityPenalty(complexity_add), pick_description(rng, &[
+            "Immature fuel fabrication processes",
+            "Poorly understood reactor kinetics",
+            "Materials compatibility under irradiation",
+        ]))
+    }
 }
 
 fn pick_description(rng: &mut rand::rngs::StdRng, options: &[&str]) -> String {
@@ -264,6 +326,48 @@ mod tests {
         assert!(!nerva.unlocked);
         assert_eq!(nerva.difficulty, 2);
         assert!(nerva.deficiencies.len() >= 2);
+    }
+
+    #[test]
+    fn test_fission_reactor_uses_reactor_domain_kinds() {
+        // The reactor tech must never surface Isp/Thrust penalties —
+        // only Power/Mass/Complexity. Sweep many seeds so we exercise
+        // the full kind distribution.
+        let mut saw_power = false;
+        for s in 0..300 {
+            let seed = GameSeed::new(s);
+            let techs = generate_technologies(&seed);
+            let reactor = techs.iter().find(|t| t.id == TECH_FISSION_REACTOR).unwrap();
+            for def in &reactor.deficiencies {
+                match def.kind {
+                    TechDeficiencyKind::PowerPenalty(_) => saw_power = true,
+                    TechDeficiencyKind::MassPenalty(_)
+                    | TechDeficiencyKind::ComplexityPenalty(_) => {}
+                    TechDeficiencyKind::IspPenalty(_)
+                    | TechDeficiencyKind::ThrustPenalty(_) => {
+                        panic!("reactor tech produced an engine-only deficiency kind: {:?}", def.kind);
+                    }
+                }
+            }
+        }
+        assert!(saw_power, "reactor tech should produce PowerPenalty deficiencies across seeds");
+    }
+
+    #[test]
+    fn test_engine_techs_never_use_power_penalty() {
+        // Engine-domain techs must never surface a PowerPenalty.
+        for s in 0..300 {
+            let seed = GameSeed::new(s);
+            let techs = generate_technologies(&seed);
+            for tech in techs.iter().filter(|t| t.id != TECH_FISSION_REACTOR) {
+                for def in &tech.deficiencies {
+                    assert!(
+                        !matches!(def.kind, TechDeficiencyKind::PowerPenalty(_)),
+                        "engine tech {:?} produced a PowerPenalty", tech.name,
+                    );
+                }
+            }
+        }
     }
 
     #[test]
