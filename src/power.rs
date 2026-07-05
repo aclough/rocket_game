@@ -167,7 +167,7 @@ impl PowerSource {
     ///   Small  → scale 0.1   (~5 kW)
     ///   Medium → scale 1.0   (~50 kW)
     ///   Large  → scale 10.0  (~500 kW)
-    pub fn new_reactor(class: ReactorClass) -> Self {
+    pub fn new_reactor(class: ReactorClass, costs: &crate::balance_config::CostsConfig) -> Self {
         use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
         let (scale, label) = match class {
             ReactorClass::Small => (0.1, "Preset Small Reactor"),
@@ -175,7 +175,7 @@ impl PowerSource {
             ReactorClass::Large => (10.0, "Preset Large Reactor"),
         };
         // ReactorId(0) marks "preset, not from a player project".
-        let design = ReactorDesign::new(ReactorId(0), label.into(), scale, EnrichmentLevel::Leu);
+        let design = ReactorDesign::new(ReactorId(0), label.into(), scale, EnrichmentLevel::Leu, costs);
         let mass_kg = design.mass_kg;
         let material_cost = design.material_cost;
         PowerSource {
@@ -286,7 +286,7 @@ pub enum ReactorClass {
 /// demand." Set on the lone solar-panel preset.
 pub struct PowerPreset {
     pub label: &'static str,
-    pub build: fn() -> PowerSource,
+    pub build: fn(&crate::balance_config::CostsConfig) -> PowerSource,
     pub tech_required: Option<crate::technology::TechnologyId>,
     pub auto_size_solar: bool,
 }
@@ -294,13 +294,13 @@ pub struct PowerPreset {
 pub fn power_presets() -> &'static [PowerPreset] {
     &[
         PowerPreset { label: "Small Battery (0.5 kWd)",
-            build: || PowerSource::new_battery(0.5),
+            build: |_| PowerSource::new_battery(0.5),
             tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Medium Battery (2 kWd)",
-            build: || PowerSource::new_battery(2.0),
+            build: |_| PowerSource::new_battery(2.0),
             tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Large Battery (10 kWd)",
-            build: || PowerSource::new_battery(10.0),
+            build: |_| PowerSource::new_battery(10.0),
             tech_required: None, auto_size_solar: false },
         // Solar panels are sized by the editor to cover the current
         // stage's demand at 1 AU; the player tunes them up/down with
@@ -308,34 +308,34 @@ pub fn power_presets() -> &'static [PowerPreset] {
         // returns a placeholder; the editor swaps it for a properly
         // sized panel at add time.
         PowerPreset { label: "Solar Panel (auto-sized to stage demand)",
-            build: || PowerSource::new_solar_panel(1.0),
+            build: |_| PowerSource::new_solar_panel(1.0),
             tech_required: None, auto_size_solar: true },
         PowerPreset { label: "Small RTG (40 W)",
-            build: || PowerSource::new_rtg(RtgClass::Small),
+            build: |_| PowerSource::new_rtg(RtgClass::Small),
             tech_required: None, auto_size_solar: false },
         PowerPreset { label: "MMRTG (120 W)",
-            build: || PowerSource::new_rtg(RtgClass::Mmrtg),
+            build: |_| PowerSource::new_rtg(RtgClass::Mmrtg),
             tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Cassini-class RTG (290 W)",
-            build: || PowerSource::new_rtg(RtgClass::Cassini),
+            build: |_| PowerSource::new_rtg(RtgClass::Cassini),
             tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Small Fuel Cell (1 kW)",
-            build: || PowerSource::new_fuel_cell(1_000.0),
+            build: |_| PowerSource::new_fuel_cell(1_000.0),
             tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Medium Fuel Cell (5 kW)",
-            build: || PowerSource::new_fuel_cell(5_000.0),
+            build: |_| PowerSource::new_fuel_cell(5_000.0),
             tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Large Fuel Cell (20 kW)",
-            build: || PowerSource::new_fuel_cell(20_000.0),
+            build: |_| PowerSource::new_fuel_cell(20_000.0),
             tech_required: None, auto_size_solar: false },
         PowerPreset { label: "Small Reactor (5 kW)",
-            build: || PowerSource::new_reactor(ReactorClass::Small),
+            build: |costs| PowerSource::new_reactor(ReactorClass::Small, costs),
             tech_required: Some(crate::technology::TECH_FISSION_REACTOR), auto_size_solar: false },
         PowerPreset { label: "Medium Reactor (50 kW)",
-            build: || PowerSource::new_reactor(ReactorClass::Medium),
+            build: |costs| PowerSource::new_reactor(ReactorClass::Medium, costs),
             tech_required: Some(crate::technology::TECH_FISSION_REACTOR), auto_size_solar: false },
         PowerPreset { label: "Large Reactor (500 kW)",
-            build: || PowerSource::new_reactor(ReactorClass::Large),
+            build: |costs| PowerSource::new_reactor(ReactorClass::Large, costs),
             tech_required: Some(crate::technology::TECH_FISSION_REACTOR), auto_size_solar: false },
     ]
 }
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn reactor_output_is_constant_with_sun_distance() {
-        let r = PowerSource::new_reactor(ReactorClass::Medium);
+        let r = PowerSource::new_reactor(ReactorClass::Medium, &crate::balance_config::CostsConfig::default());
         assert!((r.steady_output_w(1.0) - 50_000.0).abs() < 1.0);
         assert!((r.steady_output_w(10.0) - 50_000.0).abs() < 1.0);
         // Total mass includes both reactor and radiator.
@@ -457,8 +457,8 @@ mod tests {
     fn larger_reactors_have_better_mass_per_kw() {
         // Higher-temp reactors radiate heat more efficiently → less
         // radiator mass per kW. Encoded in the bundled radiator mass.
-        let small = PowerSource::new_reactor(ReactorClass::Small);
-        let large = PowerSource::new_reactor(ReactorClass::Large);
+        let small = PowerSource::new_reactor(ReactorClass::Small, &crate::balance_config::CostsConfig::default());
+        let large = PowerSource::new_reactor(ReactorClass::Large, &crate::balance_config::CostsConfig::default());
         let small_kg_per_kw = small.mass_kg / 5.0;       // 5 kW class
         let large_kg_per_kw = large.mass_kg / 500.0;     // 500 kW class
         assert!(large_kg_per_kw < small_kg_per_kw,

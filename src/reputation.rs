@@ -1,18 +1,21 @@
 use serde::{Serialize, Deserialize};
 
+use crate::balance_config::ReputationConfig;
+
 /// Factor-based reputation tracking.
 ///
 /// Total reputation is the sum of four independent factors, each with
-/// its own accumulation and decay rules.
+/// its own accumulation and decay rules. The deltas and decay factors
+/// live in `balance_config::ReputationConfig`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reputation {
-    /// +20 per successful launch, -20 per failure. Decays by 20% each launch.
+    /// Gains per successful launch, loses per failure. Decays each launch.
     pub success_factor: f64,
-    /// -50 on mission failure (payload lost). Decays by 15% each launch.
+    /// Penalized when a payload is lost. Decays each launch.
     pub lost_payload_factor: f64,
-    /// -10 per year without a launch. Resets to 0 on any launch.
+    /// Penalized per year without a launch. Resets to 0 on any launch.
     pub drought_factor: f64,
-    /// -10 per expired accepted contract. Decays by 20% each contract launch.
+    /// Penalized per expired accepted contract. Decays each contract launch.
     pub expiry_factor: f64,
 }
 
@@ -38,58 +41,62 @@ impl Reputation {
     }
 
     /// Called on a successful launch.
-    pub fn on_launch_success(&mut self) {
+    pub fn on_launch_success(&mut self, cfg: &ReputationConfig) {
         // Decay existing factors
-        self.success_factor *= 0.8;
-        self.lost_payload_factor *= 0.85;
+        self.success_factor *= cfg.success_decay;
+        self.lost_payload_factor *= cfg.lost_payload_decay;
         // Add success bonus
-        self.success_factor += 20.0;
+        self.success_factor += cfg.success_gain;
         // Reset drought
         self.drought_factor = 0.0;
     }
 
     /// Called on a failed launch (payload lost).
-    pub fn on_launch_failure(&mut self) {
+    pub fn on_launch_failure(&mut self, cfg: &ReputationConfig) {
         // Decay existing factors
-        self.success_factor *= 0.8;
-        self.lost_payload_factor *= 0.85;
+        self.success_factor *= cfg.success_decay;
+        self.lost_payload_factor *= cfg.lost_payload_decay;
         // Add failure penalties
-        self.success_factor -= 20.0;
-        self.lost_payload_factor -= 50.0;
+        self.success_factor -= cfg.failure_penalty;
+        self.lost_payload_factor -= cfg.lost_payload_penalty;
         // Reset drought (still launched, even if it failed)
         self.drought_factor = 0.0;
     }
 
     /// Called on a partially failed launch (reached near destination).
-    pub fn on_launch_partial_failure(&mut self) {
+    pub fn on_launch_partial_failure(&mut self, cfg: &ReputationConfig) {
         // Decay existing factors
-        self.success_factor *= 0.8;
-        self.lost_payload_factor *= 0.85;
+        self.success_factor *= cfg.success_decay;
+        self.lost_payload_factor *= cfg.lost_payload_decay;
         // Smaller penalty than full failure
-        self.success_factor -= 10.0;
+        self.success_factor -= cfg.partial_failure_penalty;
         // Reset drought
         self.drought_factor = 0.0;
     }
 
     /// Called when a contract launch succeeds (decays expiry factor too).
-    pub fn on_contract_launch(&mut self) {
-        self.expiry_factor *= 0.8;
+    pub fn on_contract_launch(&mut self, cfg: &ReputationConfig) {
+        self.expiry_factor *= cfg.expiry_decay;
     }
 
     /// Called when an accepted contract expires without successful launch.
-    pub fn on_contract_expired(&mut self) {
-        self.expiry_factor -= 10.0;
+    pub fn on_contract_expired(&mut self, cfg: &ReputationConfig) {
+        self.expiry_factor -= cfg.expiry_penalty;
     }
 
     /// Called on each year anniversary without a launch.
-    pub fn on_year_without_launch(&mut self) {
-        self.drought_factor -= 10.0;
+    pub fn on_year_without_launch(&mut self, cfg: &ReputationConfig) {
+        self.drought_factor -= cfg.drought_penalty;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cfg() -> ReputationConfig {
+        ReputationConfig::default()
+    }
 
     #[test]
     fn test_new_reputation() {
@@ -100,27 +107,27 @@ mod tests {
     #[test]
     fn test_success_increases_reputation() {
         let mut rep = Reputation::new();
-        rep.on_launch_success();
+        rep.on_launch_success(&cfg());
         assert!(rep.total() > 0.0);
-        assert_eq!(rep.success_factor, 20.0);
+        assert_eq!(rep.success_factor, cfg().success_gain);
     }
 
     #[test]
     fn test_failure_decreases_reputation() {
         let mut rep = Reputation::new();
-        rep.on_launch_failure();
+        rep.on_launch_failure(&cfg());
         assert!(rep.total() < 0.0);
-        assert_eq!(rep.success_factor, -20.0);
-        assert_eq!(rep.lost_payload_factor, -50.0);
+        assert_eq!(rep.success_factor, -cfg().failure_penalty);
+        assert_eq!(rep.lost_payload_factor, -cfg().lost_payload_penalty);
     }
 
     #[test]
     fn test_success_decay() {
         let mut rep = Reputation::new();
-        // Two successes: first decays by 20%, then +20
-        rep.on_launch_success();
+        // Two successes: first decays, then gains
+        rep.on_launch_success(&cfg());
         assert_eq!(rep.success_factor, 20.0);
-        rep.on_launch_success();
+        rep.on_launch_success(&cfg());
         // 20 * 0.8 + 20 = 36
         assert!((rep.success_factor - 36.0).abs() < 0.01);
     }
@@ -128,33 +135,33 @@ mod tests {
     #[test]
     fn test_drought_resets_on_launch() {
         let mut rep = Reputation::new();
-        rep.on_year_without_launch();
-        rep.on_year_without_launch();
+        rep.on_year_without_launch(&cfg());
+        rep.on_year_without_launch(&cfg());
         assert_eq!(rep.drought_factor, -20.0);
-        rep.on_launch_success();
+        rep.on_launch_success(&cfg());
         assert_eq!(rep.drought_factor, 0.0);
     }
 
     #[test]
     fn test_contract_expiry() {
         let mut rep = Reputation::new();
-        rep.on_contract_expired();
+        rep.on_contract_expired(&cfg());
         assert_eq!(rep.expiry_factor, -10.0);
-        rep.on_contract_expired();
+        rep.on_contract_expired(&cfg());
         assert_eq!(rep.expiry_factor, -20.0);
         // Contract launch decays it
-        rep.on_contract_launch();
+        rep.on_contract_launch(&cfg());
         assert!((rep.expiry_factor - (-16.0)).abs() < 0.01);
     }
 
     #[test]
     fn test_recovery_from_failure() {
         let mut rep = Reputation::new();
-        rep.on_launch_failure();
+        rep.on_launch_failure(&cfg());
         let after_failure = rep.total();
         // Several successes should recover
         for _ in 0..5 {
-            rep.on_launch_success();
+            rep.on_launch_success(&cfg());
         }
         assert!(rep.total() > after_failure);
     }

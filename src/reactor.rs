@@ -69,27 +69,27 @@ impl EnrichmentLevel {
 
     /// Total reputation required to design at this enrichment. LEU is
     /// always available; MEU and HEU sit behind serious prestige walls.
-    pub fn min_reputation(self) -> f64 {
+    pub fn min_reputation(self, rep_cfg: &crate::balance_config::ReputationConfig) -> f64 {
         match self {
             EnrichmentLevel::Leu => 0.0,
-            EnrichmentLevel::Meu => crate::balance::REACTOR_MEU_MIN_REPUTATION,
-            EnrichmentLevel::Heu => crate::balance::REACTOR_HEU_MIN_REPUTATION,
+            EnrichmentLevel::Meu => rep_cfg.reactor_meu_min_reputation,
+            EnrichmentLevel::Heu => rep_cfg.reactor_heu_min_reputation,
         }
     }
 
     /// Is this enrichment currently selectable by the player at
     /// `current_reputation`?
-    pub fn available_at(self, current_reputation: f64) -> bool {
-        current_reputation >= self.min_reputation()
+    pub fn available_at(self, current_reputation: f64, rep_cfg: &crate::balance_config::ReputationConfig) -> bool {
+        current_reputation >= self.min_reputation(rep_cfg)
     }
 }
 
 /// Enrichments the player can currently pick from in the editor,
 /// returned in display order (LEU → HEU).
-pub fn available_enrichments(current_reputation: f64) -> Vec<EnrichmentLevel> {
+pub fn available_enrichments(current_reputation: f64, rep_cfg: &crate::balance_config::ReputationConfig) -> Vec<EnrichmentLevel> {
     EnrichmentLevel::ALL.iter()
         .copied()
-        .filter(|e| e.available_at(current_reputation))
+        .filter(|e| e.available_at(current_reputation, rep_cfg))
         .collect()
 }
 
@@ -131,8 +131,6 @@ pub const REF_TEMPERATURE_K: f64 = 1400.0;
 pub const REF_REACTOR_MASS_KG: f64 = 4_200.0;
 /// Reference bundled radiator mass at scale = 1.0 (kg).
 pub const REF_RADIATOR_MASS_KG: f64 = 800.0;
-/// Reference material cost at scale = 1.0 (dollars).
-pub const REF_MATERIAL_COST: f64 = 30_000_000.0;
 
 /// Smallest physically meaningful scale. Reactors smaller than this
 /// don't form a critical mass.
@@ -155,13 +153,14 @@ impl ReactorDesign {
         name: String,
         scale: f64,
         enrichment: EnrichmentLevel,
+        costs: &crate::balance_config::CostsConfig,
     ) -> Self {
         let s = scale.max(MIN_SCALE);
         let steady_w = REF_STEADY_W * s;
         let temperature_k = REF_TEMPERATURE_K * s.powf(0.05);
         let reactor_mass_kg = REF_REACTOR_MASS_KG * s.powf(0.9) * enrichment.mass_multiplier();
         let radiator_mass_kg = REF_RADIATOR_MASS_KG * s.powf(0.9);
-        let material_cost = REF_MATERIAL_COST * s.powf(0.85);
+        let material_cost = costs.reactor_ref_material_cost * s.powf(0.85);
         let radiator = Radiator {
             kind: RadiatorKind::Standard,
             mass_kg: radiator_mass_kg,
@@ -183,8 +182,8 @@ impl ReactorDesign {
     /// Re-derive every physical field from a fresh (scale, enrichment)
     /// pair while preserving the id and name. Used by the editor when
     /// the player tweaks the design without committing a new project.
-    pub fn apply_edit(&mut self, name: String, scale: f64, enrichment: EnrichmentLevel) {
-        let updated = ReactorDesign::new(self.id, name, scale, enrichment);
+    pub fn apply_edit(&mut self, name: String, scale: f64, enrichment: EnrichmentLevel, costs: &crate::balance_config::CostsConfig) {
+        let updated = ReactorDesign::new(self.id, name, scale, enrichment, costs);
         *self = updated;
     }
 }
@@ -192,11 +191,15 @@ impl ReactorDesign {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::balance_config::{CostsConfig, ReputationConfig};
+
+    fn costs() -> CostsConfig { CostsConfig::default() }
+    fn rep() -> ReputationConfig { ReputationConfig::default() }
 
     #[test]
     fn unit_scale_matches_legacy_medium_reactor() {
         // Anchor: scale=1.0 LEU is the old Medium preset.
-        let r = ReactorDesign::new(ReactorId(1), "M".into(), 1.0, EnrichmentLevel::Leu);
+        let r = ReactorDesign::new(ReactorId(1), "M".into(), 1.0, EnrichmentLevel::Leu, &costs());
         assert!((r.steady_w - 50_000.0).abs() < 1.0);
         assert!((r.temperature_k - 1400.0).abs() < 1.0);
         // Total mass should be 4200 + 800 = 5000 kg.
@@ -206,23 +209,23 @@ mod tests {
 
     #[test]
     fn steady_power_is_linear_in_scale() {
-        let one = ReactorDesign::new(ReactorId(1), "a".into(), 1.0, EnrichmentLevel::Leu);
-        let ten = ReactorDesign::new(ReactorId(2), "b".into(), 10.0, EnrichmentLevel::Leu);
+        let one = ReactorDesign::new(ReactorId(1), "a".into(), 1.0, EnrichmentLevel::Leu, &costs());
+        let ten = ReactorDesign::new(ReactorId(2), "b".into(), 10.0, EnrichmentLevel::Leu, &costs());
         assert!((ten.steady_w / one.steady_w - 10.0).abs() < 1e-9);
     }
 
     #[test]
     fn mass_is_sublinear_in_scale() {
-        let one = ReactorDesign::new(ReactorId(1), "a".into(), 1.0, EnrichmentLevel::Leu);
-        let ten = ReactorDesign::new(ReactorId(2), "b".into(), 10.0, EnrichmentLevel::Leu);
+        let one = ReactorDesign::new(ReactorId(1), "a".into(), 1.0, EnrichmentLevel::Leu, &costs());
+        let ten = ReactorDesign::new(ReactorId(2), "b".into(), 10.0, EnrichmentLevel::Leu, &costs());
         let ratio = ten.mass_kg / one.mass_kg;
         assert!(ratio > 1.0 && ratio < 10.0, "expected sub-linear mass scaling, got {}", ratio);
     }
 
     #[test]
     fn temperature_rises_mildly_with_scale() {
-        let one = ReactorDesign::new(ReactorId(1), "a".into(), 1.0, EnrichmentLevel::Leu);
-        let ten = ReactorDesign::new(ReactorId(2), "b".into(), 10.0, EnrichmentLevel::Leu);
+        let one = ReactorDesign::new(ReactorId(1), "a".into(), 1.0, EnrichmentLevel::Leu, &costs());
+        let ten = ReactorDesign::new(ReactorId(2), "b".into(), 10.0, EnrichmentLevel::Leu, &costs());
         assert!(ten.temperature_k > one.temperature_k);
         // Should be << 2× — temperature exponent is 0.05, so 10× scale
         // gives only ~12% temperature lift.
@@ -231,9 +234,9 @@ mod tests {
 
     #[test]
     fn enrichment_reduces_reactor_mass_only() {
-        let leu = ReactorDesign::new(ReactorId(1), "a".into(), 1.0, EnrichmentLevel::Leu);
-        let meu = ReactorDesign::new(ReactorId(2), "b".into(), 1.0, EnrichmentLevel::Meu);
-        let heu = ReactorDesign::new(ReactorId(3), "c".into(), 1.0, EnrichmentLevel::Heu);
+        let leu = ReactorDesign::new(ReactorId(1), "a".into(), 1.0, EnrichmentLevel::Leu, &costs());
+        let meu = ReactorDesign::new(ReactorId(2), "b".into(), 1.0, EnrichmentLevel::Meu, &costs());
+        let heu = ReactorDesign::new(ReactorId(3), "c".into(), 1.0, EnrichmentLevel::Heu, &costs());
         // Reactor mass drops; radiator mass unchanged.
         assert!(meu.reactor_mass_kg < leu.reactor_mass_kg);
         assert!(heu.reactor_mass_kg < meu.reactor_mass_kg);
@@ -246,7 +249,7 @@ mod tests {
 
     #[test]
     fn scale_is_clamped_to_minimum() {
-        let tiny = ReactorDesign::new(ReactorId(1), "a".into(), 0.001, EnrichmentLevel::Leu);
+        let tiny = ReactorDesign::new(ReactorId(1), "a".into(), 0.001, EnrichmentLevel::Leu, &costs());
         assert!((tiny.scale - MIN_SCALE).abs() < 1e-9);
     }
 
@@ -260,7 +263,7 @@ mod tests {
         // Reputation way below HEU gate.
         let reputation = 0.0;
         let current = EnrichmentLevel::Heu;
-        let mut levels = available_enrichments(reputation);
+        let mut levels = available_enrichments(reputation, &rep());
         if !levels.contains(&current) {
             levels.push(current);
             levels.sort_by_key(|e| *e as u32);
@@ -276,21 +279,21 @@ mod tests {
     #[test]
     fn enrichment_availability_follows_reputation() {
         // LEU is always free; MEU and HEU sit behind reputation gates.
-        let none = available_enrichments(0.0);
+        let none = available_enrichments(0.0, &rep());
         assert_eq!(none, vec![EnrichmentLevel::Leu]);
 
         // Just under the MEU gate.
         let just_under_meu = available_enrichments(
-            crate::balance::REACTOR_MEU_MIN_REPUTATION - 0.1,
+            rep().reactor_meu_min_reputation - 0.1, &rep(),
         );
         assert_eq!(just_under_meu, vec![EnrichmentLevel::Leu]);
 
         // Exactly at the MEU gate — both LEU and MEU.
-        let at_meu = available_enrichments(crate::balance::REACTOR_MEU_MIN_REPUTATION);
+        let at_meu = available_enrichments(rep().reactor_meu_min_reputation, &rep());
         assert_eq!(at_meu, vec![EnrichmentLevel::Leu, EnrichmentLevel::Meu]);
 
         // HEU comes online at its threshold.
-        let at_heu = available_enrichments(crate::balance::REACTOR_HEU_MIN_REPUTATION);
+        let at_heu = available_enrichments(rep().reactor_heu_min_reputation, &rep());
         assert_eq!(at_heu, EnrichmentLevel::ALL.to_vec());
 
         // HEU < MEU < LEU on mass-per-kW.
@@ -302,9 +305,9 @@ mod tests {
 
     #[test]
     fn apply_edit_re_derives_all_fields() {
-        let mut r = ReactorDesign::new(ReactorId(7), "orig".into(), 1.0, EnrichmentLevel::Leu);
+        let mut r = ReactorDesign::new(ReactorId(7), "orig".into(), 1.0, EnrichmentLevel::Leu, &costs());
         let before_id = r.id;
-        r.apply_edit("renamed".into(), 4.0, EnrichmentLevel::Heu);
+        r.apply_edit("renamed".into(), 4.0, EnrichmentLevel::Heu, &costs());
         assert_eq!(r.id, before_id); // id preserved
         assert_eq!(r.name, "renamed");
         assert_eq!(r.enrichment, EnrichmentLevel::Heu);

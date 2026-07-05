@@ -10,13 +10,10 @@ use rand::Rng;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 
-use crate::flaw::{self, Flaw, FLAW_REVISION_WORK, TESTING_CYCLE_WORK};
+use crate::balance_config::BalanceConfig;
+use crate::flaw::{self, Flaw};
 use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
 use crate::technology::TechDeficiencyId;
-
-/// Chance per testing cycle to discover a reactor improvement. Matches
-/// the engine improvement discovery rate for parity.
-const REACTOR_IMPROVEMENT_DISCOVERY_CHANCE: f64 = 0.08;
 
 /// A potential improvement to a reactor design, discovered during
 /// testing and actualized via revision. Reactor-specific counterpart to
@@ -78,10 +75,10 @@ fn generate_reactor_improvement(rng: &mut StdRng) -> ReactorImprovement {
 pub const REACTOR_BASE_COMPLEXITY: u32 = 8;
 
 /// Days of engineering work required to take a reactor through design.
-/// Uses the shared `balance::design_work_required` curve so reactor and
-/// engine projects feel comparably weighty per team-day.
-pub fn reactor_design_work_required(complexity: u32) -> f64 {
-    crate::balance::design_work_required(complexity)
+/// Uses the shared engine design-work curve so reactor and engine
+/// projects feel comparably weighty per team-day.
+pub fn reactor_design_work_required(complexity: u32, balance_cfg: &BalanceConfig) -> f64 {
+    balance_cfg.work.design_work_required(complexity)
 }
 
 /// Unique identifier for a reactor project.
@@ -146,10 +143,11 @@ impl ReactorProject {
         name: String,
         scale: f64,
         enrichment: EnrichmentLevel,
+        balance_cfg: &BalanceConfig,
     ) -> Self {
-        let design = ReactorDesign::new(reactor_id, name, scale, enrichment);
+        let design = ReactorDesign::new(reactor_id, name, scale, enrichment, &balance_cfg.costs);
         let complexity = REACTOR_BASE_COMPLEXITY;
-        let work_required = reactor_design_work_required(complexity);
+        let work_required = reactor_design_work_required(complexity, balance_cfg);
         ReactorProject {
             project_id,
             design,
@@ -178,8 +176,9 @@ impl ReactorProject {
         name: String,
         scale: f64,
         enrichment: EnrichmentLevel,
+        balance_cfg: &BalanceConfig,
     ) -> Self {
-        let mut p = Self::new(project_id, reactor_id, name, scale, enrichment);
+        let mut p = Self::new(project_id, reactor_id, name, scale, enrichment, balance_cfg);
         let work_required = match p.status {
             ReactorDesignStatus::InDesign { work_required, .. } => work_required,
             _ => unreachable!(),
@@ -203,9 +202,9 @@ impl ReactorProject {
     /// triple. Clamps `work_completed` to the new `work_required` so
     /// the player can't appear to have over-completed a now-cheaper
     /// design.
-    pub fn apply_edit(&mut self, name: String, scale: f64, enrichment: EnrichmentLevel) {
-        self.design.apply_edit(name, scale, enrichment);
-        let work_required = reactor_design_work_required(self.complexity);
+    pub fn apply_edit(&mut self, name: String, scale: f64, enrichment: EnrichmentLevel, balance_cfg: &BalanceConfig) {
+        self.design.apply_edit(name, scale, enrichment, &balance_cfg.costs);
+        let work_required = reactor_design_work_required(self.complexity, balance_cfg);
         match &mut self.status {
             ReactorDesignStatus::Proposed { work_required: wr } => *wr = work_required,
             ReactorDesignStatus::InDesign { work_completed, work_required: wr } => {
@@ -234,6 +233,7 @@ impl ReactorProject {
         &mut self,
         rng: &mut StdRng,
         next_flaw_id: &mut u64,
+        balance_cfg: &BalanceConfig,
     ) -> Vec<ReactorWorkEvent> {
         if self.teams_assigned == 0 {
             return Vec::new();
@@ -249,7 +249,7 @@ impl ReactorProject {
                     // Design complete — generate flaws. Uses the current
                     // complexity (tech-deficiency complexity penalties are
                     // applied afterwards by game_state, matching engines).
-                    self.flaws = flaw::generate_reactor_flaws(self.complexity, rng, next_flaw_id);
+                    self.flaws = flaw::generate_reactor_flaws(self.complexity, rng, next_flaw_id, &balance_cfg.flaws);
                     let flaw_count = self.flaws.len() as u32;
                     self.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
                     events.push(ReactorWorkEvent::DesignComplete { flaw_count });
@@ -258,8 +258,8 @@ impl ReactorProject {
             ReactorDesignStatus::Testing { work_completed } => {
                 *work_completed += work;
                 self.cumulative_testing_work += work;
-                while *work_completed >= TESTING_CYCLE_WORK {
-                    *work_completed -= TESTING_CYCLE_WORK;
+                while *work_completed >= balance_cfg.work.testing_cycle_work {
+                    *work_completed -= balance_cfg.work.testing_cycle_work;
                     let discovered = flaw::roll_discoveries_with_rng(&mut self.flaws, rng);
                     for idx in discovered {
                         events.push(ReactorWorkEvent::FlawDiscovered {
@@ -267,7 +267,7 @@ impl ReactorProject {
                         });
                     }
                     // Roll for improvement discovery.
-                    if rng.gen::<f64>() < REACTOR_IMPROVEMENT_DISCOVERY_CHANCE {
+                    if rng.gen::<f64>() < balance_cfg.flaws.reactor_improvement_discovery_chance {
                         let improvement = generate_reactor_improvement(rng);
                         events.push(ReactorWorkEvent::ImprovementDiscovered {
                             description: format!("{}: {}", improvement.description, improvement.kind),
@@ -285,8 +285,8 @@ impl ReactorProject {
             } => {
                 *work_completed += work;
                 // Process flaws first.
-                while *work_completed >= FLAW_REVISION_WORK && !remaining_flaw_indices.is_empty() {
-                    *work_completed -= FLAW_REVISION_WORK;
+                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_flaw_indices.is_empty() {
+                    *work_completed -= balance_cfg.work.flaw_revision_work;
                     let fi = remaining_flaw_indices.remove(0);
                     self.flaws.remove(fi);
                     events.push(ReactorWorkEvent::RevisionComplete);
@@ -297,8 +297,8 @@ impl ReactorProject {
                     }
                 }
                 // Then actualize improvements.
-                while *work_completed >= FLAW_REVISION_WORK && !remaining_improvement_indices.is_empty() {
-                    *work_completed -= FLAW_REVISION_WORK;
+                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_improvement_indices.is_empty() {
+                    *work_completed -= balance_cfg.work.flaw_revision_work;
                     let ii = remaining_improvement_indices.remove(0);
                     if let Some(imp) = self.improvements.get_mut(ii) {
                         imp.actualized = true;
@@ -321,8 +321,8 @@ impl ReactorProject {
                     }
                 }
                 // Then attempt tech deficiency fixes (resolved by game_state).
-                while *work_completed >= FLAW_REVISION_WORK && !remaining_tech_deficiency_ids.is_empty() {
-                    *work_completed -= FLAW_REVISION_WORK;
+                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_tech_deficiency_ids.is_empty() {
+                    *work_completed -= balance_cfg.work.flaw_revision_work;
                     let def_id = remaining_tech_deficiency_ids.remove(0);
                     events.push(ReactorWorkEvent::TechDeficiencyAttempted { deficiency_id: def_id });
                 }
@@ -382,8 +382,8 @@ impl ReactorProject {
 
     /// Testing level description based on cumulative work in testing.
     /// Mirrors `EngineProject::testing_level`.
-    pub fn testing_level(&self) -> &'static str {
-        let cycles = (self.cumulative_testing_work / TESTING_CYCLE_WORK) as u32;
+    pub fn testing_level(&self, balance_cfg: &BalanceConfig) -> &'static str {
+        let cycles = (self.cumulative_testing_work / balance_cfg.work.testing_cycle_work) as u32;
         match cycles {
             0 => "Untested",
             1..=2 => "Lightly Tested",
@@ -415,6 +415,10 @@ mod tests {
         StdRng::seed_from_u64(7)
     }
 
+    fn bal() -> BalanceConfig {
+        BalanceConfig::default()
+    }
+
     #[test]
     fn new_project_starts_in_design() {
         let p = ReactorProject::new(
@@ -423,6 +427,7 @@ mod tests {
             "Mk1".into(),
             1.0,
             EnrichmentLevel::Leu,
+            &bal(),
         );
         match p.status {
             ReactorDesignStatus::InDesign { work_completed, work_required } => {
@@ -443,10 +448,11 @@ mod tests {
             "Draft".into(),
             1.0,
             EnrichmentLevel::Leu,
+            &bal(),
         );
         p.teams_assigned = 2;
         let mut next_flaw = 1u64;
-        let events = p.apply_daily_work(&mut rng(), &mut next_flaw);
+        let events = p.apply_daily_work(&mut rng(), &mut next_flaw, &bal());
         assert!(events.is_empty());
         assert!(matches!(p.status, ReactorDesignStatus::Proposed { .. }));
     }
@@ -459,6 +465,7 @@ mod tests {
             "Draft".into(),
             1.0,
             EnrichmentLevel::Leu,
+            &bal(),
         );
         p.promote_to_in_design();
         assert!(matches!(p.status, ReactorDesignStatus::InDesign { .. }));
@@ -472,6 +479,7 @@ mod tests {
             "Mk1".into(),
             1.0,
             EnrichmentLevel::Leu,
+            &bal(),
         );
         p.teams_assigned = 4;
         let mut next_flaw = 1u64;
@@ -479,7 +487,7 @@ mod tests {
         // Hard cap iterations so a runaway loop fails the test rather
         // than the process.
         for _ in 0..10_000 {
-            let events = p.apply_daily_work(&mut rng(), &mut next_flaw);
+            let events = p.apply_daily_work(&mut rng(), &mut next_flaw, &bal());
             if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete { .. })) {
                 saw_complete = true;
                 break;
@@ -497,12 +505,13 @@ mod tests {
         for seed in 0..20 {
             let mut p = ReactorProject::new(
                 ReactorProjectId(1), ReactorId(1), "Mk1".into(), 1.0, EnrichmentLevel::Leu,
+                &bal(),
             );
             p.teams_assigned = 4;
             let mut r = StdRng::seed_from_u64(seed);
             let mut next_flaw = 1u64;
             for _ in 0..10_000 {
-                let events = p.apply_daily_work(&mut r, &mut next_flaw);
+                let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
                 if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete { .. })) {
                     break;
                 }
@@ -519,13 +528,14 @@ mod tests {
     fn testing_discovers_flaws() {
         let mut p = ReactorProject::new(
             ReactorProjectId(1), ReactorId(1), "Mk1".into(), 1.0, EnrichmentLevel::Leu,
+            &bal(),
         );
         p.teams_assigned = 4;
         let mut r = rng();
         let mut next_flaw = 1u64;
         // Advance to Testing.
         for _ in 0..10_000 {
-            let events = p.apply_daily_work(&mut r, &mut next_flaw);
+            let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
             if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete { .. })) {
                 break;
             }
@@ -538,7 +548,7 @@ mod tests {
         let total = p.flaws.len();
         let mut discovered_any = false;
         for _ in 0..200 {
-            let events = p.apply_daily_work(&mut r, &mut next_flaw);
+            let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
             if events.iter().any(|e| matches!(e, ReactorWorkEvent::FlawDiscovered { .. })) {
                 discovered_any = true;
             }
@@ -555,6 +565,7 @@ mod tests {
     fn revision_removes_discovered_flaws_and_returns_to_testing() {
         let mut p = ReactorProject::new(
             ReactorProjectId(1), ReactorId(1), "Mk1".into(), 1.0, EnrichmentLevel::Leu,
+            &bal(),
         );
         // Put it into Testing with one discovered flaw.
         p.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
@@ -575,7 +586,7 @@ mod tests {
         let mut r = rng();
         let mut next_flaw = 2u64;
         for _ in 0..50 {
-            p.apply_daily_work(&mut r, &mut next_flaw);
+            p.apply_daily_work(&mut r, &mut next_flaw, &bal());
             if matches!(p.status, ReactorDesignStatus::Testing { .. }) {
                 break;
             }
@@ -589,6 +600,7 @@ mod tests {
     fn improvement_actualization_boosts_power() {
         let mut p = ReactorProject::new(
             ReactorProjectId(1), ReactorId(1), "Mk1".into(), 1.0, EnrichmentLevel::Leu,
+            &bal(),
         );
         p.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
         let before_w = p.design.steady_w;
@@ -602,7 +614,7 @@ mod tests {
         let mut r = rng();
         let mut next_flaw = 1u64;
         for _ in 0..50 {
-            p.apply_daily_work(&mut r, &mut next_flaw);
+            p.apply_daily_work(&mut r, &mut next_flaw, &bal());
             if matches!(p.status, ReactorDesignStatus::Testing { .. }) {
                 break;
             }
@@ -615,6 +627,7 @@ mod tests {
     fn mass_improvement_preserves_total_mass_invariant() {
         let mut p = ReactorProject::new(
             ReactorProjectId(1), ReactorId(1), "Mk1".into(), 1.0, EnrichmentLevel::Leu,
+            &bal(),
         );
         p.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
         p.improvements.push(ReactorImprovement {
@@ -627,7 +640,7 @@ mod tests {
         let mut r = rng();
         let mut next_flaw = 1u64;
         for _ in 0..50 {
-            p.apply_daily_work(&mut r, &mut next_flaw);
+            p.apply_daily_work(&mut r, &mut next_flaw, &bal());
             if matches!(p.status, ReactorDesignStatus::Testing { .. }) {
                 break;
             }
@@ -641,6 +654,7 @@ mod tests {
     fn start_revision_noop_when_nothing_to_do() {
         let mut p = ReactorProject::new(
             ReactorProjectId(1), ReactorId(1), "Mk1".into(), 1.0, EnrichmentLevel::Leu,
+            &bal(),
         );
         p.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
         // No discovered flaws, no improvements, no deficiencies.
@@ -656,6 +670,7 @@ mod tests {
             "Mk1".into(),
             10.0,
             EnrichmentLevel::Heu,
+            &bal(),
         );
         if let ReactorDesignStatus::InDesign { work_completed, work_required } = &mut p.status {
             *work_completed = *work_required;
@@ -663,7 +678,7 @@ mod tests {
         // Re-edit doesn't reduce work_required (complexity is constant
         // for Phase 1) but the clamp logic should still leave us
         // ≤ work_required.
-        p.apply_edit("Renamed".into(), 1.0, EnrichmentLevel::Leu);
+        p.apply_edit("Renamed".into(), 1.0, EnrichmentLevel::Leu, &bal());
         if let ReactorDesignStatus::InDesign { work_completed, work_required } = p.status {
             assert!(work_completed <= work_required);
         } else {

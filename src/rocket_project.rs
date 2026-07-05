@@ -4,7 +4,8 @@ use rand::rngs::StdRng;
 use serde::{Serialize, Deserialize};
 
 use crate::balance;
-use crate::flaw::{self, Flaw, TESTING_CYCLE_WORK, FLAW_REVISION_WORK};
+use crate::balance_config::BalanceConfig;
+use crate::flaw::{self, Flaw};
 use crate::location::DELTA_V_MAP;
 use crate::rocket::RocketDesign;
 
@@ -52,10 +53,11 @@ impl RocketProject {
     pub fn new(
         project_id: RocketProjectId,
         design: RocketDesign,
+        balance_cfg: &BalanceConfig,
     ) -> Self {
         let (total_stages, unique_engines, max_parallel) = design_stats(&design);
         let complexity = balance::rocket_complexity(total_stages, unique_engines, max_parallel);
-        let work_required = balance::rocket_design_work_required(complexity);
+        let work_required = balance_cfg.work.rocket_design_work_required(complexity);
 
         RocketProject {
             project_id,
@@ -74,7 +76,7 @@ impl RocketProject {
     }
 
     /// Apply one day of work. Returns any completed work events.
-    pub fn apply_daily_work(&mut self, rng: &mut StdRng, next_flaw_id: &mut u64) -> Vec<RocketWorkEvent> {
+    pub fn apply_daily_work(&mut self, rng: &mut StdRng, next_flaw_id: &mut u64, balance_cfg: &BalanceConfig) -> Vec<RocketWorkEvent> {
         if self.teams_assigned == 0 {
             return Vec::new();
         }
@@ -85,7 +87,7 @@ impl RocketProject {
             RocketDesignStatus::InDesign { work_completed, work_required } => {
                 *work_completed += work;
                 if *work_completed >= *work_required {
-                    self.flaws = flaw::generate_rocket_flaws(self.complexity, rng, next_flaw_id);
+                    self.flaws = flaw::generate_rocket_flaws(self.complexity, rng, next_flaw_id, &balance_cfg.flaws);
                     let flaw_count = self.flaws.len() as u32;
                     self.status = RocketDesignStatus::Testing { work_completed: 0.0 };
                     events.push(RocketWorkEvent::DesignComplete { flaw_count });
@@ -94,8 +96,8 @@ impl RocketProject {
             RocketDesignStatus::Testing { work_completed } => {
                 *work_completed += work;
                 self.cumulative_testing_work += work;
-                while *work_completed >= TESTING_CYCLE_WORK {
-                    *work_completed -= TESTING_CYCLE_WORK;
+                while *work_completed >= balance_cfg.work.testing_cycle_work {
+                    *work_completed -= balance_cfg.work.testing_cycle_work;
                     let discovered = flaw::roll_discoveries_with_rng(&mut self.flaws, rng);
                     for idx in discovered {
                         events.push(RocketWorkEvent::FlawDiscovered {
@@ -107,8 +109,8 @@ impl RocketProject {
             }
             RocketDesignStatus::Revising { remaining_indices, work_completed } => {
                 *work_completed += work;
-                while *work_completed >= FLAW_REVISION_WORK && !remaining_indices.is_empty() {
-                    *work_completed -= FLAW_REVISION_WORK;
+                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_indices.is_empty() {
+                    *work_completed -= balance_cfg.work.flaw_revision_work;
                     let fi = remaining_indices.remove(0);
                     self.flaws.remove(fi);
                     events.push(RocketWorkEvent::RevisionComplete);
@@ -155,8 +157,8 @@ impl RocketProject {
     }
 
     /// Testing level description based on cumulative work in testing.
-    pub fn testing_level(&self) -> &'static str {
-        let cycles = (self.cumulative_testing_work / TESTING_CYCLE_WORK) as u32;
+    pub fn testing_level(&self, balance_cfg: &BalanceConfig) -> &'static str {
+        let cycles = (self.cumulative_testing_work / balance_cfg.work.testing_cycle_work) as u32;
         match cycles {
             0 => "Untested",
             1..=2 => "Lightly Tested",
@@ -285,6 +287,10 @@ mod tests {
         StdRng::seed_from_u64(42)
     }
 
+    fn bal() -> BalanceConfig {
+        BalanceConfig::default()
+    }
+
     fn kerolox_engine(id: u64, thrust: f64, mass: f64, isp: f64) -> EngineDesign {
         EngineDesign {
             id: EngineId(id),
@@ -339,7 +345,7 @@ mod tests {
     #[test]
     fn test_new_rocket_project() {
         let design = simple_two_stage_design();
-        let proj = RocketProject::new(RocketProjectId(1), design);
+        let proj = RocketProject::new(RocketProjectId(1), design, &bal());
         assert!(matches!(proj.status, RocketDesignStatus::InDesign { .. }));
         assert_eq!(proj.teams_assigned, 0);
         assert!(proj.complexity >= 3 && proj.complexity <= 8);
@@ -348,7 +354,7 @@ mod tests {
     #[test]
     fn test_rocket_project_design_completes() {
         let design = simple_two_stage_design();
-        let mut proj = RocketProject::new(RocketProjectId(1), design);
+        let mut proj = RocketProject::new(RocketProjectId(1), design, &bal());
         proj.teams_assigned = 4;
         let mut rng = test_rng();
         let mut next_flaw_id = 0u64;
@@ -360,7 +366,7 @@ mod tests {
 
         let mut all_events = Vec::new();
         for _ in 0..(work_needed as u32 + 10) {
-            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id);
+            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
             all_events.extend(events);
         }
 
@@ -371,14 +377,14 @@ mod tests {
     #[test]
     fn test_rocket_project_revision_fixes_all() {
         let design = simple_two_stage_design();
-        let mut proj = RocketProject::new(RocketProjectId(1), design);
+        let mut proj = RocketProject::new(RocketProjectId(1), design, &bal());
         proj.teams_assigned = 4;
         let mut rng = test_rng();
         let mut next_flaw_id = 0u64;
 
         // Advance to testing
         for _ in 0..200 {
-            proj.apply_daily_work(&mut rng, &mut next_flaw_id);
+            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
         }
 
         // Clear any generated flaws and add controlled test flaws
@@ -407,7 +413,7 @@ mod tests {
         assert!(proj.start_revision());
 
         for _ in 0..50 {
-            proj.apply_daily_work(&mut rng, &mut next_flaw_id);
+            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
         }
 
         assert_eq!(proj.flaws.len(), 0);

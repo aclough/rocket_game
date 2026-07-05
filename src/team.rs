@@ -1,20 +1,6 @@
 use serde::{Serialize, Deserialize};
 
-/// Monthly salary for an engineering team (~8-10 engineers).
-pub const ENGINEERING_MONTHLY_SALARY: f64 = 150_000.0;
-
-/// One-time hiring cost for an engineering team (1x monthly salary).
-pub const ENGINEERING_HIRING_COST: f64 = 150_000.0;
-
-/// Monthly salary for a manufacturing team (~20-25 workers).
-pub const MANUFACTURING_MONTHLY_SALARY: f64 = 300_000.0;
-
-/// One-time hiring cost for a manufacturing team (3x monthly salary).
-pub const MANUFACTURING_HIRING_COST: f64 = 900_000.0;
-
-// Backward-compat aliases used by game_state.rs
-pub const TEAM_MONTHLY_SALARY: f64 = ENGINEERING_MONTHLY_SALARY;
-pub const TEAM_HIRING_COST: f64 = ENGINEERING_HIRING_COST;
+// Salaries and hiring costs live in `balance_config::CostsConfig`.
 
 /// Unique identifier for a team (engineering or manufacturing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -29,11 +15,11 @@ pub struct EngineeringTeam {
 }
 
 impl EngineeringTeam {
-    pub fn new(id: TeamId, name: String) -> Self {
+    pub fn new(id: TeamId, name: String, monthly_salary: f64) -> Self {
         EngineeringTeam {
             id,
             name,
-            monthly_salary: ENGINEERING_MONTHLY_SALARY,
+            monthly_salary,
         }
     }
 }
@@ -47,11 +33,11 @@ pub struct ManufacturingTeam {
 }
 
 impl ManufacturingTeam {
-    pub fn new(id: TeamId, name: String) -> Self {
+    pub fn new(id: TeamId, name: String, monthly_salary: f64) -> Self {
         ManufacturingTeam {
             id,
             name,
-            monthly_salary: MANUFACTURING_MONTHLY_SALARY,
+            monthly_salary,
         }
     }
 }
@@ -71,21 +57,24 @@ pub fn manufacturing_work_rate(num_teams: u32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::balance_config::CostsConfig;
 
     #[test]
     fn test_new_engineering_team() {
-        let team = EngineeringTeam::new(TeamId(1), "Alpha".into());
+        let costs = CostsConfig::default();
+        let team = EngineeringTeam::new(TeamId(1), "Alpha".into(), costs.engineering_monthly_salary);
         assert_eq!(team.id, TeamId(1));
         assert_eq!(team.name, "Alpha");
-        assert_eq!(team.monthly_salary, ENGINEERING_MONTHLY_SALARY);
+        assert_eq!(team.monthly_salary, costs.engineering_monthly_salary);
     }
 
     #[test]
     fn test_new_manufacturing_team() {
-        let team = ManufacturingTeam::new(TeamId(1), "Factory A".into());
+        let costs = CostsConfig::default();
+        let team = ManufacturingTeam::new(TeamId(1), "Factory A".into(), costs.manufacturing_monthly_salary);
         assert_eq!(team.id, TeamId(1));
         assert_eq!(team.name, "Factory A");
-        assert_eq!(team.monthly_salary, MANUFACTURING_MONTHLY_SALARY);
+        assert_eq!(team.monthly_salary, costs.manufacturing_monthly_salary);
     }
 
     #[test]
@@ -107,14 +96,16 @@ mod tests {
     }
 
     #[test]
-    fn test_manufacturing_costs() {
-        assert_eq!(MANUFACTURING_MONTHLY_SALARY, 300_000.0);
-        assert_eq!(MANUFACTURING_HIRING_COST, 900_000.0);
-        assert_eq!(MANUFACTURING_HIRING_COST, MANUFACTURING_MONTHLY_SALARY * 3.0);
+    fn test_default_manufacturing_costs() {
+        let costs = CostsConfig::default();
+        assert_eq!(costs.manufacturing_monthly_salary, 300_000.0);
+        assert_eq!(costs.manufacturing_hiring_cost, 900_000.0);
+        assert_eq!(costs.manufacturing_hiring_cost, costs.manufacturing_monthly_salary * 3.0);
     }
 
     #[test]
-    fn test_hiring_cost_equals_salary() {
-        assert_eq!(ENGINEERING_HIRING_COST, ENGINEERING_MONTHLY_SALARY);
+    fn test_default_hiring_cost_equals_salary() {
+        let costs = CostsConfig::default();
+        assert_eq!(costs.engineering_hiring_cost, costs.engineering_monthly_salary);
     }
 }

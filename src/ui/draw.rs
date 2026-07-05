@@ -285,7 +285,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             EngineDesignStatus::Proposed { .. } => unreachable!("filtered above"),
             EngineDesignStatus::InDesign { .. } => "In Design".to_string(),
             EngineDesignStatus::Testing { .. } =>
-                format!("Testing  {}", project.testing_level()),
+                format!("Testing  {}", project.testing_level(&app.game.balance)),
             EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, .. } =>
                 format!("Revising {} flaw(s), {} improvement(s)",
                     remaining_flaw_indices.len(), remaining_improvement_indices.len()),
@@ -509,7 +509,6 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
 }
 
 fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
-    use crate::flaw::{FLAW_REVISION_WORK, TESTING_CYCLE_WORK};
     use crate::reactor_project::{ReactorDesignStatus, ReactorProject};
 
     let company = &app.game.player_company;
@@ -538,7 +537,7 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
             ReactorDesignStatus::Proposed { .. } => unreachable!("filtered above"),
             ReactorDesignStatus::InDesign { .. } => "In Design".to_string(),
             ReactorDesignStatus::Testing { .. } =>
-                format!("Testing  {}", project.testing_level()),
+                format!("Testing  {}", project.testing_level(&app.game.balance)),
             ReactorDesignStatus::Revising {
                 remaining_flaw_indices,
                 remaining_improvement_indices,
@@ -571,18 +570,20 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                 });
             }
             ReactorDesignStatus::Testing { work_completed } => {
-                let ratio = work_completed / TESTING_CYCLE_WORK;
+                let cycle_work = app.game.balance.work.testing_cycle_work;
+                let ratio = work_completed / cycle_work;
                 gauges.push(GaugeInfo {
                     line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, TESTING_CYCLE_WORK),
+                    label: format!("{:.0}/{:.0}", work_completed, cycle_work),
                     fill_color: Color::Green, text_width, right_aligned: false,
                 });
             }
             ReactorDesignStatus::Revising { work_completed, .. } => {
-                let ratio = work_completed / FLAW_REVISION_WORK;
+                let revision_work = app.game.balance.work.flaw_revision_work;
+                let ratio = work_completed / revision_work;
                 gauges.push(GaugeInfo {
                     line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, FLAW_REVISION_WORK),
+                    label: format!("{:.0}/{:.0}", work_completed, revision_work),
                     fill_color: Color::Rgb(180, 130, 0), text_width, right_aligned: false,
                 });
             }
@@ -620,7 +621,7 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
             if matches!(project.status,
                 ReactorDesignStatus::Testing { .. } | ReactorDesignStatus::Revising { .. })
             {
-                lines.push(Line::from(format!("      Testing: {}", project.testing_level())));
+                lines.push(Line::from(format!("      Testing: {}", project.testing_level(&app.game.balance))));
             }
 
             // Discovered flaws — reactor-flavored consequence reading.
@@ -732,7 +733,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             rocket_project::RocketDesignStatus::InDesign { .. } =>
                 "In Design".to_string(),
             rocket_project::RocketDesignStatus::Testing { .. } =>
-                format!("Testing  {}", project.testing_level()),
+                format!("Testing  {}", project.testing_level(&app.game.balance)),
             rocket_project::RocketDesignStatus::Revising { remaining_indices, .. } =>
                 format!("Revising {} flaw(s)", remaining_indices.len()),
         };
@@ -939,8 +940,9 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
         let line_text = format!("    Building {} unit(s)", order.units);
         let text_width = line_text.len() as u16;
         let line_idx = lines.len();
-        let ratio = (crate::manufacturing::FLOOR_SPACE_BUILD_DAYS - order.days_remaining) as f64
-            / crate::manufacturing::FLOOR_SPACE_BUILD_DAYS as f64;
+        let build_days = app.game.balance.costs.floor_space_build_days;
+        let ratio = build_days.saturating_sub(order.days_remaining) as f64
+            / build_days.max(1) as f64;
         gauges.push(GaugeInfo {
             line_index: line_idx, ratio,
             label: format!("{}d left", order.days_remaining),
@@ -3024,9 +3026,9 @@ fn draw_reactor_editor_modal(
         format!("{}{}{}", mark_l, lvl.display_name(), mark_r)
     }).collect();
     let next_gate_hint = EnrichmentLevel::ALL.iter()
-        .find(|lvl| !lvl.available_at(reputation))
+        .find(|lvl| !lvl.available_at(reputation, &app.game.balance.reputation))
         .map(|lvl| format!("(next: {} at {:.0} rep, you have {:.0})",
-            lvl.display_name(), lvl.min_reputation(), reputation))
+            lvl.display_name(), lvl.min_reputation(&app.game.balance.reputation), reputation))
         .unwrap_or_else(|| "(all enrichments unlocked)".into());
     let enrichment_row = format!(
         " {} Enrichment: {}  {}",

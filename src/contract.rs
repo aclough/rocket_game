@@ -2,6 +2,7 @@ use rand::Rng;
 use rand::rngs::StdRng;
 use serde::{Serialize, Deserialize};
 
+use crate::balance_config::MarketsConfig;
 use crate::calendar::GameDate;
 
 /// Unique identifier for a contract.
@@ -62,7 +63,7 @@ impl EconomySensitivity {
 }
 
 /// A destination within a market that contracts can target.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarketDestination {
     pub location_id: String,
     pub display_name: String,
@@ -74,7 +75,7 @@ pub struct MarketDestination {
 }
 
 /// An active modifier on a market (from events, competition, etc.).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarketModifier {
     /// Unique key — checked for duplicates when adding.
     pub id: String,
@@ -89,7 +90,7 @@ pub struct MarketModifier {
 }
 
 /// A launch market that generates contracts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Market {
     pub id: MarketId,
     pub name: String,
@@ -142,6 +143,7 @@ pub fn generate_market_contracts(
     current_date: GameDate,
     reputation: f64,
     economy_modifier: f64,
+    markets_cfg: &MarketsConfig,
 ) -> Vec<Contract> {
     if !market.active || reputation < market.min_reputation {
         return Vec::new();
@@ -154,7 +156,7 @@ pub fn generate_market_contracts(
     let mut contracts = Vec::new();
     for _ in 0..count {
         if let Some(c) = generate_single_contract(
-            market, rng, next_contract_id, current_date, rate_mult,
+            market, rng, next_contract_id, current_date, rate_mult, markets_cfg,
         ) {
             contracts.push(c);
         }
@@ -168,6 +170,7 @@ fn generate_single_contract(
     next_contract_id: &mut u64,
     current_date: GameDate,
     rate_mult: f64,
+    markets_cfg: &MarketsConfig,
 ) -> Option<Contract> {
     if market.destinations.is_empty() || market.name_prefixes.is_empty() {
         return None;
@@ -193,10 +196,10 @@ fn generate_single_contract(
     let payload_kg = payload_kg.max(dest.min_payload_kg);
 
     let base_payment = payload_kg * dest.rate_per_kg;
-    let variance = rng.gen_range(0.8..=1.2);
+    let variance = rng.gen_range(markets_cfg.payment_variance_min..=markets_cfg.payment_variance_max);
     let payment = (base_payment * variance * rate_mult / 10_000.0).round() * 10_000.0;
 
-    let deadline_days = rng.gen_range(60..=180);
+    let deadline_days = rng.gen_range(markets_cfg.deadline_min_days..=markets_cfg.deadline_max_days);
     let deadline = current_date.add_days(deadline_days);
 
     let prefix = &market.name_prefixes[rng.gen_range(0..market.name_prefixes.len())];
@@ -457,6 +460,10 @@ mod tests {
         StdRng::seed_from_u64(42)
     }
 
+    fn mcfg() -> MarketsConfig {
+        MarketsConfig::default()
+    }
+
     #[test]
     fn test_initial_markets_count() {
         let markets = initial_markets();
@@ -481,11 +488,11 @@ mod tests {
         let rideshare = markets.iter().find(|m| m.id == MARKET_RIDESHARE).unwrap();
         let geo = markets.iter().find(|m| m.id == MARKET_GEO_COMSATS).unwrap();
 
-        let cs = generate_market_contracts(rideshare, &mut rng, &mut next_id, date, 0.0, 1.0);
+        let cs = generate_market_contracts(rideshare, &mut rng, &mut next_id, date, 0.0, 1.0, &mcfg());
         // May or may not generate (volume 0.5 + random), but shouldn't error
         assert!(cs.iter().all(|c| c.market_id == MARKET_RIDESHARE));
 
-        let cs = generate_market_contracts(geo, &mut rng, &mut next_id, date, 10.0, 1.0);
+        let cs = generate_market_contracts(geo, &mut rng, &mut next_id, date, 10.0, 1.0, &mcfg());
         assert!(cs.is_empty(), "GEO should require rep 50");
     }
 
@@ -552,7 +559,7 @@ mod tests {
         let market = &initial_markets()[2]; // Rideshare
         let mut rng = make_rng();
         let mut next_id = 1u64;
-        let cs = generate_market_contracts(market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 0.0, 1.0);
+        let cs = generate_market_contracts(market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 0.0, 1.0, &mcfg());
         for c in &cs {
             assert_eq!(c.market_id, MARKET_RIDESHARE);
         }
@@ -563,7 +570,7 @@ mod tests {
         let market = &event_market_templates()[0]; // COTS, inactive
         let mut rng = make_rng();
         let mut next_id = 1u64;
-        let cs = generate_market_contracts(market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 200.0, 1.0);
+        let cs = generate_market_contracts(market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 200.0, 1.0, &mcfg());
         assert!(cs.is_empty());
     }
 }

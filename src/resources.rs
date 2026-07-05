@@ -1,5 +1,6 @@
 use serde::{Serialize, Deserialize};
 
+use crate::balance_config::ResourcePrices;
 use crate::engine_project::PropellantPreset;
 
 /// Resource types used in manufacturing.
@@ -44,20 +45,6 @@ impl Resource {
         }
     }
 
-    /// Price per kilogram in dollars.
-    pub fn price_per_kg(&self) -> f64 {
-        match self {
-            Resource::Aluminium => 5.0,
-            Resource::Steel => 3.0,
-            Resource::Superalloys => 80.0,
-            Resource::Composites => 50.0,
-            Resource::Wiring => 150.0,
-            Resource::Electronics => 20_000.0,
-            Resource::Plumbing => 1_500.0,
-            Resource::SolidPropellant => 15.0,
-            Resource::HEU => 100_000.0, // very expensive, regulated material
-        }
-    }
 }
 
 /// A bill of materials: fraction of total mass for each resource.
@@ -69,9 +56,9 @@ pub struct BillOfMaterials {
 
 impl BillOfMaterials {
     /// Compute the material cost for a given total mass.
-    pub fn material_cost(&self, mass_kg: f64) -> f64 {
+    pub fn material_cost(&self, mass_kg: f64, prices: &ResourcePrices) -> f64 {
         self.fractions.iter()
-            .map(|(r, frac)| mass_kg * frac * r.price_per_kg())
+            .map(|(r, frac)| mass_kg * frac * prices.price_per_kg(*r))
             .sum()
     }
 
@@ -225,23 +212,23 @@ pub fn rocket_integration_bom() -> BillOfMaterials {
 pub const ROCKET_INTEGRATION_MASS_KG: f64 = 800.0;
 
 /// Cost to manufacture an engine of given mass and propellant type.
-pub fn engine_material_cost(preset: PropellantPreset, engine_mass_kg: f64) -> f64 {
-    engine_bom(preset).material_cost(engine_mass_kg)
+pub fn engine_material_cost(preset: PropellantPreset, engine_mass_kg: f64, prices: &ResourcePrices) -> f64 {
+    engine_bom(preset).material_cost(engine_mass_kg, prices)
 }
 
 /// Cost for tank/structure manufacturing of a stage.
-pub fn tank_material_cost(structural_mass_kg: f64) -> f64 {
-    tank_bom().material_cost(structural_mass_kg)
+pub fn tank_material_cost(structural_mass_kg: f64, prices: &ResourcePrices) -> f64 {
+    tank_bom().material_cost(structural_mass_kg, prices)
 }
 
 /// Fixed cost for stage assembly (wiring, avionics, etc.).
-pub fn stage_assembly_cost() -> f64 {
-    stage_assembly_bom().material_cost(STAGE_ASSEMBLY_MASS_KG)
+pub fn stage_assembly_cost(prices: &ResourcePrices) -> f64 {
+    stage_assembly_bom().material_cost(STAGE_ASSEMBLY_MASS_KG, prices)
 }
 
 /// Fixed cost for final rocket integration.
-pub fn rocket_integration_cost() -> f64 {
-    rocket_integration_bom().material_cost(ROCKET_INTEGRATION_MASS_KG)
+pub fn rocket_integration_cost(prices: &ResourcePrices) -> f64 {
+    rocket_integration_bom().material_cost(ROCKET_INTEGRATION_MASS_KG, prices)
 }
 
 /// Format a dollar amount for display (e.g. "$1.5M", "$300K").
@@ -288,9 +275,10 @@ mod tests {
 
     #[test]
     fn test_resource_prices() {
-        assert_eq!(Resource::Aluminium.price_per_kg(), 5.0);
-        assert_eq!(Resource::Electronics.price_per_kg(), 20_000.0);
-        assert_eq!(Resource::SolidPropellant.price_per_kg(), 15.0);
+        let prices = ResourcePrices::default();
+        assert_eq!(prices.price_per_kg(Resource::Aluminium), 5.0);
+        assert_eq!(prices.price_per_kg(Resource::Electronics), 20_000.0);
+        assert_eq!(prices.price_per_kg(Resource::SolidPropellant), 15.0);
     }
 
     #[test]
@@ -313,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_engine_material_cost_kerolox() {
-        let cost = engine_material_cost(PropellantPreset::Kerolox, 500.0);
+        let cost = engine_material_cost(PropellantPreset::Kerolox, 500.0, &ResourcePrices::default());
         // 500kg engine: superalloys(200kg*$80) + steel(125*$3) + alu(50*$5) + plumb(50*$1500) + ...
         // Should be in the tens-to-hundreds of thousands range
         assert!(cost > 50_000.0, "Kerolox engine cost {} too low", cost);
@@ -323,15 +311,15 @@ mod tests {
     #[test]
     fn test_engine_material_cost_solid_higher() {
         // Solid engines include solid propellant in the casing mass
-        let solid = engine_material_cost(PropellantPreset::Solid, 1000.0);
-        let kerolox = engine_material_cost(PropellantPreset::Kerolox, 1000.0);
+        let solid = engine_material_cost(PropellantPreset::Solid, 1000.0, &ResourcePrices::default());
+        let kerolox = engine_material_cost(PropellantPreset::Kerolox, 1000.0, &ResourcePrices::default());
         // Solid should be cheaper (less superalloy, more cheap steel/propellant)
         assert!(solid < kerolox, "Solid {} should be cheaper than kerolox {}", solid, kerolox);
     }
 
     #[test]
     fn test_tank_material_cost() {
-        let cost = tank_material_cost(2000.0);
+        let cost = tank_material_cost(2000.0, &ResourcePrices::default());
         // Includes electronics at $20K/kg: 2000 * 0.002 * 20000 = $80K, plus plumbing, etc.
         assert!(cost > 50_000.0 && cost < 500_000.0,
             "Tank cost {} out of range for 2000kg structure", cost);
@@ -339,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_stage_assembly_cost() {
-        let cost = stage_assembly_cost();
+        let cost = stage_assembly_cost(&ResourcePrices::default());
         // 500kg: electronics(50kg*$20K=$1M) + wiring(150kg*$150) + plumbing(50kg*$1.5K) + ...
         assert!(cost > 100_000.0 && cost < 2_000_000.0,
             "Stage assembly cost {} out of range", cost);
@@ -347,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_rocket_integration_cost() {
-        let cost = rocket_integration_cost();
+        let cost = rocket_integration_cost(&ResourcePrices::default());
         // 800kg: electronics(40kg*$20K=$800K) + wiring(120kg*$150) + ...
         assert!(cost > 100_000.0 && cost < 2_000_000.0,
             "Integration cost {} out of range", cost);

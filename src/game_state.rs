@@ -14,8 +14,8 @@ use crate::reputation::Reputation;
 use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
 use crate::rocket_project::{RocketProject, RocketProjectId, RocketWorkEvent};
 use crate::seed::GameSeed;
-use crate::team::{EngineeringTeam, ManufacturingTeam, TeamId, TEAM_HIRING_COST,
-    MANUFACTURING_HIRING_COST, ENGINEERING_MONTHLY_SALARY};
+use crate::balance_config::BalanceConfig;
+use crate::team::{EngineeringTeam, ManufacturingTeam, TeamId};
 use crate::third_party::{self, ContractedEngine, ContractedEngineId, ThirdPartyEngine};
 
 /// Game simulation speed.
@@ -176,7 +176,7 @@ pub struct Company {
 }
 
 impl Company {
-    pub fn new(name: String, starting_money: f64, seed: &GameSeed) -> Self {
+    pub fn new(name: String, starting_money: f64, seed: &GameSeed, balance_cfg: &BalanceConfig) -> Self {
         let catalog = third_party::generate_starter_engines(seed);
         let mut company = Company {
             name,
@@ -197,7 +197,7 @@ impl Company {
             third_party_catalog: catalog,
             contracted_engines: Vec::new(),
             rocket_designs: Vec::new(),
-            manufacturing: Manufacturing::new(),
+            manufacturing: Manufacturing::new(&balance_cfg.costs),
             notified_manufacturing_idle: false,
             active_contracts: Vec::new(),
             reputation: Reputation::new(),
@@ -212,16 +212,16 @@ impl Company {
             auto_build_targets: HashMap::new(),
         };
         // Start with one engineering team
-        company.hire_team("Team 1".into());
+        company.hire_team("Team 1".into(), balance_cfg);
         company
     }
 
     /// Hire a new engineering team. Returns the event if successful.
-    pub fn hire_team(&mut self, name: String) -> Option<GameEvent> {
-        self.money -= TEAM_HIRING_COST;
+    pub fn hire_team(&mut self, name: String, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
+        self.money -= balance_cfg.costs.engineering_hiring_cost;
         let id = TeamId(self.next_team_id);
         self.next_team_id += 1;
-        let team = EngineeringTeam::new(id, name.clone());
+        let team = EngineeringTeam::new(id, name.clone(), balance_cfg.costs.engineering_monthly_salary);
         self.teams.push(team);
         Some(GameEvent::TeamHired { name })
     }
@@ -259,11 +259,11 @@ impl Company {
     }
 
     /// Hire a manufacturing team.
-    pub fn hire_manufacturing_team(&mut self, name: String) -> Option<GameEvent> {
-        self.money -= MANUFACTURING_HIRING_COST;
+    pub fn hire_manufacturing_team(&mut self, name: String, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
+        self.money -= balance_cfg.costs.manufacturing_hiring_cost;
         let id = TeamId(self.next_team_id);
         self.next_team_id += 1;
-        let team = ManufacturingTeam::new(id, name.clone());
+        let team = ManufacturingTeam::new(id, name.clone(), balance_cfg.costs.manufacturing_monthly_salary);
         self.manufacturing_teams.push(team);
         Some(GameEvent::ManufacturingTeamHired { name })
     }
@@ -277,6 +277,7 @@ impl Company {
         scale: f64,
         use_vacuum_isp: bool,
         technology_id: Option<crate::technology::TechnologyId>,
+        balance_cfg: &BalanceConfig,
     ) -> Option<GameEvent> {
         let project_id = EngineProjectId(self.next_project_id);
         let engine_id = EngineId(self.next_engine_id);
@@ -285,7 +286,7 @@ impl Company {
 
         let mut project = EngineProject::new(
             project_id, engine_id, name.clone(),
-            cycle, preset, scale, use_vacuum_isp,
+            cycle, preset, scale, use_vacuum_isp, balance_cfg,
         )?;
         project.technology_id = technology_id;
         self.engine_projects.push(project);
@@ -304,6 +305,7 @@ impl Company {
         scale: f64,
         use_vacuum_isp: bool,
         technology_id: Option<crate::technology::TechnologyId>,
+        balance_cfg: &BalanceConfig,
     ) -> Option<EngineProjectId> {
         let project_id = EngineProjectId(self.next_project_id);
         let engine_id = EngineId(self.next_engine_id);
@@ -312,7 +314,7 @@ impl Company {
 
         let mut project = EngineProject::new_proposed(
             project_id, engine_id, name,
-            cycle, preset, scale, use_vacuum_isp,
+            cycle, preset, scale, use_vacuum_isp, balance_cfg,
         )?;
         project.technology_id = technology_id;
         self.engine_projects.push(project);
@@ -374,13 +376,14 @@ impl Company {
         name: String,
         scale: f64,
         enrichment: crate::reactor::EnrichmentLevel,
+        balance_cfg: &BalanceConfig,
     ) -> crate::reactor_project::ReactorProjectId {
         let project_id = crate::reactor_project::ReactorProjectId(self.next_reactor_project_id);
         let reactor_id = crate::reactor::ReactorId(self.next_reactor_id);
         self.next_reactor_project_id += 1;
         self.next_reactor_id += 1;
         let project = crate::reactor_project::ReactorProject::new_proposed(
-            project_id, reactor_id, name, scale, enrichment,
+            project_id, reactor_id, name, scale, enrichment, balance_cfg,
         );
         self.reactor_projects.push(project);
         project_id
@@ -500,11 +503,11 @@ impl Company {
     }
 
     /// Start a new rocket design project. Returns the event if successful.
-    pub fn start_rocket_project(&mut self, design: RocketDesign) -> Option<GameEvent> {
+    pub fn start_rocket_project(&mut self, design: RocketDesign, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
         let project_id = RocketProjectId(self.next_rocket_project_id);
         self.next_rocket_project_id += 1;
         let name = design.name.clone();
-        let project = RocketProject::new(project_id, design);
+        let project = RocketProject::new(project_id, design, balance_cfg);
         self.rocket_projects.push(project);
         Some(GameEvent::RocketDesignStarted { rocket_name: name })
     }
@@ -543,7 +546,7 @@ impl Company {
 
     /// Order construction of a rocket. Auto-queues engine, stage, and integration orders.
     /// Returns the total material cost and event, or None if the rocket project isn't complete.
-    pub fn order_rocket_build(&mut self, rocket_project_index: usize) -> Option<(f64, GameEvent)> {
+    pub fn order_rocket_build(&mut self, rocket_project_index: usize, balance_cfg: &BalanceConfig) -> Option<(f64, GameEvent)> {
         if rocket_project_index >= self.rocket_projects.len() {
             return None;
         }
@@ -585,6 +588,7 @@ impl Company {
                                     ep.revision,
                                     ep.flaws.clone(),
                                     ep.improvements.iter().filter(|i| i.actualized).cloned().collect(),
+                                    balance_cfg,
                                 );
                                 total_cost += order.material_cost;
                                 self.manufacturing.orders.push(order);
@@ -631,6 +635,7 @@ impl Company {
                     stage_name,
                     stage.structural_mass_kg,
                     rocket_prior,
+                    balance_cfg,
                 );
                 total_cost += order.material_cost;
                 self.manufacturing.orders.push(order);
@@ -651,6 +656,7 @@ impl Company {
             rocket_prior,
             rp.revision,
             rp.flaws.clone(),
+            balance_cfg,
         );
         total_cost += integration_order.material_cost;
         self.manufacturing.orders.push(integration_order);
@@ -675,7 +681,7 @@ impl Company {
     }
 
     /// Order a standalone engine build for a player-designed engine project.
-    pub fn order_engine_build(&mut self, engine_project_index: usize) -> Option<(f64, GameEvent)> {
+    pub fn order_engine_build(&mut self, engine_project_index: usize, balance_cfg: &BalanceConfig) -> Option<(f64, GameEvent)> {
         if engine_project_index >= self.engine_projects.len() {
             return None;
         }
@@ -708,6 +714,7 @@ impl Company {
             revision,
             flaws,
             improvements,
+            balance_cfg,
         );
         let cost = order.material_cost;
         self.manufacturing.orders.push(order);
@@ -721,7 +728,7 @@ impl Company {
     }
 
     /// Automatically order rocket builds to maintain auto_build_targets inventory levels.
-    fn auto_reorder_rockets(&mut self) -> Vec<GameEvent> {
+    fn auto_reorder_rockets(&mut self, balance_cfg: &BalanceConfig) -> Vec<GameEvent> {
         let mut events = Vec::new();
         let targets: Vec<(RocketProjectId, u32)> = self.auto_build_targets.iter()
             .map(|(&pid, &count)| (pid, count))
@@ -740,7 +747,7 @@ impl Company {
             let current = self.manufacturing.inventory.rocket_count(project_id) as u32
                 + self.manufacturing.pending_integration_orders(project_id);
             for _ in current..min_count {
-                if let Some((_cost, evt)) = self.order_rocket_build(index) {
+                if let Some((_cost, evt)) = self.order_rocket_build(index, balance_cfg) {
                     events.push(evt);
                 }
             }
@@ -827,7 +834,7 @@ impl Company {
 
     /// Contract a third-party engine from the catalog.
     /// No upfront cost — per-unit cost is charged when building rockets.
-    pub fn contract_third_party(&mut self, catalog_index: usize, current_date: GameDate, seed: &GameSeed) -> Option<GameEvent> {
+    pub fn contract_third_party(&mut self, catalog_index: usize, current_date: GameDate, seed: &GameSeed, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
         if catalog_index >= self.third_party_catalog.len() {
             return None;
         }
@@ -845,6 +852,7 @@ impl Company {
             seed,
             &name,
             &mut self.next_flaw_id,
+            &balance_cfg.flaws,
         );
 
         let contracted = ContractedEngine {
@@ -1049,6 +1057,10 @@ pub struct GameState {
     /// Tracks which market events have already fired (by event key).
     #[serde(default)]
     pub fired_market_events: Vec<String>,
+    /// Tunable balance parameters this game was created with. Saves
+    /// remember their balance; old saves load with defaults.
+    #[serde(default)]
+    pub balance: crate::balance_config::BalanceConfig,
 }
 
 fn default_next_contract_id() -> u64 { 1 }
@@ -1062,6 +1074,24 @@ fn default_markets() -> Vec<contract::Market> {
 
 impl GameState {
     pub fn new(company_name: String, starting_money: f64, seed_value: u64) -> Self {
+        Self::with_balance_and_money(
+            company_name, starting_money, seed_value, BalanceConfig::default(),
+        )
+    }
+
+    /// Create a game with a custom balance config; starting money comes
+    /// from the config. Used by the game binary and the sim harness.
+    pub fn with_balance(company_name: String, seed_value: u64, balance: BalanceConfig) -> Self {
+        let starting_money = balance.costs.starting_money;
+        Self::with_balance_and_money(company_name, starting_money, seed_value, balance)
+    }
+
+    fn with_balance_and_money(
+        company_name: String,
+        starting_money: f64,
+        seed_value: u64,
+        balance: BalanceConfig,
+    ) -> Self {
         let start = GameDate::default_start();
         let mut event_log = EventLog::new(EVENT_LOG_SIZE);
         event_log.push(start, GameEvent::GameStarted);
@@ -1070,10 +1100,13 @@ impl GameState {
         let economy = crate::economy::initial_state(&seed, start);
         let technologies = crate::technology::generate_technologies(&seed);
 
+        let mut markets = balance.markets.initial_markets.clone();
+        markets.extend(balance.markets.event_market_templates.clone());
+
         GameState {
             date: start,
             start_date: start,
-            player_company: Company::new(company_name, starting_money, &seed),
+            player_company: Company::new(company_name, starting_money, &seed, &balance),
             event_log,
             seed,
             speed: GameSpeed::Paused,
@@ -1085,9 +1118,10 @@ impl GameState {
             next_rocket_id: 1,
             spacecraft: Vec::new(),
             economy,
-            markets: default_markets(),
+            markets,
             fired_market_events: Vec::new(),
             technologies,
+            balance,
         }
     }
 
@@ -1111,8 +1145,8 @@ impl GameState {
         if matches!(project.status, RocketDesignStatus::Revising { .. }) {
             return None;
         }
-        let work_required = crate::balance::rocket_design_work_required(project.complexity)
-            * crate::balance::ROCKET_MODIFICATION_WORK_FRACTION;
+        let work_required = self.balance.work.rocket_design_work_required(project.complexity)
+            * self.balance.work.rocket_modification_work_fraction;
         project.design.stage_groups = new_stage_groups;
         project.status = RocketDesignStatus::InDesign {
             work_completed: 0.0,
@@ -1124,17 +1158,19 @@ impl GameState {
         // schema for rocket flaws; existing rocket flaws are generated
         // the same way via gaussian_sample over complexity).
         let new_flaw = self.seed.contingent_rng.gen::<f64>()
-            < crate::balance::ROCKET_MODIFICATION_FLAW_PROB;
+            < self.balance.flaws.modification_flaw_prob;
         if new_flaw {
             let id = crate::flaw::FlawId(self.player_company.next_flaw_id);
             self.player_company.next_flaw_id += 1;
-            let trigger = if self.seed.contingent_rng.gen::<f64>() < 0.30 {
+            let trigger = if self.seed.contingent_rng.gen::<f64>()
+                < self.balance.flaws.rocket_endurance_fraction
+            {
                 crate::flaw::FlawTrigger::PerDay
             } else {
                 crate::flaw::FlawTrigger::PerFlight
             };
             let flaw = crate::flaw::generate_single_flaw(
-                id, trigger, &mut self.seed.contingent_rng, None,
+                id, trigger, &mut self.seed.contingent_rng, None, &self.balance.flaws,
             );
             // Re-borrow project (it was released across the rng calls).
             let project = self.player_company.rocket_projects.iter_mut()
@@ -1165,10 +1201,11 @@ impl GameState {
         {
             let rng = &mut self.seed.contingent_rng;
             let next_flaw_id = &mut self.player_company.next_flaw_id;
+            let balance_cfg = &self.balance;
 
             for (pi, project) in self.player_company.engine_projects.iter_mut().enumerate() {
                 let engine_name = project.design.name.clone();
-                let work_events = project.apply_daily_work(rng, next_flaw_id);
+                let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
                 for we in work_events {
                     let evt = match we {
                         WorkEvent::DesignComplete { flaw_count } => {
@@ -1196,7 +1233,7 @@ impl GameState {
 
             for project in &mut self.player_company.rocket_projects {
                 let rocket_name = project.design.name.clone();
-                let work_events = project.apply_daily_work(rng, next_flaw_id);
+                let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
                 for we in work_events {
                     let evt = match we {
                         RocketWorkEvent::DesignComplete { flaw_count } =>
@@ -1217,7 +1254,7 @@ impl GameState {
             // arrive in Phase 3.
             for (pi, project) in self.player_company.reactor_projects.iter_mut().enumerate() {
                 let reactor_name = project.design.name.clone();
-                let work_events = project.apply_daily_work(rng, next_flaw_id);
+                let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
                 for we in work_events {
                     let evt = match we {
                         crate::reactor_project::ReactorWorkEvent::DesignComplete { flaw_count } => {
@@ -1244,7 +1281,7 @@ impl GameState {
             }
 
             // Accumulate NRE (engineering salary) on active projects
-            let daily_salary = ENGINEERING_MONTHLY_SALARY / 30.0;
+            let daily_salary = balance_cfg.costs.engineering_monthly_salary / 30.0;
             for project in &mut self.player_company.engine_projects {
                 if project.teams_assigned > 0 {
                     project.nre_cost += project.teams_assigned as f64 * daily_salary;
@@ -1532,7 +1569,7 @@ impl GameState {
             for market in &self.markets {
                 let cs = contract::generate_market_contracts(
                     market, &mut rng, &mut self.next_contract_id,
-                    self.date, rep, econ_mod,
+                    self.date, rep, econ_mod, &self.balance.markets,
                 );
                 generated += cs.len() as u32;
                 self.available_contracts.extend(cs);
@@ -1557,19 +1594,19 @@ impl GameState {
             if let Some(last) = self.player_company.last_launch_date {
                 let days_since = last.days_until(&self.date);
                 if days_since >= 365 {
-                    self.player_company.reputation.on_year_without_launch();
+                    self.player_company.reputation.on_year_without_launch(&self.balance.reputation);
                 }
             } else if self.date != self.start_date {
                 // Never launched and at least a year has passed
                 let days_since_start = self.start_date.days_until(&self.date);
                 if days_since_start >= 365 {
-                    self.player_company.reputation.on_year_without_launch();
+                    self.player_company.reputation.on_year_without_launch(&self.balance.reputation);
                 }
             }
         }
 
         // Process manufacturing
-        let mfg_events = self.player_company.manufacturing.advance_day();
+        let mfg_events = self.player_company.manufacturing.advance_day(&self.balance.costs);
         for me in mfg_events {
             let evt = match me {
                 crate::manufacturing::ManufacturingEvent::EngineBuilt {
@@ -1606,7 +1643,7 @@ impl GameState {
         self.player_company.try_unblock_manufacturing_orders();
 
         // Auto-reorder rockets to maintain inventory targets
-        let auto_events = self.player_company.auto_reorder_rockets();
+        let auto_events = self.player_company.auto_reorder_rockets(&self.balance);
         for evt in auto_events {
             self.event_log.push(self.date, evt.clone());
             events.push(evt);
@@ -1835,7 +1872,7 @@ impl GameState {
         }
         for (i, name) in expired_accepted.into_iter().rev() {
             self.player_company.active_contracts.remove(i);
-            self.player_company.reputation.on_contract_expired();
+            self.player_company.reputation.on_contract_expired(&self.balance.reputation);
             let evt = GameEvent::ContractExpired { contract_name: name };
             self.event_log.push(self.date, evt.clone());
             events.push(evt);
@@ -1968,7 +2005,7 @@ impl GameState {
                 contract_id_for_record = Some(*first);
             }
 
-            self.player_company.reputation.on_launch_failure();
+            self.player_company.reputation.on_launch_failure(&self.balance.reputation);
 
             for cid in &manifest_contract_ids {
                 if let Some(ci) = self.player_company.active_contracts.iter()
@@ -2755,7 +2792,7 @@ impl GameState {
                         FlightStatus::Failed { reason } => reason.clone(),
                         _ => "stage loss".to_string(),
                     };
-                    self.player_company.reputation.on_launch_failure();
+                    self.player_company.reputation.on_launch_failure(&self.balance.reputation);
                     let evt = GameEvent::SpacecraftLost {
                         rocket_name: flight.rocket_name.clone(),
                         location,
@@ -2786,9 +2823,9 @@ impl GameState {
         let is_partial = flight.launch_partial;
 
         if is_partial {
-            self.player_company.reputation.on_launch_partial_failure();
+            self.player_company.reputation.on_launch_partial_failure(&self.balance.reputation);
         } else {
-            self.player_company.reputation.on_launch_success();
+            self.player_company.reputation.on_launch_success(&self.balance.reputation);
         }
 
         // Process each payload. Spacecraft payloads marked for this
@@ -2814,7 +2851,7 @@ impl GameState {
                         let contract_name = contract.name.clone();
                         self.player_company.money += payment;
                         self.record_income(payment);
-                        self.player_company.reputation.on_contract_launch();
+                        self.player_company.reputation.on_contract_launch(&self.balance.reputation);
 
                         let pay_evt = GameEvent::PaymentReceived {
                             amount: payment,
@@ -3093,7 +3130,7 @@ mod tests {
         assert_eq!(gs.date, GameDate::default_start());
         assert_eq!(gs.player_company.name, "SpaceCorp");
         // Starting money minus one engineering team hiring cost ($150K)
-        assert_eq!(gs.player_company.money, 200_000_000.0 - TEAM_HIRING_COST);
+        assert_eq!(gs.player_company.money, 200_000_000.0 - gs.balance.costs.engineering_hiring_cost);
         assert_eq!(gs.speed, GameSpeed::Paused);
         assert_eq!(gs.elapsed_days(), 0);
         // Should have GameStarted event
@@ -3185,10 +3222,10 @@ mod tests {
         let mut gs = GameState::new("Test".into(), 1_000_000.0, 1);
         // Starts with 1 team (from Company::new)
         assert_eq!(gs.player_company.team_count(), 1);
-        gs.player_company.hire_team("Alpha".into());
+        gs.player_company.hire_team("Alpha".into(), &gs.balance);
         assert_eq!(gs.player_company.team_count(), 2);
         // Starting money minus 2 hiring costs (initial team + Alpha)
-        assert_eq!(gs.player_company.money, 1_000_000.0 - 2.0 * TEAM_HIRING_COST);
+        assert_eq!(gs.player_company.money, 1_000_000.0 - 2.0 * gs.balance.costs.engineering_hiring_cost);
     }
 
     /// Build a 3-stage rocket design with two different engines.
@@ -3356,7 +3393,7 @@ mod tests {
             "Stage 3 should add significant dv, got total {:.0} vs 1+2={:.0}", total_dv, dv_12);
 
         // --- Part 1: Launch to LEO, only stages 1+2 flaws should fire ---
-        let rp = RocketProject::new(RocketProjectId(1), design.clone());
+        let rp = RocketProject::new(RocketProjectId(1), design.clone(), &crate::balance_config::BalanceConfig::default());
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
         let sim = crate::launch::simulate_launch(
@@ -3460,7 +3497,7 @@ mod tests {
         gs.player_company.engine_projects = engine_projects;
 
         // Simulate launch to get degraded design
-        let rp = RocketProject::new(RocketProjectId(1), design.clone());
+        let rp = RocketProject::new(RocketProjectId(1), design.clone(), &crate::balance_config::BalanceConfig::default());
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::seed_from_u64(99);
         let sim = crate::launch::simulate_launch(
@@ -3522,7 +3559,7 @@ mod tests {
     #[test]
     fn test_salary_deduction() {
         let mut gs = GameState::new("Test".into(), 1_000_000.0, 1);
-        gs.player_company.hire_team("Alpha".into());
+        gs.player_company.hire_team("Alpha".into(), &gs.balance);
         // Now has 2 teams (1 initial + Alpha), paid 2 hiring costs
 
         // Advance to Feb 1 (31 days)
@@ -3530,7 +3567,7 @@ mod tests {
             gs.advance_day();
         }
         // Should have paid 2 hiring costs + 2 team salaries for 1 month
-        let expected = 1_000_000.0 - 2.0 * TEAM_HIRING_COST - 2.0 * ENGINEERING_MONTHLY_SALARY;
+        let expected = 1_000_000.0 - 2.0 * gs.balance.costs.engineering_hiring_cost - 2.0 * gs.balance.costs.engineering_monthly_salary;
         assert!((gs.player_company.money - expected).abs() < 0.01);
     }
 
@@ -3539,7 +3576,7 @@ mod tests {
         let mut gs = GameState::new("Test".into(), 100_000.0, 1);
         // Starts with 1 team (hiring cost $150K), money = 100K - 150K = -50K
         assert!(gs.player_company.money < 0.0);
-        gs.player_company.hire_team("Alpha".into()); // another -150K
+        gs.player_company.hire_team("Alpha".into(), &gs.balance); // another -150K
         assert!(gs.player_company.money < -150_000.0);
         // Should still work, just go negative
         for _ in 0..31 {
@@ -3557,7 +3594,7 @@ mod tests {
             crate::engine::EngineCycle::GasGenerator,
             crate::engine_project::PropellantPreset::Kerolox,
             1.0,
-            true, None,
+            true, None, &gs.balance,
         );
         assert!(evt.is_some());
         assert_eq!(gs.player_company.engine_projects.len(), 1);
@@ -3567,13 +3604,13 @@ mod tests {
     fn test_team_assignment() {
         let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
         // Starts with 1 team, hire another
-        gs.player_company.hire_team("Alpha".into());
+        gs.player_company.hire_team("Alpha".into(), &gs.balance);
         gs.player_company.start_engine_project(
             "Kestrel".into(),
             crate::engine::EngineCycle::GasGenerator,
             crate::engine_project::PropellantPreset::Kerolox,
             1.0,
-            true, None,
+            true, None, &gs.balance,
         );
 
         assert_eq!(gs.player_company.unassigned_team_count(), 2);
@@ -3603,7 +3640,7 @@ mod tests {
         let date = gs.date;
         let seed = gs.seed.clone();
 
-        let evt = gs.player_company.contract_third_party(0, date, &seed);
+        let evt = gs.player_company.contract_third_party(0, date, &seed, &gs.balance);
         assert!(evt.is_some());
         assert_eq!(gs.player_company.contracted_engines.len(), 1);
         // No money deducted for contracting
@@ -3615,13 +3652,13 @@ mod tests {
     #[test]
     fn test_design_work_progresses() {
         let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
-        gs.player_company.hire_team("Alpha".into());
+        gs.player_company.hire_team("Alpha".into(), &gs.balance);
         gs.player_company.start_engine_project(
             "Kestrel".into(),
             crate::engine::EngineCycle::GasGenerator,
             crate::engine_project::PropellantPreset::Kerolox,
             1.0,
-            true, None,
+            true, None, &gs.balance,
         );
         gs.player_company.add_team_to_project(0);
 
@@ -3799,7 +3836,7 @@ mod tests {
         let (design, engine_projects) = make_three_stage_design();
         gs.player_company.engine_projects = engine_projects;
 
-        let mut rp = RocketProject::new(RocketProjectId(1), design);
+        let mut rp = RocketProject::new(RocketProjectId(1), design, &crate::balance_config::BalanceConfig::default());
         rp.status = RocketDesignStatus::Testing { work_completed: 100.0 };
         let rp_id = rp.project_id;
         gs.player_company.rocket_projects.push(rp);
@@ -3811,7 +3848,7 @@ mod tests {
     /// Cap at 30 iterations to avoid infinite loops if something is wrong.
     fn run_manufacturing_to_rocket(gs: &mut GameState) {
         // Hire a manufacturing team so auto-assignment can pick orders up.
-        gs.player_company.hire_manufacturing_team("MfgA".into());
+        gs.player_company.hire_manufacturing_team("MfgA".into(), &gs.balance);
         for _ in 0..30 {
             // Force every active order to "almost complete" so the next day's
             // work tick finishes them. We still tick advance_day so the full
@@ -3852,15 +3889,17 @@ mod tests {
             0,
             Vec::new(),
             Vec::new(),
+            &crate::balance_config::BalanceConfig::default(),
         );
         let material = order.material_cost;
         order.teams_assigned = 1;
 
         // Tick 30 days of work — this is roughly one team-month = $300K of labor.
+        let costs = crate::balance_config::CostsConfig::default();
         for _ in 0..30 {
-            order.apply_daily_work();
+            order.apply_daily_work(&costs);
         }
-        let expected_month_labor = crate::team::MANUFACTURING_MONTHLY_SALARY;
+        let expected_month_labor = costs.manufacturing_monthly_salary;
         assert!((order.labor_cost - expected_month_labor).abs() < 1.0,
             "labor after 30 days should be ≈ one month salary, got {}", order.labor_cost);
         // Material cost should be unchanged by the work loop.
@@ -3872,7 +3911,7 @@ mod tests {
         let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
         setup_buildable_rocket(&mut gs);
 
-        gs.player_company.order_rocket_build(0).unwrap();
+        gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
         run_manufacturing_to_rocket(&mut gs);
 
         let design_id = gs.player_company.rocket_projects[0].design.id;
@@ -3892,7 +3931,7 @@ mod tests {
         let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
         setup_buildable_rocket(&mut gs);
 
-        gs.player_company.order_rocket_build(0).unwrap();
+        gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
         run_manufacturing_to_rocket(&mut gs);
 
         // Three-stage design: 4 EP1 engines (3 on S1 + 1 on S2), 1 EP2 (S3).
@@ -3920,7 +3959,7 @@ mod tests {
         let tp_idx = gs.player_company.third_party_catalog.iter()
             .position(|e| e.available_from <= date)
             .expect("at least one starter engine should be available");
-        gs.player_company.contract_third_party(tp_idx, date, &seed)
+        gs.player_company.contract_third_party(tp_idx, date, &seed, &gs.balance)
             .expect("contracting should succeed");
         let ce_id = gs.player_company.contracted_engines[0].id;
 
@@ -3934,13 +3973,13 @@ mod tests {
         let stage1_count = design.stage_groups[0][0].engine_count;
 
         use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
-        let mut rp = RocketProject::new(RocketProjectId(1), design);
+        let mut rp = RocketProject::new(RocketProjectId(1), design, &crate::balance_config::BalanceConfig::default());
         rp.status = RocketDesignStatus::Testing { work_completed: 100.0 };
         gs.player_company.rocket_projects.push(rp);
 
         // Contracted engines are billed and counted at order time (instant
         // delivery to inventory) — no manufacturing cycle needed.
-        gs.player_company.order_rocket_build(0).unwrap();
+        gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
 
         let count = *gs.player_company.contracted_engine_build_counts
             .get(&ce_id).unwrap_or(&0);
@@ -4288,7 +4327,7 @@ mod tests {
 
         let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
         let pid = gs.player_company.start_proposed_reactor(
-            "Draft".into(), 1.0, EnrichmentLevel::Leu,
+            "Draft".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
         );
         let rp = gs.player_company.find_reactor_project(pid).unwrap();
         assert!(matches!(rp.status, ReactorDesignStatus::Proposed { .. }));
@@ -4318,7 +4357,7 @@ mod tests {
         use crate::reactor::EnrichmentLevel;
         let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
         let pid = gs.player_company.start_proposed_reactor(
-            "Cancelled".into(), 1.0, EnrichmentLevel::Leu,
+            "Cancelled".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
         );
         gs.player_company.delete_proposed_reactor(pid);
         assert!(gs.player_company.find_reactor_project(pid).is_none());
@@ -4333,15 +4372,15 @@ mod tests {
         let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
         // Hire two more teams so the engine project can carry a load
         // worth stealing from.
-        gs.player_company.hire_team("Team 2".into());
-        gs.player_company.hire_team("Team 3".into());
+        gs.player_company.hire_team("Team 2".into(), &gs.balance);
+        gs.player_company.hire_team("Team 3".into(), &gs.balance);
 
         // Start an engine project; load it with 3 teams.
         let pid = gs.player_company.start_proposed_engine_project(
             "E1".into(),
             crate::engine::EngineCycle::GasGenerator,
             crate::engine_project::PropellantPreset::Kerolox,
-            1.0, false, None,
+            1.0, false, None, &gs.balance,
         ).expect("create engine project");
         gs.player_company.promote_proposed_engine(pid);
         for _ in 0..3 {
@@ -4351,7 +4390,7 @@ mod tests {
 
         // Start a reactor project with no teams.
         let _ = gs.player_company.start_proposed_reactor(
-            "R1".into(), 1.0, EnrichmentLevel::Leu,
+            "R1".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
         );
         gs.player_company.promote_proposed_reactor(
             crate::reactor_project::ReactorProjectId(1));
@@ -4387,7 +4426,7 @@ mod tests {
         use crate::reactor::EnrichmentLevel;
         let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
         let _pid = gs.player_company.start_proposed_reactor(
-            "Mk1".into(), 1.0, EnrichmentLevel::Leu,
+            "Mk1".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
         );
         // Defaults: 1 engineering team (created in Company::new), all
         // unassigned. Adding once succeeds; the second add fails (no
@@ -4410,7 +4449,7 @@ mod tests {
 
         let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
         let pid = gs.player_company.start_proposed_reactor(
-            "Mk1".into(), 1.0, EnrichmentLevel::Leu,
+            "Mk1".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
         );
         // Proposed: not installable.
         assert_eq!(gs.player_company.installable_reactor_projects().count(), 0);
@@ -4442,6 +4481,7 @@ mod tests {
             "Mk1 Reactor".into(),
             1.0,
             EnrichmentLevel::Leu,
+            &crate::balance_config::BalanceConfig::default(),
         );
         project.teams_assigned = 4;
         gs.player_company.reactor_projects.push(project);
@@ -4480,6 +4520,7 @@ mod tests {
         let mut gs = GameState::new("Reactor Test".into(), 100_000_000.0, 7);
         let mut project = ReactorProject::new(
             ReactorProjectId(1), ReactorId(1), "Mk1 Reactor".into(), 1.0, EnrichmentLevel::Leu,
+            &crate::balance_config::BalanceConfig::default(),
         );
         project.teams_assigned = 4;
         gs.player_company.reactor_projects.push(project);
@@ -4557,6 +4598,7 @@ mod tests {
         let reactor_id = ReactorId(50);
         let mut rproj = ReactorProject::new(
             ReactorProjectId(1), reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu,
+            &crate::balance_config::BalanceConfig::default(),
         );
         rproj.status = crate::reactor_project::ReactorDesignStatus::Testing { work_completed: 0.0 };
         rproj.flaws = vec![Flaw {
@@ -4582,7 +4624,7 @@ mod tests {
             ],
             power_draw_w: 0.0,
         };
-        let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu);
+        let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu, &crate::balance_config::CostsConfig::default());
         let steady_full = reactor_design.steady_w;
         let stage = Stage {
             id: StageId(1), name: "S".into(),
@@ -4649,6 +4691,7 @@ mod tests {
         let reactor_id = ReactorId(50);
         let mut rproj = ReactorProject::new(
             ReactorProjectId(1), reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu,
+            &crate::balance_config::BalanceConfig::default(),
         );
         rproj.status = crate::reactor_project::ReactorDesignStatus::Testing { work_completed: 0.0 };
         rproj.flaws = vec![Flaw {
@@ -4673,7 +4716,7 @@ mod tests {
             ],
             power_draw_w: 0.0,
         };
-        let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu);
+        let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu, &crate::balance_config::CostsConfig::default());
         let stage = Stage {
             id: StageId(1), name: "S".into(),
             engine, engine_count: 1,
@@ -4722,6 +4765,7 @@ mod tests {
         let reactor_id = ReactorId(50);
         let mut rproj = ReactorProject::new(
             ReactorProjectId(1), reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu,
+            &crate::balance_config::BalanceConfig::default(),
         );
         rproj.status = crate::reactor_project::ReactorDesignStatus::Testing { work_completed: 0.0 };
         rproj.flaws = vec![Flaw {
@@ -4746,7 +4790,7 @@ mod tests {
             ],
             power_draw_w: 0.0,
         };
-        let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu);
+        let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu, &crate::balance_config::CostsConfig::default());
         let stage = Stage {
             id: StageId(1), name: "S".into(),
             engine, engine_count: 1,
@@ -4798,6 +4842,7 @@ mod tests {
         let mut gs = GameState::new("Reactor Test".into(), 100_000_000.0, 3);
         let mut project = ReactorProject::new(
             ReactorProjectId(1), ReactorId(1), "Mk1 Reactor".into(), 1.0, EnrichmentLevel::Leu,
+            &crate::balance_config::BalanceConfig::default(),
         );
         project.teams_assigned = 4;
         gs.player_company.reactor_projects.push(project);

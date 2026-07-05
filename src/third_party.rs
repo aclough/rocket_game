@@ -116,10 +116,11 @@ pub fn generate_third_party_flaws(
     seed: &GameSeed,
     engine_name: &str,
     next_flaw_id: &mut u64,
+    flaws_cfg: &crate::balance_config::FlawsConfig,
 ) -> Vec<Flaw> {
     let effective = (complexity / 8).max(1);
     let mut rng = seed.world_query(&format!("3p_flaws_{}", engine_name));
-    flaw::generate_flaws(effective, &mut rng, next_flaw_id)
+    flaw::generate_flaws(effective, &mut rng, next_flaw_id, flaws_cfg)
 }
 
 #[cfg(test)]
@@ -151,14 +152,14 @@ mod tests {
         let mut total_flaws = 0;
         for i in 0..100 {
             let seed_i = GameSeed::new(i);
-            let flaws = generate_third_party_flaws(8, &seed_i, "test", &mut next_flaw_id);
+            let flaws = generate_third_party_flaws(8, &seed_i, "test", &mut next_flaw_id, &crate::balance_config::FlawsConfig::default());
             total_flaws += flaws.len();
         }
         let avg = total_flaws as f64 / 100.0;
         assert!(avg < 3.0, "Avg flaw count {} should be low for complexity 8 (effective 1)", avg);
 
         // Complexity 5 -> effective 1 (5/8 = 0, clamped to 1)
-        let flaws = generate_third_party_flaws(5, &seed, "solid", &mut next_flaw_id);
+        let flaws = generate_third_party_flaws(5, &seed, "solid", &mut next_flaw_id, &crate::balance_config::FlawsConfig::default());
         // Just check they're generated, exact count is random
         for flaw in &flaws {
             assert!(!flaw.discovered);
@@ -170,8 +171,8 @@ mod tests {
         let seed = GameSeed::new(42);
         let mut id1 = 10000u64;
         let mut id2 = 10000u64;
-        let f1 = generate_third_party_flaws(8, &seed, "RD-33K", &mut id1);
-        let f2 = generate_third_party_flaws(8, &seed, "RD-33K", &mut id2);
+        let f1 = generate_third_party_flaws(8, &seed, "RD-33K", &mut id1, &crate::balance_config::FlawsConfig::default());
+        let f2 = generate_third_party_flaws(8, &seed, "RD-33K", &mut id2, &crate::balance_config::FlawsConfig::default());
         assert_eq!(f1.len(), f2.len());
     }
 }

@@ -443,13 +443,14 @@ mod tests {
             PropellantPreset::Kerolox,
             1.0,
             true,
+            &crate::balance_config::BalanceConfig::default(),
         ).unwrap();
         ep.flaws = flaws;
         ep
     }
 
     fn make_rocket_project(design: RocketDesign, flaws: Vec<Flaw>) -> RocketProject {
-        let mut rp = RocketProject::new(RocketProjectId(1), design);
+        let mut rp = RocketProject::new(RocketProjectId(1), design, &crate::balance_config::BalanceConfig::default());
         rp.flaws = flaws;
         rp
     }
@@ -552,7 +553,7 @@ mod tests {
     fn reactor_stage(engine_id: u64, reactor_id: u64) -> Stage {
         use crate::power::PowerSource;
         use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
-        let design = ReactorDesign::new(ReactorId(reactor_id), "R".into(), 1.0, EnrichmentLevel::Leu);
+        let design = ReactorDesign::new(ReactorId(reactor_id), "R".into(), 1.0, EnrichmentLevel::Leu, &crate::balance_config::CostsConfig::default());
         let mut stage = make_stage(engine_id);
         stage.power_sources = vec![PowerSource::from_reactor_design(design)];
         stage

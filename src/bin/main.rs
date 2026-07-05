@@ -25,7 +25,7 @@ fn main() -> io::Result<()> {
             .get(2)
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or_else(|| rand::random());
-        GameState::new(name, 200_000_000.0, seed)
+        GameState::with_balance(name, seed, rocket_tycoon::balance_config::BalanceConfig::default())
     } else {
         run_startup_screen()?
     };
@@ -106,7 +106,7 @@ fn startup_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Re
                             company_name.trim().to_string()
                         };
                         let seed: u64 = rand::random();
-                        return Ok(GameState::new(name, 200_000_000.0, seed));
+                        return Ok(GameState::with_balance(name, seed, rocket_tycoon::balance_config::BalanceConfig::default()));
                     }
                     KeyCode::Esc => {
                         state = StartupState::Menu;

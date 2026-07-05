@@ -2,6 +2,8 @@ use rand::Rng;
 use rand::rngs::StdRng;
 use serde::{Serialize, Deserialize};
 
+use crate::balance_config::FlawsConfig;
+
 /// Unique identifier for a flaw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FlawId(pub u64);
@@ -78,12 +80,6 @@ impl Flaw {
     }
 }
 
-/// Work units required to fix one flaw via revision.
-pub const FLAW_REVISION_WORK: f64 = 30.0;
-
-/// Work units per testing cycle.
-pub const TESTING_CYCLE_WORK: f64 = 30.0;
-
 /// Generate flaws for a newly completed engine design.
 ///
 /// `effective_complexity` includes cycle + fuel complexity + problems factor.
@@ -93,8 +89,9 @@ pub fn generate_flaws(
     effective_complexity: u32,
     rng: &mut StdRng,
     next_flaw_id: &mut u64,
+    cfg: &FlawsConfig,
 ) -> Vec<Flaw> {
-    generate_flaws_for_cycle(effective_complexity, rng, next_flaw_id, None)
+    generate_flaws_for_cycle(effective_complexity, rng, next_flaw_id, None, cfg)
 }
 
 /// Generate flaws with cycle-specific descriptions.
@@ -103,17 +100,17 @@ pub fn generate_flaws_for_cycle(
     rng: &mut StdRng,
     next_flaw_id: &mut u64,
     cycle: Option<crate::engine::EngineCycle>,
+    cfg: &FlawsConfig,
 ) -> Vec<Flaw> {
     let mean = effective_complexity as f64;
-    let stddev = 1.5;
 
-    let count_f = gaussian_sample(mean, stddev, rng);
+    let count_f = gaussian_sample(mean, cfg.count_stddev, rng);
     let count = count_f.round().max(0.0) as u32;
 
     (0..count).map(|_| {
         let id = FlawId(*next_flaw_id);
         *next_flaw_id += 1;
-        generate_single_flaw(id, FlawTrigger::PerFlight, rng, cycle)
+        generate_single_flaw(id, FlawTrigger::PerFlight, rng, cycle, cfg)
     }).collect()
 }
 
@@ -122,21 +119,21 @@ pub fn generate_rocket_flaws(
     effective_complexity: u32,
     rng: &mut StdRng,
     next_flaw_id: &mut u64,
+    cfg: &FlawsConfig,
 ) -> Vec<Flaw> {
     let mean = effective_complexity as f64;
-    let stddev = 1.5;
-    let count_f = gaussian_sample(mean, stddev, rng);
+    let count_f = gaussian_sample(mean, cfg.count_stddev, rng);
     let count = count_f.round().max(0.0) as u32;
 
     (0..count).map(|_| {
         let id = FlawId(*next_flaw_id);
         *next_flaw_id += 1;
-        let trigger = if rng.gen::<f64>() < 0.30 {
+        let trigger = if rng.gen::<f64>() < cfg.rocket_endurance_fraction {
             FlawTrigger::PerDay
         } else {
             FlawTrigger::PerFlight
         };
-        generate_single_flaw(id, trigger, rng, None)
+        generate_single_flaw(id, trigger, rng, None, cfg)
     }).collect()
 }
 
@@ -147,12 +144,12 @@ pub fn generate_rocket_flaws(
 /// Consequence weighting: ~50% performance degradation, ~35% engine/part
 /// loss, ~15% stage loss. Activation chance is random^2 (skewed low);
 /// discovery probability = uniform(0,1) * sqrt(activation_chance).
-fn roll_flaw_core(rng: &mut StdRng) -> (FlawConsequence, f64, f64) {
+fn roll_flaw_core(rng: &mut StdRng, cfg: &FlawsConfig) -> (FlawConsequence, f64, f64) {
     let roll: f64 = rng.gen();
-    let consequence = if roll < 0.50 {
-        let degradation = rng.gen_range(0.03..0.15);
+    let consequence = if roll < cfg.performance_degradation_weight {
+        let degradation = rng.gen_range(cfg.degradation_min..cfg.degradation_max);
         FlawConsequence::PerformanceDegradation(degradation)
-    } else if roll < 0.85 {
+    } else if roll < cfg.performance_degradation_weight + cfg.engine_loss_weight {
         FlawConsequence::EngineLoss
     } else {
         FlawConsequence::StageLoss
@@ -164,12 +161,6 @@ fn roll_flaw_core(rng: &mut StdRng) -> (FlawConsequence, f64, f64) {
 
     (consequence, activation_chance, discovery_probability)
 }
-
-/// Fraction of reactor flaws that are `PerDay` endurance flaws (the rest
-/// are `PerFlight`). Reactors run continuously in flight, so a share of
-/// their failure modes accumulate risk over a long mission rather than
-/// biting once at ignition. Matches the rocket-flaw endurance share.
-const REACTOR_ENDURANCE_FRACTION: f64 = 0.30;
 
 /// Generate flaws for a newly completed reactor design.
 ///
@@ -183,29 +174,29 @@ pub fn generate_reactor_flaws(
     effective_complexity: u32,
     rng: &mut StdRng,
     next_flaw_id: &mut u64,
+    cfg: &FlawsConfig,
 ) -> Vec<Flaw> {
     let mean = effective_complexity as f64;
-    let stddev = 1.5;
-    let count_f = gaussian_sample(mean, stddev, rng);
+    let count_f = gaussian_sample(mean, cfg.count_stddev, rng);
     let count = count_f.round().max(0.0) as u32;
 
     (0..count).map(|_| {
         let id = FlawId(*next_flaw_id);
         *next_flaw_id += 1;
-        let trigger = if rng.gen::<f64>() < REACTOR_ENDURANCE_FRACTION {
+        let trigger = if rng.gen::<f64>() < cfg.reactor_endurance_fraction {
             FlawTrigger::PerDay
         } else {
             FlawTrigger::PerFlight
         };
-        generate_single_reactor_flaw(id, trigger, rng)
+        generate_single_reactor_flaw(id, trigger, rng, cfg)
     }).collect()
 }
 
 /// Build one reactor flaw. Reuses the shared probability core with a
 /// reactor-specific description; `PerDay` flaws get endurance-flavored
 /// text (gradual wear) and `PerFlight` ones get event-flavored text.
-pub fn generate_single_reactor_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng) -> Flaw {
-    let (consequence, activation_chance, discovery_probability) = roll_flaw_core(rng);
+pub fn generate_single_reactor_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cfg: &FlawsConfig) -> Flaw {
+    let (consequence, activation_chance, discovery_probability) = roll_flaw_core(rng, cfg);
     let description = match trigger {
         FlawTrigger::PerDay => generate_reactor_endurance_flaw_description(&consequence, rng),
         FlawTrigger::PerFlight => generate_reactor_flaw_description(&consequence, rng),
@@ -291,8 +282,8 @@ fn generate_reactor_endurance_flaw_description(consequence: &FlawConsequence, rn
     descriptions[idx].to_string()
 }
 
-pub fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cycle: Option<crate::engine::EngineCycle>) -> Flaw {
-    let (consequence, activation_chance, discovery_probability) = roll_flaw_core(rng);
+pub fn generate_single_flaw(id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cycle: Option<crate::engine::EngineCycle>, cfg: &FlawsConfig) -> Flaw {
+    let (consequence, activation_chance, discovery_probability) = roll_flaw_core(rng, cfg);
 
     let use_electric = matches!(cycle, Some(crate::engine::EngineCycle::ElectricPropulsion));
     let use_nuclear = matches!(cycle, Some(crate::engine::EngineCycle::NuclearThermal));
@@ -513,6 +504,10 @@ mod tests {
         StdRng::seed_from_u64(42)
     }
 
+    fn cfg() -> FlawsConfig {
+        FlawsConfig::default()
+    }
+
     #[test]
     fn test_generate_flaws_count_near_complexity() {
         // Run many times and check average is near effective_complexity
@@ -521,7 +516,7 @@ mod tests {
         for seed in 0..trials {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut next_id = 0u64;
-            let flaws = generate_flaws(7, &mut rng, &mut next_id);
+            let flaws = generate_flaws(7, &mut rng, &mut next_id, &cfg());
             total += flaws.len() as u32;
         }
         let avg = total as f64 / trials as f64;
@@ -536,7 +531,7 @@ mod tests {
         for seed in 0..1000 {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut next_id = 0u64;
-            let flaws = generate_flaws(2, &mut rng, &mut next_id);
+            let flaws = generate_flaws(2, &mut rng, &mut next_id, &cfg());
             if flaws.is_empty() {
                 found_zero = true;
                 break;
@@ -549,7 +544,7 @@ mod tests {
     fn test_flaw_ids_are_sequential() {
         let mut rng = test_rng();
         let mut next_id = 10u64;
-        let flaws = generate_flaws(6, &mut rng, &mut next_id);
+        let flaws = generate_flaws(6, &mut rng, &mut next_id, &cfg());
         for (i, flaw) in flaws.iter().enumerate() {
             assert_eq!(flaw.id, FlawId(10 + i as u64));
         }
@@ -560,7 +555,7 @@ mod tests {
     fn test_flaws_start_undiscovered() {
         let mut rng = test_rng();
         let mut next_id = 0u64;
-        let flaws = generate_flaws(8, &mut rng, &mut next_id);
+        let flaws = generate_flaws(8, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert!(!flaw.discovered);
         }
@@ -570,7 +565,7 @@ mod tests {
     fn test_activation_chance_in_range() {
         let mut rng = test_rng();
         let mut next_id = 0u64;
-        let flaws = generate_flaws(9, &mut rng, &mut next_id);
+        let flaws = generate_flaws(9, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert!(flaw.activation_chance >= 0.0, "activation_chance should be non-negative");
             assert!(flaw.activation_chance <= 1.0, "activation_chance should be <= 1");
@@ -582,7 +577,7 @@ mod tests {
         // With random^2, most values should be below 0.5
         let mut rng = test_rng();
         let mut next_id = 0u64;
-        let flaws = generate_flaws(100, &mut rng, &mut next_id);
+        let flaws = generate_flaws(100, &mut rng, &mut next_id, &cfg());
         let below_half = flaws.iter().filter(|f| f.activation_chance < 0.5).count();
         assert!(
             below_half as f64 / flaws.len() as f64 > 0.6,
@@ -595,7 +590,7 @@ mod tests {
     fn test_discovery_probability_bounded_by_sqrt_activation() {
         let mut rng = test_rng();
         let mut next_id = 0u64;
-        let flaws = generate_flaws(9, &mut rng, &mut next_id);
+        let flaws = generate_flaws(9, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert!(
                 flaw.discovery_probability <= flaw.activation_chance.sqrt() + 0.001,
@@ -611,7 +606,7 @@ mod tests {
     fn test_roll_discoveries() {
         let mut rng = test_rng();
         let mut next_id = 0u64;
-        let mut flaws = generate_flaws(8, &mut rng, &mut next_id);
+        let mut flaws = generate_flaws(8, &mut rng, &mut next_id, &cfg());
 
         // Force high discovery probability on first flaw for testing
         if !flaws.is_empty() {
@@ -691,7 +686,7 @@ mod tests {
     fn test_rocket_flaws_have_per_day() {
         let mut rng = test_rng();
         let mut next_id = 0u64;
-        let flaws = generate_rocket_flaws(10, &mut rng, &mut next_id);
+        let flaws = generate_rocket_flaws(10, &mut rng, &mut next_id, &cfg());
         let per_day_count = flaws.iter().filter(|f| f.trigger == FlawTrigger::PerDay).count();
         // With 30% chance and ~10 flaws, expect ~3 PerDay (allow 0-8 for randomness)
         assert!(per_day_count > 0, "Should have some PerDay flaws");
@@ -708,7 +703,7 @@ mod tests {
         for seed in 0..200 {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut next_id = 0u64;
-            for flaw in generate_reactor_flaws(10, &mut rng, &mut next_id) {
+            for flaw in generate_reactor_flaws(10, &mut rng, &mut next_id, &cfg()) {
                 match flaw.trigger {
                     FlawTrigger::PerDay => per_day += 1,
                     FlawTrigger::PerFlight => per_flight += 1,
@@ -729,7 +724,7 @@ mod tests {
         for seed in 0..trials {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut next_id = 0u64;
-            let flaws = generate_reactor_flaws(8, &mut rng, &mut next_id);
+            let flaws = generate_reactor_flaws(8, &mut rng, &mut next_id, &cfg());
             total += flaws.len() as u32;
         }
         let avg = total as f64 / trials as f64;
@@ -740,7 +735,7 @@ mod tests {
     fn test_reactor_flaws_ids_sequential_and_undiscovered() {
         let mut rng = test_rng();
         let mut next_id = 5u64;
-        let flaws = generate_reactor_flaws(9, &mut rng, &mut next_id);
+        let flaws = generate_reactor_flaws(9, &mut rng, &mut next_id, &cfg());
         for (i, flaw) in flaws.iter().enumerate() {
             assert_eq!(flaw.id, FlawId(5 + i as u64));
             assert!(!flaw.discovered);
@@ -752,7 +747,7 @@ mod tests {
     fn test_engine_flaws_all_per_flight() {
         let mut rng = test_rng();
         let mut next_id = 0u64;
-        let flaws = generate_flaws(10, &mut rng, &mut next_id);
+        let flaws = generate_flaws(10, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert_eq!(flaw.trigger, FlawTrigger::PerFlight,
                 "Engine flaws should all be PerFlight");

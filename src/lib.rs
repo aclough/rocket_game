@@ -10,6 +10,7 @@ pub mod calendar;
 pub mod event;
 pub mod seed;
 pub mod balance;
+pub mod balance_config;
 pub mod flaw;
 pub mod team;
 pub mod engine_project;

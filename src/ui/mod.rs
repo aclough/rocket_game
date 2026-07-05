@@ -982,7 +982,7 @@ impl App {
                 let n = self.game.player_company.reactor_projects.len() + 1;
                 let name = format!("Reactor Mk{}", n);
                 let pid = self.game.player_company.start_proposed_reactor(
-                    name, DEFAULT_SCALE, EnrichmentLevel::Leu,
+                    name, DEFAULT_SCALE, EnrichmentLevel::Leu, &self.game.balance,
                 );
                 self.enter_modal(InputMode::ReactorEditor { project_id: pid, cursor: 0 });
             }
@@ -1082,6 +1082,7 @@ impl App {
                 let tech_id = crate::technology::technology_for_preset(preset);
                 match self.game.player_company.start_proposed_engine_project(
                     name, EngineCycle::GasGenerator, preset, DEFAULT_SCALE, false, tech_id,
+                    &self.game.balance,
                 ) {
                     Some(pid) => {
                         self.enter_modal(InputMode::EngineEditor {
@@ -1120,7 +1121,7 @@ impl App {
             KeyCode::Char('o') => {
                 // Order standalone engine build
                 let idx = real_idx.unwrap_or(usize::MAX);
-                if let Some((cost, evt)) = self.game.player_company.order_engine_build(idx) {
+                if let Some((cost, evt)) = self.game.player_company.order_engine_build(idx, &self.game.balance) {
                     self.game.event_log.push(self.game.date, evt);
                     self.status_message = Some(format!("Engine build ordered ({})", crate::ui::draw::format_money(cost)));
                 } else {
@@ -1148,7 +1149,7 @@ impl App {
             KeyCode::Char('e') => {
                 let team_num = self.game.player_company.team_count() + 1;
                 let name = format!("Team {}", team_num);
-                if let Some(evt) = self.game.player_company.hire_team(name.clone()) {
+                if let Some(evt) = self.game.player_company.hire_team(name.clone(), &self.game.balance) {
                     self.game.event_log.push(self.game.date, evt);
                     self.status_message = Some(format!("Hired {}", name));
                 }
@@ -1192,14 +1193,14 @@ impl App {
             KeyCode::Char('e') => {
                 let team_num = self.game.player_company.team_count() + 1;
                 let name = format!("Team {}", team_num);
-                if let Some(evt) = self.game.player_company.hire_team(name.clone()) {
+                if let Some(evt) = self.game.player_company.hire_team(name.clone(), &self.game.balance) {
                     self.game.event_log.push(self.game.date, evt);
                     self.status_message = Some(format!("Hired {}", name));
                 }
             }
             KeyCode::Char('o') => {
                 // Order rocket build
-                if let Some((cost, evt)) = self.game.player_company.order_rocket_build(self.selected_item) {
+                if let Some((cost, evt)) = self.game.player_company.order_rocket_build(self.selected_item, &self.game.balance) {
                     self.game.event_log.push(self.game.date, evt);
                     self.status_message = Some(format!("Build ordered ({})", crate::ui::draw::format_money(cost)));
                 } else {
@@ -1256,7 +1257,7 @@ impl App {
         match key {
             KeyCode::Char('b') => {
                 // Buy floor space
-                let cost = self.game.player_company.manufacturing.floor_space.order_expansion(1);
+                let cost = self.game.player_company.manufacturing.floor_space.order_expansion(1, &self.game.balance.costs);
                 self.game.player_company.money -= cost;
                 self.status_message = Some(format!("Ordered 1 floor space unit ({})", crate::ui::draw::format_money(cost)));
             }
@@ -1277,7 +1278,7 @@ impl App {
             KeyCode::Char('m') => {
                 let team_num = self.game.player_company.manufacturing_teams.len() + 1;
                 let name = format!("Mfg Team {}", team_num);
-                if let Some(evt) = self.game.player_company.hire_manufacturing_team(name.clone()) {
+                if let Some(evt) = self.game.player_company.hire_manufacturing_team(name.clone(), &self.game.balance) {
                     self.game.event_log.push(self.game.date, evt);
                     self.status_message = Some(format!("Hired {}", name));
                 }
@@ -1590,7 +1591,7 @@ impl App {
                         let date = self.game.date;
                         self.exit_modal();
                         let seed_clone = self.game.seed.clone();
-                        if let Some(evt) = self.game.player_company.contract_third_party(idx, date, &seed_clone) {
+                        if let Some(evt) = self.game.player_company.contract_third_party(idx, date, &seed_clone, &self.game.balance) {
                             self.game.event_log.push(self.game.date, evt);
                             self.status_message = Some("Engine contracted".into());
                         }
@@ -2487,6 +2488,7 @@ impl App {
                     let project_id = match self.game.player_company
                         .start_proposed_engine_project(
                             default_name, cycle, preset, scale, use_vacuum, tech_id,
+                            &self.game.balance,
                         )
                     {
                         Some(id) => id,
@@ -2646,7 +2648,7 @@ impl App {
         };
         let (name, cycle, preset, _, use_vacuum, _) = snap;
         if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
-            ep.apply_edit(name, cycle, preset, scale, use_vacuum);
+            ep.apply_edit(name, cycle, preset, scale, use_vacuum, &self.game.balance);
         }
     }
 
@@ -2664,7 +2666,7 @@ impl App {
         };
         let (name, enrichment) = snap;
         if let Some(rp) = self.game.player_company.find_reactor_project_mut(project_id) {
-            rp.apply_edit(name, scale, enrichment);
+            rp.apply_edit(name, scale, enrichment, &self.game.balance);
         }
     }
 
@@ -2681,7 +2683,7 @@ impl App {
         };
         let (name, scale) = snap;
         if let Some(rp) = self.game.player_company.find_reactor_project_mut(project_id) {
-            rp.apply_edit(name, scale, enrichment);
+            rp.apply_edit(name, scale, enrichment, &self.game.balance);
         }
     }
 
@@ -2773,7 +2775,7 @@ impl App {
                 // so a player who built an HEU reactor doesn't get the
                 // editor refusing to display HEU when re-opened later.
                 let reputation = self.game.player_company.reputation.total();
-                let mut levels = available_enrichments(reputation);
+                let mut levels = available_enrichments(reputation, &self.game.balance.reputation);
                 if !levels.contains(&enrichment) {
                     levels.push(enrichment);
                     levels.sort_by_key(|e| *e as u32);
@@ -2879,7 +2881,7 @@ impl App {
                     true
                 } else { use_vacuum };
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
-                    ep.apply_edit(name, next, new_preset, scale, new_vacuum);
+                    ep.apply_edit(name, next, new_preset, scale, new_vacuum, &self.game.balance);
                 }
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company);
@@ -2894,7 +2896,7 @@ impl App {
                 let next = wrap_cycle(&presets, preset, matches!(key, KeyCode::Right))
                     .unwrap_or(preset);
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
-                    ep.apply_edit(name, cycle, next, scale, use_vacuum);
+                    ep.apply_edit(name, cycle, next, scale, use_vacuum, &self.game.balance);
                 }
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company);
@@ -2921,7 +2923,7 @@ impl App {
             }
             KeyCode::Left | KeyCode::Right if cursor == 4 && !vacuum_only => {
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
-                    ep.apply_edit(name, cycle, preset, scale, !use_vacuum);
+                    ep.apply_edit(name, cycle, preset, scale, !use_vacuum, &self.game.balance);
                 }
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company);
@@ -3000,7 +3002,7 @@ impl App {
                             &state.stage_groups[group_index][stage_index],
                         )
                     } else {
-                        (preset.build)()
+                        (preset.build)(&self.game.balance.costs)
                     };
                     state.stage_groups[group_index][stage_index]
                         .power_sources.push(new_src);
@@ -3166,7 +3168,7 @@ impl App {
             stage_groups,
         };
 
-        if let Some(evt) = self.game.player_company.start_rocket_project(design) {
+        if let Some(evt) = self.game.player_company.start_rocket_project(design, &self.game.balance) {
             self.game.event_log.push(self.game.date, evt);
             self.status_message = Some(format!("Started rocket design: {}", name));
         }
@@ -3203,12 +3205,14 @@ mod sync_tests {
     fn sync_refreshes_stage_engine_after_project_edit() {
         let mut company = crate::game_state::Company::new(
             "Test".into(), 10_000_000.0, &crate::seed::GameSeed::new(1),
+            &crate::balance_config::BalanceConfig::default(),
         );
         // Player designs a kerolox engine.
         let ep = EngineProject::new(
             EngineProjectId(1), EngineId(1), "E1".into(),
             EngineCycle::GasGenerator, PropellantPreset::Kerolox,
             1.0, false,
+            &crate::balance_config::BalanceConfig::default(),
         ).unwrap();
         company.engine_projects.push(ep);
 
@@ -3245,6 +3249,7 @@ mod sync_tests {
             PropellantPreset::Xenon,
             1.0,
             true,
+            &crate::balance_config::BalanceConfig::default(),
         );
 
         // Before sync: stage still has kerolox numbers.
@@ -3293,6 +3298,7 @@ mod reactor_render_tests {
 
         let mut project = ReactorProject::new(
             ReactorProjectId(1), ReactorId(1), "Mk1 Reactor".into(), 1.0, EnrichmentLevel::Leu,
+            &crate::balance_config::BalanceConfig::default(),
         );
         project.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
         project.cumulative_testing_work = 120.0;

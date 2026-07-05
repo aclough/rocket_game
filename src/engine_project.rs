@@ -4,7 +4,8 @@ use serde::{Serialize, Deserialize};
 
 use crate::balance;
 use crate::engine::{EngineDesign, EngineCycle, EngineId, PropellantFraction, G0};
-use crate::flaw::{self, Flaw, TESTING_CYCLE_WORK, FLAW_REVISION_WORK};
+use crate::balance_config::BalanceConfig;
+use crate::flaw::{self, Flaw};
 use crate::propellant::Propellant;
 use crate::third_party::ContractedEngineId;
 
@@ -368,12 +369,13 @@ impl EngineProject {
         preset: PropellantPreset,
         scale: f64,
         use_vacuum_isp: bool,
+        balance_cfg: &BalanceConfig,
     ) -> Option<Self> {
         let baseline = engine_baseline(cycle, preset)?;
         let propellants = preset.propellants();
         let complexity = balance::combined_complexity(cycle, &propellants);
         let effective = balance::effective_complexity(cycle, &propellants);
-        let work_required = balance::design_work_required(effective);
+        let work_required = balance_cfg.work.design_work_required(effective);
 
         let thrust = baseline.thrust_n * scale;
         let mass = baseline.mass_kg * scale;
@@ -429,8 +431,9 @@ impl EngineProject {
         preset: PropellantPreset,
         scale: f64,
         use_vacuum_isp: bool,
+        balance_cfg: &BalanceConfig,
     ) -> Option<Self> {
-        let mut p = Self::new(project_id, engine_id, name, cycle, preset, scale, use_vacuum_isp)?;
+        let mut p = Self::new(project_id, engine_id, name, cycle, preset, scale, use_vacuum_isp, balance_cfg)?;
         let work_required = match p.status {
             EngineDesignStatus::InDesign { work_required, .. } => work_required,
             _ => unreachable!(),
@@ -451,6 +454,7 @@ impl EngineProject {
         preset: PropellantPreset,
         scale: f64,
         use_vacuum_isp: bool,
+        balance_cfg: &BalanceConfig,
     ) -> bool {
         let baseline = match engine_baseline(cycle, preset) {
             Some(b) => b,
@@ -459,7 +463,7 @@ impl EngineProject {
         let propellants = preset.propellants();
         let complexity = balance::combined_complexity(cycle, &propellants);
         let effective = balance::effective_complexity(cycle, &propellants);
-        let work_required = balance::design_work_required(effective);
+        let work_required = balance_cfg.work.design_work_required(effective);
 
         let use_vacuum = if baseline.vacuum_only { true } else { use_vacuum_isp };
         let isp = if use_vacuum { baseline.isp_vac_s } else { baseline.isp_sl_s };
@@ -514,7 +518,7 @@ impl EngineProject {
     }
 
     /// Apply one day of work. Returns any completed work events.
-    pub fn apply_daily_work(&mut self, rng: &mut StdRng, next_flaw_id: &mut u64) -> Vec<WorkEvent> {
+    pub fn apply_daily_work(&mut self, rng: &mut StdRng, next_flaw_id: &mut u64, balance_cfg: &BalanceConfig) -> Vec<WorkEvent> {
         if self.teams_assigned == 0 {
             return Vec::new();
         }
@@ -532,7 +536,7 @@ impl EngineProject {
                     // Design complete — generate flaws
                     let propellants = self.preset.propellants();
                     let eff = balance::effective_complexity(self.design.cycle, &propellants);
-                    self.flaws = flaw::generate_flaws_for_cycle(eff, rng, next_flaw_id, Some(self.design.cycle));
+                    self.flaws = flaw::generate_flaws_for_cycle(eff, rng, next_flaw_id, Some(self.design.cycle), &balance_cfg.flaws);
                     let flaw_count = self.flaws.len() as u32;
                     self.status = EngineDesignStatus::Testing { work_completed: 0.0 };
                     events.push(WorkEvent::DesignComplete { flaw_count });
@@ -542,8 +546,8 @@ impl EngineProject {
                 *work_completed += work;
                 self.cumulative_testing_work += work;
                 // Check for testing cycle completion
-                while *work_completed >= TESTING_CYCLE_WORK {
-                    *work_completed -= TESTING_CYCLE_WORK;
+                while *work_completed >= balance_cfg.work.testing_cycle_work {
+                    *work_completed -= balance_cfg.work.testing_cycle_work;
                     let discovered = flaw::roll_discoveries_with_rng(&mut self.flaws, rng);
                     for idx in discovered {
                         events.push(WorkEvent::FlawDiscovered {
@@ -551,7 +555,7 @@ impl EngineProject {
                         });
                     }
                     // Roll for improvement discovery
-                    if rng.gen::<f64>() < IMPROVEMENT_DISCOVERY_CHANCE {
+                    if rng.gen::<f64>() < balance_cfg.flaws.improvement_discovery_chance {
                         let improvement = generate_improvement(rng, self.design.cycle);
                         events.push(WorkEvent::ImprovementDiscovered {
                             description: format!("{}: {}", improvement.description, improvement.kind),
@@ -564,8 +568,8 @@ impl EngineProject {
             EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, remaining_tech_deficiency_ids, work_completed } => {
                 *work_completed += work;
                 // Process flaws first
-                while *work_completed >= FLAW_REVISION_WORK && !remaining_flaw_indices.is_empty() {
-                    *work_completed -= FLAW_REVISION_WORK;
+                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_flaw_indices.is_empty() {
+                    *work_completed -= balance_cfg.work.flaw_revision_work;
                     let fi = remaining_flaw_indices.remove(0);
                     self.flaws.remove(fi);
                     events.push(WorkEvent::RevisionComplete);
@@ -576,8 +580,8 @@ impl EngineProject {
                     }
                 }
                 // Then actualize improvements
-                while *work_completed >= FLAW_REVISION_WORK && !remaining_improvement_indices.is_empty() {
-                    *work_completed -= FLAW_REVISION_WORK;
+                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_improvement_indices.is_empty() {
+                    *work_completed -= balance_cfg.work.flaw_revision_work;
                     let ii = remaining_improvement_indices.remove(0);
                     if let Some(imp) = self.improvements.get_mut(ii) {
                         imp.actualized = true;
@@ -599,8 +603,8 @@ impl EngineProject {
                     }
                 }
                 // Then attempt tech deficiency fixes
-                while *work_completed >= FLAW_REVISION_WORK && !remaining_tech_deficiency_ids.is_empty() {
-                    *work_completed -= FLAW_REVISION_WORK;
+                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_tech_deficiency_ids.is_empty() {
+                    *work_completed -= balance_cfg.work.flaw_revision_work;
                     let def_id = remaining_tech_deficiency_ids.remove(0);
                     events.push(WorkEvent::TechDeficiencyAttempted { deficiency_id: def_id });
                 }
@@ -656,8 +660,8 @@ impl EngineProject {
     }
 
     /// Testing level description based on cumulative work in testing.
-    pub fn testing_level(&self) -> &'static str {
-        let cycles = (self.cumulative_testing_work / TESTING_CYCLE_WORK) as u32;
+    pub fn testing_level(&self, balance_cfg: &BalanceConfig) -> &'static str {
+        let cycles = (self.cumulative_testing_work / balance_cfg.work.testing_cycle_work) as u32;
         match cycles {
             0 => "Untested",
             1..=2 => "Lightly Tested",
@@ -699,8 +703,6 @@ impl std::fmt::Display for EngineImprovementKind {
     }
 }
 
-/// Chance per testing cycle to discover an improvement.
-const IMPROVEMENT_DISCOVERY_CHANCE: f64 = 0.08;
 
 /// Generate a random improvement appropriate for the engine cycle.
 fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle) -> EngineImprovement {
@@ -829,6 +831,10 @@ mod tests {
         StdRng::seed_from_u64(42)
     }
 
+    fn bal() -> BalanceConfig {
+        BalanceConfig::default()
+    }
+
     fn create_test_project() -> EngineProject {
         EngineProject::new(
             EngineProjectId(1),
@@ -838,6 +844,7 @@ mod tests {
             PropellantPreset::Kerolox,
             1.0,
             true,
+            &bal(),
         ).unwrap()
     }
 
@@ -885,11 +892,11 @@ mod tests {
     fn test_scale_affects_thrust_and_mass() {
         let p1 = EngineProject::new(
             EngineProjectId(1), EngineId(1), "Small".into(),
-            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 0.5, true,
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 0.5, true, &bal(),
         ).unwrap();
         let p2 = EngineProject::new(
             EngineProjectId(2), EngineId(2), "Big".into(),
-            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 2.0, true,
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 2.0, true, &bal(),
         ).unwrap();
         // Thrust and mass scale linearly
         assert!((p2.design.thrust_n / p1.design.thrust_n - 4.0).abs() < 0.01);
@@ -902,11 +909,11 @@ mod tests {
     fn test_vacuum_vs_sea_level_isp() {
         let vac = EngineProject::new(
             EngineProjectId(1), EngineId(1), "Vac".into(),
-            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, true,
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, true, &bal(),
         ).unwrap();
         let sl = EngineProject::new(
             EngineProjectId(2), EngineId(2), "SL".into(),
-            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, false,
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, false, &bal(),
         ).unwrap();
         assert!(vac.design.isp_s > sl.design.isp_s);
     }
@@ -926,7 +933,7 @@ mod tests {
         // Apply enough days
         let mut all_events = Vec::new();
         for _ in 0..(work_needed.ceil() as u32 + 1) {
-            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id);
+            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
             all_events.extend(events);
         }
 
@@ -943,7 +950,7 @@ mod tests {
         let mut next_flaw_id = 0u64;
 
         for _ in 0..100 {
-            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id);
+            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
             assert!(events.is_empty());
         }
         // Should still be in design at 0 work
@@ -969,8 +976,8 @@ mod tests {
 
         // After 10 days, proj2 should have more work done
         for _ in 0..10 {
-            proj1.apply_daily_work(&mut rng1, &mut id1);
-            proj2.apply_daily_work(&mut rng2, &mut id2);
+            proj1.apply_daily_work(&mut rng1, &mut id1, &bal());
+            proj2.apply_daily_work(&mut rng2, &mut id2, &bal());
         }
 
         let work1 = match &proj1.status {
@@ -995,7 +1002,7 @@ mod tests {
 
         // Fast-forward to testing
         for _ in 0..300 {
-            proj.apply_daily_work(&mut rng, &mut next_flaw_id);
+            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
         }
 
         // Manually add a discovered flaw for testing
@@ -1020,7 +1027,7 @@ mod tests {
 
         // Work through all revisions (30 work units each, sqrt(4) = 2/day)
         for _ in 0..50 {
-            proj.apply_daily_work(&mut rng, &mut next_flaw_id);
+            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
         }
 
         assert_eq!(proj.flaws.len(), count_before - discovered_count);
@@ -1033,19 +1040,19 @@ mod tests {
     fn test_testing_level() {
         let mut proj = create_test_project();
         proj.cumulative_testing_work = 0.0;
-        assert_eq!(proj.testing_level(), "Untested");
+        assert_eq!(proj.testing_level(&bal()), "Untested");
 
         proj.cumulative_testing_work = 60.0;
-        assert_eq!(proj.testing_level(), "Lightly Tested");
+        assert_eq!(proj.testing_level(&bal()), "Lightly Tested");
 
         proj.cumulative_testing_work = 150.0;
-        assert_eq!(proj.testing_level(), "Moderately Tested");
+        assert_eq!(proj.testing_level(&bal()), "Moderately Tested");
 
         proj.cumulative_testing_work = 250.0;
-        assert_eq!(proj.testing_level(), "Well Tested");
+        assert_eq!(proj.testing_level(&bal()), "Well Tested");
 
         proj.cumulative_testing_work = 400.0;
-        assert_eq!(proj.testing_level(), "Thoroughly Tested");
+        assert_eq!(proj.testing_level(&bal()), "Thoroughly Tested");
     }
 
     #[test]

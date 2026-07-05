@@ -1,6 +1,5 @@
 use serde::{Serialize, Deserialize};
 
-use crate::balance;
 use crate::engine::EngineId;
 use crate::engine_project::EngineSource;
 use crate::resources;
@@ -17,15 +16,7 @@ pub struct ManufacturingOrderId(pub u64);
 pub struct InventoryItemId(pub u64);
 
 // ── Floor space ──
-
-/// Cost per floor space unit in dollars.
-pub const FLOOR_SPACE_COST: f64 = 5_000_000.0;
-
-/// Days to construct one floor space unit.
-pub const FLOOR_SPACE_BUILD_DAYS: u32 = 30;
-
-/// Starting floor space units.
-pub const STARTING_FLOOR_SPACE: u32 = 12;
+// (Costs and build times live in `balance_config::CostsConfig`.)
 
 /// A floor space expansion order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,19 +33,19 @@ pub struct FloorSpace {
 }
 
 impl FloorSpace {
-    pub fn new() -> Self {
+    pub fn new(costs: &crate::balance_config::CostsConfig) -> Self {
         FloorSpace {
-            total_units: STARTING_FLOOR_SPACE,
+            total_units: costs.starting_floor_space,
             under_construction: Vec::new(),
         }
     }
 
     /// Start building more floor space. Returns cost.
-    pub fn order_expansion(&mut self, units: u32) -> f64 {
-        let cost = units as f64 * FLOOR_SPACE_COST;
+    pub fn order_expansion(&mut self, units: u32, costs: &crate::balance_config::CostsConfig) -> f64 {
+        let cost = units as f64 * costs.floor_space_cost;
         self.under_construction.push(FloorSpaceOrder {
             units,
-            days_remaining: FLOOR_SPACE_BUILD_DAYS,
+            days_remaining: costs.floor_space_build_days,
         });
         cost
     }
@@ -190,10 +181,11 @@ impl ManufacturingOrder {
         revision: u32,
         flaws: Vec<crate::flaw::Flaw>,
         improvements: Vec<crate::engine_project::EngineImprovement>,
+        balance_cfg: &crate::balance_config::BalanceConfig,
     ) -> Self {
-        let base_work = balance::engine_build_work(complexity);
-        let learning = balance::learning_curve_multiplier(prior_builds);
-        let material_cost = resources::engine_material_cost(preset, engine_mass_kg) * learning;
+        let base_work = balance_cfg.work.engine_build_work(complexity);
+        let learning = balance_cfg.work.learning_curve_multiplier(prior_builds);
+        let material_cost = resources::engine_material_cost(preset, engine_mass_kg, &balance_cfg.costs.resource_prices) * learning;
 
         ManufacturingOrder {
             id,
@@ -227,12 +219,13 @@ impl ManufacturingOrder {
         stage_name: String,
         structural_mass_kg: f64,
         prior_builds: u32,
+        balance_cfg: &crate::balance_config::BalanceConfig,
     ) -> Self {
         let stage_total_mass = structural_mass_kg; // structural mass drives build work
-        let base_work = balance::stage_build_work(stage_total_mass);
-        let learning = balance::learning_curve_multiplier(prior_builds);
-        let material_cost = (resources::tank_material_cost(structural_mass_kg)
-            + resources::stage_assembly_cost()) * learning;
+        let base_work = balance_cfg.work.stage_build_work(stage_total_mass);
+        let learning = balance_cfg.work.learning_curve_multiplier(prior_builds);
+        let material_cost = (resources::tank_material_cost(structural_mass_kg, &balance_cfg.costs.resource_prices)
+            + resources::stage_assembly_cost(&balance_cfg.costs.resource_prices)) * learning;
 
         ManufacturingOrder {
             id,
@@ -264,10 +257,11 @@ impl ManufacturingOrder {
         prior_builds: u32,
         revision: u32,
         rocket_flaws: Vec<crate::flaw::Flaw>,
+        balance_cfg: &crate::balance_config::BalanceConfig,
     ) -> Self {
-        let base_work = balance::rocket_integration_work(total_stages);
-        let learning = balance::learning_curve_multiplier(prior_builds);
-        let material_cost = resources::rocket_integration_cost() * learning;
+        let base_work = balance_cfg.work.rocket_integration_work(total_stages);
+        let learning = balance_cfg.work.learning_curve_multiplier(prior_builds);
+        let material_cost = resources::rocket_integration_cost(&balance_cfg.costs.resource_prices) * learning;
 
         ManufacturingOrder {
             id,
@@ -309,7 +303,7 @@ impl ManufacturingOrder {
     }
 
     /// Apply one day of manufacturing work. Returns true if completed.
-    pub fn apply_daily_work(&mut self) -> bool {
+    pub fn apply_daily_work(&mut self, costs: &crate::balance_config::CostsConfig) -> bool {
         if self.waiting_for_prerequisites || self.teams_assigned == 0 {
             return false;
         }
@@ -317,7 +311,7 @@ impl ManufacturingOrder {
         self.work_completed += work;
         // Attribute one team-day of salary per assigned team. 30 days/month
         // is the same approximation used by the salary-deduction path.
-        let daily_salary = team::MANUFACTURING_MONTHLY_SALARY / 30.0;
+        let daily_salary = costs.manufacturing_monthly_salary / 30.0;
         self.labor_cost += self.teams_assigned as f64 * daily_salary;
         self.work_completed >= self.work_required
     }
@@ -461,9 +455,9 @@ pub struct Manufacturing {
 }
 
 impl Manufacturing {
-    pub fn new() -> Self {
+    pub fn new(costs: &crate::balance_config::CostsConfig) -> Self {
         Manufacturing {
-            floor_space: FloorSpace::new(),
+            floor_space: FloorSpace::new(costs),
             orders: Vec::new(),
             inventory: Inventory::new(),
             next_order_id: 1,
@@ -530,7 +524,7 @@ impl Manufacturing {
     }
 
     /// Process one day of manufacturing work. Returns events.
-    pub fn advance_day(&mut self) -> Vec<ManufacturingEvent> {
+    pub fn advance_day(&mut self, costs: &crate::balance_config::CostsConfig) -> Vec<ManufacturingEvent> {
         let mut events = Vec::new();
 
         // Process floor space construction
@@ -542,7 +536,7 @@ impl Manufacturing {
         // Process manufacturing orders
         let mut completed_indices = Vec::new();
         for (i, order) in self.orders.iter_mut().enumerate() {
-            if order.apply_daily_work() {
+            if order.apply_daily_work(costs) {
                 completed_indices.push(i);
             }
         }
@@ -674,34 +668,43 @@ impl Manufacturing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::balance_config::{BalanceConfig, CostsConfig};
     use crate::engine_project::EngineProjectId;
 
     fn test_source() -> EngineSource {
         EngineSource::PlayerDesign(EngineProjectId(1))
     }
 
+    fn bal() -> BalanceConfig {
+        BalanceConfig::default()
+    }
+
+    fn costs() -> CostsConfig {
+        CostsConfig::default()
+    }
+
     #[test]
     fn test_floor_space_new() {
-        let fs = FloorSpace::new();
-        assert_eq!(fs.total_units, STARTING_FLOOR_SPACE);
+        let fs = FloorSpace::new(&costs());
+        assert_eq!(fs.total_units, costs().starting_floor_space);
         assert!(fs.under_construction.is_empty());
     }
 
     #[test]
     fn test_floor_space_expansion() {
-        let mut fs = FloorSpace::new();
-        let cost = fs.order_expansion(2);
-        assert_eq!(cost, 2.0 * FLOOR_SPACE_COST);
+        let mut fs = FloorSpace::new(&costs());
+        let cost = fs.order_expansion(2, &costs());
+        assert_eq!(cost, 2.0 * costs().floor_space_cost);
 
         // Advance 29 days — not done yet
         for _ in 0..29 {
             assert_eq!(fs.advance_day(), 0);
         }
-        assert_eq!(fs.total_units, STARTING_FLOOR_SPACE);
+        assert_eq!(fs.total_units, costs().starting_floor_space);
 
         // Day 30 — complete
         assert_eq!(fs.advance_day(), 2);
-        assert_eq!(fs.total_units, STARTING_FLOOR_SPACE + 2);
+        assert_eq!(fs.total_units, costs().starting_floor_space + 2);
     }
 
     #[test]
@@ -716,6 +719,7 @@ mod tests {
             crate::engine_project::PropellantPreset::Kerolox,
             0,
             0, Vec::new(), Vec::new(),
+            &bal(),
         );
         assert!(order.work_required > 0.0);
         assert!(order.material_cost > 0.0);
@@ -732,6 +736,7 @@ mod tests {
             "S1".into(),
             3000.0,
             0,
+            &bal(),
         );
         assert!(order.work_required > 0.0);
         assert!(order.material_cost > 0.0);
@@ -748,6 +753,7 @@ mod tests {
             2,
             0,
             0, Vec::new(),
+            &bal(),
         );
         assert!(order.work_required > 0.0);
         assert!(order.material_cost > 0.0);
@@ -762,12 +768,14 @@ mod tests {
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
             0, Vec::new(), Vec::new(),
+            &bal(),
         );
         let tenth = ManufacturingOrder::new_engine(
             ManufacturingOrderId(2), test_source(), EngineId(2),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 10,
             0, Vec::new(), Vec::new(),
+            &bal(),
         );
         assert!(tenth.work_required < first.work_required,
             "10th build work {} should be less than first {}", tenth.work_required, first.work_required);
@@ -777,20 +785,21 @@ mod tests {
 
     #[test]
     fn test_engine_build_completes() {
-        let mut mfg = Manufacturing::new();
+        let mut mfg = Manufacturing::new(&costs());
         let id = mfg.next_order_id();
         let mut order = ManufacturingOrder::new_engine(
             id, test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
             0, Vec::new(), Vec::new(),
+            &bal(),
         );
         order.teams_assigned = 2;
         mfg.orders.push(order);
 
         let mut engine_built = false;
         for _ in 0..500 {
-            let events = mfg.advance_day();
+            let events = mfg.advance_day(&costs());
             for evt in &events {
                 if matches!(evt, ManufacturingEvent::EngineBuilt { .. }) {
                     engine_built = true;
@@ -830,48 +839,49 @@ mod tests {
 
     #[test]
     fn test_floor_space_tracking() {
-        let mut mfg = Manufacturing::new();
+        let mut mfg = Manufacturing::new(&costs());
         let id = mfg.next_order_id();
         let mut order = ManufacturingOrder::new_engine(
             id, test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
             0, Vec::new(), Vec::new(),
+            &bal(),
         );
         order.teams_assigned = 1;
         mfg.orders.push(order);
 
         assert_eq!(mfg.floor_space_in_use(), 1);
-        assert_eq!(mfg.floor_space_available(), STARTING_FLOOR_SPACE - 1);
+        assert_eq!(mfg.floor_space_available(), costs().starting_floor_space - 1);
     }
 
     #[test]
     fn test_waiting_orders_dont_use_floor_space() {
-        let mut mfg = Manufacturing::new();
+        let mut mfg = Manufacturing::new(&costs());
         let id = mfg.next_order_id();
         let order = ManufacturingOrder::new_stage(
-            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0,
+            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0, &bal(),
         );
         mfg.orders.push(order);
 
         // Waiting orders don't use floor space
         assert_eq!(mfg.floor_space_in_use(), 0);
-        assert_eq!(mfg.floor_space_available(), STARTING_FLOOR_SPACE);
+        assert_eq!(mfg.floor_space_available(), costs().starting_floor_space);
     }
 
     #[test]
     fn test_waiting_orders_dont_progress() {
-        let mut mfg = Manufacturing::new();
+        let mut mfg = Manufacturing::new(&costs());
         let id = mfg.next_order_id();
         let mut order = ManufacturingOrder::new_stage(
-            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0,
+            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0, &bal(),
         );
         order.teams_assigned = 2;
         mfg.orders.push(order);
 
         // Advance some days
         for _ in 0..10 {
-            mfg.advance_day();
+            mfg.advance_day(&costs());
         }
 
         // Should have made no progress (waiting for prerequisites)
@@ -880,17 +890,17 @@ mod tests {
 
     #[test]
     fn test_unblocked_orders_progress() {
-        let mut mfg = Manufacturing::new();
+        let mut mfg = Manufacturing::new(&costs());
         let id = mfg.next_order_id();
         let mut order = ManufacturingOrder::new_stage(
-            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0,
+            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0, &bal(),
         );
         order.teams_assigned = 2;
         order.waiting_for_prerequisites = false; // manually unblock
         mfg.orders.push(order);
 
         for _ in 0..10 {
-            mfg.advance_day();
+            mfg.advance_day(&costs());
         }
 
         assert!(mfg.orders[0].work_completed > 0.0, "Should have made progress");
@@ -903,6 +913,7 @@ mod tests {
             "Merlin".into(), 500.0, 6,
             crate::engine_project::PropellantPreset::Kerolox, 0,
             0, Vec::new(), Vec::new(),
+            &bal(),
         );
         assert!((order.progress() - 0.0).abs() < 0.001);
 
