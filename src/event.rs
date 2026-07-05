@@ -272,6 +272,10 @@ impl GameEvent {
 pub struct EventLog {
     events: VecDeque<(GameDate, GameEvent)>,
     max_size: usize,
+    /// Monotonic count of every event ever pushed (survives ring-buffer
+    /// trimming). Lets headless consumers tally per-tick deltas.
+    #[serde(default)]
+    total_pushed: u64,
 }
 
 impl EventLog {
@@ -279,6 +283,7 @@ impl EventLog {
         EventLog {
             events: VecDeque::with_capacity(max_size),
             max_size,
+            total_pushed: 0,
         }
     }
 
@@ -288,6 +293,12 @@ impl EventLog {
             self.events.pop_front();
         }
         self.events.push_back((date, event));
+        self.total_pushed += 1;
+    }
+
+    /// Monotonic count of every event ever pushed.
+    pub fn total_pushed(&self) -> u64 {
+        self.total_pushed
     }
 
     /// Get the N most recent events (newest first).

@@ -16,7 +16,6 @@ use rocket_tycoon::balance_config::BalanceConfig;
 use rocket_tycoon::calendar::GameDate;
 use rocket_tycoon::event::GameEvent;
 use rocket_tycoon::game_state::GameState;
-use rocket_tycoon::launch::LaunchOutcome;
 use rocket_tycoon::policy::{policy_by_name, CompanyPolicy, POLICY_NAMES};
 
 const USAGE: &str = "\
@@ -95,19 +94,35 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
-/// Cumulative event tallies for one run.
+/// Cumulative event tallies for one run. Launch attempts/outcomes are
+/// tallied from events because `launch_history` only records
+/// catastrophic at-launch failures and completed arrivals — vehicles
+/// lost mid-flight would otherwise be invisible.
 #[derive(Default)]
 struct Tally {
     contracts_completed: u32,
     contracts_expired: u32,
+    /// At-launch catastrophic failures + flights that departed.
+    launch_attempts: u32,
+    /// Flights that arrived fully successfully.
+    launch_successes: u32,
+    /// Vehicles destroyed (at launch or mid-flight) or stranded.
+    vehicles_lost: u32,
 }
 
 impl Tally {
-    fn record(&mut self, events: &[GameEvent]) {
-        for e in events {
+    fn record_one(&mut self, e: &GameEvent) {
+        {
             match e {
                 GameEvent::PaymentReceived { .. } => self.contracts_completed += 1,
                 GameEvent::ContractExpired { .. } => self.contracts_expired += 1,
+                GameEvent::FlightDeparted { .. } => self.launch_attempts += 1,
+                GameEvent::LaunchFailure { .. } => {
+                    self.launch_attempts += 1;
+                    self.vehicles_lost += 1;
+                }
+                GameEvent::LaunchSuccess { .. } => self.launch_successes += 1,
+                GameEvent::SpacecraftLost { .. } => self.vehicles_lost += 1,
                 _ => {}
             }
         }
@@ -115,17 +130,13 @@ impl Tally {
 }
 
 const CSV_HEADER: &str = "seed,date,money,reputation,contracts_available,contracts_active,\
-contracts_completed,contracts_expired,launches,launch_successes,engine_projects,\
+contracts_completed,contracts_expired,launches,launch_successes,vehicles_lost,engine_projects,\
 rocket_projects,reactor_projects,eng_teams,mfg_teams,rockets_inventory,flights_active";
 
 fn metric_row(seed: u64, gs: &GameState, tally: &Tally) -> String {
     let c = &gs.player_company;
-    let launches = c.launch_history.len();
-    let successes = c.launch_history.iter()
-        .filter(|r| matches!(r.outcome, LaunchOutcome::Success))
-        .count();
     format!(
-        "{seed},{:04}-{:02}-{:02},{:.0},{:.1},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        "{seed},{:04}-{:02}-{:02},{:.0},{:.1},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
         gs.date.year, gs.date.month, gs.date.day,
         c.money,
         c.reputation.total(),
@@ -133,8 +144,9 @@ fn metric_row(seed: u64, gs: &GameState, tally: &Tally) -> String {
         c.active_contracts.len(),
         tally.contracts_completed,
         tally.contracts_expired,
-        launches,
-        successes,
+        tally.launch_attempts,
+        tally.launch_successes,
+        tally.vehicles_lost,
         c.engine_projects.len(),
         c.rocket_projects.len(),
         c.reactor_projects.len(),
@@ -192,9 +204,15 @@ fn run_seed(
 
     monthly(&metric_row(seed, &gs, &tally));
     while gs.date < end {
+        let log_before = gs.event_log.total_pushed();
         policy.act(&mut gs);
-        let events = gs.advance_day();
-        tally.record(&events);
+        gs.advance_day();
+        // Tally from the event log so policy-initiated events (launches
+        // happen during act(), not advance_day) are counted too.
+        let new_events = (gs.event_log.total_pushed() - log_before) as usize;
+        for (_, e) in gs.event_log.recent(new_events) {
+            tally.record_one(e);
+        }
         min_money = min_money.min(gs.player_company.money);
         if gs.date.day == 1 {
             monthly(&metric_row(seed, &gs, &tally));
@@ -208,16 +226,13 @@ fn run_seed(
         .find(|w| w[1].1 > w[0].1)
         .map(|w| w[0].0);
 
-    let c = &gs.player_company;
     RunSummary {
         seed,
-        final_money: c.money,
+        final_money: gs.player_company.money,
         min_money,
-        bankrupt: c.money < 0.0,
-        launches: c.launch_history.len(),
-        successes: c.launch_history.iter()
-            .filter(|r| matches!(r.outcome, LaunchOutcome::Success))
-            .count(),
+        bankrupt: gs.player_company.money < 0.0,
+        launches: tally.launch_attempts as usize,
+        successes: tally.launch_successes as usize,
         first_profitable_year,
     }
 }
@@ -252,14 +267,13 @@ fn main() -> ExitCode {
         }
     }
 
-    let mut policy = match policy_by_name(&args.policy) {
-        Some(p) => p,
-        None => {
-            eprintln!("error: unknown policy `{}` (available: {})",
-                args.policy, POLICY_NAMES.join(", "));
-            return ExitCode::FAILURE;
-        }
-    };
+    // Validate the policy name up front; a FRESH policy instance is
+    // created per seed (policies carry run state).
+    if policy_by_name(&args.policy).is_none() {
+        eprintln!("error: unknown policy `{}` (available: {})",
+            args.policy, POLICY_NAMES.join(", "));
+        return ExitCode::FAILURE;
+    }
 
     // Monthly rows go to --csv if given, else stdout (unless --summary-only).
     let mut csv_file = match &args.csv {
@@ -277,6 +291,7 @@ fn main() -> ExitCode {
 
     let mut summaries = Vec::new();
     for &seed in &args.seeds {
+        let mut policy = policy_by_name(&args.policy).expect("validated above");
         let summary = run_seed(seed, args.years, &balance, policy.as_mut(), |row| {
             if !wrote_header {
                 if let Some(f) = csv_file.as_mut() {

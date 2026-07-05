@@ -768,82 +768,38 @@ impl App {
         spacecraft_picks: Vec<bool>,
         spacecraft_item_ids: Vec<crate::manufacturing::InventoryItemId>,
     ) {
-        use crate::flight::Payload;
+        use crate::game_state::ManifestError;
 
-        // Determine destination from picked contracts (must agree). If no
-        // contracts picked, default to LEO.
-        let mut destination: Option<String> = None;
-        for (i, picked) in contract_picks.iter().enumerate() {
-            if !picked { continue; }
-            let dest = self.game.player_company.active_contracts[i].destination.clone();
-            match &destination {
-                None => destination = Some(dest),
-                Some(d) if d == &dest => {}
-                Some(d) => {
-                    self.status_message = Some(format!(
-                        "Picked contracts have different destinations ({} vs {}). Untoggle one.",
-                        d, dest,
-                    ));
-                    return;
-                }
+        let contract_indices: Vec<usize> = contract_picks.iter().enumerate()
+            .filter(|(_, picked)| **picked)
+            .map(|(i, _)| i)
+            .collect();
+        let picked_spacecraft: Vec<crate::manufacturing::InventoryItemId> =
+            spacecraft_picks.iter().enumerate()
+                .filter(|(_, picked)| **picked)
+                .map(|(i, _)| spacecraft_item_ids[i])
+                .collect();
+
+        let (destination, payloads) = match self.game
+            .build_launch_payloads(&contract_indices, &picked_spacecraft)
+        {
+            Ok(dp) => dp,
+            Err(ManifestError::ConflictingDestinations { first, second }) => {
+                self.status_message = Some(format!(
+                    "Picked contracts have different destinations ({} vs {}). Untoggle one.",
+                    first, second,
+                ));
+                return;
             }
-        }
-        let destination = destination.unwrap_or_else(|| "leo".to_string());
-
-        // Build contract-delivery payloads.
-        let mut payloads: Vec<Payload> = Vec::new();
-        for (i, picked) in contract_picks.iter().enumerate() {
-            if !picked { continue; }
-            let c = &self.game.player_company.active_contracts[i];
-            payloads.push(Payload::ContractDelivery {
-                contract_id: c.id,
-                payload_kg: c.payload_kg,
-            });
-        }
-
-        // Take picked inventory rockets and pack as Spacecraft payloads.
-        // We take in reverse so removing items from the inventory Vec
-        // doesn't shift earlier indices (we look up by item_id, not index,
-        // but extra-safe).
-        for (i, picked) in spacecraft_picks.iter().enumerate() {
-            if !picked { continue; }
-            let item_id = spacecraft_item_ids[i];
-            let inv_rocket = match self.game.player_company.manufacturing.inventory
-                .take_rocket(item_id)
-            {
-                Some(r) => r,
-                None => {
-                    self.status_message = Some("Spacecraft payload no longer in inventory.".into());
-                    return;
-                }
-            };
-            // Pull the project's design and instantiate a fresh Rocket
-            // with full propellant. Nested payload mass is 0 for now (no
-            // recursive picking in this UI).
-            let rp = self.game.player_company.rocket_projects.iter()
-                .find(|rp| rp.project_id == inv_rocket.rocket_project_id);
-            if rp.is_none() {
+            Err(ManifestError::SpacecraftMissing) => {
+                self.status_message = Some("Spacecraft payload no longer in inventory.".into());
+                return;
+            }
+            Err(ManifestError::PayloadProjectMissing) => {
                 self.status_message = Some("Payload rocket project not found.".into());
                 return;
             }
-            let design = rp.unwrap().design.clone();
-            let rocket_id = crate::rocket::RocketId(self.game.next_rocket_id);
-            self.game.next_rocket_id += 1;
-            let rocket = design.instantiate(rocket_id, "earth_surface", 0.0);
-            payloads.push(Payload::Spacecraft {
-                deploy_at: Some(destination.clone()),
-                design,
-                rocket,
-                nested_payloads: vec![],
-                rocket_project_id: inv_rocket.rocket_project_id,
-                name: inv_rocket.rocket_name.clone(),
-            });
-        }
-
-        // No picks → test launch with zero mass.
-        if payloads.is_empty() {
-            payloads.push(Payload::TestMass { mass_kg: 0.0 });
-        }
+        };
 
         match self.game.launch_rocket(rocket_item_id, &destination, payloads, persist) {
             Some((_events, Some(record))) => {
@@ -1009,21 +965,7 @@ impl App {
                 // improvements, and attempt tech-deficiency fixes.
                 // Testing-only (mirrors the engine pane).
                 if let Some(idx) = real_idx {
-                    let project = &mut self.game.player_company.reactor_projects[idx];
-                    if project.start_revision() {
-                        let (fc, ic, dc) = match &project.status {
-                            ReactorDesignStatus::Revising {
-                                remaining_flaw_indices,
-                                remaining_improvement_indices,
-                                remaining_tech_deficiency_ids,
-                                ..
-                            } => (
-                                remaining_flaw_indices.len(),
-                                remaining_improvement_indices.len(),
-                                remaining_tech_deficiency_ids.len(),
-                            ),
-                            _ => (0, 0, 0),
-                        };
+                    if let Some((fc, ic, dc)) = self.game.player_company.start_reactor_revision(idx) {
                         self.status_message = Some(format!(
                             "Revising {} flaw(s), {} improvement(s), {} deficiency(ies)",
                             fc, ic, dc,
@@ -1131,13 +1073,7 @@ impl App {
             KeyCode::Char('r') => {
                 // Revise all discovered flaws and actualize pending improvements
                 if let Some(idx) = real_idx {
-                    let project = &mut self.game.player_company.engine_projects[idx];
-                    if project.start_revision() {
-                        let (fc, ic) = match &project.status {
-                            EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, .. } =>
-                                (remaining_flaw_indices.len(), remaining_improvement_indices.len()),
-                            _ => (0, 0),
-                        };
+                    if let Some((fc, ic)) = self.game.player_company.start_engine_revision(idx) {
                         if ic > 0 {
                             self.status_message = Some(format!("Revising {} flaw(s), {} improvement(s)", fc, ic));
                         } else {
@@ -1179,15 +1115,8 @@ impl App {
                 }
             }
             KeyCode::Char('r') => {
-                if self.selected_item < self.game.player_company.rocket_projects.len() {
-                    let project = &mut self.game.player_company.rocket_projects[self.selected_item];
-                    if project.start_revision() {
-                        let count = match &project.status {
-                            RocketDesignStatus::Revising { remaining_indices, .. } => remaining_indices.len(),
-                            _ => 0,
-                        };
-                        self.status_message = Some(format!("Revising {} flaw(s)", count));
-                    }
+                if let Some(count) = self.game.player_company.start_rocket_revision(self.selected_item) {
+                    self.status_message = Some(format!("Revising {} flaw(s)", count));
                 }
             }
             KeyCode::Char('e') => {
@@ -1231,21 +1160,11 @@ impl App {
             KeyCode::Char('m') => {
                 // Cycle auto-build target: 0 → 1 → 2 → 3 → 0
                 if self.selected_item < self.game.player_company.rocket_projects.len() {
-                    let project = &self.game.player_company.rocket_projects[self.selected_item];
-                    if matches!(project.status, RocketDesignStatus::Testing { .. }) {
-                        let pid = project.project_id;
-                        let current = self.game.player_company.auto_build_targets
-                            .get(&pid).copied().unwrap_or(0);
-                        let next = if current >= 3 { 0 } else { current + 1 };
-                        if next == 0 {
-                            self.game.player_company.auto_build_targets.remove(&pid);
-                            self.status_message = Some("Auto-build: off".into());
-                        } else {
-                            self.game.player_company.auto_build_targets.insert(pid, next);
-                            self.status_message = Some(format!("Auto-build: {}", next));
-                        }
-                    } else {
-                        self.status_message = Some("Must be in Testing to set auto-build".into());
+                    match self.game.player_company.cycle_auto_build_target(self.selected_item) {
+                        Some(0) => self.status_message = Some("Auto-build: off".into()),
+                        Some(n) => self.status_message = Some(format!("Auto-build: {}", n)),
+                        None => self.status_message =
+                            Some("Must be in Testing to set auto-build".into()),
                     }
                 }
             }
@@ -1257,8 +1176,7 @@ impl App {
         match key {
             KeyCode::Char('b') => {
                 // Buy floor space
-                let cost = self.game.player_company.manufacturing.floor_space.order_expansion(1, &self.game.balance.costs);
-                self.game.player_company.money -= cost;
+                let cost = self.game.player_company.buy_floor_space(1, &self.game.balance);
                 self.status_message = Some(format!("Ordered 1 floor space unit ({})", crate::ui::draw::format_money(cost)));
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {

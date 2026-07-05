@@ -268,6 +268,98 @@ impl Company {
         Some(GameEvent::ManufacturingTeamHired { name })
     }
 
+    /// Order a floor-space expansion and pay for it. Returns the cost.
+    pub fn buy_floor_space(&mut self, units: u32, balance_cfg: &BalanceConfig) -> f64 {
+        let cost = self.manufacturing.floor_space.order_expansion(units, &balance_cfg.costs);
+        self.money -= cost;
+        cost
+    }
+
+    /// Start a revision on the engine project at `index`. Returns the
+    /// (flaw, improvement) counts queued for revision, or None if the
+    /// index is invalid or there is nothing to revise / not Testing.
+    pub fn start_engine_revision(&mut self, index: usize) -> Option<(usize, usize)> {
+        let project = self.engine_projects.get_mut(index)?;
+        if !project.start_revision() {
+            return None;
+        }
+        match &project.status {
+            EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, .. } =>
+                Some((remaining_flaw_indices.len(), remaining_improvement_indices.len())),
+            _ => Some((0, 0)),
+        }
+    }
+
+    /// Start a revision on the rocket project at `index`. Returns the
+    /// flaw count queued for revision, or None if invalid / nothing to do.
+    pub fn start_rocket_revision(&mut self, index: usize) -> Option<usize> {
+        let project = self.rocket_projects.get_mut(index)?;
+        if !project.start_revision() {
+            return None;
+        }
+        match &project.status {
+            crate::rocket_project::RocketDesignStatus::Revising { remaining_indices, .. } =>
+                Some(remaining_indices.len()),
+            _ => Some(0),
+        }
+    }
+
+    /// Start a revision on the reactor project at `index`. Returns the
+    /// (flaw, improvement, deficiency) counts queued for revision, or
+    /// None if invalid / nothing to do.
+    pub fn start_reactor_revision(&mut self, index: usize) -> Option<(usize, usize, usize)> {
+        let project = self.reactor_projects.get_mut(index)?;
+        if !project.start_revision() {
+            return None;
+        }
+        match &project.status {
+            crate::reactor_project::ReactorDesignStatus::Revising {
+                remaining_flaw_indices,
+                remaining_improvement_indices,
+                remaining_tech_deficiency_ids,
+                ..
+            } => Some((
+                remaining_flaw_indices.len(),
+                remaining_improvement_indices.len(),
+                remaining_tech_deficiency_ids.len(),
+            )),
+            _ => Some((0, 0, 0)),
+        }
+    }
+
+    /// Set the auto-build inventory target for a rocket project
+    /// (0 removes the target). The project must be in Testing.
+    /// Returns false if the project doesn't exist or isn't Testing.
+    pub fn set_auto_build_target(&mut self, project_id: RocketProjectId, target: u32) -> bool {
+        let Some(project) = self.rocket_projects.iter().find(|p| p.project_id == project_id)
+        else {
+            return false;
+        };
+        if !matches!(project.status, crate::rocket_project::RocketDesignStatus::Testing { .. }) {
+            return false;
+        }
+        if target == 0 {
+            self.auto_build_targets.remove(&project_id);
+        } else {
+            self.auto_build_targets.insert(project_id, target);
+        }
+        true
+    }
+
+    /// Cycle the auto-build target for the rocket project at `index`:
+    /// 0 → 1 → 2 → 3 → 0. Returns the new target, or None if the
+    /// project doesn't exist or isn't in Testing.
+    pub fn cycle_auto_build_target(&mut self, index: usize) -> Option<u32> {
+        let project_id = self.rocket_projects.get(index)?.project_id;
+        let current = self.auto_build_targets.get(&project_id).copied().unwrap_or(0);
+        let next = if current >= 3 { 0 } else { current + 1 };
+        if self.set_auto_build_target(project_id, next) {
+            Some(next)
+        } else {
+            None
+        }
+    }
+
     /// Start a new engine design project. Returns the event if successful.
     pub fn start_engine_project(
         &mut self,
@@ -1015,6 +1107,17 @@ impl Company {
 }
 
 const EVENT_LOG_SIZE: usize = 1000;
+
+/// Why a launch manifest couldn't be assembled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManifestError {
+    /// Two picked contracts want different destinations.
+    ConflictingDestinations { first: String, second: String },
+    /// A picked spacecraft is no longer in inventory.
+    SpacecraftMissing,
+    /// A picked spacecraft's rocket project no longer exists.
+    PayloadProjectMissing,
+}
 
 /// Top-level game state.
 #[derive(Debug, Serialize, Deserialize)]
@@ -1891,6 +1994,90 @@ impl GameState {
         let evt = GameEvent::ContractAccepted { contract_name: name };
         self.event_log.push(self.date, evt.clone());
         Some(evt)
+    }
+
+    /// Assemble a launch manifest from contract picks and spacecraft
+    /// inventory items: resolves the shared destination (all picked
+    /// contracts must agree; defaults to LEO with no contract picks),
+    /// builds `ContractDelivery` payloads, and takes each picked
+    /// inventory rocket, instantiating it as a `Spacecraft` payload
+    /// deployed at the destination. Validates everything before
+    /// consuming inventory, so on error nothing is taken. An empty
+    /// manifest becomes a zero-mass test launch.
+    ///
+    /// `contract_indices` index into `player_company.active_contracts`.
+    pub fn build_launch_payloads(
+        &mut self,
+        contract_indices: &[usize],
+        spacecraft_item_ids: &[crate::manufacturing::InventoryItemId],
+    ) -> Result<(String, Vec<Payload>), ManifestError> {
+        // Destination must agree across picked contracts.
+        let mut destination: Option<String> = None;
+        for &i in contract_indices {
+            let dest = self.player_company.active_contracts[i].destination.clone();
+            match &destination {
+                None => destination = Some(dest),
+                Some(d) if d == &dest => {}
+                Some(d) => {
+                    return Err(ManifestError::ConflictingDestinations {
+                        first: d.clone(),
+                        second: dest,
+                    });
+                }
+            }
+        }
+        let destination = destination.unwrap_or_else(|| "leo".to_string());
+
+        // Validate spacecraft picks before consuming any inventory.
+        for &item_id in spacecraft_item_ids {
+            let inv = self.player_company.manufacturing.inventory.rockets.iter()
+                .find(|r| r.item_id == item_id)
+                .ok_or(ManifestError::SpacecraftMissing)?;
+            if !self.player_company.rocket_projects.iter()
+                .any(|rp| rp.project_id == inv.rocket_project_id)
+            {
+                return Err(ManifestError::PayloadProjectMissing);
+            }
+        }
+
+        let mut payloads: Vec<Payload> = Vec::new();
+        for &i in contract_indices {
+            let c = &self.player_company.active_contracts[i];
+            payloads.push(Payload::ContractDelivery {
+                contract_id: c.id,
+                payload_kg: c.payload_kg,
+            });
+        }
+
+        // Take picked inventory rockets and pack them as Spacecraft
+        // payloads with full propellant. Nested payload mass is 0 (no
+        // recursive picking yet).
+        for &item_id in spacecraft_item_ids {
+            let inv_rocket = self.player_company.manufacturing.inventory
+                .take_rocket(item_id)
+                .expect("validated above");
+            let design = self.player_company.rocket_projects.iter()
+                .find(|rp| rp.project_id == inv_rocket.rocket_project_id)
+                .expect("validated above")
+                .design.clone();
+            let rocket_id = crate::rocket::RocketId(self.next_rocket_id);
+            self.next_rocket_id += 1;
+            let rocket = design.instantiate(rocket_id, "earth_surface", 0.0);
+            payloads.push(Payload::Spacecraft {
+                deploy_at: Some(destination.clone()),
+                design,
+                rocket,
+                nested_payloads: vec![],
+                rocket_project_id: inv_rocket.rocket_project_id,
+                name: inv_rocket.rocket_name.clone(),
+            });
+        }
+
+        if payloads.is_empty() {
+            payloads.push(Payload::TestMass { mass_kg: 0.0 });
+        }
+
+        Ok((destination, payloads))
     }
 
     /// Launch a rocket carrying a manifest of payloads.
@@ -4903,4 +5090,121 @@ mod tests {
             );
         }
     }
+    // ── Lifted-from-UI action methods (M1 Task 3a) ──
+
+    fn push_contract(gs: &mut GameState, id: u64, destination: &str) -> usize {
+        gs.player_company.active_contracts.push(Contract {
+            id: crate::contract::ContractId(id),
+            name: format!("C{}", id),
+            destination: destination.into(),
+            payload_kg: 1_000.0,
+            payment: 10_000_000.0,
+            deadline: GameDate::new(2002, 1, 1),
+            status: crate::contract::ContractStatus::Accepted,
+            market_id: crate::contract::MarketId::default(),
+        });
+        gs.player_company.active_contracts.len() - 1
+    }
+
+    #[test]
+    fn test_build_launch_payloads_empty_is_leo_test_mass() {
+        let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+        let (dest, payloads) = gs.build_launch_payloads(&[], &[]).unwrap();
+        assert_eq!(dest, "leo");
+        assert_eq!(payloads.len(), 1);
+        assert!(matches!(payloads[0], Payload::TestMass { .. }));
+    }
+
+    #[test]
+    fn test_build_launch_payloads_shared_destination() {
+        let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+        let a = push_contract(&mut gs, 1, "gto");
+        let b = push_contract(&mut gs, 2, "gto");
+        let (dest, payloads) = gs.build_launch_payloads(&[a, b], &[]).unwrap();
+        assert_eq!(dest, "gto");
+        assert_eq!(payloads.len(), 2);
+        assert!(payloads.iter().all(|p| matches!(p, Payload::ContractDelivery { .. })));
+    }
+
+    #[test]
+    fn test_build_launch_payloads_conflicting_destinations() {
+        let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+        let a = push_contract(&mut gs, 1, "leo");
+        let b = push_contract(&mut gs, 2, "gto");
+        let err = gs.build_launch_payloads(&[a, b], &[]).unwrap_err();
+        assert!(matches!(err, ManifestError::ConflictingDestinations { .. }));
+    }
+
+    #[test]
+    fn test_build_launch_payloads_validates_before_consuming() {
+        // One real spacecraft in inventory plus one bogus id: the call
+        // must fail AND leave the real spacecraft in inventory (validate
+        // everything before taking anything).
+        let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+        let (design, engine_projects) = make_three_stage_design();
+        gs.player_company.engine_projects = engine_projects;
+        let rp = RocketProject::new(
+            RocketProjectId(1), design, &gs.balance,
+        );
+        let design_id = rp.design.id;
+        gs.player_company.rocket_projects.push(rp);
+        gs.player_company.manufacturing.inventory.rockets.push(
+            crate::manufacturing::InventoryRocket {
+                item_id: crate::manufacturing::InventoryItemId(10),
+                rocket_project_id: RocketProjectId(1),
+                design_id,
+                rocket_name: "Real".into(),
+                build_cost: 0.0,
+                revision: 0,
+                rocket_flaws: Vec::new(),
+            });
+
+        let real = crate::manufacturing::InventoryItemId(10);
+        let bogus = crate::manufacturing::InventoryItemId(999);
+        let err = gs.build_launch_payloads(&[], &[real, bogus]).unwrap_err();
+        assert_eq!(err, ManifestError::SpacecraftMissing);
+        assert_eq!(gs.player_company.manufacturing.inventory.rockets.len(), 1,
+            "failed manifest must not consume inventory");
+
+        // With only the real pick it succeeds and consumes it.
+        let (dest, payloads) = gs.build_launch_payloads(&[], &[real]).unwrap();
+        assert_eq!(dest, "leo");
+        assert_eq!(payloads.len(), 1);
+        assert!(matches!(payloads[0], Payload::Spacecraft { .. }));
+        assert!(gs.player_company.manufacturing.inventory.rockets.is_empty());
+    }
+
+    #[test]
+    fn test_buy_floor_space_debits_money() {
+        let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+        let before = gs.player_company.money;
+        let cost = gs.player_company.buy_floor_space(2, &gs.balance.clone());
+        assert_eq!(cost, 2.0 * gs.balance.costs.floor_space_cost);
+        assert_eq!(gs.player_company.money, before - cost);
+        assert_eq!(gs.player_company.manufacturing.floor_space.under_construction.len(), 1);
+    }
+
+    #[test]
+    fn test_cycle_auto_build_target_requires_testing_and_wraps() {
+        let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+        let (design, engine_projects) = make_three_stage_design();
+        gs.player_company.engine_projects = engine_projects;
+        let mut rp = RocketProject::new(RocketProjectId(1), design, &gs.balance.clone());
+        let pid = rp.project_id;
+
+        // InDesign: not settable.
+        gs.player_company.rocket_projects.push(rp.clone());
+        assert_eq!(gs.player_company.cycle_auto_build_target(0), None);
+        gs.player_company.rocket_projects.clear();
+
+        // Testing: cycles 1 → 2 → 3 → 0 (0 removes the entry).
+        rp.status = crate::rocket_project::RocketDesignStatus::Testing { work_completed: 0.0 };
+        gs.player_company.rocket_projects.push(rp);
+        assert_eq!(gs.player_company.cycle_auto_build_target(0), Some(1));
+        assert_eq!(gs.player_company.cycle_auto_build_target(0), Some(2));
+        assert_eq!(gs.player_company.cycle_auto_build_target(0), Some(3));
+        assert_eq!(gs.player_company.cycle_auto_build_target(0), Some(0));
+        assert!(gs.player_company.auto_build_targets.get(&pid).is_none());
+    }
 }
+
