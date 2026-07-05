@@ -14,3 +14,7 @@ toml = "0.8"
 [[bin]]
 name = "rocket_tycoon"
 path = "src/bin/main.rs"
+
+[[bin]]
+name = "simulate"
+path = "src/bin/simulate.rs"

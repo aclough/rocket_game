@@ -27,5 +27,6 @@ pub mod flight;
 pub mod economy;
 pub mod technology;
 pub mod game_state;
+pub mod policy;
 pub mod save;
 pub mod ui;
