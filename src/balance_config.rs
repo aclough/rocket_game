@@ -380,6 +380,20 @@ impl MarketsConfig {
                     ));
                 }
             }
+            if let Some((lo, hi)) = a.template.deadline_days {
+                if lo < 1 || lo > hi {
+                    return Err(format!(
+                        "archetype `{}`: deadline_days ({lo}, {hi}) must be ordered and >= 1",
+                        a.key,
+                    ));
+                }
+            }
+            if a.template.failure_severity < 0.0 {
+                return Err(format!(
+                    "archetype `{}`: failure_severity {} must be >= 0",
+                    a.key, a.template.failure_severity,
+                ));
+            }
             // Additive-only rule for the reputation-0 opening floor.
             if a.template.min_reputation <= 0.0 && a.emergence.is_none() {
                 if a.presence_probability < 1.0 {

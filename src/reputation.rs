@@ -51,25 +51,28 @@ impl Reputation {
         self.drought_factor = 0.0;
     }
 
-    /// Called on a failed launch (payload lost).
-    pub fn on_launch_failure(&mut self, cfg: &ReputationConfig) {
+    /// Called on a failed launch (payload lost). `severity` scales the
+    /// penalties by the harshest market on the manifest (1.0 for
+    /// test-mass flights).
+    pub fn on_launch_failure(&mut self, cfg: &ReputationConfig, severity: f64) {
         // Decay existing factors
         self.success_factor *= cfg.success_decay;
         self.lost_payload_factor *= cfg.lost_payload_decay;
         // Add failure penalties
-        self.success_factor -= cfg.failure_penalty;
-        self.lost_payload_factor -= cfg.lost_payload_penalty;
+        self.success_factor -= cfg.failure_penalty * severity;
+        self.lost_payload_factor -= cfg.lost_payload_penalty * severity;
         // Reset drought (still launched, even if it failed)
         self.drought_factor = 0.0;
     }
 
     /// Called on a partially failed launch (reached near destination).
-    pub fn on_launch_partial_failure(&mut self, cfg: &ReputationConfig) {
+    /// `severity` scales the penalty by the involved market.
+    pub fn on_launch_partial_failure(&mut self, cfg: &ReputationConfig, severity: f64) {
         // Decay existing factors
         self.success_factor *= cfg.success_decay;
         self.lost_payload_factor *= cfg.lost_payload_decay;
         // Smaller penalty than full failure
-        self.success_factor -= cfg.partial_failure_penalty;
+        self.success_factor -= cfg.partial_failure_penalty * severity;
         // Reset drought
         self.drought_factor = 0.0;
     }
@@ -79,9 +82,10 @@ impl Reputation {
         self.expiry_factor *= cfg.expiry_decay;
     }
 
-    /// Called when an accepted contract expires without successful launch.
-    pub fn on_contract_expired(&mut self, cfg: &ReputationConfig) {
-        self.expiry_factor -= cfg.expiry_penalty;
+    /// Called when an accepted contract expires without successful
+    /// launch. `severity` scales the penalty by the contract's market.
+    pub fn on_contract_expired(&mut self, cfg: &ReputationConfig, severity: f64) {
+        self.expiry_factor -= cfg.expiry_penalty * severity;
     }
 
     /// Called on each year anniversary without a launch.
@@ -115,7 +119,7 @@ mod tests {
     #[test]
     fn test_failure_decreases_reputation() {
         let mut rep = Reputation::new();
-        rep.on_launch_failure(&cfg());
+        rep.on_launch_failure(&cfg(), 1.0);
         assert!(rep.total() < 0.0);
         assert_eq!(rep.success_factor, -cfg().failure_penalty);
         assert_eq!(rep.lost_payload_factor, -cfg().lost_payload_penalty);
@@ -145,9 +149,9 @@ mod tests {
     #[test]
     fn test_contract_expiry() {
         let mut rep = Reputation::new();
-        rep.on_contract_expired(&cfg());
+        rep.on_contract_expired(&cfg(), 1.0);
         assert_eq!(rep.expiry_factor, -10.0);
-        rep.on_contract_expired(&cfg());
+        rep.on_contract_expired(&cfg(), 1.0);
         assert_eq!(rep.expiry_factor, -20.0);
         // Contract launch decays it
         rep.on_contract_launch(&cfg());
@@ -155,9 +159,22 @@ mod tests {
     }
 
     #[test]
+    fn test_severity_scales_penalties() {
+        let mut baseline = Reputation::new();
+        baseline.on_launch_failure(&cfg(), 1.0);
+        let mut harsh = Reputation::new();
+        harsh.on_launch_failure(&cfg(), 2.0);
+        assert!((harsh.total() - baseline.total() * 2.0).abs() < 1e-9);
+
+        let mut lenient = Reputation::new();
+        lenient.on_contract_expired(&cfg(), 0.7);
+        assert!((lenient.expiry_factor - (-cfg().expiry_penalty * 0.7)).abs() < 1e-9);
+    }
+
+    #[test]
     fn test_recovery_from_failure() {
         let mut rep = Reputation::new();
-        rep.on_launch_failure(&cfg());
+        rep.on_launch_failure(&cfg(), 1.0);
         let after_failure = rep.total();
         // Several successes should recover
         for _ in 0..5 {

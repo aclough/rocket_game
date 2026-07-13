@@ -2,10 +2,10 @@
 //!
 //! Bands are set around the measured baseline (basic policy, default
 //! balance, 200 seeds × 8 years, 2026-07, re-measured after the M2
-//! market-archetype layer and volume growth): 0/200 bankrupt, 24–30
-//! launches per seed, per-seed success ≥ 90%, first profitable year
-//! within 5 years of start, min money ≥ $112M, final money ≥ $291M.
-//! Bands are
+//! market-archetype layer, volume growth, and contract character
+//! axes): 0/200 bankrupt, 23–30 launches per seed, per-seed success
+//! ≥ 89%, first profitable year within 5 years of start, min money
+//! ≥ $85M, final money ≥ $387M. Bands are
 //! regression protection around observed reality, not aspirations —
 //! M4 retunes them.
 //!

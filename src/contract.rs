@@ -112,6 +112,19 @@ pub struct Market {
     /// None until activation (and on pre-growth saves).
     #[serde(default)]
     pub activation_date: Option<GameDate>,
+    /// Per-market contract deadline window in days from issue;
+    /// None falls back to the global `MarketsConfig` window.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deadline_days: Option<(u32, u32)>,
+    /// Multiplier on reputation penalties for failures and expiries
+    /// involving this market's contracts (1.0 = baseline; crewed
+    /// markets are much less forgiving, government science more so).
+    #[serde(default = "default_severity")]
+    pub failure_severity: f64,
+}
+
+fn default_severity() -> f64 {
+    1.0
 }
 
 impl Market {
@@ -220,7 +233,9 @@ fn generate_single_contract(
     let variance = rng.gen_range(markets_cfg.payment_variance_min..=markets_cfg.payment_variance_max);
     let payment = (base_payment * variance * rate_mult / 10_000.0).round() * 10_000.0;
 
-    let deadline_days = rng.gen_range(markets_cfg.deadline_min_days..=markets_cfg.deadline_max_days);
+    let (deadline_min, deadline_max) = market.deadline_days
+        .unwrap_or((markets_cfg.deadline_min_days, markets_cfg.deadline_max_days));
+    let deadline_days = rng.gen_range(deadline_min..=deadline_max);
     let deadline = current_date.add_days(deadline_days);
 
     let prefix = &market.name_prefixes[rng.gen_range(0..market.name_prefixes.len())];
@@ -288,6 +303,8 @@ pub fn initial_markets() -> Vec<Market> {
             modifiers: Vec::new(),
             annual_growth: 0.0,
             activation_date: None,
+            deadline_days: Some((90, 240)),
+            failure_severity: 1.2,
         },
         Market {
             id: MARKET_GOV_SCIENCE,
@@ -328,6 +345,8 @@ pub fn initial_markets() -> Vec<Market> {
             modifiers: Vec::new(),
             annual_growth: 0.0,
             activation_date: None,
+            deadline_days: Some((120, 360)),
+            failure_severity: 0.7,
         },
         Market {
             id: MARKET_RIDESHARE,
@@ -353,6 +372,8 @@ pub fn initial_markets() -> Vec<Market> {
             modifiers: Vec::new(),
             annual_growth: 0.0,
             activation_date: None,
+            deadline_days: Some((60, 150)),
+            failure_severity: 1.0,
         },
     ]
 }
@@ -363,7 +384,8 @@ pub fn event_market_templates() -> Vec<Market> {
         Market {
             id: MARKET_COTS,
             name: "NASA Crew & Cargo".into(),
-            description: "ISS resupply and crew rotation under commercial contract".into(),
+            description: "ISS resupply and crew rotation under commercial contract. \
+                          Crew-adjacent missions: failures end careers".into(),
             active: false,
             base_volume: 0.5,
             destinations: vec![
@@ -379,6 +401,8 @@ pub fn event_market_templates() -> Vec<Market> {
             modifiers: Vec::new(),
             annual_growth: 0.0,
             activation_date: None,
+            deadline_days: Some((90, 270)),
+            failure_severity: 2.0,
         },
         Market {
             id: MARKET_LEO_CONSTELLATION,
@@ -404,6 +428,8 @@ pub fn event_market_templates() -> Vec<Market> {
             modifiers: Vec::new(),
             annual_growth: 0.0,
             activation_date: None,
+            deadline_days: Some((60, 180)),
+            failure_severity: 1.0,
         },
         Market {
             id: MARKET_MEO_CONSTELLATION,
@@ -424,11 +450,14 @@ pub fn event_market_templates() -> Vec<Market> {
             modifiers: Vec::new(),
             annual_growth: 0.0,
             activation_date: None,
+            deadline_days: Some((90, 210)),
+            failure_severity: 1.0,
         },
         Market {
             id: MARKET_NSSL,
             name: "National Security".into(),
-            description: "Defense and intelligence satellite launches".into(),
+            description: "Defense and intelligence satellite launches. \
+                          Irreplaceable payloads; failures draw hearings".into(),
             active: false,
             base_volume: 0.3,
             destinations: vec![
@@ -459,6 +488,8 @@ pub fn event_market_templates() -> Vec<Market> {
             modifiers: Vec::new(),
             annual_growth: 0.0,
             activation_date: None,
+            deadline_days: Some((120, 360)),
+            failure_severity: 1.5,
         },
         Market {
             id: MARKET_EARTH_OBS,
@@ -484,6 +515,8 @@ pub fn event_market_templates() -> Vec<Market> {
             modifiers: Vec::new(),
             annual_growth: 0.0,
             activation_date: None,
+            deadline_days: Some((60, 180)),
+            failure_severity: 1.0,
         },
     ]
 }

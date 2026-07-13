@@ -1983,16 +1983,35 @@ impl GameState {
         let mut expired_accepted = Vec::new();
         for (i, c) in self.player_company.active_contracts.iter().enumerate() {
             if self.date > c.deadline {
-                expired_accepted.push((i, c.name.clone()));
+                expired_accepted.push((i, c.name.clone(), c.market_id));
             }
         }
-        for (i, name) in expired_accepted.into_iter().rev() {
+        for (i, name, market_id) in expired_accepted.into_iter().rev() {
             self.player_company.active_contracts.remove(i);
-            self.player_company.reputation.on_contract_expired(&self.balance.reputation);
+            let severity = self.market_failure_severity(market_id);
+            self.player_company.reputation.on_contract_expired(&self.balance.reputation, severity);
             let evt = GameEvent::ContractExpired { contract_name: name };
             self.event_log.push(self.date, evt.clone());
             events.push(evt);
         }
+    }
+
+    /// Reputation-penalty severity for a market (1.0 if unknown).
+    fn market_failure_severity(&self, market_id: contract::MarketId) -> f64 {
+        self.markets.iter()
+            .find(|m| m.id == market_id)
+            .map_or(1.0, |m| m.failure_severity)
+    }
+
+    /// Harshest failure severity across the contracts on a manifest
+    /// (1.0 when no contracts are aboard, e.g. test-mass flights).
+    fn manifest_failure_severity(&self, contract_ids: &[contract::ContractId]) -> f64 {
+        contract_ids.iter()
+            .filter_map(|cid| {
+                self.player_company.active_contracts.iter().find(|c| c.id == *cid)
+            })
+            .map(|c| self.market_failure_severity(c.market_id))
+            .fold(1.0, f64::max)
     }
 
     /// Accept a contract from the available market.
@@ -2205,7 +2224,8 @@ impl GameState {
                 contract_id_for_record = Some(*first);
             }
 
-            self.player_company.reputation.on_launch_failure(&self.balance.reputation);
+            let severity = self.manifest_failure_severity(&manifest_contract_ids);
+            self.player_company.reputation.on_launch_failure(&self.balance.reputation, severity);
 
             for cid in &manifest_contract_ids {
                 if let Some(ci) = self.player_company.active_contracts.iter()
@@ -2918,7 +2938,14 @@ impl GameState {
                         FlightStatus::Failed { reason } => reason.clone(),
                         _ => "stage loss".to_string(),
                     };
-                    self.player_company.reputation.on_launch_failure(&self.balance.reputation);
+                    let manifest: Vec<crate::contract::ContractId> = flight.payloads.iter()
+                        .filter_map(|p| match p {
+                            Payload::ContractDelivery { contract_id, .. } => Some(*contract_id),
+                            _ => None,
+                        })
+                        .collect();
+                    let severity = self.manifest_failure_severity(&manifest);
+                    self.player_company.reputation.on_launch_failure(&self.balance.reputation, severity);
                     let evt = GameEvent::SpacecraftLost {
                         rocket_name: flight.rocket_name.clone(),
                         location,
@@ -2949,7 +2976,16 @@ impl GameState {
         let is_partial = flight.launch_partial;
 
         if is_partial {
-            self.player_company.reputation.on_launch_partial_failure(&self.balance.reputation);
+            let manifest: Vec<crate::contract::ContractId> = flight.payloads.iter()
+                .filter_map(|p| match p {
+                    Payload::ContractDelivery { contract_id, .. } => Some(*contract_id),
+                    _ => None,
+                })
+                .collect();
+            let severity = self.manifest_failure_severity(&manifest);
+            self.player_company.reputation.on_launch_partial_failure(
+                &self.balance.reputation, severity,
+            );
         } else {
             self.player_company.reputation.on_launch_success(&self.balance.reputation);
         }
