@@ -1,11 +1,12 @@
 //! M1 Task 4: determinism smoke test + metric-band regression tests.
 //!
 //! Bands are set around the measured baseline (basic policy, default
-//! balance, 200 seeds × 8 years, 2026-07): 0/200 bankrupt, 23–30
-//! launches per seed, per-seed success ≥ 93%, aggregate success 98.6%,
-//! first profitable year within 5 years of start, min money ≥ $108M,
-//! final money ≥ $287M. Bands are regression protection around
-//! observed reality, not aspirations — M4 retunes them.
+//! balance, 200 seeds × 8 years, 2026-07, re-measured after the M2
+//! market-archetype layer): 0/200 bankrupt, 26–30 launches per seed,
+//! per-seed success ≥ 97%, first profitable year within 5 years of
+//! start, min money ≥ $112M, final money ≥ $293M. Bands are
+//! regression protection around observed reality, not aspirations —
+//! M4 retunes them.
 //!
 //! When changing balance values or game constants, re-measure with
 //! `cargo run --release --bin simulate -- --seeds 1..200 --years 8

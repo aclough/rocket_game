@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde::{Serialize, Deserialize};
 
-use crate::contract::Market;
+use crate::contract::MarketArchetype;
 use crate::resources::Resource;
 
 /// All tunable balance parameters. Lives on `GameState` (serialized
@@ -46,8 +46,10 @@ impl BalanceConfig {
                 .map_err(|key| format!("{}: unknown balance key `{key}`", path.display()))?;
             deep_merge(&mut merged, overlay);
         }
-        merged.try_into()
-            .map_err(|e| format!("invalid balance config: {e}"))
+        let config: BalanceConfig = merged.try_into()
+            .map_err(|e| format!("invalid balance config: {e}"))?;
+        config.markets.validate()?;
+        Ok(config)
     }
 
     /// The full effective config as TOML — the generated reference file
@@ -293,8 +295,8 @@ impl WorkConfig {
 // Markets / contracts
 // ==========================================
 
-/// The base market table and contract-generation parameters. This is
-/// the substrate the M2 seed-perturbation layer will multiply on top of.
+/// Contract-generation parameters plus the market archetype table
+/// that the per-seed realization layer draws from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MarketsConfig {
@@ -306,10 +308,9 @@ pub struct MarketsConfig {
     pub payment_variance_min: f64,
     /// Upper bound of the per-contract payment variance multiplier.
     pub payment_variance_max: f64,
-    /// Markets active at game start.
-    pub initial_markets: Vec<Market>,
-    /// Markets opened later by events (created inactive).
-    pub event_market_templates: Vec<Market>,
+    /// Market templates + perturbation specs, realized per seed at
+    /// game start (see [`crate::contract::MarketArchetype`]).
+    pub archetypes: Vec<MarketArchetype>,
 }
 
 impl Default for MarketsConfig {
@@ -319,9 +320,79 @@ impl Default for MarketsConfig {
             deadline_max_days: 180,
             payment_variance_min: 0.8,
             payment_variance_max: 1.2,
-            initial_markets: crate::contract::initial_markets(),
-            event_market_templates: crate::contract::event_market_templates(),
+            archetypes: crate::contract::default_archetypes(),
         }
+    }
+}
+
+impl MarketsConfig {
+    /// Structural checks a TOML sweep must not violate. The key rule
+    /// is additive-only year-1 variance: markets visible at
+    /// reputation 0 from game start form the guaranteed opening
+    /// floor, so their per-seed draws may only raise them.
+    pub fn validate(&self) -> Result<(), String> {
+        let mut keys = std::collections::HashSet::new();
+        let mut ids = std::collections::HashSet::new();
+        for a in &self.archetypes {
+            if !keys.insert(a.key.as_str()) {
+                return Err(format!("duplicate market archetype key `{}`", a.key));
+            }
+            if !ids.insert(a.template.id) {
+                return Err(format!(
+                    "archetype `{}`: duplicate market id {}", a.key, a.template.id.0,
+                ));
+            }
+            if !(0.0..=1.0).contains(&a.presence_probability) {
+                return Err(format!(
+                    "archetype `{}`: presence_probability {} outside [0, 1]",
+                    a.key, a.presence_probability,
+                ));
+            }
+            for (name, range) in [
+                ("volume_mult_range", a.volume_mult_range),
+                ("rate_mult_range", a.rate_mult_range),
+            ] {
+                if range.0 > range.1 || range.0 <= 0.0 {
+                    return Err(format!(
+                        "archetype `{}`: {} ({}, {}) must be ordered and positive",
+                        a.key, name, range.0, range.1,
+                    ));
+                }
+            }
+            if !(0.0..1.0).contains(&a.weight_tilt_strength) {
+                return Err(format!(
+                    "archetype `{}`: weight_tilt_strength {} outside [0, 1)",
+                    a.key, a.weight_tilt_strength,
+                ));
+            }
+            if let Some(e) = &a.emergence {
+                if e.year_range.0 > e.year_range.1 {
+                    return Err(format!(
+                        "archetype `{}`: emergence year_range ({}, {}) is reversed",
+                        a.key, e.year_range.0, e.year_range.1,
+                    ));
+                }
+            }
+            // Additive-only rule for the reputation-0 opening floor.
+            if a.template.min_reputation <= 0.0 && a.emergence.is_none() {
+                if a.presence_probability < 1.0 {
+                    return Err(format!(
+                        "archetype `{}`: opening-floor market (min_reputation <= 0, \
+                         start-active) must have presence_probability 1.0",
+                        a.key,
+                    ));
+                }
+                if a.volume_mult_range.0 < 1.0 || a.rate_mult_range.0 < 1.0 {
+                    return Err(format!(
+                        "archetype `{}`: opening-floor market (min_reputation <= 0, \
+                         start-active) must have multiplier floors >= 1.0 \
+                         (additive-only year-1 variance)",
+                        a.key,
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
