@@ -1,0 +1,30 @@
+* Some missions, like those involving keeping people alive, are much less forgiving of failure.
+* Should we divide reputation into different metrics like notions of reliability (ULA's 100 launches without
+  a failure) and notions of excitement (SpaceX reuse)
+* Ideas for markets:
+    * Space pharmaceuticals research
+    * Space pharmaceuticals (maybe gated off the last)
+    * tourism
+        * suborbital
+        * orbital
+        * lunar orbit
+        * lunar surface
+    * Military
+        * "Rods from god"
+        * Golden dome
+        * Prepositioned supplies
+        * We might track geopolitcial tension and push these from that metric
+    * Telecoms
+        * LEO (Starlink)
+        * MEO (Iridium)
+    * Space solar power
+    * Space compute
+* Events that could drive launch demand
+    * Solar flairs
+    * Economic growth
+    * War (also see Military markets)
+    * Interest rates (which would mean we would track economic health and interest rates sperately)
+        * Eventually the player will be able to take on debt
+
+After M3
+* Demand curves that adjust number of missions to price, with a delay
