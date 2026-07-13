@@ -359,6 +359,13 @@ impl MarketsConfig {
                     ));
                 }
             }
+            let growth = a.annual_growth_range;
+            if growth.0 > growth.1 || growth.0 <= -1.0 {
+                return Err(format!(
+                    "archetype `{}`: annual_growth_range ({}, {}) must be ordered and > -1.0",
+                    a.key, growth.0, growth.1,
+                ));
+            }
             if !(0.0..1.0).contains(&a.weight_tilt_strength) {
                 return Err(format!(
                     "archetype `{}`: weight_tilt_strength {} outside [0, 1)",
@@ -387,6 +394,14 @@ impl MarketsConfig {
                         "archetype `{}`: opening-floor market (min_reputation <= 0, \
                          start-active) must have multiplier floors >= 1.0 \
                          (additive-only year-1 variance)",
+                        a.key,
+                    ));
+                }
+                if a.annual_growth_range.0 < 0.0 {
+                    return Err(format!(
+                        "archetype `{}`: opening-floor market (min_reputation <= 0, \
+                         start-active) must have annual_growth_range floor >= 0 \
+                         (the floor may only rise)",
                         a.key,
                     ));
                 }

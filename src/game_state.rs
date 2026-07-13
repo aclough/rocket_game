@@ -1204,12 +1204,19 @@ impl GameState {
         let technologies = crate::technology::generate_technologies(&seed);
 
         // Realize the archetype table for this world: presence rolls,
-        // volume/rate multipliers, and weight tilts baked in. Absent
-        // and not-yet-emerged markets ride along inactive.
+        // volume/rate multipliers, growth rates, and weight tilts
+        // baked in. Absent and not-yet-emerged markets ride along
+        // inactive. Start-active markets begin their growth clock now.
         let markets: Vec<contract::Market> =
             contract::realize_markets(&seed, &balance.markets.archetypes)
                 .into_iter()
-                .map(|r| r.market)
+                .map(|r| {
+                    let mut m = r.market;
+                    if m.active {
+                        m.activation_date = Some(start);
+                    }
+                    m
+                })
                 .collect();
 
         GameState {
@@ -2371,6 +2378,7 @@ impl GameState {
         for (key, market_id, flavor, cross_effects) in to_fire {
             if let Some(market) = self.markets.iter_mut().find(|m| m.id == market_id) {
                 market.active = true;
+                market.activation_date = Some(self.date);
             }
             for ce in &cross_effects {
                 if let Some(target) = self.markets.iter_mut().find(|m| m.id == ce.target) {

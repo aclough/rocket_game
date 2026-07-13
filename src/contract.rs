@@ -104,14 +104,34 @@ pub struct Market {
     pub economy_sensitivity: EconomySensitivity,
     pub name_prefixes: Vec<String>,
     pub modifiers: Vec<MarketModifier>,
+    /// Compounding annual volume growth rate (0.05 = +5%/year),
+    /// drawn per seed at realization.
+    #[serde(default)]
+    pub annual_growth: f64,
+    /// When this market became active; growth compounds from here.
+    /// None until activation (and on pre-growth saves).
+    #[serde(default)]
+    pub activation_date: Option<GameDate>,
 }
 
 impl Market {
-    /// Effective volume after all modifiers.
-    pub fn effective_volume(&self, economy_modifier: f64) -> f64 {
+    /// Compounding growth multiplier accumulated since activation
+    /// (1.0 before activation or with zero growth).
+    pub fn growth_factor(&self, current_date: GameDate) -> f64 {
+        match self.activation_date {
+            Some(activated) if current_date > activated => {
+                let years = activated.days_until(&current_date) as f64 / 365.25;
+                (1.0 + self.annual_growth).powf(years)
+            }
+            _ => 1.0,
+        }
+    }
+
+    /// Effective volume after growth and all modifiers.
+    pub fn effective_volume(&self, economy_modifier: f64, current_date: GameDate) -> f64 {
         let econ = self.economy_sensitivity.apply(economy_modifier);
         let mod_mult: f64 = self.modifiers.iter().map(|m| m.volume_mult).product();
-        self.base_volume * mod_mult * econ
+        self.base_volume * self.growth_factor(current_date) * mod_mult * econ
     }
 
     /// Effective rate multiplier from all modifiers.
@@ -150,7 +170,7 @@ pub fn generate_market_contracts(
         return Vec::new();
     }
 
-    let effective_volume = market.effective_volume(economy_modifier);
+    let effective_volume = market.effective_volume(economy_modifier, current_date);
     let count = (effective_volume + rng.gen::<f64>()) as u32;
     let rate_mult = market.rate_multiplier(economy_modifier);
 
@@ -266,6 +286,8 @@ pub fn initial_markets() -> Vec<Market> {
             economy_sensitivity: EconomySensitivity::Moderate,
             name_prefixes: vec!["ComSat".into(), "BroadcastSat".into(), "RelaySat".into()],
             modifiers: Vec::new(),
+            annual_growth: 0.0,
+            activation_date: None,
         },
         Market {
             id: MARKET_GOV_SCIENCE,
@@ -304,6 +326,8 @@ pub fn initial_markets() -> Vec<Market> {
             economy_sensitivity: EconomySensitivity::Low,
             name_prefixes: vec!["Observatory".into(), "SciSat".into(), "Probe".into(), "WeatherSat".into()],
             modifiers: Vec::new(),
+            annual_growth: 0.0,
+            activation_date: None,
         },
         Market {
             id: MARKET_RIDESHARE,
@@ -327,6 +351,8 @@ pub fn initial_markets() -> Vec<Market> {
             economy_sensitivity: EconomySensitivity::Moderate,
             name_prefixes: vec!["CubeSat Bundle".into(), "University Payload".into(), "TechDemo".into()],
             modifiers: Vec::new(),
+            annual_growth: 0.0,
+            activation_date: None,
         },
     ]
 }
@@ -351,6 +377,8 @@ pub fn event_market_templates() -> Vec<Market> {
             economy_sensitivity: EconomySensitivity::Low,
             name_prefixes: vec!["ISS Resupply".into(), "Station Cargo".into(), "Crew Rotation".into()],
             modifiers: Vec::new(),
+            annual_growth: 0.0,
+            activation_date: None,
         },
         Market {
             id: MARKET_LEO_CONSTELLATION,
@@ -374,6 +402,8 @@ pub fn event_market_templates() -> Vec<Market> {
             economy_sensitivity: EconomySensitivity::High,
             name_prefixes: vec!["Constellation Batch".into(), "LEO Deploy".into(), "Network Sat".into()],
             modifiers: Vec::new(),
+            annual_growth: 0.0,
+            activation_date: None,
         },
         Market {
             id: MARKET_MEO_CONSTELLATION,
@@ -392,6 +422,8 @@ pub fn event_market_templates() -> Vec<Market> {
             economy_sensitivity: EconomySensitivity::High,
             name_prefixes: vec!["NavSat Batch".into(), "MEO Deploy".into(), "Constellation Unit".into()],
             modifiers: Vec::new(),
+            annual_growth: 0.0,
+            activation_date: None,
         },
         Market {
             id: MARKET_NSSL,
@@ -425,6 +457,8 @@ pub fn event_market_templates() -> Vec<Market> {
             economy_sensitivity: EconomySensitivity::None,
             name_prefixes: vec!["NatSec Payload".into(), "Defense Sat".into(), "Classified Mission".into()],
             modifiers: Vec::new(),
+            annual_growth: 0.0,
+            activation_date: None,
         },
         Market {
             id: MARKET_EARTH_OBS,
@@ -448,6 +482,8 @@ pub fn event_market_templates() -> Vec<Market> {
             economy_sensitivity: EconomySensitivity::Moderate,
             name_prefixes: vec!["ImagingSat".into(), "RadarSat".into(), "EarthWatch".into()],
             modifiers: Vec::new(),
+            annual_growth: 0.0,
+            activation_date: None,
         },
     ]
 }
@@ -489,6 +525,10 @@ pub struct MarketArchetype {
     pub volume_mult_range: (f64, f64),
     /// Per-seed multiplier on every destination's `rate_per_kg`.
     pub rate_mult_range: (f64, f64),
+    /// Per-seed compounding annual volume growth rate, drawn
+    /// uniformly (0.05 = +5%/year from activation).
+    #[serde(default = "zero_range")]
+    pub annual_growth_range: (f64, f64),
     /// Max fractional jitter on each destination weight (0 = none).
     pub weight_tilt_strength: f64,
     /// At most one present market per group; the earliest trigger
@@ -499,6 +539,10 @@ pub struct MarketArchetype {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub emergence: Option<EmergenceSpec>,
     pub template: Market,
+}
+
+fn zero_range() -> (f64, f64) {
+    (0.0, 0.0)
 }
 
 /// One archetype realized for a specific world seed.
@@ -536,6 +580,8 @@ pub fn realize_archetype(seed: &GameSeed, arch: &MarketArchetype) -> RealizedMar
             dest.weight *= 1.0 + tilt;
         }
     }
+    market.annual_growth =
+        rng.gen_range(arch.annual_growth_range.0..=arch.annual_growth_range.1);
     if !present {
         market.active = false;
     }
@@ -594,11 +640,12 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
     let by_id = |id: MarketId, from: &[Market]| -> Market {
         from.iter().find(|m| m.id == id).expect("template exists").clone()
     };
-    let pinned = |key: &str, template: Market| MarketArchetype {
+    let pinned = |key: &str, growth: (f64, f64), template: Market| MarketArchetype {
         key: key.into(),
         presence_probability: 1.0,
         volume_mult_range: (1.0, 1.0),
         rate_mult_range: (1.0, 1.0),
+        annual_growth_range: growth,
         weight_tilt_strength: 0.0,
         exclusive_group: None,
         emergence: None,
@@ -606,24 +653,29 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
     };
 
     vec![
-        // Mainstays: literally fixed across seeds.
-        pinned("market_geo_comsats", by_id(MARKET_GEO_COMSATS, &base)),
+        // Mainstays: starting volume/rates literally fixed across
+        // seeds; only the growth trajectory varies. GEO is a mature
+        // business (flat to gently moving), rideshare rides the
+        // smallsat wave (never shrinks: reputation-0 opening floor).
+        pinned("market_geo_comsats", (-0.02, 0.02), by_id(MARKET_GEO_COMSATS, &base)),
         MarketArchetype {
             key: "market_gov_science".into(),
             presence_probability: 1.0,
             volume_mult_range: (0.8, 1.3),
             rate_mult_range: (0.9, 1.15),
+            annual_growth_range: (-0.01, 0.03),
             weight_tilt_strength: 0.15,
             exclusive_group: None,
             emergence: None,
             template: by_id(MARKET_GOV_SCIENCE, &base),
         },
-        pinned("market_rideshare", by_id(MARKET_RIDESHARE, &base)),
+        pinned("market_rideshare", (0.02, 0.08), by_id(MARKET_RIDESHARE, &base)),
         MarketArchetype {
             key: "market_cots".into(),
             presence_probability: 0.70,
             volume_mult_range: (0.8, 1.3),
             rate_mult_range: (0.9, 1.1),
+            annual_growth_range: (0.0, 0.05),
             weight_tilt_strength: 0.0,
             exclusive_group: None,
             emergence: Some(EmergenceSpec {
@@ -638,6 +690,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
             presence_probability: 0.60,
             volume_mult_range: (0.7, 1.5),
             rate_mult_range: (0.85, 1.15),
+            annual_growth_range: (0.04, 0.12),
             weight_tilt_strength: 0.1,
             exclusive_group: Some("constellation".into()),
             emergence: Some(EmergenceSpec {
@@ -661,6 +714,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
             presence_probability: 0.30,
             volume_mult_range: (0.7, 1.4),
             rate_mult_range: (0.9, 1.1),
+            annual_growth_range: (0.03, 0.10),
             weight_tilt_strength: 0.0,
             exclusive_group: Some("constellation".into()),
             emergence: Some(EmergenceSpec {
@@ -684,6 +738,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
             presence_probability: 0.50,
             volume_mult_range: (0.8, 1.2),
             rate_mult_range: (0.9, 1.2),
+            annual_growth_range: (0.0, 0.04),
             weight_tilt_strength: 0.1,
             exclusive_group: None,
             emergence: Some(EmergenceSpec {
@@ -698,6 +753,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
             presence_probability: 0.70,
             volume_mult_range: (0.7, 1.4),
             rate_mult_range: (0.85, 1.15),
+            annual_growth_range: (0.02, 0.10),
             weight_tilt_strength: 0.2,
             exclusive_group: None,
             emergence: Some(EmergenceSpec {
@@ -787,13 +843,50 @@ mod tests {
     #[test]
     fn test_modifier_affects_volume() {
         let mut market = initial_markets().remove(0); // GEO, base_volume 1.5
-        let vol_before = market.effective_volume(1.0);
+        let date = GameDate::new(2001, 1, 1);
+        let vol_before = market.effective_volume(1.0, date);
         market.add_modifier(MarketModifier {
             id: "test".into(), description: "Test".into(),
             volume_mult: 0.5, rate_mult: 1.0, end_date: None,
         });
-        let vol_after = market.effective_volume(1.0);
+        let vol_after = market.effective_volume(1.0, date);
         assert!((vol_after - vol_before * 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_growth_compounds_from_activation() {
+        let mut market = initial_markets().remove(0);
+        market.annual_growth = 0.10;
+
+        // No activation date -> no growth.
+        assert_eq!(market.growth_factor(GameDate::new(2005, 1, 1)), 1.0);
+
+        market.activation_date = Some(GameDate::new(2001, 1, 1));
+        // Before/at activation -> no growth.
+        assert_eq!(market.growth_factor(GameDate::new(2000, 6, 1)), 1.0);
+        assert_eq!(market.growth_factor(GameDate::new(2001, 1, 1)), 1.0);
+        // Two years on -> ~1.1^2, within leap-day slop.
+        let two_years = market.growth_factor(GameDate::new(2003, 1, 1));
+        assert!(
+            (two_years - 1.21).abs() < 0.01,
+            "expected ~1.21 growth factor after 2 years at 10%, got {two_years}",
+        );
+        // Growth feeds effective_volume.
+        let base = market.effective_volume(1.0, GameDate::new(2001, 1, 1));
+        let grown = market.effective_volume(1.0, GameDate::new(2003, 1, 1));
+        assert!((grown / base - two_years).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_negative_growth_shrinks() {
+        let mut market = initial_markets().remove(0);
+        market.annual_growth = -0.02;
+        market.activation_date = Some(GameDate::new(2001, 1, 1));
+        let factor = market.growth_factor(GameDate::new(2011, 1, 1));
+        assert!(
+            factor < 1.0 && factor > 0.7,
+            "expected mild decade-long decline at -2%/yr, got {factor}",
+        );
     }
 
     #[test]

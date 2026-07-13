@@ -28,25 +28,28 @@ fn mainstays_are_identical_in_every_world() {
         let seed = GameSeed::new(seed_value);
         let realized = realize_markets(&seed, &archetypes);
 
-        let r = realized
-            .iter()
-            .find(|r| r.market.id == rideshare.template.id)
-            .expect("rideshare realized");
-        assert!(r.present, "seed {seed_value}: rideshare should always be present");
-        assert_eq!(
-            r.market, rideshare.template,
-            "seed {seed_value}: rideshare market drifted from its template",
-        );
-
-        let g = realized
-            .iter()
-            .find(|r| r.market.id == geo.template.id)
-            .expect("geo comsats realized");
-        assert!(g.present, "seed {seed_value}: geo comsats should always be present");
-        assert_eq!(
-            g.market, geo.template,
-            "seed {seed_value}: geo comsats market drifted from its template",
-        );
+        for (name, arch) in [("rideshare", rideshare), ("geo comsats", geo)] {
+            let r = realized
+                .iter()
+                .find(|r| r.market.id == arch.template.id)
+                .unwrap_or_else(|| panic!("{name} realized"));
+            assert!(r.present, "seed {seed_value}: {name} should always be present");
+            // Identical starting market in every world; only the
+            // growth trajectory is seeded (within the archetype range).
+            let (lo, hi) = arch.annual_growth_range;
+            assert!(
+                (lo..=hi).contains(&r.market.annual_growth),
+                "seed {seed_value}: {name} annual_growth {} outside ({lo}, {hi})",
+                r.market.annual_growth,
+            );
+            let mut normalized = r.market.clone();
+            normalized.annual_growth = arch.template.annual_growth;
+            assert_eq!(
+                normalized, arch.template,
+                "seed {seed_value}: {name} market drifted from its template \
+                 beyond the seeded growth rate",
+            );
+        }
     }
 }
 
@@ -170,7 +173,14 @@ fn game_state_markets_match_realization() {
         let seed = GameSeed::new(seed_value);
         let expected: Vec<_> = realize_markets(&seed, &archetypes)
             .into_iter()
-            .map(|r| r.market)
+            .map(|r| {
+                let mut m = r.market;
+                // GameState starts the growth clock on active markets.
+                if m.active {
+                    m.activation_date = Some(gs.start_date);
+                }
+                m
+            })
             .collect();
         assert_eq!(
             gs.markets, expected,
