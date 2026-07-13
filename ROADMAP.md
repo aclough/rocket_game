@@ -140,6 +140,21 @@ Using M1's harness against the M2+M3 economy:
 4. Clears the TODO "Later tuning" items: construction time, design
    time, profitability.
 
+Findings from the M1 harness to revisit here:
+
+- **Reputation death-spiral:** a failure before the first success
+  drives reputation negative; every market gates at
+  `min_reputation >= 0` and only launches restore reputation, so a
+  company with no contract income is permanently locked out. The
+  basic bot works around it with test-mass flights; a player may not.
+- **Too forgiving once the loop runs:** with the test/revise loop the
+  naive bot hits ~98.6% launch success and 200/200 seeds profitable —
+  little tension after year 2.
+- **10x year-1 seed disparity:** achievable year-1 contract value
+  ranges $6M–$62M across seeds (recession years suppress rideshare
+  volume). All seeds survive today, but M2 variance stacks on top of
+  this — the fairness-floor test guards the bottom edge.
+
 ### M5 — First 15 minutes & release readiness  (~1–2 weeks)
 
 1. **Onboarding** — suggested-first-steps panel or lightly guided first
