@@ -394,6 +394,41 @@ impl MarketsConfig {
                     a.key, a.template.failure_severity,
                 ));
             }
+            if let Some(c) = &a.campaign {
+                if !(0.0..=1.0).contains(&c.spawn_chance_per_month) {
+                    return Err(format!(
+                        "archetype `{}`: campaign spawn_chance_per_month {} outside [0, 1]",
+                        a.key, c.spawn_chance_per_month,
+                    ));
+                }
+                if c.mission_count_range.0 < 1 || c.mission_count_range.0 > c.mission_count_range.1 {
+                    return Err(format!(
+                        "archetype `{}`: campaign mission_count_range ({}, {}) must be ordered and >= 1",
+                        a.key, c.mission_count_range.0, c.mission_count_range.1,
+                    ));
+                }
+                if c.interval_days_range.0 < 1 || c.interval_days_range.0 > c.interval_days_range.1 {
+                    return Err(format!(
+                        "archetype `{}`: campaign interval_days_range ({}, {}) must be ordered and >= 1",
+                        a.key, c.interval_days_range.0, c.interval_days_range.1,
+                    ));
+                }
+                if !(0.0..1.0).contains(&c.discount_range.0)
+                    || !(0.0..1.0).contains(&c.discount_range.1)
+                    || c.discount_range.0 > c.discount_range.1
+                {
+                    return Err(format!(
+                        "archetype `{}`: campaign discount_range ({}, {}) must be ordered within [0, 1)",
+                        a.key, c.discount_range.0, c.discount_range.1,
+                    ));
+                }
+                if c.program_names.is_empty() {
+                    return Err(format!(
+                        "archetype `{}`: campaign program_names must not be empty",
+                        a.key,
+                    ));
+                }
+            }
             match a.template.cadence {
                 crate::contract::Cadence::Steady => {}
                 crate::contract::Cadence::Lumpy { quiet_chance } => {

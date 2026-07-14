@@ -197,6 +197,7 @@ fn expiry_applies_market_severity_end_to_end() {
             deadline,
             status: ContractStatus::Accepted,
             market_id: MARKET_COTS,
+            campaign_id: None,
         });
         gs.advance_day();
 
@@ -221,6 +222,7 @@ fn expiry_applies_market_severity_end_to_end() {
             deadline,
             status: ContractStatus::Accepted,
             market_id: MARKET_GOV_SCIENCE,
+            campaign_id: None,
         });
         gs.advance_day();
 

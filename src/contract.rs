@@ -24,6 +24,10 @@ pub enum ContractStatus {
     Expired,
 }
 
+/// Unique identifier for an anchor-customer campaign.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub struct CampaignId(pub u64);
+
 /// A contract to deliver a payload to a destination.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contract {
@@ -36,6 +40,10 @@ pub struct Contract {
     pub status: ContractStatus,
     #[serde(default)]
     pub market_id: MarketId,
+    /// Set when this contract is a mission of an anchor-customer
+    /// campaign (correlated series, block-buy pricing).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub campaign_id: Option<CampaignId>,
 }
 
 /// How sensitive a market is to economic cycles.
@@ -247,6 +255,25 @@ pub fn generate_market_contracts(
     contracts
 }
 
+/// Pick a destination by weight (None if the market has no positive
+/// weights).
+fn pick_destination<'a>(market: &'a Market, rng: &mut StdRng) -> Option<&'a MarketDestination> {
+    let total_weight: f64 = market.destinations.iter().map(|d| d.weight).sum();
+    if total_weight <= 0.0 {
+        return None;
+    }
+    let mut roll = rng.gen::<f64>() * total_weight;
+    let mut dest = market.destinations.first()?;
+    for d in &market.destinations {
+        roll -= d.weight;
+        if roll <= 0.0 {
+            dest = d;
+            break;
+        }
+    }
+    Some(dest)
+}
+
 fn generate_single_contract(
     market: &Market,
     rng: &mut StdRng,
@@ -259,20 +286,7 @@ fn generate_single_contract(
         return None;
     }
 
-    // Pick destination by weight
-    let total_weight: f64 = market.destinations.iter().map(|d| d.weight).sum();
-    if total_weight <= 0.0 {
-        return None;
-    }
-    let mut roll = rng.gen::<f64>() * total_weight;
-    let mut dest = &market.destinations[0];
-    for d in &market.destinations {
-        roll -= d.weight;
-        if roll <= 0.0 {
-            dest = d;
-            break;
-        }
-    }
+    let dest = pick_destination(market, rng)?;
 
     let payload_kg = rng.gen_range(dest.min_payload_kg..=dest.max_payload_kg);
     let payload_kg = (payload_kg / 100.0).round() * 100.0;
@@ -302,7 +316,133 @@ fn generate_single_contract(
         deadline,
         status: ContractStatus::Available,
         market_id: market.id,
+        campaign_id: None,
     })
+}
+
+// ==========================================
+// Anchor-customer campaigns (M2)
+// ==========================================
+
+/// Per-market campaign generation parameters: how often an anchor
+/// customer announces a multi-flight program, and what its missions
+/// look like.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CampaignSpec {
+    /// Chance per month (while the market is active and visible) that
+    /// a new campaign is announced.
+    pub spawn_chance_per_month: f64,
+    /// Missions per campaign, drawn uniformly.
+    pub mission_count_range: (u32, u32),
+    /// Days between mission contract issues, drawn once per campaign.
+    pub interval_days_range: (u32, u32),
+    /// Block-buy discount off the market rate (0.15 = 15% off),
+    /// drawn once per campaign.
+    pub discount_range: (f64, f64),
+    /// Program name pool ("Meridian Constellation Flight 3").
+    pub program_names: Vec<String>,
+}
+
+/// A live anchor-customer program: a series of correlated mission
+/// contracts (same payload, destination, and block-buy price) issued
+/// on a fixed cadence. Missions are ordinary offered contracts — no
+/// exclusivity, and a skipped mission doesn't stop the next one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Campaign {
+    pub id: CampaignId,
+    /// Program name (mission contracts are "{name} Flight {n}").
+    pub name: String,
+    pub market_id: MarketId,
+    pub destination: String,
+    pub destination_display: String,
+    pub payload_kg: f64,
+    /// Block-buy price, locked at announcement.
+    pub payment_per_mission: f64,
+    pub missions_total: u32,
+    pub missions_issued: u32,
+    pub next_issue_date: GameDate,
+    pub interval_days: u32,
+}
+
+/// Roll a campaign announcement for a market. Consumes the spawn roll
+/// and, on success, draws the program's parameters. The block-buy
+/// price locks in the announcement-time rate multiplier.
+pub fn spawn_campaign(
+    market: &Market,
+    spec: &CampaignSpec,
+    rng: &mut StdRng,
+    next_campaign_id: &mut u64,
+    current_date: GameDate,
+    economy_modifier: f64,
+) -> Option<Campaign> {
+    if rng.gen::<f64>() >= spec.spawn_chance_per_month {
+        return None;
+    }
+    if spec.program_names.is_empty() {
+        return None;
+    }
+    let dest = pick_destination(market, rng)?;
+
+    let payload_kg = rng.gen_range(dest.min_payload_kg..=dest.max_payload_kg);
+    let payload_kg = ((payload_kg / 100.0).round() * 100.0).max(dest.min_payload_kg);
+    let discount = rng.gen_range(spec.discount_range.0..=spec.discount_range.1);
+    let rate_mult = market.rate_multiplier(economy_modifier);
+    let payment_per_mission =
+        (payload_kg * dest.rate_per_kg * rate_mult * (1.0 - discount) / 10_000.0).round()
+            * 10_000.0;
+    let missions_total =
+        rng.gen_range(spec.mission_count_range.0..=spec.mission_count_range.1);
+    let interval_days =
+        rng.gen_range(spec.interval_days_range.0..=spec.interval_days_range.1);
+    let name = spec.program_names[rng.gen_range(0..spec.program_names.len())].clone();
+
+    let id = CampaignId(*next_campaign_id);
+    *next_campaign_id += 1;
+
+    Some(Campaign {
+        id,
+        name,
+        market_id: market.id,
+        destination: dest.location_id.clone(),
+        destination_display: dest.display_name.clone(),
+        payload_kg,
+        payment_per_mission,
+        missions_total,
+        missions_issued: 0,
+        next_issue_date: current_date,
+        interval_days,
+    })
+}
+
+/// Issue the campaign's next mission as an ordinary offered contract.
+/// The caller advances `missions_issued`/`next_issue_date`.
+pub fn campaign_contract(
+    campaign: &Campaign,
+    deadline_window: (u32, u32),
+    rng: &mut StdRng,
+    next_contract_id: &mut u64,
+    current_date: GameDate,
+) -> Contract {
+    let deadline_days = rng.gen_range(deadline_window.0..=deadline_window.1);
+    let id = ContractId(*next_contract_id);
+    *next_contract_id += 1;
+
+    Contract {
+        id,
+        name: format!(
+            "{} Flight {} to {}",
+            campaign.name,
+            campaign.missions_issued + 1,
+            campaign.destination_display,
+        ),
+        destination: campaign.destination.clone(),
+        payload_kg: campaign.payload_kg,
+        payment: campaign.payment_per_mission,
+        deadline: current_date.add_days(deadline_days),
+        status: ContractStatus::Available,
+        market_id: campaign.market_id,
+        campaign_id: Some(campaign.id),
+    }
 }
 
 /// Get the display name for a location ID.
@@ -628,6 +768,10 @@ pub struct MarketArchetype {
     /// None = active from game start (when present).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub emergence: Option<EmergenceSpec>,
+    /// Anchor-customer campaign generation for this market (None =
+    /// no campaigns).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub campaign: Option<CampaignSpec>,
     pub template: Market,
 }
 
@@ -730,7 +874,8 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
     let by_id = |id: MarketId, from: &[Market]| -> Market {
         from.iter().find(|m| m.id == id).expect("template exists").clone()
     };
-    let pinned = |key: &str, growth: (f64, f64), template: Market| MarketArchetype {
+    let pinned = |key: &str, growth: (f64, f64), campaign: Option<CampaignSpec>,
+                  template: Market| MarketArchetype {
         key: key.into(),
         presence_probability: 1.0,
         volume_mult_range: (1.0, 1.0),
@@ -739,6 +884,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
         weight_tilt_strength: 0.0,
         exclusive_group: None,
         emergence: None,
+        campaign,
         template,
     };
 
@@ -747,7 +893,21 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
         // seeds; only the growth trajectory varies. GEO is a mature
         // business (flat to gently moving), rideshare rides the
         // smallsat wave (never shrinks: reputation-0 opening floor).
-        pinned("market_geo_comsats", (-0.02, 0.02), by_id(MARKET_GEO_COMSATS, &base)),
+        pinned(
+            "market_geo_comsats",
+            (-0.02, 0.02),
+            Some(CampaignSpec {
+                spawn_chance_per_month: 0.015,
+                mission_count_range: (2, 4),
+                interval_days_range: (90, 180),
+                discount_range: (0.10, 0.20),
+                program_names: vec![
+                    "GlobalRelay Fleet".into(), "TransComm Block".into(),
+                    "Meridian Comms".into(), "EchoWave Series".into(),
+                ],
+            }),
+            by_id(MARKET_GEO_COMSATS, &base),
+        ),
         MarketArchetype {
             key: "market_gov_science".into(),
             presence_probability: 1.0,
@@ -757,9 +917,24 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
             weight_tilt_strength: 0.15,
             exclusive_group: None,
             emergence: None,
+            campaign: None,
             template: by_id(MARKET_GOV_SCIENCE, &base),
         },
-        pinned("market_rideshare", (0.02, 0.08), by_id(MARKET_RIDESHARE, &base)),
+        pinned(
+            "market_rideshare",
+            (0.02, 0.08),
+            Some(CampaignSpec {
+                spawn_chance_per_month: 0.02,
+                mission_count_range: (3, 5),
+                interval_days_range: (60, 120),
+                discount_range: (0.10, 0.20),
+                program_names: vec![
+                    "Orbital Classroom".into(), "Pathfinder Series".into(),
+                    "SmallSat Express".into(), "Horizon Initiative".into(),
+                ],
+            }),
+            by_id(MARKET_RIDESHARE, &base),
+        ),
         MarketArchetype {
             key: "market_cots".into(),
             presence_probability: 0.70,
@@ -772,6 +947,17 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                 year_range: (2004, 2008),
                 flavor: "NASA announces Commercial Orbital Transportation Services program".into(),
                 cross_effects: Vec::new(),
+            }),
+            campaign: Some(CampaignSpec {
+                spawn_chance_per_month: 0.03,
+                mission_count_range: (4, 8),
+                interval_days_range: (60, 120),
+                discount_range: (0.15, 0.25),
+                program_names: vec![
+                    "Station Logistics Block".into(),
+                    "Orbital Resupply Series".into(),
+                    "Crew Rotation Block".into(),
+                ],
             }),
             template: by_id(MARKET_COTS, &event),
         },
@@ -797,6 +983,16 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                     },
                 }],
             }),
+            campaign: Some(CampaignSpec {
+                spawn_chance_per_month: 0.04,
+                mission_count_range: (4, 8),
+                interval_days_range: (45, 90),
+                discount_range: (0.15, 0.30),
+                program_names: vec![
+                    "Meridian Constellation".into(), "SkyWeb Deployment".into(),
+                    "Aurora Network".into(), "LinkNet Buildout".into(),
+                ],
+            }),
             template: by_id(MARKET_LEO_CONSTELLATION, &event),
         },
         MarketArchetype {
@@ -821,6 +1017,16 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                     },
                 }],
             }),
+            campaign: Some(CampaignSpec {
+                spawn_chance_per_month: 0.04,
+                mission_count_range: (3, 6),
+                interval_days_range: (60, 120),
+                discount_range: (0.15, 0.30),
+                program_names: vec![
+                    "NavGrid Deployment".into(), "PathStar Series".into(),
+                    "Compass Network".into(),
+                ],
+            }),
             template: by_id(MARKET_MEO_CONSTELLATION, &event),
         },
         MarketArchetype {
@@ -836,6 +1042,16 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                 flavor: "National security space launch program opens to new providers".into(),
                 cross_effects: Vec::new(),
             }),
+            campaign: Some(CampaignSpec {
+                spawn_chance_per_month: 0.02,
+                mission_count_range: (2, 4),
+                interval_days_range: (120, 240),
+                discount_range: (0.10, 0.20),
+                program_names: vec![
+                    "Assured Access Block".into(), "Sentinel Series".into(),
+                    "Vanguard Buy".into(),
+                ],
+            }),
             template: by_id(MARKET_NSSL, &event),
         },
         MarketArchetype {
@@ -850,6 +1066,16 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                 year_range: (2005, 2012),
                 flavor: "Commercial Earth observation market taking off".into(),
                 cross_effects: Vec::new(),
+            }),
+            campaign: Some(CampaignSpec {
+                spawn_chance_per_month: 0.02,
+                mission_count_range: (3, 5),
+                interval_days_range: (60, 120),
+                discount_range: (0.10, 0.20),
+                program_names: vec![
+                    "EarthWatch Program".into(), "TerraScan Series".into(),
+                    "GeoSight Fleet".into(),
+                ],
             }),
             template: by_id(MARKET_EARTH_OBS, &event),
         },

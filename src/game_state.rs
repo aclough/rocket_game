@@ -1160,6 +1160,11 @@ pub struct GameState {
     /// Tracks which market events have already fired (by event key).
     #[serde(default)]
     pub fired_market_events: Vec<String>,
+    /// Live anchor-customer campaigns issuing mission contracts.
+    #[serde(default)]
+    pub active_campaigns: Vec<contract::Campaign>,
+    #[serde(default = "default_next_campaign_id")]
+    pub next_campaign_id: u64,
     /// Tunable balance parameters this game was created with. Saves
     /// remember their balance; old saves load with defaults.
     #[serde(default)]
@@ -1167,6 +1172,7 @@ pub struct GameState {
 }
 
 fn default_next_contract_id() -> u64 { 1 }
+fn default_next_campaign_id() -> u64 { 1 }
 fn default_next_flight_id() -> u64 { 1 }
 fn default_next_rocket_id() -> u64 { 1 }
 fn default_markets() -> Vec<contract::Market> {
@@ -1236,6 +1242,8 @@ impl GameState {
             economy,
             markets,
             fired_market_events: Vec::new(),
+            active_campaigns: Vec::new(),
+            next_campaign_id: 1,
             technologies,
             balance,
         }
@@ -1698,9 +1706,51 @@ impl GameState {
                 events.push(evt);
             }
 
+            // Roll anchor-customer campaign announcements. Seeded per
+            // month like contract generation, so identical runs get
+            // identical programs.
+            let campaign_query = format!("campaigns_{}_{}", self.date.year, self.date.month);
+            let mut campaign_rng = self.seed.world_query(&campaign_query);
+            let mut announced: Vec<contract::Campaign> = Vec::new();
+            for arch in &self.balance.markets.archetypes {
+                let Some(spec) = &arch.campaign else { continue };
+                let Some(market) = self.markets.iter().find(|m| m.id == arch.template.id)
+                else { continue };
+                if !market.active || rep < market.min_reputation {
+                    continue;
+                }
+                if let Some(campaign) = contract::spawn_campaign(
+                    market, spec, &mut campaign_rng,
+                    &mut self.next_campaign_id, self.date, econ_mod,
+                ) {
+                    announced.push(campaign);
+                }
+            }
+            for campaign in announced {
+                let market_name = self.markets.iter()
+                    .find(|m| m.id == campaign.market_id)
+                    .map(|m| m.name.clone())
+                    .unwrap_or_default();
+                let evt = GameEvent::EconomicShift {
+                    condition: format!("New Program: {}", campaign.name),
+                    description: format!(
+                        "{market_name}: {} flights of {:.0} kg to {}, block-buy pricing",
+                        campaign.missions_total, campaign.payload_kg,
+                        campaign.destination_display,
+                    ),
+                };
+                self.event_log.push(self.date, evt.clone());
+                events.push(evt);
+                self.active_campaigns.push(campaign);
+            }
+
             // Start new month in financials
             self.ensure_current_month_financials();
         }
+
+        // Issue due campaign mission contracts (daily; intervals are
+        // day-grained, not month-grained).
+        self.issue_campaign_contracts(&mut events);
 
         // Expire contracts past deadline
         self.expire_contracts(&mut events);
@@ -1963,6 +2013,53 @@ impl GameState {
             .find(|f| f.year == year && f.month == month)
         {
             f.income += amount;
+        }
+    }
+
+    /// Issue mission contracts for campaigns whose next issue date has
+    /// arrived, and retire campaigns that have issued their last
+    /// mission. Missions are ordinary offered contracts: skipping one
+    /// never blocks the next.
+    fn issue_campaign_contracts(&mut self, events: &mut Vec<GameEvent>) {
+        let global_window = (
+            self.balance.markets.deadline_min_days,
+            self.balance.markets.deadline_max_days,
+        );
+        let mut issued = 0u32;
+        for i in 0..self.active_campaigns.len() {
+            while self.active_campaigns[i].missions_issued
+                < self.active_campaigns[i].missions_total
+                && self.date >= self.active_campaigns[i].next_issue_date
+            {
+                let campaign = &self.active_campaigns[i];
+                let window = self.markets.iter()
+                    .find(|m| m.id == campaign.market_id)
+                    .and_then(|m| m.deadline_days)
+                    .unwrap_or(global_window);
+                // Per-mission query: order-independent and stable
+                // across save/load.
+                let query = format!(
+                    "campaign_issue_{}_{}", campaign.id.0, campaign.missions_issued + 1,
+                );
+                let mut rng = self.seed.world_query(&query);
+                let contract = contract::campaign_contract(
+                    campaign, window, &mut rng, &mut self.next_contract_id, self.date,
+                );
+                self.available_contracts.push(contract);
+                issued += 1;
+
+                let campaign = &mut self.active_campaigns[i];
+                campaign.missions_issued += 1;
+                campaign.next_issue_date = self.date.add_days(campaign.interval_days);
+            }
+        }
+        self.active_campaigns.retain(|c| c.missions_issued < c.missions_total);
+
+        if issued > 0 {
+            self.available_contracts.sort_by_key(|c| c.market_id.0);
+            let evt = GameEvent::ContractsRefreshed { count: issued };
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
         }
     }
 
@@ -4292,6 +4389,7 @@ mod tests {
             deadline: GameDate::new(2099, 1, 1),
             status: ContractStatus::Accepted,
             market_id: Default::default(),
+            campaign_id: None,
         };
         let contract_b = Contract {
             id: ContractId(2), name: "B".into(),
@@ -4299,6 +4397,7 @@ mod tests {
             deadline: GameDate::new(2099, 1, 1),
             status: ContractStatus::Accepted,
             market_id: Default::default(),
+            campaign_id: None,
         };
         gs.player_company.active_contracts.push(contract_a);
         gs.player_company.active_contracts.push(contract_b);
@@ -5077,6 +5176,7 @@ mod tests {
             deadline: GameDate::new(2002, 1, 1),
             status: crate::contract::ContractStatus::Accepted,
             market_id: crate::contract::MarketId::default(),
+            campaign_id: None,
         });
         gs.player_company.active_contracts.len() - 1
     }

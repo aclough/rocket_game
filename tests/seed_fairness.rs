@@ -9,10 +9,10 @@
 //! per-seed market variance, no seed can be silently starved.
 //!
 //! Floors are set at the measured baseline minimum (default balance,
-//! 200 seeds, 2026-07, re-measured after M2 volume growth: count
-//! min 3 / median 6 / max 11, value min $6.97M / median $28.9M / max
-//! $62.6M — the thin seeds are year-1 recessions suppressing
-//! rideshare volume). Re-measure with
+//! 200 seeds, 2026-07, re-measured after the full M2 market layer:
+//! count min 3 / median 7 / max 14, value min $7.53M / median $30.7M
+//! / max $65.9M — the thin seeds are year-1 recessions suppressing
+//! rideshare volume; campaigns only add). Re-measure with
 //! `measure_year1_distribution` (`cargo test --test seed_fairness --
 //! --ignored --nocapture`) and update floors alongside any
 //! market/balance change. The 10x min-to-max disparity is an M4
