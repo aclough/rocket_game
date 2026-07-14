@@ -1,5 +1,9 @@
 # M2 Plan — Seeded Markets & Contract Character
 
+> **COMPLETED 2026-07-14** (commits 1a40270, d7519aa, c606a24,
+> 516f602, 9d6663b + Task 6). One deviation from plan: rideshare
+> cadence stays Steady — see the Task 4 amendment.
+>
 > Working plan for ROADMAP.md milestone M2. Same review process as M1:
 > USER: comments inline, CLAUDE: replies, then task-by-task execution
 > with approval before each commit.

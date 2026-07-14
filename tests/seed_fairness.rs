@@ -28,7 +28,11 @@ use rocket_tycoon::game_state::GameState;
 /// contract that was offered at any point. Contracts expire after
 /// 60+ days, so a daily scan of `available_contracts` misses nothing.
 fn year1_offered_contracts(seed: u64) -> Vec<Contract> {
-    let mut gs = GameState::with_balance("Probe".into(), seed, BalanceConfig::default());
+    year1_offered_with(seed, BalanceConfig::default())
+}
+
+fn year1_offered_with(seed: u64, balance: BalanceConfig) -> Vec<Contract> {
+    let mut gs = GameState::with_balance("Probe".into(), seed, balance);
     let start_year = gs.date.year;
     let mut seen = HashSet::new();
     let mut offered = Vec::new();
@@ -64,6 +68,62 @@ fn assert_year1_floor(seed: u64) {
         value >= 5_000_000.0,
         "seed {seed}: achievable year-1 contract value ${value:.0} below $5M floor (baseline min $6.05M)",
     );
+}
+
+/// The additive-only property, asserted directly (M2 Task 6): with
+/// all variance layers live, a seed's year-1 offering must contain
+/// the mainstay-only baseline exactly, and may only add to it. At
+/// reputation 0 only the (pinned) rideshare market draws from the
+/// monthly generation stream, so the comparison is exact, not
+/// statistical.
+fn assert_year1_additive(seed: u64) {
+    let full = year1_offered_contracts(seed);
+
+    let mut stripped_cfg = BalanceConfig::default();
+    for arch in &mut stripped_cfg.markets.archetypes {
+        arch.campaign = None;
+    }
+    let baseline = year1_offered_with(seed, stripped_cfg);
+
+    // The full run's non-campaign contracts are byte-for-byte the
+    // baseline offering.
+    let key = |c: &Contract| {
+        (c.name.clone(), c.payload_kg.to_bits(), c.payment.to_bits(), c.deadline)
+    };
+    let base_contracts: Vec<_> = full.iter()
+        .filter(|c| c.campaign_id.is_none())
+        .map(key)
+        .collect();
+    let baseline_contracts: Vec<_> = baseline.iter().map(key).collect();
+    assert_eq!(
+        base_contracts, baseline_contracts,
+        "seed {seed}: variance layers altered the baseline year-1 offering \
+         instead of only adding to it",
+    );
+
+    // And therefore total value can only be >= the baseline's.
+    let value = |cs: &[Contract]| cs.iter().map(|c| c.payment).sum::<f64>();
+    assert!(
+        value(&full) >= value(&baseline),
+        "seed {seed}: full-variance year-1 value below mainstay-only baseline",
+    );
+}
+
+/// Cheap additive-only check in normal `cargo test`.
+#[test]
+fn year1_additive_only_20_seeds() {
+    for seed in 1..=20 {
+        assert_year1_additive(seed);
+    }
+}
+
+/// Full additive-only check; run with `cargo test -- --ignored`.
+#[test]
+#[ignore = "full 200-seed additive-only check; run with `cargo test -- --ignored`"]
+fn year1_additive_only_200_seeds() {
+    for seed in 1..=200 {
+        assert_year1_additive(seed);
+    }
 }
 
 /// Cheap floor check in normal `cargo test`.

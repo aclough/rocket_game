@@ -3268,6 +3268,79 @@ mod reactor_render_tests {
 }
 
 #[cfg(test)]
+mod market_discovery_render_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    /// M2 Task 6 discovery rule: the Contracts pane shows only
+    /// realized contracts and observed history. A campaign mission
+    /// renders like any offered contract, and no seeded market
+    /// internals (growth rates, presence draws, cadence/severity
+    /// parameters) reach the buffer — which would only happen via an
+    /// accidental debug-format of a Market or archetype.
+    #[test]
+    fn contracts_pane_shows_realized_only() {
+        let mut game = crate::game_state::GameState::new(
+            "Render Test".into(), 100_000_000.0, 7,
+        );
+
+        // Inject a live campaign mission alongside whatever the first
+        // month generated.
+        let campaign = crate::contract::Campaign {
+            id: crate::contract::CampaignId(1),
+            name: "Pathfinder Series".into(),
+            market_id: crate::contract::MARKET_RIDESHARE,
+            destination: "leo".into(),
+            destination_display: "LEO".into(),
+            payload_kg: 300.0,
+            payment_per_mission: 4_050_000.0,
+            missions_total: 4,
+            missions_issued: 0,
+            next_issue_date: game.date,
+            interval_days: 90,
+        };
+        let mut rng = game.seed.world_query("render_test_campaign");
+        let mut next_id = 900_000u64;
+        let contract = crate::contract::campaign_contract(
+            &campaign, (60, 150), &mut rng, &mut next_id, game.date,
+        );
+        game.available_contracts.push(contract);
+        game.active_campaigns.push(campaign);
+
+        let mut app = App::new(game);
+        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.selected_item = 0;
+
+        let backend = TestBackend::new(120, 50);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw::draw(frame, &app)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // Realized content renders.
+        assert!(text.contains("Rideshare"), "market group header should render");
+        assert!(
+            text.contains("Pathfinder Series Flight 1"),
+            "campaign mission should render as an ordinary offered contract",
+        );
+
+        // Seeded internals never do. These strings only appear if a
+        // Market/archetype is debug-printed into the UI.
+        for leak in [
+            "annual_growth", "presence_probability", "quiet_chance",
+            "burst_chance", "failure_severity", "spawn_chance",
+            "volume_mult", "base_volume", "trigger_year",
+        ] {
+            assert!(
+                !text.contains(leak),
+                "seeded parameter `{leak}` leaked into the contracts pane",
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod engine_pane_tests {
     use super::*;
     use crate::engine_project::EngineDesignStatus;

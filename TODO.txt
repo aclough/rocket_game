@@ -1,3 +1,5 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
 [] Make color coding of contracts take into account spacecraft duration
+[] Timing for batteries and launches, related fenceposts
+    [] If we launch to LEO on the 5th we should arrive on the 5th.

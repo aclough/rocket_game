@@ -82,11 +82,16 @@ the competitor work (bot policy = competitor brain).
 5. **Seed-fairness floor** — across N seeds, assert viable early-game
    contract volume. (Becomes critical once M2 adds market variance.)
 
-### M2 — Seeded markets & contract character  (~1–2 weeks)
+### M2 — Seeded markets & contract character  ✅ shipped 2026-07
 
 Makes contract streams differ from each other and run to run. The
 `Market` architecture already exists; this adds the seed layer and
-character axes.
+character axes. (As built: `MarketArchetype` realization layer with
+pinned Rideshare/GEO mainstays, seeded volume growth, per-market
+deadlines + failure severity, steady/lumpy/burst cadence, and
+anchor-customer campaigns. The additive-only year-1 rule is enforced
+at config load and by a 200-seed property test. Details in
+docs/plans/m2_plan.md.)
 
 1. **Seed-perturbed market table** — at game start, `world_query`
    per market archetype draws: exists?, emergence date/trigger, volume
