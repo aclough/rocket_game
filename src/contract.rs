@@ -90,6 +90,51 @@ pub struct MarketModifier {
     pub end_date: Option<GameDate>,
 }
 
+/// When a market's contracts arrive: evenly, in clumps, or in
+/// batches. Every variant conserves long-run volume — cadence
+/// reshapes *when* contracts appear, never how many.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Cadence {
+    /// Even monthly flow (the pre-cadence behavior).
+    Steady,
+    /// Irregular: a month goes quiet with probability `quiet_chance`;
+    /// active months run at boosted volume to compensate.
+    Lumpy { quiet_chance: f64 },
+    /// Batchy: quiet most months, then a burst month (probability
+    /// `burst_chance`) generates the accumulated volume at once.
+    Burst { burst_chance: f64 },
+}
+
+impl Default for Cadence {
+    fn default() -> Self {
+        Cadence::Steady
+    }
+}
+
+impl Cadence {
+    /// Roll this month's volume multiplier. Each variant has
+    /// expectation 1.0, so long-run volume is conserved.
+    pub fn monthly_multiplier(&self, rng: &mut StdRng) -> f64 {
+        match *self {
+            Cadence::Steady => 1.0,
+            Cadence::Lumpy { quiet_chance } => {
+                if rng.gen::<f64>() < quiet_chance {
+                    0.0
+                } else {
+                    1.0 / (1.0 - quiet_chance)
+                }
+            }
+            Cadence::Burst { burst_chance } => {
+                if rng.gen::<f64>() < burst_chance {
+                    1.0 / burst_chance
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+}
+
 /// A launch market that generates contracts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Market {
@@ -121,6 +166,9 @@ pub struct Market {
     /// markets are much less forgiving, government science more so).
     #[serde(default = "default_severity")]
     pub failure_severity: f64,
+    /// How this market's contracts arrive over time.
+    #[serde(default)]
+    pub cadence: Cadence,
 }
 
 fn default_severity() -> f64 {
@@ -184,7 +232,8 @@ pub fn generate_market_contracts(
     }
 
     let effective_volume = market.effective_volume(economy_modifier, current_date);
-    let count = (effective_volume + rng.gen::<f64>()) as u32;
+    let cadence_mult = market.cadence.monthly_multiplier(rng);
+    let count = (effective_volume * cadence_mult + rng.gen::<f64>()) as u32;
     let rate_mult = market.rate_multiplier(economy_modifier);
 
     let mut contracts = Vec::new();
@@ -305,6 +354,7 @@ pub fn initial_markets() -> Vec<Market> {
             activation_date: None,
             deadline_days: Some((90, 240)),
             failure_severity: 1.2,
+            cadence: Cadence::Steady,
         },
         Market {
             id: MARKET_GOV_SCIENCE,
@@ -347,6 +397,7 @@ pub fn initial_markets() -> Vec<Market> {
             activation_date: None,
             deadline_days: Some((120, 360)),
             failure_severity: 0.7,
+            cadence: Cadence::Steady,
         },
         Market {
             id: MARKET_RIDESHARE,
@@ -374,6 +425,7 @@ pub fn initial_markets() -> Vec<Market> {
             activation_date: None,
             deadline_days: Some((60, 150)),
             failure_severity: 1.0,
+            cadence: Cadence::Steady,
         },
     ]
 }
@@ -403,6 +455,7 @@ pub fn event_market_templates() -> Vec<Market> {
             activation_date: None,
             deadline_days: Some((90, 270)),
             failure_severity: 2.0,
+            cadence: Cadence::Steady,
         },
         Market {
             id: MARKET_LEO_CONSTELLATION,
@@ -430,6 +483,7 @@ pub fn event_market_templates() -> Vec<Market> {
             activation_date: None,
             deadline_days: Some((60, 180)),
             failure_severity: 1.0,
+            cadence: Cadence::Burst { burst_chance: 0.2 },
         },
         Market {
             id: MARKET_MEO_CONSTELLATION,
@@ -452,6 +506,7 @@ pub fn event_market_templates() -> Vec<Market> {
             activation_date: None,
             deadline_days: Some((90, 210)),
             failure_severity: 1.0,
+            cadence: Cadence::Burst { burst_chance: 0.2 },
         },
         Market {
             id: MARKET_NSSL,
@@ -490,6 +545,7 @@ pub fn event_market_templates() -> Vec<Market> {
             activation_date: None,
             deadline_days: Some((120, 360)),
             failure_severity: 1.5,
+            cadence: Cadence::Lumpy { quiet_chance: 0.5 },
         },
         Market {
             id: MARKET_EARTH_OBS,
@@ -517,6 +573,7 @@ pub fn event_market_templates() -> Vec<Market> {
             activation_date: None,
             deadline_days: Some((60, 180)),
             failure_severity: 1.0,
+            cadence: Cadence::Lumpy { quiet_chance: 0.4 },
         },
     ]
 }
@@ -884,6 +941,80 @@ mod tests {
         });
         let vol_after = market.effective_volume(1.0, date);
         assert!((vol_after - vol_before * 0.5).abs() < 0.01);
+    }
+
+    /// Generate `months` of contracts for a synthetic market with the
+    /// given cadence and return the per-month counts.
+    fn monthly_counts(cadence: Cadence, months: u32) -> Vec<usize> {
+        let mut market = initial_markets().remove(2); // Rideshare, rep 0
+        market.base_volume = 1.0;
+        market.cadence = cadence;
+        let mut rng = make_rng();
+        let mut next_id = 1u64;
+        let mut counts = Vec::new();
+        for m in 0..months {
+            let date = GameDate::new(2001 + m / 12, m % 12 + 1, 1);
+            let cs = generate_market_contracts(
+                &market, &mut rng, &mut next_id, date, 0.0, 1.0, &mcfg(),
+            );
+            counts.push(cs.len());
+        }
+        counts
+    }
+
+    #[test]
+    fn test_cadence_conserves_long_run_volume() {
+        // Every cadence has a monthly multiplier with expectation 1.0,
+        // so total contracts over N months must track base_volume * N.
+        let months = 2400;
+        for cadence in [
+            Cadence::Steady,
+            Cadence::Lumpy { quiet_chance: 0.4 },
+            Cadence::Burst { burst_chance: 0.2 },
+        ] {
+            let total: usize = monthly_counts(cadence, months).iter().sum();
+            let expected = months as f64; // base_volume 1.0
+            let ratio = total as f64 / expected;
+            assert!(
+                (0.9..=1.1).contains(&ratio),
+                "{cadence:?}: {total} contracts over {months} months, \
+                 {:.0}% of expected — cadence must conserve volume",
+                ratio * 100.0,
+            );
+        }
+    }
+
+    #[test]
+    fn test_cadence_shapes_differ() {
+        let months = 240;
+        let zero_share = |counts: &[usize]| {
+            counts.iter().filter(|&&c| c == 0).count() as f64 / counts.len() as f64
+        };
+
+        // Steady at volume 1.0 delivers every month.
+        let steady = monthly_counts(Cadence::Steady, months);
+        assert_eq!(zero_share(&steady), 0.0, "steady should never skip a month");
+
+        // Lumpy skips roughly its quiet_chance share of months.
+        let lumpy = monthly_counts(Cadence::Lumpy { quiet_chance: 0.4 }, months);
+        let lumpy_zero = zero_share(&lumpy);
+        assert!(
+            (0.25..=0.55).contains(&lumpy_zero),
+            "lumpy zero-month share {lumpy_zero:.2} not near quiet_chance 0.4",
+        );
+
+        // Burst is mostly quiet with occasional big months.
+        let burst = monthly_counts(Cadence::Burst { burst_chance: 0.2 }, months);
+        let burst_zero = zero_share(&burst);
+        assert!(
+            burst_zero >= 0.6,
+            "burst zero-month share {burst_zero:.2} should be well above half",
+        );
+        let max_month = *burst.iter().max().unwrap();
+        assert!(
+            max_month >= 4,
+            "burst peak month {max_month} should batch several contracts (5x volume)",
+        );
     }
 
     #[test]

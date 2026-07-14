@@ -40,6 +40,9 @@ fn per_market_deadline_windows_honored() {
         let mut market = arch.template.clone();
         market.base_volume = 5.0;
         market.active = true;
+        // Pin cadence: this test is about deadline windows, and lumpy/
+        // burst markets can legitimately go months without contracts.
+        market.cadence = rocket_tycoon::contract::Cadence::Steady;
         let reputation = market.min_reputation + 100.0;
 
         let mut rng = StdRng::seed_from_u64(7);
@@ -85,6 +88,7 @@ fn global_deadline_fallback_used_when_unset() {
     let mut market = arch.template.clone();
     market.deadline_days = None;
     market.base_volume = 5.0;
+    market.cadence = rocket_tycoon::contract::Cadence::Steady;
     let reputation = market.min_reputation + 100.0;
 
     let mut rng = StdRng::seed_from_u64(11);

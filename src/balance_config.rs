@@ -394,6 +394,25 @@ impl MarketsConfig {
                     a.key, a.template.failure_severity,
                 ));
             }
+            match a.template.cadence {
+                crate::contract::Cadence::Steady => {}
+                crate::contract::Cadence::Lumpy { quiet_chance } => {
+                    if !(0.0..1.0).contains(&quiet_chance) {
+                        return Err(format!(
+                            "archetype `{}`: Lumpy quiet_chance {} outside [0, 1)",
+                            a.key, quiet_chance,
+                        ));
+                    }
+                }
+                crate::contract::Cadence::Burst { burst_chance } => {
+                    if !(burst_chance > 0.0 && burst_chance <= 1.0) {
+                        return Err(format!(
+                            "archetype `{}`: Burst burst_chance {} outside (0, 1]",
+                            a.key, burst_chance,
+                        ));
+                    }
+                }
+            }
             // Additive-only rule for the reputation-0 opening floor.
             if a.template.min_reputation <= 0.0 && a.emergence.is_none() {
                 if a.presence_probability < 1.0 {
@@ -416,6 +435,15 @@ impl MarketsConfig {
                         "archetype `{}`: opening-floor market (min_reputation <= 0, \
                          start-active) must have annual_growth_range floor >= 0 \
                          (the floor may only rise)",
+                        a.key,
+                    ));
+                }
+                if a.template.cadence != crate::contract::Cadence::Steady {
+                    return Err(format!(
+                        "archetype `{}`: opening-floor market (min_reputation <= 0, \
+                         start-active) must have Steady cadence — lumpy/burst \
+                         variance can starve a seed's first year even at \
+                         conserved volume",
                         a.key,
                     ));
                 }

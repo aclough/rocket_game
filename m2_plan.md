@@ -159,9 +159,18 @@ Replace the one-size monthly draw with per-market cadence:
 
 - **Steady** — current behavior (uniform fractional draw).
 - **Lumpy** — same long-run volume, higher variance (some months 0,
-  some 2–3). Rideshare, Earth obs.
+  some 2–3). Earth obs, NSSL.
 - **Burst** — quiet stretches, then a seeded batch window (several
   contracts in 1–2 months). Constellations especially.
+
+**AMENDED (measured, 2026-07):** Rideshare was planned Lumpy but
+stays **Steady**. At quiet_chance 0.4 the 200-seed year-1 value
+margin thinned to $5.41M vs the $5M floor; at 0.3 a reshuffled seed
+dropped to 1 contract, breaking the count floor. Cadence conserves
+the mean, but the opening floor is a worst-case guarantee — so the
+additive-only rule now also requires Steady cadence on opening-floor
+markets, enforced in `validate()`. Lumpy flavor for rideshare could
+return later as a guaranteed-base-plus-lumpy-extras split (M4).
 
 Implementation: `CadenceSpec` enum on the market, consumed inside
 `generate_market_contracts`. Long-run volume must be conserved —

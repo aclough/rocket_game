@@ -220,6 +220,39 @@ fn additive_only_rule_rejects_thinned_floor() {
 }
 
 #[test]
+fn cadence_validation_rejects_bad_params() {
+    use rocket_tycoon::contract::Cadence;
+
+    let base = BalanceConfig::default().markets;
+
+    let mut config = base.clone();
+    config.archetypes[0].template.cadence = Cadence::Lumpy { quiet_chance: 1.0 };
+    assert!(
+        config.validate().is_err(),
+        "expected validate() to reject Lumpy quiet_chance of 1.0 (never active)",
+    );
+
+    let mut config = base.clone();
+    config.archetypes[0].template.cadence = Cadence::Burst { burst_chance: 0.0 };
+    assert!(
+        config.validate().is_err(),
+        "expected validate() to reject Burst burst_chance of 0.0 (never fires)",
+    );
+
+    // Opening-floor markets must stay Steady: conserved mean is not a
+    // conserved worst case, and the year-1 floor is a worst-case rule.
+    let mut config = base.clone();
+    let idx = config.archetypes.iter()
+        .position(|a| a.key == "market_rideshare")
+        .expect("market_rideshare archetype exists");
+    config.archetypes[idx].template.cadence = Cadence::Lumpy { quiet_chance: 0.2 };
+    assert!(
+        config.validate().is_err(),
+        "expected validate() to reject non-Steady cadence on an opening-floor market",
+    );
+}
+
+#[test]
 fn duplicate_archetype_key_rejected() {
     let mut config = BalanceConfig::default().markets;
     let dup = config.archetypes[0].clone();
