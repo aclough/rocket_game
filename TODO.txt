@@ -1,1 +1,3 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
+
+[] Make color coding of contracts take into account spacecraft duration
