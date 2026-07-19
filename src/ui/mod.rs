@@ -420,6 +420,8 @@ pub enum InputMode {
     /// Editing standing per-market bid rules (enable + margin). The
     /// rule engine auto-bids marginal cost × (1 + margin) daily.
     BidRules { selected: usize },
+    /// Browsing observed award outcomes (price-discovery history).
+    AwardHistory { scroll: usize },
     /// Persistent rocket designer screen.
     RocketDesigner { state: Box<RocketDesignerState> },
     /// Per-stage power-source editor opened from the rocket designer.
@@ -1240,6 +1242,9 @@ impl App {
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.enter_modal(InputMode::BidRules { selected: 0 });
             }
+            KeyCode::Char('h') | KeyCode::Char('H') => {
+                self.enter_modal(InputMode::AwardHistory { scroll: 0 });
+            }
             _ => {}
         }
     }
@@ -1603,6 +1608,23 @@ impl App {
                             let rule = self.game.player_company.bid_rules
                                 .entry(id).or_default();
                             rule.margin = (rule.margin + 0.25).min(9.0);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::AwardHistory { scroll } => {
+                let len = self.game.award_history.len();
+                match key {
+                    KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('H') => {
+                        self.exit_modal();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        *scroll = scroll.saturating_sub(1);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if *scroll + 1 < len {
+                            *scroll += 1;
                         }
                     }
                     _ => {}
@@ -3478,6 +3500,68 @@ mod market_discovery_render_tests {
             matches!(app.input_mode, InputMode::Normal),
             "Esc should close the modal",
         );
+    }
+
+    /// M3 Task 4 discovery rule: the award-history modal shows every
+    /// observed outcome kind — and nothing the market never disclosed
+    /// (no ceilings, no competitor cost/reliability internals).
+    #[test]
+    fn h_opens_award_history_showing_outcomes_only() {
+        use crate::contract::{AwardOutcome, AwardRecord, MARKET_GEO_COMSATS};
+
+        let mut game = crate::game_state::GameState::new(
+            "History Test".into(), 100_000_000.0, 7,
+        );
+        let mk = |name: &str, outcome: AwardOutcome| AwardRecord {
+            date: game.date,
+            market_id: MARKET_GEO_COMSATS,
+            contract_name: name.into(),
+            destination: "gto".into(),
+            payload_kg: 4_200.0,
+            outcome,
+        };
+        game.award_history.push(mk("WonSat", AwardOutcome::PlayerWon {
+            amount: 88_000_000.0,
+        }));
+        game.award_history.push(mk("LostSat", AwardOutcome::CompetitorWon {
+            company: "DinoSoar".into(),
+            amount: 124_000_000.0,
+            player_bid: Some(150_000_000.0),
+        }));
+        game.award_history.push(mk("HighSat", AwardOutcome::PlayerRejected {
+            bid: 400_000_000.0,
+        }));
+
+        let mut app = App::new(game);
+        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.handle_key(KeyCode::Char('h'));
+        assert!(
+            matches!(app.input_mode, InputMode::AwardHistory { scroll: 0 }),
+            "'h' should open the award-history modal",
+        );
+
+        let backend = TestBackend::new(140, 50);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw::draw(frame, &app)).unwrap();
+        let text: String = terminal.backend().buffer()
+            .content().iter().map(|c| c.symbol()).collect();
+
+        assert!(text.contains("Award History"), "modal title should render");
+        assert!(text.contains("won at"), "player win should render with its price");
+        assert!(text.contains("DinoSoar") && text.contains("(you"),
+            "a lost award should show the winner's public price and the player's own bid");
+        assert!(text.contains("over budget"),
+            "a rejection should render without disclosing the ceiling");
+        for leak in [
+            "budget_ceiling", "budget_tolerance", "rep_target", "w_cost",
+            "w_rep", "rep_scale", "failure_rate", "margin_min", "margin_max",
+            "catalog_cost", "bid_floor",
+        ] {
+            assert!(
+                !text.contains(leak),
+                "hidden parameter `{leak}` leaked into the award-history modal",
+            );
+        }
     }
 }
 

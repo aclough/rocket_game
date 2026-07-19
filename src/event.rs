@@ -61,8 +61,9 @@ pub enum GameEvent {
         contract_name: String,
         company: String,
         amount: f64,
-        /// True when the player also bid (and lost) — bumps importance.
-        player_had_bid: bool,
+        /// The player's losing bid, when they bid — shown alongside
+        /// the winning price, and bumps importance.
+        player_bid: Option<f64>,
     },
     /// A competitor flew an awarded contract (abstractly).
     CompetitorLaunch { company: String, contract_name: String, success: bool },
@@ -178,13 +179,14 @@ impl fmt::Display for GameEvent {
                 write!(f, "Contract awarded: {} at {}", contract_name, crate::resources::format_money(*amount)),
             GameEvent::BidRejected { contract_name } =>
                 write!(f, "No award on {}: the bid exceeded the customer's budget", contract_name),
-            GameEvent::ContractAwardedToCompetitor { contract_name, company, amount, player_had_bid } => {
-                if *player_had_bid {
-                    write!(f, "Outbid: {} goes to {} at {}",
-                        contract_name, company, crate::resources::format_money(*amount))
-                } else {
-                    write!(f, "{} awarded to {} at {}",
-                        contract_name, company, crate::resources::format_money(*amount))
+            GameEvent::ContractAwardedToCompetitor { contract_name, company, amount, player_bid } => {
+                match player_bid {
+                    Some(b) => write!(f, "Outbid: {} goes to {} at {} (you bid {})",
+                        contract_name, company,
+                        crate::resources::format_money(*amount),
+                        crate::resources::format_money(*b)),
+                    None => write!(f, "{} awarded to {} at {}",
+                        contract_name, company, crate::resources::format_money(*amount)),
                 }
             }
             GameEvent::CompetitorLaunch { company, contract_name, success } => {
@@ -255,8 +257,8 @@ impl GameEvent {
             GameEvent::DayAdvanced | GameEvent::MonthStart | GameEvent::SalariesPaid { .. }
             | GameEvent::CompetitorRocketBuilt { .. } =>
                 EventImportance::Routine,
-            GameEvent::ContractAwardedToCompetitor { player_had_bid, .. } => {
-                if *player_had_bid { EventImportance::Notable } else { EventImportance::Routine }
+            GameEvent::ContractAwardedToCompetitor { player_bid, .. } => {
+                if player_bid.is_some() { EventImportance::Notable } else { EventImportance::Routine }
             }
             GameEvent::CompetitorLaunch { success, .. } => {
                 if *success { EventImportance::Routine } else { EventImportance::Notable }

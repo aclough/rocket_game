@@ -6,8 +6,11 @@
 //! lifts ~500 kg to LEO (see `policy::tests`). As of M3 every active
 //! market is *visible* at reputation 0 (awards, not visibility, are
 //! reputation-weighted), so "achievable" is a payload/destination
-//! filter, not a visibility one. These floors exist so no seed can be
-//! silently starved.
+//! filter, not a visibility one. And since M3 Task 4 the floor is
+//! *winnable*, not just offered: a reference-priced bid clears every
+//! achievable ceiling, and `assert_year1_reference_bid_wins` proves
+//! the award end-to-end with the competitor enabled. These floors
+//! exist so no seed can be silently starved.
 //!
 //! Floors are set at the measured baseline minimum (default balance,
 //! 200 seeds, 2026-07, re-measured after M3 Task 1 — per-market
@@ -73,6 +76,89 @@ fn assert_year1_floor(seed: u64) {
         value >= 9_000_000.0,
         "seed {seed}: achievable year-1 contract value ${value:.0} below $9M floor (baseline min $12.29M)",
     );
+
+    // Winnable, not just offered (M3 Task 4): a reference-priced bid
+    // must clear every achievable solicitation's hidden ceiling. This
+    // is structural (ceiling = payment × tolerance, tolerance ≥ 1.0)
+    // — asserted so a future pricing change can't silently break it.
+    // The other half of winnability — no competitor takes these — is
+    // locked economically in tests/competitor_dino.rs (DinoSoar's bid
+    // floor prices it out of the small-payload class) and end-to-end
+    // by assert_year1_reference_bid_wins below.
+    for c in &achievable {
+        if c.is_solicitation() {
+            assert!(
+                c.payment <= c.budget_ceiling,
+                "seed {seed}: achievable solicitation {} has reference ${:.0} above \
+                 its ceiling ${:.0} — a reference bid could no longer win it",
+                c.name, c.payment, c.budget_ceiling,
+            );
+        }
+    }
+}
+
+/// End-to-end winnability: in a fresh default world (competitor
+/// enabled), bidding the reference payment on the first achievable
+/// solicitation must produce an award to the player — not a lapse,
+/// not a rejection, not a competitor win.
+fn assert_year1_reference_bid_wins(seed: u64) {
+    use rocket_tycoon::event::GameEvent;
+
+    let mut gs = GameState::with_balance("Probe".into(), seed, BalanceConfig::default());
+    let start_year = gs.date.year;
+
+    // Find the first achievable solicitation.
+    let (name, bid_deadline) = loop {
+        gs.advance_day();
+        assert_eq!(
+            gs.date.year, start_year,
+            "seed {seed}: no achievable solicitation appeared in year 1",
+        );
+        let found = gs.available_contracts.iter().enumerate()
+            .find(|(_, c)| achievable(c) && c.is_solicitation())
+            .map(|(i, c)| (i, c.name.clone(), c.payment, c.bid_deadline.unwrap()));
+        if let Some((idx, name, reference, bd)) = found {
+            gs.place_bid(idx, reference)
+                .expect("placing a reference bid on a solicitation must succeed");
+            break (name, bd);
+        }
+    };
+
+    // Run to resolution and demand the player award.
+    let mut won = false;
+    while gs.date <= bid_deadline {
+        for evt in gs.advance_day() {
+            match evt {
+                GameEvent::ContractAwarded { contract_name, .. }
+                    if contract_name == name => won = true,
+                GameEvent::ContractAwardedToCompetitor { contract_name, company, .. }
+                    if contract_name == name =>
+                    panic!("seed {seed}: {company} took the floor contract {contract_name}"),
+                GameEvent::BidRejected { contract_name }
+                    if contract_name == name =>
+                    panic!("seed {seed}: reference bid on {contract_name} was rejected"),
+                _ => {}
+            }
+        }
+    }
+    assert!(won, "seed {seed}: reference bid on {name} never resolved to an award");
+}
+
+/// Cheap winnability check in normal `cargo test`.
+#[test]
+fn year1_reference_bid_wins_20_seeds() {
+    for seed in 1..=20 {
+        assert_year1_reference_bid_wins(seed);
+    }
+}
+
+/// Full winnability check; run with `cargo test -- --ignored`.
+#[test]
+#[ignore = "full 200-seed winnability check; run with `cargo test -- --ignored`"]
+fn year1_reference_bid_wins_200_seeds() {
+    for seed in 1..=200 {
+        assert_year1_reference_bid_wins(seed);
+    }
 }
 
 /// The additive-only property, asserted directly (M2 Task 6,

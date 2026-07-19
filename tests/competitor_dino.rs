@@ -117,16 +117,20 @@ fn dino_outbids_expensive_player() {
     let events = advance_through(&mut gs, bid_close, 30);
 
     let award = events.iter().find_map(|e| match e {
-        GameEvent::ContractAwardedToCompetitor { contract_name, company, amount, player_had_bid }
+        GameEvent::ContractAwardedToCompetitor { contract_name, company, amount, player_bid }
             if contract_name == "InjectedSat1" =>
-            Some((company.clone(), *amount, *player_had_bid)),
+            Some((company.clone(), *amount, *player_bid)),
         _ => None,
     });
-    let (company, amount, player_had_bid) = award.unwrap_or_else(|| {
+    let (company, amount, player_bid) = award.unwrap_or_else(|| {
         panic!("seed {seed}: expected ContractAwardedToCompetitor for InjectedSat1, got {events:?}")
     });
     assert_eq!(company, "DinoSoar", "seed {seed}: winner should be DinoSoar");
-    assert!(player_had_bid, "seed {seed}: player_had_bid should be true (player did bid)");
+    assert_eq!(
+        player_bid,
+        Some(290_000_000.0),
+        "seed {seed}: the losing player bid should ride along in the event",
+    );
     assert_eq!(
         amount, expected_bid,
         "seed {seed}: awarded amount should equal DinoSoar's pre-resolution compute_bid",
@@ -261,10 +265,10 @@ fn capacity_limits_awards() {
     // No player bids at all in this test.
 
     let events = advance_through(&mut gs, bid_close, 30);
-    let awards: Vec<(String, bool)> = events.iter().filter_map(|e| match e {
-        GameEvent::ContractAwardedToCompetitor { contract_name, player_had_bid, .. }
+    let awards: Vec<(String, Option<f64>)> = events.iter().filter_map(|e| match e {
+        GameEvent::ContractAwardedToCompetitor { contract_name, player_bid, .. }
             if contract_name.starts_with("Capacity") =>
-            Some((contract_name.clone(), *player_had_bid)),
+            Some((contract_name.clone(), *player_bid)),
         _ => None,
     }).collect();
 
@@ -273,8 +277,8 @@ fn capacity_limits_awards() {
         initial_stock as usize,
         "seed {seed}: exactly initial_stock ({initial_stock}) awards should fire, got {awards:?}",
     );
-    for (_, had_bid) in &awards {
-        assert!(!had_bid, "seed {seed}: player never bid on any Capacity contract");
+    for (_, bid) in &awards {
+        assert!(bid.is_none(), "seed {seed}: player never bid on any Capacity contract");
     }
 
     // The other 3 (6 - initial_stock, assuming initial_stock == 3)

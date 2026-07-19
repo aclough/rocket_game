@@ -66,6 +66,34 @@ impl Contract {
     }
 }
 
+/// One observed award outcome — the player's price-discovery data.
+/// Records only what the market made public (or what the player did
+/// themselves): winning prices are announced, a rejection reveals
+/// nothing but the player's own bid, and hidden ceilings are never
+/// stored here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AwardRecord {
+    pub date: GameDate,
+    pub market_id: MarketId,
+    pub contract_name: String,
+    pub destination: String,
+    pub payload_kg: f64,
+    pub outcome: AwardOutcome,
+}
+
+/// How a solicitation resolved, as observed from the player's seat.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AwardOutcome {
+    /// The player's bid won at this price.
+    PlayerWon { amount: f64 },
+    /// A competitor won; the price is public news. `player_bid` is
+    /// set when the player bid and lost.
+    CompetitorWon { company: String, amount: f64, player_bid: Option<f64> },
+    /// The player's bid exceeded the (undisclosed) budget and nobody
+    /// else won. Only the player's own bid is knowable.
+    PlayerRejected { bid: f64 },
+}
+
 /// Baseline contract literals for unit tests in other modules.
 #[cfg(test)]
 pub mod test_support {

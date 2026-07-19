@@ -1225,7 +1225,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(" Contracts  [B] Bid / Accept  [R] Bid Rules ");
+        .title(" Contracts  [B] Bid / Accept  [R] Bid Rules  [H] History ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -2332,6 +2332,66 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(" Bid Rules ")
+                .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::AwardHistory { scroll } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from("  Observed awards, newest first (↑/↓ scroll, Esc closes):"),
+                Line::from(""),
+            ];
+            let visible = (modal_area.height as usize).saturating_sub(6);
+            let records: Vec<&crate::contract::AwardRecord> =
+                app.game.award_history.iter().rev().skip(*scroll).take(visible.max(1)).collect();
+            for r in &records {
+                let market_entry = app.game.markets.iter().find(|m| m.id == r.market_id);
+                let market: String = market_entry
+                    .map(|m| m.name.chars().take(18).collect())
+                    .unwrap_or_else(|| "?".into());
+                // Short destination tag ("GTO"), not the long display
+                // name — these rows are tight.
+                let dest: String = market_entry
+                    .and_then(|m| m.destinations.iter()
+                        .find(|d| d.location_id == r.destination)
+                        .map(|d| d.display_name.clone()))
+                    .unwrap_or_else(|| r.destination.to_uppercase());
+                let (outcome, color) = match &r.outcome {
+                    crate::contract::AwardOutcome::PlayerWon { amount } => (
+                        format!("won at {}", format_money(*amount)),
+                        Color::Green,
+                    ),
+                    crate::contract::AwardOutcome::CompetitorWon { company, amount, player_bid } => {
+                        match player_bid {
+                            Some(b) => (
+                                format!("{} {} (you {})",
+                                    company, format_money(*amount), format_money(*b)),
+                                Color::Red,
+                            ),
+                            None => (
+                                format!("{} {}", company, format_money(*amount)),
+                                Color::DarkGray,
+                            ),
+                        }
+                    }
+                    crate::contract::AwardOutcome::PlayerRejected { bid } => (
+                        format!("over budget (bid {})", format_money(*bid)),
+                        Color::Yellow,
+                    ),
+                };
+                lines.push(Line::from(format!(
+                    "  {:04}-{:02}-{:02}  {:<18} {:>6.0} kg →{:<4} {}",
+                    r.date.year, r.date.month, r.date.day,
+                    market, r.payload_kg, dest, outcome,
+                )).style(Style::default().fg(color)));
+            }
+            if app.game.award_history.is_empty() {
+                lines.push(Line::from("  (no awards observed yet — bid on a solicitation)"));
+            }
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Award History ")
                 .style(Style::default().fg(Color::Yellow));
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);

@@ -1190,6 +1190,11 @@ pub struct GameState {
     /// state driven by a margin script instead of a player.
     #[serde(default)]
     pub competitors: Vec<crate::competitor::Competitor>,
+    /// Observed award outcomes, newest last — the player's
+    /// price-discovery record (M3 Task 4). Only public information
+    /// and the player's own bids; capped so saves stay bounded.
+    #[serde(default)]
+    pub award_history: Vec<contract::AwardRecord>,
     /// Live anchor-customer campaigns issuing mission contracts.
     #[serde(default)]
     pub active_campaigns: Vec<contract::Campaign>,
@@ -1286,6 +1291,7 @@ impl GameState {
             markets,
             fired_market_events: Vec::new(),
             competitors,
+            award_history: Vec::new(),
             active_campaigns: Vec::new(),
             next_campaign_id: 1,
             technologies,
@@ -2296,8 +2302,23 @@ impl GameState {
                 }
             }
 
+            let record_date = self.date;
+            let record_outcome = move |outcome: contract::AwardOutcome, c: &contract::Contract| {
+                contract::AwardRecord {
+                    date: record_date,
+                    market_id: c.market_id,
+                    contract_name: c.name.clone(),
+                    destination: c.destination.clone(),
+                    payload_kg: c.payload_kg,
+                    outcome,
+                }
+            };
             match winner {
                 Some((None, bid)) => {
+                    let record = record_outcome(
+                        contract::AwardOutcome::PlayerWon { amount: bid }, &c,
+                    );
+                    self.push_award_record(record);
                     c.payment = bid;
                     c.status = contract::ContractStatus::Accepted;
                     let evt = GameEvent::ContractAwarded {
@@ -2312,9 +2333,18 @@ impl GameState {
                     self.speed = GameSpeed::Paused;
                 }
                 Some((Some(ci), bid)) => {
+                    let losing_player_bid = c.player_bid;
+                    let record = record_outcome(
+                        contract::AwardOutcome::CompetitorWon {
+                            company: self.competitors[ci].company.name.clone(),
+                            amount: bid,
+                            player_bid: c.player_bid,
+                        },
+                        &c,
+                    );
+                    self.push_award_record(record);
                     c.payment = bid;
                     c.status = contract::ContractStatus::Accepted;
-                    let player_had_bid = c.player_bid.is_some();
                     let launch_date = {
                         let d = self.date.add_days(self.balance.competitor.launch_lead_days);
                         if d > c.deadline { c.deadline } else { d }
@@ -2328,7 +2358,7 @@ impl GameState {
                         contract_name: c.name.clone(),
                         company: comp.company.name.clone(),
                         amount: bid,
-                        player_had_bid,
+                        player_bid: losing_player_bid,
                     };
                     comp.company.active_contracts.push(c);
                     self.event_log.push(self.date, evt.clone());
@@ -2337,6 +2367,13 @@ impl GameState {
                 None if player_over_ceiling => {
                     // Over budget: no award, and the customer doesn't
                     // say what the budget was.
+                    let record = record_outcome(
+                        contract::AwardOutcome::PlayerRejected {
+                            bid: c.player_bid.unwrap_or(0.0),
+                        },
+                        &c,
+                    );
+                    self.push_award_record(record);
                     let evt = GameEvent::BidRejected {
                         contract_name: c.name.clone(),
                     };
@@ -2345,6 +2382,17 @@ impl GameState {
                 }
                 None => {} // No valid bids: lapses without ceremony.
             }
+        }
+    }
+
+    /// Append to the award-history record, dropping the oldest entries
+    /// past the cap (bounds save size; ~15 awards/year game-time).
+    fn push_award_record(&mut self, record: contract::AwardRecord) {
+        const AWARD_HISTORY_CAP: usize = 400;
+        self.award_history.push(record);
+        if self.award_history.len() > AWARD_HISTORY_CAP {
+            let excess = self.award_history.len() - AWARD_HISTORY_CAP;
+            self.award_history.drain(..excess);
         }
     }
 

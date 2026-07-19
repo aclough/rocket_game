@@ -529,3 +529,36 @@ Resolved history:
    **CLAUDE:** Audited — no leaky abstraction in the way. Same code
    it is; details in the manufacturing reply above and the rewritten
    Task 2.
+
+## Execution findings for M4 (recorded at M3 close, 2026-07-19)
+
+M3 shipped in four commits (Tasks 1–4). What the measurements said,
+for M4 to pick up:
+
+1. **The margin sweep tripwire fired inverted.** "Bid cost+ε" does
+   not dominate — profit rises *monotonically* with margin through
+   800% (0.25 → 0/200 seeds profitable, 4.0 → 193/200, still rising
+   at 8.0). The bot's small-payload market has no second bidder
+   (DinoSoar's $60M floor prices it out), so only invisible budget
+   ceilings push back. Scoring weights cannot discipline an
+   uncontested market; a second small-lift competitor (or player
+   overlap with DinoSoar's class) is the real fix.
+2. **The cost-realism gap drives everything above.** Contracts pay
+   3–10× marginal build cost (DinoSoar's heavy: $8.6M real cost vs
+   $80–400M GEO payments). "Sane" margins (0–50%) all lose money;
+   market-rate pricing is a 4–20× markup. The TODO.txt cost pass and
+   the budget_tolerance retune (USER note under Task 4) should be
+   done together against the sim harness.
+3. **Interim honesty correction.** The pre-Task-3 bot read the
+   hidden reference payment when bidding; bands measured under that
+   cheat were too rosy (20–25 launches → honest 4–22; 190/200
+   profitable → 193/200 only at margin 4.0 with 2-rocket stock).
+   Any future policy must price blind, like a player.
+4. **DinoSoar is capacity-bound, not price-bound.** At 8 lines it
+   wins ~8 awards/year while serviceable volume is ~20+/year; the
+   rest lapse unserved. The production_lines sweep is the difficulty
+   knob; a demand-responsiveness pass (market_ideas.txt) would make
+   lapses mean something.
+5. **Award-history UI is the discovery seed.** Price learning now
+   has a data surface (observed outcomes only). Block-bid campaigns
+   and demand curves should write into the same record.
