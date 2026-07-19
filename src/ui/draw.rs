@@ -1225,7 +1225,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(" Contracts  [B] Bid / Accept ");
+        .title(" Contracts  [B] Bid / Accept  [R] Bid Rules ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -2294,6 +2294,44 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(" Place Bid ")
+                .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::BidRules { selected } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from("  Standing bid rules: auto-bid build cost × (1 + margin)"),
+                Line::from("  on new solicitations while a rocket is free to fly them."),
+                Line::from("  Space toggles, ←/→ adjust margin, Esc closes."),
+                Line::from(""),
+            ];
+            let markets: Vec<&crate::contract::Market> = app.game.markets.iter()
+                .filter(|m| m.active)
+                .collect();
+            for (i, market) in markets.iter().enumerate() {
+                let rule = app.game.player_company.bid_rules.get(&market.id);
+                let (state, margin) = match rule {
+                    Some(r) if r.enabled => ("auto", r.margin),
+                    Some(r) => (" off", r.margin),
+                    None => (" off", crate::game_state::BidRule::default().margin),
+                };
+                let marker = if i == *selected { "▶ " } else { "  " };
+                let mut line = Line::from(format!(
+                    "  {marker}{:<28} [{state}]  margin +{:.0}%",
+                    market.name, margin * 100.0,
+                ));
+                if state == "auto" {
+                    line = line.style(Style::default().fg(Color::Green));
+                }
+                lines.push(line);
+            }
+            if markets.is_empty() {
+                lines.push(Line::from("  (no active markets)"));
+            }
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Bid Rules ")
                 .style(Style::default().fg(Color::Yellow));
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);

@@ -68,6 +68,11 @@ pub struct BasicPolicy {
     upper: Option<EngineProjectId>,
     rocket: Option<RocketProjectId>,
     auto_build_set: bool,
+    /// Standing bid rules installed yet? (Done once; the game's rule
+    /// engine does the actual bidding from then on.)
+    bid_rules_set: bool,
+    /// Markup the policy's standing rules use: bid = cost × (1 + margin).
+    bid_margin: f64,
     /// Max payload (kg) to a destination for the fixed template.
     /// BTreeMap for deterministic iteration.
     capability: BTreeMap<String, f64>,
@@ -110,18 +115,53 @@ impl BasicPolicy {
 
 /// Don't hire or start projects when cash falls below this floor.
 const MONEY_FLOOR: f64 = 5_000_000.0;
-/// Fraction of computed max payload the bot is willing to book.
-const PAYLOAD_MARGIN: f64 = 0.9;
+/// Fraction of computed max payload the bot is willing to book —
+/// shared with the game's rule engine.
+const PAYLOAD_MARGIN: f64 = crate::game_state::BID_PAYLOAD_MARGIN;
+/// Default markup for the policy's standing bid rules. Looks high as
+/// a "margin", but the game's payment scales sit several multiples
+/// above marginal build cost (see the cost-realism TODO), so cost ×
+/// 5 is simply market-rate pricing — the 2026-07 sweep measured
+/// profitability rising monotonically through this range (0.25 →
+/// 0/200 seeds profitable, 4.0 → 193/200) because the bot's
+/// small-payload market is uncontested and only budget ceilings
+/// push back.
+const DEFAULT_BID_MARGIN: f64 = 4.0;
 
 impl BasicPolicy {
     pub fn new() -> Self {
+        Self::with_margin(DEFAULT_BID_MARGIN)
+    }
+
+    /// A BasicPolicy whose standing rules use the given markup —
+    /// the knob the margin sweep exercises (`--policy basic:0.15`).
+    pub fn with_margin(bid_margin: f64) -> Self {
         BasicPolicy {
             booster: None,
             upper: None,
             rocket: None,
             auto_build_set: false,
+            bid_rules_set: false,
+            bid_margin,
             capability: BTreeMap::new(),
         }
+    }
+
+    /// Install standing bid rules for every market, once. The game's
+    /// rule engine handles capability, cost basis, and the readiness
+    /// gate from here on.
+    fn ensure_bid_rules(&mut self, game: &mut GameState) {
+        if self.bid_rules_set {
+            return;
+        }
+        let market_ids: Vec<_> = game.markets.iter().map(|m| m.id).collect();
+        for id in market_ids {
+            game.player_company.bid_rules.insert(id, crate::game_state::BidRule {
+                enabled: true,
+                margin: self.bid_margin,
+            });
+        }
+        self.bid_rules_set = true;
     }
 
     fn ensure_teams(&self, game: &mut GameState) {
@@ -277,7 +317,10 @@ impl BasicPolicy {
             return;
         }
         let Some(rid) = self.rocket else { return };
-        if game.player_company.set_auto_build_target(rid, 1) {
+        // Two on the shelf: the readiness gate allows one outstanding
+        // bid per free rocket, so a single rejected bid no longer
+        // stalls the whole pipeline for a bid window.
+        if game.player_company.set_auto_build_target(rid, 2) {
             self.auto_build_set = true;
         }
     }
@@ -344,18 +387,16 @@ impl BasicPolicy {
         let active_index = match pending {
             Some(i) => i,
             None => {
-                // 2) Pursue the best-paying available contract the
-                //    template can lift. Solicitations are bid at the
-                //    reference payment (interim until the Task 3 rule
-                //    engine) — one outstanding bid at a time, awarded
-                //    at the bid deadline. Pre-priced contracts are
-                //    accepted directly as before.
-                if game.available_contracts.iter().any(|c| c.player_bid.is_some()) {
-                    return; // Waiting on a sealed bid to resolve.
-                }
+                // 2) Solicitations are handled by the standing bid
+                //    rules (installed in ensure_bid_rules; the game's
+                //    rule engine bids and awards arrive by deadline).
+                //    Here we only accept the best-paying *pre-priced*
+                //    contract the template can lift (campaign missions
+                //    and pre-M3 saves).
                 let mut best: Option<(usize, f64)> = None;
                 let candidates: Vec<(usize, String, f64, f64)> = game.available_contracts
                     .iter().enumerate()
+                    .filter(|(_, c)| !c.is_solicitation())
                     .map(|(i, c)| (i, c.destination.clone(), c.payload_kg, c.payment))
                     .collect();
                 for (i, dest, payload_kg, payment) in candidates {
@@ -364,13 +405,6 @@ impl BasicPolicy {
                     }
                     if best.map_or(true, |(_, p)| payment > p) {
                         best = Some((i, payment));
-                    }
-                }
-                if let Some((avail_index, _)) = best {
-                    if game.available_contracts[avail_index].is_solicitation() {
-                        let reference = game.available_contracts[avail_index].payment;
-                        game.place_bid(avail_index, reference);
-                        return; // Award arrives at the bid deadline.
                     }
                 }
                 let Some((avail_index, _)) = best else {
@@ -421,6 +455,7 @@ impl CompanyPolicy for BasicPolicy {
         self.assign_idle_engineers(game);
         self.maybe_design_rocket(game);
         self.maybe_enable_auto_build(game);
+        self.ensure_bid_rules(game);
         self.accept_and_launch(game);
     }
 
@@ -429,8 +464,17 @@ impl CompanyPolicy for BasicPolicy {
     }
 }
 
-/// Look up a policy by CLI name.
+/// Look up a policy by CLI name. `basic:<margin>` selects BasicPolicy
+/// with a specific standing-rule markup (e.g. `basic:0.15`) — the
+/// margin-sweep entry point.
 pub fn policy_by_name(name: &str) -> Option<Box<dyn CompanyPolicy>> {
+    if let Some(margin) = name.strip_prefix("basic:") {
+        let margin: f64 = margin.parse().ok()?;
+        if !(0.0..=10.0).contains(&margin) {
+            return None;
+        }
+        return Some(Box::new(BasicPolicy::with_margin(margin)));
+    }
     match name {
         "none" => Some(Box::new(NullPolicy)),
         "basic" => Some(Box::new(BasicPolicy::new())),
@@ -439,7 +483,7 @@ pub fn policy_by_name(name: &str) -> Option<Box<dyn CompanyPolicy>> {
 }
 
 /// Names accepted by `policy_by_name`, for CLI help text.
-pub const POLICY_NAMES: &[&str] = &["none", "basic"];
+pub const POLICY_NAMES: &[&str] = &["none", "basic", "basic:<margin>"];
 
 #[cfg(test)]
 mod tests {

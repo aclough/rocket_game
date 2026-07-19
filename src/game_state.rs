@@ -173,6 +173,26 @@ pub struct Company {
     /// Auto-build targets: maintain at least N rockets in inventory per project.
     #[serde(default)]
     pub auto_build_targets: HashMap<RocketProjectId, u32>,
+    /// Standing per-market bid rules (M3 Task 3): while enabled, the
+    /// rule engine auto-bids marginal cost × (1 + margin) on that
+    /// market's solicitations, gated on free stock.
+    #[serde(default)]
+    pub bid_rules: HashMap<contract::MarketId, BidRule>,
+}
+
+/// A standing bid rule for one market. The player (or a policy) sets
+/// these once; the daily rule engine does the bidding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BidRule {
+    pub enabled: bool,
+    /// Markup over the design's marginal cost: bid = cost × (1 + margin).
+    pub margin: f64,
+}
+
+impl Default for BidRule {
+    fn default() -> Self {
+        BidRule { enabled: false, margin: 0.25 }
+    }
 }
 
 impl Company {
@@ -210,6 +230,7 @@ impl Company {
             engine_cost_history: HashMap::new(),
             contracted_engine_build_counts: HashMap::new(),
             auto_build_targets: HashMap::new(),
+            bid_rules: HashMap::new(),
         };
         // Start with one engineering team
         company.hire_team("Team 1".into(), balance_cfg);
@@ -1108,6 +1129,11 @@ impl Company {
 
 const EVENT_LOG_SIZE: usize = 1000;
 
+/// Payload safety factor applied when judging whether a design can
+/// carry a contract — don't book payloads within 10% of the physical
+/// maximum. Shared by the bid rule engine and `BasicPolicy`.
+pub const BID_PAYLOAD_MARGIN: f64 = 0.9;
+
 /// Why a launch manifest couldn't be assembled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestError {
@@ -1173,6 +1199,13 @@ pub struct GameState {
     /// remember their balance; old saves load with defaults.
     #[serde(default)]
     pub balance: crate::balance_config::BalanceConfig,
+    /// Max-payload lookups for the bid rule engine, keyed by
+    /// (project, revision, destination). Path planning is far too
+    /// slow to run per contract per day. Not serialized — rebuilt on
+    /// demand; cleared when a design is modified (modifications
+    /// change stage_groups without bumping revision).
+    #[serde(skip)]
+    pub payload_capability_cache: HashMap<(RocketProjectId, u32, String), f64>,
 }
 
 fn default_next_contract_id() -> u64 { 1 }
@@ -1257,6 +1290,7 @@ impl GameState {
             next_campaign_id: 1,
             technologies,
             balance,
+            payload_capability_cache: HashMap::new(),
         }
     }
 
@@ -1283,6 +1317,9 @@ impl GameState {
         let work_required = self.balance.work.rocket_design_work_required(project.complexity)
             * self.balance.work.rocket_modification_work_fraction;
         project.design.stage_groups = new_stage_groups;
+        // The design's performance changed under the same revision —
+        // drop every cached capability figure.
+        self.payload_capability_cache.clear();
         project.status = RocketDesignStatus::InDesign {
             work_completed: 0.0,
             work_required,
@@ -1777,6 +1814,10 @@ impl GameState {
         // day-grained, not month-grained).
         self.issue_campaign_contracts(&mut events);
 
+        // Standing bid rules place the player's automatic bids before
+        // today's resolutions.
+        self.run_bid_rules(&mut events);
+
         // Resolve sealed bids on solicitations whose window closed
         // (before delivery-deadline expiry: bid windows are shorter
         // than any delivery deadline, so awards happen first).
@@ -2106,6 +2147,105 @@ impl GameState {
     /// customer's hidden budget; `contract::bid_score` ranks bidders
     /// once DinoSoar enters (Task 2). Unbid solicitations lapse
     /// quietly.
+    /// The standing-rule auto-bidder (M3 Task 3). For each unbid
+    /// solicitation whose market has an enabled rule: find the
+    /// cheapest capable Testing design with real build-cost history,
+    /// gate on free stock, and place marginal cost × (1 + margin).
+    ///
+    /// Free stock = capable rockets in inventory − rockets already
+    /// promised (accepted contracts not currently flying, plus
+    /// outstanding sealed bids — counting bids goes beyond the bare
+    /// awarded-unflown reservation so the engine can never promise
+    /// five launches against one rocket). Same gate shape as
+    /// DinoSoar's script and, later, other competitors.
+    fn run_bid_rules(&mut self, events: &mut Vec<GameEvent>) {
+        if self.player_company.bid_rules.is_empty() {
+            return;
+        }
+        let total_stock = self.player_company.manufacturing.inventory.rockets.len();
+        if total_stock == 0 {
+            return;
+        }
+        let in_flight: Vec<contract::ContractId> = self.active_flights.iter()
+            .flat_map(|f| f.payloads.iter())
+            .filter_map(|p| match p {
+                crate::flight::Payload::ContractDelivery { contract_id, .. } =>
+                    Some(*contract_id),
+                _ => None,
+            })
+            .collect();
+        let accepted_unflown = self.player_company.active_contracts.iter()
+            .filter(|c| matches!(c.status, contract::ContractStatus::Accepted)
+                && !in_flight.contains(&c.id))
+            .count();
+
+        for i in 0..self.available_contracts.len() {
+            let (market_id, dest, payload_kg) = {
+                let c = &self.available_contracts[i];
+                if !c.is_solicitation() || c.player_bid.is_some() {
+                    continue;
+                }
+                (c.market_id, c.destination.clone(), c.payload_kg)
+            };
+            let Some(rule) = self.player_company.bid_rules.get(&market_id) else {
+                continue;
+            };
+            if !rule.enabled {
+                continue;
+            }
+            let margin = rule.margin;
+
+            // Capable designs (Testing only), and the cheapest real
+            // marginal cost among those that have been built before.
+            // No cost history → no cost basis → no bid.
+            let mut capable_projects: Vec<RocketProjectId> = Vec::new();
+            let mut best_cost: Option<f64> = None;
+            for rp in &self.player_company.rocket_projects {
+                if !matches!(rp.status, crate::rocket_project::RocketDesignStatus::Testing { .. }) {
+                    continue;
+                }
+                let cap = *self.payload_capability_cache
+                    .entry((rp.project_id, rp.revision, dest.clone()))
+                    .or_insert_with(|| crate::rocket_project::max_payload_to(
+                        &rp.design, "earth_surface", &dest,
+                    ));
+                if payload_kg > cap * BID_PAYLOAD_MARGIN {
+                    continue;
+                }
+                capable_projects.push(rp.project_id);
+                if let Some(h) = self.player_company.rocket_cost_history.get(&rp.design.id) {
+                    if !h.is_empty() {
+                        let recent = &h[h.len().saturating_sub(5)..];
+                        let cost = recent.iter().sum::<f64>() / recent.len() as f64;
+                        if best_cost.map_or(true, |b| cost < b) {
+                            best_cost = Some(cost);
+                        }
+                    }
+                }
+            }
+            let Some(cost) = best_cost else { continue };
+
+            // Readiness gate: free stock must cover this new bid.
+            let capable_stock = self.player_company.manufacturing.inventory.rockets.iter()
+                .filter(|r| capable_projects.contains(&r.rocket_project_id))
+                .count();
+            let pending_bids = self.available_contracts.iter()
+                .filter(|c| c.player_bid.is_some())
+                .count();
+            if capable_stock <= accepted_unflown + pending_bids {
+                continue;
+            }
+
+            let bid = ((cost * (1.0 + margin)) / 10_000.0).round() * 10_000.0;
+            if bid <= 0.0 {
+                continue;
+            }
+            if let Some(evt) = self.place_bid(i, bid) {
+                events.push(evt);
+            }
+        }
+    }
+
     fn resolve_bids(&mut self, events: &mut Vec<GameEvent>) {
         let mut i = 0;
         while i < self.available_contracts.len() {
@@ -2167,6 +2307,9 @@ impl GameState {
                     self.player_company.active_contracts.push(c);
                     self.event_log.push(self.date, evt.clone());
                     events.push(evt);
+                    // Winning a contract is a decision point (schedule
+                    // the launch, adjust rules) — stop the clock.
+                    self.speed = GameSpeed::Paused;
                 }
                 Some((Some(ci), bid)) => {
                     c.payment = bid;

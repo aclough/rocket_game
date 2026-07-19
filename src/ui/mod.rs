@@ -417,6 +417,9 @@ pub enum InputMode {
     RocketName { buffer: String },
     /// Entering a sealed bid (in $M) on an available solicitation.
     BidEntry { contract_index: usize, buffer: String },
+    /// Editing standing per-market bid rules (enable + margin). The
+    /// rule engine auto-bids marginal cost × (1 + margin) daily.
+    BidRules { selected: usize },
     /// Persistent rocket designer screen.
     RocketDesigner { state: Box<RocketDesignerState> },
     /// Per-stage power-source editor opened from the rocket designer.
@@ -1234,6 +1237,9 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.enter_modal(InputMode::BidRules { selected: 0 });
+            }
             _ => {}
         }
     }
@@ -1557,6 +1563,47 @@ impl App {
                     KeyCode::Backspace => { buffer.pop(); }
                     KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
                         buffer.push(c);
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::BidRules { selected } => {
+                let market_ids: Vec<crate::contract::MarketId> = self.game.markets.iter()
+                    .filter(|m| m.active)
+                    .map(|m| m.id)
+                    .collect();
+                match key {
+                    KeyCode::Esc | KeyCode::Char('r') | KeyCode::Char('R') => {
+                        self.exit_modal();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        *selected = selected.saturating_sub(1);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if *selected + 1 < market_ids.len() {
+                            *selected += 1;
+                        }
+                    }
+                    KeyCode::Char(' ') | KeyCode::Enter => {
+                        if let Some(&id) = market_ids.get(*selected) {
+                            let rule = self.game.player_company.bid_rules
+                                .entry(id).or_default();
+                            rule.enabled = !rule.enabled;
+                        }
+                    }
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        if let Some(&id) = market_ids.get(*selected) {
+                            let rule = self.game.player_company.bid_rules
+                                .entry(id).or_default();
+                            rule.margin = (rule.margin - 0.25).max(0.0);
+                        }
+                    }
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        if let Some(&id) = market_ids.get(*selected) {
+                            let rule = self.game.player_company.bid_rules
+                                .entry(id).or_default();
+                            rule.margin = (rule.margin + 0.25).min(9.0);
+                        }
                     }
                     _ => {}
                 }
@@ -3385,6 +3432,52 @@ mod market_discovery_render_tests {
                 "seeded parameter `{leak}` leaked into the contracts pane",
             );
         }
+    }
+
+    /// 'r' on the Contracts pane opens the standing bid-rules editor;
+    /// Space toggles the selected market's rule, and the modal renders
+    /// market names with their enable state and margin.
+    #[test]
+    fn r_opens_bid_rules_and_space_toggles() {
+        let game = crate::game_state::GameState::new(
+            "Rules Test".into(), 100_000_000.0, 7,
+        );
+        let first_active = game.markets.iter()
+            .find(|m| m.active)
+            .map(|m| (m.id, m.name.clone()))
+            .expect("some market is active at start");
+        let mut app = App::new(game);
+        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+
+        app.handle_key(KeyCode::Char('r'));
+        assert!(
+            matches!(app.input_mode, InputMode::BidRules { selected: 0 }),
+            "'r' should open the bid-rules modal",
+        );
+
+        app.handle_key(KeyCode::Char(' '));
+        let rule = app.game.player_company.bid_rules.get(&first_active.0)
+            .expect("Space should create and enable the first market's rule");
+        assert!(rule.enabled, "Space should toggle the rule on");
+
+        let backend = TestBackend::new(120, 50);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw::draw(frame, &app)).unwrap();
+        let text: String = terminal.backend().buffer()
+            .content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("Bid Rules"), "modal title should render");
+        assert!(
+            text.contains(&first_active.1),
+            "active market `{}` should be listed in the rules modal", first_active.1,
+        );
+        assert!(text.contains("auto"), "the enabled rule should show as auto");
+        assert!(text.contains("margin"), "margin column should render");
+
+        app.handle_key(KeyCode::Esc);
+        assert!(
+            matches!(app.input_mode, InputMode::Normal),
+            "Esc should close the modal",
+        );
     }
 }
 
