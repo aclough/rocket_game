@@ -403,7 +403,7 @@ impl BasicPolicy {
                     if payload_kg > self.capability_to(game, &dest) * PAYLOAD_MARGIN {
                         continue;
                     }
-                    if best.map_or(true, |(_, p)| payment > p) {
+                    if best.is_none_or(|(_, p)| payment > p) {
                         best = Some((i, payment));
                     }
                 }

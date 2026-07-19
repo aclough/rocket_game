@@ -10,16 +10,15 @@ pub struct FlawId(pub u64);
 
 /// When a flaw can trigger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum FlawTrigger {
     /// Rolls once when the stage fires (existing behavior).
+    #[default]
     PerFlight,
     /// Rolls every day in flight (endurance flaw).
     PerDay,
 }
 
-impl Default for FlawTrigger {
-    fn default() -> Self { FlawTrigger::PerFlight }
-}
 
 impl FlawTrigger {
     /// Reference mission duration in days for converting activation_chance to daily rate.

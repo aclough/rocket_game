@@ -12,7 +12,7 @@ pub fn list_saves() -> Vec<(String, PathBuf)> {
     };
     let mut saves: Vec<(String, PathBuf, std::time::SystemTime)> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
         .filter_map(|e| {
             let path = e.path();
             let name = path.file_stem()?.to_string_lossy().to_string();
@@ -20,7 +20,7 @@ pub fn list_saves() -> Vec<(String, PathBuf)> {
             Some((name, path, mtime))
         })
         .collect();
-    saves.sort_by(|a, b| b.2.cmp(&a.2)); // newest first
+    saves.sort_by_key(|&(_, _, mtime)| std::cmp::Reverse(mtime)); // newest first
     saves.into_iter().map(|(name, path, _)| (name, path)).collect()
 }
 
@@ -30,7 +30,7 @@ pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(state)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     fs::write(path, json)
 }
 

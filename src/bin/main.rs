@@ -24,7 +24,7 @@ fn main() -> io::Result<()> {
         let seed = args
             .get(2)
             .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or_else(|| rand::random());
+            .unwrap_or_else(rand::random);
         GameState::with_balance(name, seed, rocket_tycoon::balance_config::BalanceConfig::default())
     } else {
         run_startup_screen()?
@@ -73,9 +73,7 @@ fn startup_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Re
                         return Err(io::Error::new(io::ErrorKind::Interrupted, "quit"));
                     }
                     KeyCode::Up => {
-                        if selected > 0 {
-                            selected -= 1;
-                        }
+                        selected = selected.saturating_sub(1);
                     }
                     KeyCode::Down => {
                         if selected + 1 < menu_len {
@@ -115,11 +113,10 @@ fn startup_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Re
                     KeyCode::Backspace => {
                         company_name.pop();
                     }
-                    KeyCode::Char(c) => {
-                        if company_name.len() < 30 {
+                    KeyCode::Char(c)
+                        if company_name.len() < 30 => {
                             company_name.push(c);
                         }
-                    }
                     _ => {}
                 },
             }

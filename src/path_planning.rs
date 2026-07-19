@@ -174,6 +174,7 @@ fn compute_heuristic(map: &DeltaVMap, goal_idx: usize) -> Vec<f64> {
 
     // Reverse adjacency: for each node `to`, list incoming `(from, cheapest_dv)`.
     let mut incoming: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+    #[allow(clippy::needless_range_loop)] // from/to index pairs read clearer symmetric
     for to_idx in 0..n {
         let to_id = map.location_at(to_idx).unwrap().id;
         for from_idx in 0..n {
@@ -341,7 +342,7 @@ impl DeltaVMap {
         let n = design.stage_groups.len();
         let active_stage = (0..n).find(|&gi| {
             rocket.stage_states.get(gi)
-                .map_or(false, |g| g.iter().any(|s| s.attached && s.propellant_remaining_kg > 0.0))
+                .is_some_and(|g| g.iter().any(|s| s.attached && s.propellant_remaining_kg > 0.0))
         })?;
         let initial_dv = rocket.group_remaining_delta_v(design, active_stage);
         self.astar_search(
@@ -388,7 +389,7 @@ impl DeltaVMap {
             // frontier (something better dominated it after we pushed).
             let still_on_frontier = frontiers
                 .get(&(state.loc_idx, state.active_stage))
-                .map_or(false, |f| f.iter().any(|&(g, dv)| {
+                .is_some_and(|f| f.iter().any(|&(g, dv)| {
                     g == state.g_score && dv == state.dv_left_in_active
                 }));
             if !still_on_frontier {

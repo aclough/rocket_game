@@ -361,6 +361,7 @@ pub struct EngineProject {
 
 impl EngineProject {
     /// Create a new engine project from player choices.
+    #[allow(clippy::too_many_arguments)] // constructor-style, callers read positionally with names at the call site
     pub fn new(
         project_id: EngineProjectId,
         engine_id: EngineId,
@@ -423,6 +424,7 @@ impl EngineProject {
     /// Create a tentative engine project in `Proposed` status. Used by
     /// the rocket designer to spawn a draft engine that can be iterated
     /// on; promoted to InDesign when the parent rocket is finalised.
+    #[allow(clippy::too_many_arguments)] // constructor-style, callers read positionally with names at the call site
     pub fn new_proposed(
         project_id: EngineProjectId,
         engine_id: EngineId,

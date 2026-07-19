@@ -34,7 +34,7 @@ pub fn tank_mass_fraction(mix: &[(Propellant, f64)]) -> f64 {
     let slope = (hydrolox_fraction - kerolox_fraction) / (hydrolox_vol_per_kg - kerolox_vol_per_kg);
     let fraction = kerolox_fraction + slope * (volume_per_kg - kerolox_vol_per_kg);
 
-    fraction.max(0.02).min(0.15) // clamp to reasonable range
+    fraction.clamp(0.02, 0.15) // clamp to reasonable range
 }
 
 /// Compute thrust structure mass: the structure holding engines to the stage.

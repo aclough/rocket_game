@@ -52,7 +52,9 @@ pub fn parent_body_sun_distance_au(parent: &str) -> f64 {
         "phobos" | "deimos" => 1.52,
         "vesta" => 2.36,
         "ceres" => 2.77,
-        "hygiea" => 3.14,
+        // 3.1417 AU semi-major axis — genuinely within a whisker of π,
+        // which is also why clippy::approx_constant needs the extra digits.
+        "hygiea" => 3.1417,
         "eros" => 1.46,
         "bennu" => 1.13,
         _ => 1.0,
@@ -201,6 +203,7 @@ fn loc_lagrange(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // constructor-style, callers read positionally with names at the call site
 fn loc_surface(
     id: &'static str, display: &'static str, short: &'static str, parent: &'static str,
     gravity: f64, radius: f64, has_atm: bool, atm_density: f64, ambient: f64,
@@ -278,6 +281,7 @@ fn add_ground_pair(
 /// `transfer ↔ capture ↔ orbit ↔ surface`.
 /// All edges symmetric. The capture and orbit links are spiral-friendly;
 /// the surface link is created by `add_ground_pair`.
+#[allow(clippy::too_many_arguments)] // constructor-style, callers read positionally with names at the call site
 fn add_body_branch(
     transfers: &mut Vec<Transfer>,
     transfer_node: &'static str, capture: &'static str,

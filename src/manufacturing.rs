@@ -169,6 +169,7 @@ pub enum ManufacturingEvent {
 
 impl ManufacturingOrder {
     /// Create an engine build order.
+    #[allow(clippy::too_many_arguments)] // constructor-style, callers read positionally with names at the call site
     pub fn new_engine(
         id: ManufacturingOrderId,
         source: EngineSource,
@@ -211,6 +212,7 @@ impl ManufacturingOrder {
     }
 
     /// Create a stage build order.
+    #[allow(clippy::too_many_arguments)] // constructor-style, callers read positionally with names at the call site
     pub fn new_stage(
         id: ManufacturingOrderId,
         rocket_project_id: RocketProjectId,
@@ -248,6 +250,7 @@ impl ManufacturingOrder {
     }
 
     /// Create a rocket integration order.
+    #[allow(clippy::too_many_arguments)] // constructor-style, callers read positionally with names at the call site
     pub fn new_integration(
         id: ManufacturingOrderId,
         rocket_project_id: RocketProjectId,
@@ -385,6 +388,12 @@ pub struct Inventory {
     pub engines: Vec<InventoryEngine>,
     pub stages: Vec<InventoryStage>,
     pub rockets: Vec<InventoryRocket>,
+}
+
+impl Default for Inventory {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Inventory {

@@ -256,8 +256,8 @@ pub fn build_route(
             let burn_days = if total_thrust_n > 0.0 {
                 let accel = total_thrust_n / rocket_mass_kg;
                 let burn_time_s = dv_cost / accel;
-                let days = (burn_time_s / 86400.0).ceil() as u32;
-                days
+                
+                (burn_time_s / 86400.0).ceil() as u32
             } else {
                 0
             };
@@ -340,7 +340,7 @@ pub fn build_route_for_rocket(
         let avail_for_engines = (supply_w - housekeeping_w).max(0.0);
         let active_group = (0..design.stage_groups.len())
             .find(|gi| sim.stage_states.get(*gi)
-                .map_or(false, |g| g.iter().any(|s|
+                .is_some_and(|g| g.iter().any(|s|
                     s.attached && s.propellant_remaining_kg > 0.0)));
         let thrust = active_group
             .map(|gi| design.group_effective_thrust_n(gi, avail_for_engines))

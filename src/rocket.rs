@@ -378,7 +378,7 @@ impl Rocket {
     pub fn is_current_stage_low_thrust(&self, design: &RocketDesign) -> bool {
         for (gi, group) in design.stage_groups.iter().enumerate() {
             let is_active = self.stage_states.get(gi)
-                .map_or(false, |ss| ss.iter().any(|s| s.attached && (
+                .is_some_and(|ss| ss.iter().any(|s| s.attached && (
                     s.propellant_remaining_kg > 0.0
                     || group.iter().any(|st| st.engine.is_solar_sail())
                 )));
@@ -454,9 +454,9 @@ impl Rocket {
 
             // Solar sail: infinite dv, no propellant consumed
             let is_sail = design.stage_groups.get(gi)
-                .map_or(false, |g| g.iter().any(|s| s.engine.is_solar_sail()))
+                .is_some_and(|g| g.iter().any(|s| s.engine.is_solar_sail()))
                 && self.stage_states.get(gi)
-                    .map_or(false, |ss| ss.iter().any(|s| s.attached));
+                    .is_some_and(|ss| ss.iter().any(|s| s.attached));
             if is_sail {
                 dv_achieved += dv_remaining;
                 groups_burned.push(gi);
@@ -507,9 +507,9 @@ impl Rocket {
     pub fn group_remaining_delta_v(&self, design: &RocketDesign, gi: usize) -> f64 {
         // Solar sail: infinite dv
         if design.stage_groups.get(gi)
-            .map_or(false, |g| g.iter().any(|s| s.engine.is_solar_sail()))
+            .is_some_and(|g| g.iter().any(|s| s.engine.is_solar_sail()))
             && self.stage_states.get(gi)
-                .map_or(false, |ss| ss.iter().any(|s| s.attached))
+                .is_some_and(|ss| ss.iter().any(|s| s.attached))
         {
             return f64::INFINITY;
         }
@@ -648,7 +648,7 @@ impl Rocket {
             for (si, stage) in group.iter().enumerate() {
                 let attached = self.stage_states.get(gi)
                     .and_then(|g| g.get(si))
-                    .map_or(false, |ss| ss.attached);
+                    .is_some_and(|ss| ss.attached);
                 if !attached { continue; }
                 for src in &stage.power_sources {
                     total += stage_source_supply_w(stage, src, sun_distance_au);
@@ -665,7 +665,7 @@ impl Rocket {
             for (si, stage) in group.iter().enumerate() {
                 let attached = self.stage_states.get(gi)
                     .and_then(|g| g.get(si))
-                    .map_or(false, |ss| ss.attached);
+                    .is_some_and(|ss| ss.attached);
                 if attached {
                     total += stage.housekeeping_w();
                 }
@@ -681,7 +681,7 @@ impl Rocket {
             for (si, stage) in group.iter().enumerate() {
                 let attached = self.stage_states.get(gi)
                     .and_then(|g| g.get(si))
-                    .map_or(false, |ss| ss.attached);
+                    .is_some_and(|ss| ss.attached);
                 if !attached { continue; }
                 for src in &stage.power_sources {
                     if let crate::power::PowerSourceKind::Battery = src.kind {
@@ -710,7 +710,7 @@ impl Rocket {
             for (si, stage) in group.iter().enumerate() {
                 let attached = self.stage_states.get(gi)
                     .and_then(|g| g.get(si))
-                    .map_or(false, |ss| ss.attached);
+                    .is_some_and(|ss| ss.attached);
                 if attached && !stage.power_sources.is_empty() {
                     return true;
                 }
@@ -766,7 +766,7 @@ impl Rocket {
             for (si, stage) in group.iter().enumerate() {
                 let attached = self.stage_states.get(gi)
                     .and_then(|g| g.get(si))
-                    .map_or(false, |ss| ss.attached);
+                    .is_some_and(|ss| ss.attached);
                 if !attached { continue; }
                 for src in &stage.power_sources {
                     match src.kind {
@@ -800,7 +800,7 @@ impl Rocket {
             for si in 0..design.stage_groups[gi].len() {
                 let attached = self.stage_states.get(gi)
                     .and_then(|g| g.get(si))
-                    .map_or(false, |ss| ss.attached);
+                    .is_some_and(|ss| ss.attached);
                 if !attached { continue; }
                 let stage = &design.stage_groups[gi][si];
                 if !crate::power::fuel_cell_can_run_on(&stage.engine) {
@@ -839,7 +839,7 @@ impl Rocket {
             for (si, stage) in group.iter().enumerate() {
                 let attached = self.stage_states.get(gi)
                     .and_then(|g| g.get(si))
-                    .map_or(false, |ss| ss.attached);
+                    .is_some_and(|ss| ss.attached);
                 if !attached { continue; }
                 let stage_capacity: f64 = stage.power_sources.iter()
                     .filter_map(|p| match p.kind {
@@ -918,7 +918,7 @@ pub fn compute_stage_stats(
     // Surface gravity (for TWR reference) — fall back to Earth so TWR
     // numbers stay readable when launching from a non-surface location.
     let surface_g = surface_props.map_or(9.81, |p| p.gravity_m_s2);
-    let has_atmosphere = surface_props.map_or(false, |p| p.has_atmosphere);
+    let has_atmosphere = surface_props.is_some_and(|p| p.has_atmosphere);
     let ambient_pressure = surface_props.map_or(0.0, |p| p.ambient_pressure_pa);
 
     // Collect per-group params for gravity sim: (thrust_n, mass_flow_kg_s, propellant_kg)

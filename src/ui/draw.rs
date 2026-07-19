@@ -18,7 +18,7 @@ use crate::ui::{App, FocusedPane, InputMode, RocketDesignerState, Tab};
 /// markets — including markets that haven't generated a contract this month.
 /// Falls back to the basic Earth-orbit set (LEO, MEO, GTO, GEO) when no
 /// markets are active yet.
-fn relevant_destinations<'a>(game: &'a crate::game_state::GameState) -> Vec<&'a str> {
+fn relevant_destinations(game: &crate::game_state::GameState) -> Vec<&str> {
     let mut dests: Vec<&str> = Vec::new();
     for market in &game.markets {
         if !market.active {
@@ -1333,7 +1333,7 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                 let mut stage_parts = Vec::new();
                 for gi in 0..flight.design.stage_groups.len() {
                     let attached = flight.rocket.stage_states.get(gi)
-                        .map_or(false, |ss| ss.iter().any(|s| s.attached));
+                        .is_some_and(|ss| ss.iter().any(|s| s.attached));
                     if !attached {
                         continue;
                     }
@@ -1360,7 +1360,7 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                         let states = &flight.rocket.stage_states;
                         group.iter().enumerate().filter_map(move |(sj, stage)| {
                             let attached = states.get(gj).and_then(|g| g.get(sj))
-                                .map_or(false, |s| s.attached);
+                                .is_some_and(|s| s.attached);
                             if !attached { return None; }
                             let prop = states[gj][sj].propellant_remaining_kg;
                             Some(stage.dry_mass_kg() + prop)
@@ -1447,7 +1447,7 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                 let mut stage_parts = Vec::new();
                 for gi in 0..total_groups {
                     let attached = sc.rocket.stage_states.get(gi)
-                        .map_or(false, |ss| ss.iter().any(|s| s.attached));
+                        .is_some_and(|ss| ss.iter().any(|s| s.attached));
                     if !attached {
                         continue;
                     }
@@ -1476,7 +1476,7 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                         let states = &sc.rocket.stage_states;
                         group.iter().enumerate().filter_map(move |(sj, stage)| {
                             let attached = states.get(gj).and_then(|g| g.get(sj))
-                                .map_or(false, |s| s.attached);
+                                .is_some_and(|s| s.attached);
                             if !attached { return None; }
                             let prop = states[gj][sj].propellant_remaining_kg;
                             Some(stage.dry_mass_kg() + prop)
@@ -2959,7 +2959,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             // Visible window around the selected entry so long lists scroll.
             let modal_inner_h = modal_area.height.saturating_sub(4) as usize;
             let window = modal_inner_h.max(5);
-            let start = selected.saturating_sub(window / 2).min(locations.len().saturating_sub(window).max(0));
+            let start = selected.saturating_sub(window / 2).min(locations.len().saturating_sub(window));
             for (i, (_id, name)) in locations.iter().enumerate().skip(start).take(window) {
                 let marker = if i == *selected { " ▶ " } else { "   " };
                 let style = if i == *selected {
@@ -3001,7 +3001,7 @@ fn draw_engine_editor_modal(
         None => return,
     };
     let baseline = crate::engine_project::engine_baseline(ep.design.cycle, ep.preset);
-    let vacuum_only = baseline.map_or(false, |b| b.vacuum_only);
+    let vacuum_only = baseline.is_some_and(|b| b.vacuum_only);
     let use_vacuum = !ep.design.needs_atmosphere;
     let row_count = if vacuum_only { 4 } else { 5 };
     let cursor = cursor.min(row_count - 1);

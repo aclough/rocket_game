@@ -175,8 +175,10 @@ pub struct MarketModifier {
 /// batches. Every variant conserves long-run volume — cadence
 /// reshapes *when* contracts appear, never how many.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum Cadence {
     /// Even monthly flow (the pre-cadence behavior).
+    #[default]
     Steady,
     /// Irregular: a month goes quiet with probability `quiet_chance`;
     /// active months run at boosted volume to compensate.
@@ -186,11 +188,6 @@ pub enum Cadence {
     Burst { burst_chance: f64 },
 }
 
-impl Default for Cadence {
-    fn default() -> Self {
-        Cadence::Steady
-    }
-}
 
 impl Cadence {
     /// Roll this month's volume multiplier. Each variant has
@@ -351,7 +348,7 @@ impl Market {
     /// Remove expired modifiers.
     pub fn expire_modifiers(&mut self, current_date: GameDate) {
         self.modifiers.retain(|m| {
-            m.end_date.map_or(true, |end| current_date < end)
+            m.end_date.is_none_or(|end| current_date < end)
         });
     }
 }

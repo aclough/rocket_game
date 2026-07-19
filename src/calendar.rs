@@ -12,7 +12,7 @@ pub struct GameDate {
 
 impl GameDate {
     pub fn new(year: u32, month: u32, day: u32) -> Self {
-        debug_assert!(month >= 1 && month <= 12);
+        debug_assert!((1..=12).contains(&month));
         debug_assert!(day >= 1 && day <= days_in_month(year, month));
         GameDate { year, month, day }
     }
@@ -93,7 +93,7 @@ impl fmt::Display for GameDate {
 
 /// Whether a year is a leap year.
 pub fn is_leap_year(year: u32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 /// Days in a given month of a given year.

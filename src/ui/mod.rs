@@ -1151,22 +1151,19 @@ impl App {
                     return;
                 }
                 let project = &self.game.player_company.rocket_projects[self.selected_item];
-                match &project.status {
-                    RocketDesignStatus::Revising { .. } => {
-                        self.status_message = Some(
-                            "Can't modify while revising — finish flaws first".into());
-                        return;
-                    }
-                    _ => {}
+                if let RocketDesignStatus::Revising { .. } = &project.status {
+                    self.status_message = Some(
+                        "Can't modify while revising — finish flaws first".into());
+                    return;
                 }
                 let state = Box::new(RocketDesignerState::from_existing(
                     project, &self.game.player_company,
                 ));
                 self.enter_modal(InputMode::RocketDesigner { state });
             }
-            KeyCode::Char('m') => {
+            KeyCode::Char('m')
                 // Cycle auto-build target: 0 → 1 → 2 → 3 → 0
-                if self.selected_item < self.game.player_company.rocket_projects.len() {
+                if self.selected_item < self.game.player_company.rocket_projects.len() => {
                     match self.game.player_company.cycle_auto_build_target(self.selected_item) {
                         Some(0) => self.status_message = Some("Auto-build: off".into()),
                         Some(n) => self.status_message = Some(format!("Auto-build: {}", n)),
@@ -1174,7 +1171,6 @@ impl App {
                             Some("Must be in Testing to set auto-build".into()),
                     }
                 }
-            }
             _ => {}
         }
     }
@@ -1408,9 +1404,8 @@ impl App {
                             }
                             KeyCode::Enter => {
                                 if let Ok(parsed) = buffer.parse::<f64>() {
-                                    let clamped = parsed
-                                        .max(crate::reactor::MIN_SCALE)
-                                        .min(crate::reactor::MAX_SCALE);
+                                    let clamped = parsed.clamp(
+                                        crate::reactor::MIN_SCALE, crate::reactor::MAX_SCALE);
                                     self.apply_reactor_scale(project_id, clamped);
                                 }
                                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
@@ -1493,9 +1488,8 @@ impl App {
                             }
                             KeyCode::Enter => {
                                 if let Ok(parsed) = buffer.parse::<f64>() {
-                                    let clamped = parsed
-                                        .max(crate::engine_project::MIN_SCALE)
-                                        .min(crate::engine_project::MAX_SCALE);
+                                    let clamped = parsed.clamp(
+                                        crate::engine_project::MIN_SCALE, crate::engine_project::MAX_SCALE);
                                     self.apply_engine_scale(project_id, clamped);
                                     if let Some(s) = state.as_mut() {
                                         sync_stages_to_projects(s, &self.game.player_company);
@@ -1622,11 +1616,10 @@ impl App {
                     KeyCode::Up | KeyCode::Char('k') => {
                         *scroll = scroll.saturating_sub(1);
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if *scroll + 1 < len {
+                    KeyCode::Down | KeyCode::Char('j')
+                        if *scroll + 1 < len => {
                             *scroll += 1;
                         }
-                    }
                     _ => {}
                 }
             }
@@ -2432,6 +2425,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // constructor-style, callers read positionally with names at the call site
     fn handle_rocket_pick_engine_key(
         &mut self,
         key: KeyCode,
@@ -2456,7 +2450,7 @@ impl App {
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Up => {
-                if selected > 0 { selected -= 1; }
+                selected = selected.saturating_sub(1);
                 self.input_mode = InputMode::RocketPickEngine {
                     state, target_index, inner_index, editing, booster, selected,
                 };
@@ -2627,7 +2621,7 @@ impl App {
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Up => {
-                if selected > 0 { selected -= 1; }
+                selected = selected.saturating_sub(1);
                 self.input_mode = InputMode::RocketDesignerLocationPicker {
                     state, target, locations, selected,
                 };
@@ -2770,7 +2764,7 @@ impl App {
                 self.exit_modal();
             }
             KeyCode::Up => {
-                if cursor > 0 { cursor -= 1; }
+                cursor = cursor.saturating_sub(1);
                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
             }
             KeyCode::Down => {
@@ -2875,7 +2869,7 @@ impl App {
                 self.exit_modal();
             }
             KeyCode::Up => {
-                if cursor > 0 { cursor -= 1; }
+                cursor = cursor.saturating_sub(1);
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Down => {
@@ -3017,7 +3011,7 @@ impl App {
                 return;
             }
             KeyCode::Up => {
-                if cursor > 0 { cursor -= 1; }
+                cursor = cursor.saturating_sub(1);
             }
             KeyCode::Down => {
                 if cursor + 1 < n_total { cursor += 1; }
@@ -3068,9 +3062,9 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('-') | KeyCode::Char('_') => {
+            KeyCode::Char('-') | KeyCode::Char('_')
                 // Resize a solar panel down by 1/√2 (symmetric with +).
-                if cursor < n_equipped {
+                if cursor < n_equipped => {
                     let src = &mut state.stage_groups[group_index][stage_index]
                         .power_sources[cursor];
                     if let crate::power::PowerSourceKind::SolarPanel { peak_w_at_1au } = src.kind {
@@ -3079,7 +3073,6 @@ impl App {
                         );
                     }
                 }
-            }
             _ => {}
         }
         self.input_mode = InputMode::PowerEditor {

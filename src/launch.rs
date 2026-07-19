@@ -191,7 +191,7 @@ pub fn simulate_launch(
     // (burning at sea level, 101325 Pa)
     let ambient = 101_325.0_f64;
     if groups_needed > 0 {
-        for (_si, stage) in degraded.stage_groups[0].iter_mut().enumerate() {
+        for stage in degraded.stage_groups[0].iter_mut() {
             let risk = stage.engine.overexpansion_destruction_risk(ambient);
             if risk > 0.0 {
                 // Roll independently for each engine
