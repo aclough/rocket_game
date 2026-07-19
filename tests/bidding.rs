@@ -17,6 +17,15 @@ use rocket_tycoon::contract::{
 use rocket_tycoon::event::GameEvent;
 use rocket_tycoon::game_state::GameState;
 
+/// The balance these tests run under: default rules with the scripted
+/// competitor disabled. This file locks the *player-side* award
+/// mechanic; competitive awards are covered by the Task 2 tests.
+fn solo_balance() -> BalanceConfig {
+    let mut b = BalanceConfig::default();
+    b.competitor.enabled = false;
+    b
+}
+
 /// Advance `gs` day by day (up to `max_days`) until a solicitation
 /// appears in `available_contracts`, returning its index. Monthly
 /// generation lands on the 1st of each month (first on Feb 1), and
@@ -34,7 +43,7 @@ fn advance_to_first_solicitation(gs: &mut GameState, max_days: u32) -> usize {
 
 #[test]
 fn bid_within_ceiling_wins_at_deadline() {
-    let mut gs = GameState::with_balance("Test".into(), 1, BalanceConfig::default());
+    let mut gs = GameState::with_balance("Test".into(), 1, solo_balance());
     let idx = advance_to_first_solicitation(&mut gs, 40);
 
     let name = gs.available_contracts[idx].name.clone();
@@ -99,7 +108,7 @@ fn bid_within_ceiling_wins_at_deadline() {
 
 #[test]
 fn bid_over_ceiling_is_rejected() {
-    let mut gs = GameState::with_balance("Test".into(), 2, BalanceConfig::default());
+    let mut gs = GameState::with_balance("Test".into(), 2, solo_balance());
     let idx = advance_to_first_solicitation(&mut gs, 40);
 
     let name = gs.available_contracts[idx].name.clone();
@@ -139,7 +148,7 @@ fn bid_over_ceiling_is_rejected() {
 
 #[test]
 fn unbid_solicitations_lapse_silently() {
-    let mut gs = GameState::with_balance("Test".into(), 3, BalanceConfig::default());
+    let mut gs = GameState::with_balance("Test".into(), 3, solo_balance());
 
     let mut all_events = Vec::new();
     let mut month1_solicitation_ids: Vec<u64> = Vec::new();
@@ -195,7 +204,7 @@ fn unbid_solicitations_lapse_silently() {
 
 #[test]
 fn accept_refuses_solicitations_and_bid_refuses_prepriced() {
-    let mut gs = GameState::with_balance("Test".into(), 4, BalanceConfig::default());
+    let mut gs = GameState::with_balance("Test".into(), 4, solo_balance());
     let idx = advance_to_first_solicitation(&mut gs, 40);
 
     assert!(
@@ -254,7 +263,7 @@ fn accept_refuses_solicitations_and_bid_refuses_prepriced() {
 
 #[test]
 fn bids_are_revisable_until_deadline() {
-    let mut gs = GameState::with_balance("Test".into(), 5, BalanceConfig::default());
+    let mut gs = GameState::with_balance("Test".into(), 5, solo_balance());
     let idx = advance_to_first_solicitation(&mut gs, 40);
 
     let name = gs.available_contracts[idx].name.clone();
@@ -342,7 +351,7 @@ fn legacy_contract_json_loads_and_accepts() {
 
     // And it flows through the pre-priced accept path like any other
     // bid_deadline: None contract.
-    let mut gs = GameState::with_balance("Test".into(), 6, BalanceConfig::default());
+    let mut gs = GameState::with_balance("Test".into(), 6, solo_balance());
     gs.available_contracts.push(contract);
     let idx = gs.available_contracts.len() - 1;
 

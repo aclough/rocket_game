@@ -15,3 +15,6 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 [] Duplicate color for selection / borderline in contracts view
 [] Check on grandfathered power
     [] Maybe add a default battery?
+[] Cost realism pass: material/build costs vs contract payments are on different scales
+    (DinoSoar's heavy costs $8.6M vs GEO payments of $80-400M). Use the sim harness
+    to measure ripple effects of retuning.

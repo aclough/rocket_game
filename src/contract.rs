@@ -66,6 +66,31 @@ impl Contract {
     }
 }
 
+/// Baseline contract literals for unit tests in other modules.
+#[cfg(test)]
+pub mod test_support {
+    use super::*;
+
+    /// A generic open solicitation; tests override the fields under test
+    /// with struct-update syntax.
+    pub fn solicitation_fixture() -> Contract {
+        Contract {
+            id: ContractId(1),
+            name: "Test Solicitation".into(),
+            destination: "leo".into(),
+            payload_kg: 1_000.0,
+            payment: 20_000_000.0,
+            deadline: GameDate { year: 2001, month: 12, day: 1 },
+            status: ContractStatus::Available,
+            market_id: MarketId(0),
+            campaign_id: None,
+            bid_deadline: Some(GameDate { year: 2001, month: 6, day: 1 }),
+            budget_ceiling: 24_000_000.0,
+            player_bid: None,
+        }
+    }
+}
+
 /// How sensitive a market is to economic cycles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EconomySensitivity {

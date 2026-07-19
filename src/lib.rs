@@ -21,6 +21,7 @@ pub mod rocket_project;
 pub mod manufacturing;
 pub mod third_party;
 pub mod contract;
+pub mod competitor;
 pub mod reputation;
 pub mod launch;
 pub mod flight;

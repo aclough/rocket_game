@@ -55,6 +55,14 @@ pub fn load_game(path: &Path) -> io::Result<GameState> {
     state.player_company.reactor_projects.retain(|rp|
         !matches!(rp.status, crate::reactor_project::ReactorDesignStatus::Proposed { .. })
     );
+    // Backfill competitors for pre-M3 saves: DinoSoar joins an old
+    // world mid-game (fresh company, same seeded realization it would
+    // have had at that world's creation).
+    if state.competitors.is_empty() && state.balance.competitor.enabled {
+        state.competitors.push(
+            crate::competitor::realize_dinosoar(&state.seed, &state.balance),
+        );
+    }
     Ok(state)
 }
 

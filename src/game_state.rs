@@ -1160,6 +1160,10 @@ pub struct GameState {
     /// Tracks which market events have already fired (by event key).
     #[serde(default)]
     pub fired_market_events: Vec<String>,
+    /// Scripted competitor companies (M3: DinoSoar). Real `Company`
+    /// state driven by a margin script instead of a player.
+    #[serde(default)]
+    pub competitors: Vec<crate::competitor::Competitor>,
     /// Live anchor-customer campaigns issuing mission contracts.
     #[serde(default)]
     pub active_campaigns: Vec<contract::Campaign>,
@@ -1225,6 +1229,12 @@ impl GameState {
                 })
                 .collect();
 
+        let competitors = if balance.competitor.enabled {
+            vec![crate::competitor::realize_dinosoar(&seed, &balance)]
+        } else {
+            Vec::new()
+        };
+
         GameState {
             date: start,
             start_date: start,
@@ -1242,6 +1252,7 @@ impl GameState {
             economy,
             markets,
             fired_market_events: Vec::new(),
+            competitors,
             active_campaigns: Vec::new(),
             next_campaign_id: 1,
             technologies,
@@ -1649,6 +1660,12 @@ impl GameState {
                 }
             }
 
+            // Competitors pay the same salaries, silently.
+            for comp in &mut self.competitors {
+                let salary = comp.company.monthly_salary_cost();
+                comp.company.money -= salary;
+            }
+
             // Advance economy — check if current state has expired
             let prev_condition = self.economy.condition;
             if let Some(new_condition) = crate::economy::advance_economy(
@@ -1768,6 +1785,11 @@ impl GameState {
         // Expire contracts past deadline
         self.expire_contracts(&mut events);
 
+        // Fly competitors' awarded contracts that reached their
+        // scheduled launch day (abstract launches — real inventory,
+        // real reputation, no flight sim).
+        self.process_competitor_launches(&mut events);
+
         // Track launch drought (yearly check)
         if self.date.is_first_of_month() && self.date.month == 1 && self.date.day == 1 {
             if let Some(last) = self.player_company.last_launch_date {
@@ -1830,6 +1852,9 @@ impl GameState {
 
         // Auto-assign idle manufacturing teams to least-staffed orders
         self.player_company.auto_assign_idle_manufacturing_teams();
+
+        // Competitors run the same manufacturing machinery daily.
+        self.tick_competitors(&mut events);
 
         // Advance flights in transit
         let flight_events = self.advance_flights();
@@ -2084,15 +2109,55 @@ impl GameState {
     fn resolve_bids(&mut self, events: &mut Vec<GameEvent>) {
         let mut i = 0;
         while i < self.available_contracts.len() {
-            let c = &self.available_contracts[i];
-            let due = c.bid_deadline.map_or(false, |bd| self.date > bd);
+            let due = {
+                let c = &self.available_contracts[i];
+                c.bid_deadline.map_or(false, |bd| self.date > bd)
+            };
             if !due {
                 i += 1;
                 continue;
             }
             let mut c = self.available_contracts.remove(i);
-            match c.player_bid {
-                Some(bid) if bid <= c.budget_ceiling => {
+
+            let market = self.markets.iter().find(|m| m.id == c.market_id).cloned();
+            let rep_scale = self.balance.markets.rep_scale;
+            let score = |bid: f64, rep: f64| {
+                market.as_ref().map_or(0.0, |m| {
+                    contract::bid_score(bid, c.budget_ceiling, rep, m, rep_scale)
+                })
+            };
+
+            // Gather sealed bids: the player first, then each
+            // competitor's scripted price. Over-ceiling bids never
+            // score. Ties break toward the earlier entry, so an
+            // exactly-matched player never loses to a coin flip.
+            // (bidder, bid): bidder None = player, Some(ci) = competitor.
+            let mut winner: Option<(Option<usize>, f64)> = None;
+            let mut best_score = f64::NEG_INFINITY;
+            let mut consider = |who: Option<usize>, bid: f64, s: f64| {
+                if s > best_score {
+                    best_score = s;
+                    winner = Some((who, bid));
+                }
+            };
+            let mut player_over_ceiling = false;
+            if let Some(bid) = c.player_bid {
+                if bid <= c.budget_ceiling {
+                    consider(None, bid, score(bid, self.player_company.reputation.total()));
+                } else {
+                    player_over_ceiling = true;
+                }
+            }
+            for (ci, comp) in self.competitors.iter().enumerate() {
+                if let Some(bid) = comp.compute_bid(&c, &self.balance, &self.seed) {
+                    if bid <= c.budget_ceiling {
+                        consider(Some(ci), bid, score(bid, comp.company.reputation.total()));
+                    }
+                }
+            }
+
+            match winner {
+                Some((None, bid)) => {
                     c.payment = bid;
                     c.status = contract::ContractStatus::Accepted;
                     let evt = GameEvent::ContractAwarded {
@@ -2103,7 +2168,30 @@ impl GameState {
                     self.event_log.push(self.date, evt.clone());
                     events.push(evt);
                 }
-                Some(_) => {
+                Some((Some(ci), bid)) => {
+                    c.payment = bid;
+                    c.status = contract::ContractStatus::Accepted;
+                    let player_had_bid = c.player_bid.is_some();
+                    let launch_date = {
+                        let d = self.date.add_days(self.balance.competitor.launch_lead_days);
+                        if d > c.deadline { c.deadline } else { d }
+                    };
+                    let comp = &mut self.competitors[ci];
+                    comp.scheduled_launches.push(crate::competitor::ScheduledLaunch {
+                        contract_id: c.id,
+                        launch_date,
+                    });
+                    let evt = GameEvent::ContractAwardedToCompetitor {
+                        contract_name: c.name.clone(),
+                        company: comp.company.name.clone(),
+                        amount: bid,
+                        player_had_bid,
+                    };
+                    comp.company.active_contracts.push(c);
+                    self.event_log.push(self.date, evt.clone());
+                    events.push(evt);
+                }
+                None if player_over_ceiling => {
                     // Over budget: no award, and the customer doesn't
                     // say what the budget was.
                     let evt = GameEvent::BidRejected {
@@ -2112,7 +2200,113 @@ impl GameState {
                     self.event_log.push(self.date, evt.clone());
                     events.push(evt);
                 }
-                None => {} // No bids: lapses without ceremony.
+                None => {} // No valid bids: lapses without ceremony.
+            }
+        }
+    }
+
+    /// Daily manufacturing tick for scripted competitors: the same
+    /// machinery the player runs, with only finished vehicles making
+    /// the news.
+    fn tick_competitors(&mut self, events: &mut Vec<GameEvent>) {
+        for ci in 0..self.competitors.len() {
+            let comp = &mut self.competitors[ci];
+            let mfg_events = comp.company.manufacturing.advance_day(&self.balance.costs);
+            for me in mfg_events {
+                if let crate::manufacturing::ManufacturingEvent::RocketIntegrated {
+                    design_id, rocket_name, build_cost, ..
+                } = me
+                {
+                    comp.company.rocket_cost_history
+                        .entry(design_id)
+                        .or_default()
+                        .push(build_cost);
+                    let evt = GameEvent::CompetitorRocketBuilt {
+                        company: comp.company.name.clone(),
+                        rocket_name,
+                    };
+                    self.event_log.push(self.date, evt.clone());
+                    events.push(evt);
+                }
+            }
+            comp.company.try_unblock_manufacturing_orders();
+            // Auto-build events are the competitor's internal
+            // bookkeeping, not news.
+            let _ = comp.company.auto_reorder_rockets(&self.balance);
+            comp.company.auto_assign_idle_manufacturing_teams();
+        }
+    }
+
+    /// Fly competitors' awarded contracts whose scheduled day arrived:
+    /// consume a real inventory rocket, roll its snapshot flaws once
+    /// (per-flight), settle payment and reputation, make the news.
+    fn process_competitor_launches(&mut self, events: &mut Vec<GameEvent>) {
+        use rand::Rng;
+
+        for ci in 0..self.competitors.len() {
+            let due: Vec<crate::competitor::ScheduledLaunch> = {
+                let comp = &mut self.competitors[ci];
+                let mut d = Vec::new();
+                let mut j = 0;
+                while j < comp.scheduled_launches.len() {
+                    if self.date >= comp.scheduled_launches[j].launch_date {
+                        d.push(comp.scheduled_launches.remove(j));
+                    } else {
+                        j += 1;
+                    }
+                }
+                d
+            };
+            for launch in due {
+                let taken = {
+                    let comp = &mut self.competitors[ci];
+                    let pos = comp.company.active_contracts.iter()
+                        .position(|c| c.id == launch.contract_id);
+                    let ridx = comp.company.manufacturing.inventory.rockets.iter()
+                        .position(|r| r.rocket_project_id == comp.rocket_project_id);
+                    match (pos, ridx) {
+                        (Some(pos), Some(ridx)) => {
+                            let contract = comp.company.active_contracts.remove(pos);
+                            let rocket = comp.company.manufacturing.inventory.rockets.remove(ridx);
+                            Some((contract, rocket))
+                        }
+                        (Some(_), None) => {
+                            // The readiness gate makes this unreachable
+                            // (rockets are only consumed here, and every
+                            // award reserves one). Retry defensively.
+                            debug_assert!(false, "competitor launch with no vehicle in stock");
+                            comp.scheduled_launches.push(crate::competitor::ScheduledLaunch {
+                                contract_id: launch.contract_id,
+                                launch_date: self.date.add_days(7),
+                            });
+                            None
+                        }
+                        (None, _) => None,
+                    }
+                };
+                let Some((contract, rocket)) = taken else { continue };
+
+                let severity = self.market_failure_severity(contract.market_id);
+                let mut rng = self.seed.world_query(&format!("dino_launch_{}", contract.id.0));
+                let failed = rocket.rocket_flaws.iter()
+                    .any(|fl| rng.gen::<f64>() < fl.activation_chance);
+
+                let comp = &mut self.competitors[ci];
+                if failed {
+                    comp.company.reputation.on_launch_failure(&self.balance.reputation, severity);
+                } else {
+                    comp.company.money += contract.payment;
+                    comp.company.reputation.on_launch_success(&self.balance.reputation);
+                    comp.company.reputation.on_contract_launch(&self.balance.reputation);
+                }
+                comp.company.last_launch_date = Some(self.date);
+                let evt = GameEvent::CompetitorLaunch {
+                    company: comp.company.name.clone(),
+                    contract_name: contract.name.clone(),
+                    success: !failed,
+                };
+                self.event_log.push(self.date, evt.clone());
+                events.push(evt);
             }
         }
     }

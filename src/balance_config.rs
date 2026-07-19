@@ -24,6 +24,7 @@ pub struct BalanceConfig {
     pub markets: MarketsConfig,
     pub flaws: FlawsConfig,
     pub reputation: ReputationConfig,
+    pub competitor: CompetitorConfig,
 }
 
 impl BalanceConfig {
@@ -49,6 +50,7 @@ impl BalanceConfig {
         let config: BalanceConfig = merged.try_into()
             .map_err(|e| format!("invalid balance config: {e}"))?;
         config.markets.validate()?;
+        config.competitor.validate()?;
         Ok(config)
     }
 
@@ -616,6 +618,148 @@ impl Default for ReputationConfig {
             reactor_meu_min_reputation: 60.0,
             reactor_heu_min_reputation: 150.0,
         }
+    }
+}
+
+// ==========================================
+// Competitor (M3: DinoSoar)
+// ==========================================
+
+/// One destination the competitor's catalog vehicle can serve, and
+/// the heaviest payload it will take there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DestinationCapability {
+    pub location_id: String,
+    pub max_payload_kg: f64,
+}
+
+/// Script parameters for the scripted competitor (DinoSoar). The
+/// company itself is a real `Company`; these knobs shape its size,
+/// pricing rule, and seeded reliability. `production_lines` is the
+/// intended sweep knob for difficulty.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompetitorConfig {
+    /// Master switch; off = no competitor is realized.
+    pub enabled: bool,
+    pub name: String,
+    /// Manufacturing teams hired at realization — the capacity knob.
+    pub production_lines: u32,
+    /// Floor space units at realization (must comfortably fit
+    /// simultaneous stage + integration orders for the catalog vehicle).
+    pub floor_space: u32,
+    pub starting_money: f64,
+    /// Integrated rockets on the shelf at game start.
+    pub initial_stock: u32,
+    /// Auto-build inventory target (real `auto_build_targets` entry).
+    pub auto_build_target: u32,
+    /// Prior builds credited at realization: a mature incumbent starts
+    /// well down the learning curve.
+    pub prior_builds: u32,
+    /// Marginal-cost estimate used for pricing until the real
+    /// manufacturing pipeline has produced cost history, and the book
+    /// value of initial stock. Keep near the real build cost (the
+    /// pricing basis switches to actual cost history after the first
+    /// build; a large gap makes prices jump).
+    pub catalog_cost: f64,
+    /// Bid = marginal cost × margin. Margin relaxes from margin_max
+    /// (one free rocket) toward margin_min as free stock grows.
+    /// These are monopoly-incumbent markups, not thin margins: the
+    /// parody incumbent prices at what the market bears, disciplined
+    /// only by its own stock pressure.
+    pub margin_min: f64,
+    pub margin_max: f64,
+    /// Absolute lowest bid the script will ever place — the safety
+    /// knob that keeps it out of small-contract price wars.
+    pub bid_floor: f64,
+    /// Symmetric per-contract price noise (0.05 = ±5%), seeded per
+    /// contract from the world seed.
+    pub bid_jitter: f64,
+    /// Days between an award and the scripted launch (clamped to the
+    /// contract deadline).
+    pub launch_lead_days: u32,
+    /// Per-flight loss-of-vehicle chance = failure_base +
+    /// failure_spread × u^failure_skew, u uniform in [0,1) from the
+    /// world seed. High skew keeps most worlds near failure_base
+    /// (~99%+ reliable) and makes a ~95% DinoSoar rare.
+    pub failure_base: f64,
+    pub failure_spread: f64,
+    pub failure_skew: f64,
+    /// Destinations served and per-destination payload limits.
+    pub capability: Vec<DestinationCapability>,
+}
+
+impl Default for CompetitorConfig {
+    fn default() -> Self {
+        let cap = |location_id: &str, max_payload_kg: f64| DestinationCapability {
+            location_id: location_id.into(), max_payload_kg,
+        };
+        CompetitorConfig {
+            enabled: true,
+            name: "DinoSoar".into(),
+            production_lines: 8,
+            floor_space: 40,
+            starting_money: 3_000_000_000.0,
+            initial_stock: 3,
+            auto_build_target: 4,
+            prior_builds: 40,
+            catalog_cost: 9_000_000.0,
+            margin_min: 8.0,
+            margin_max: 20.0,
+            bid_floor: 60_000_000.0,
+            bid_jitter: 0.05,
+            launch_lead_days: 30,
+            failure_base: 0.003,
+            failure_spread: 0.047,
+            failure_skew: 8.0,
+            capability: vec![
+                cap("leo", 26_000.0),
+                cap("sso", 20_000.0),
+                cap("gto", 13_500.0),
+                cap("geo", 6_600.0),
+                cap("meo", 10_000.0),
+                cap("l1", 9_000.0),
+                cap("l2", 9_000.0),
+                cap("lunar_orbit", 9_000.0),
+            ],
+        }
+    }
+}
+
+impl CompetitorConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.production_lines == 0 {
+            return Err("competitor.production_lines must be >= 1 when enabled".into());
+        }
+        if self.margin_min < 1.0 || self.margin_max < self.margin_min {
+            return Err(format!(
+                "competitor margins must satisfy 1.0 <= margin_min <= margin_max \
+                 (got {} / {})", self.margin_min, self.margin_max,
+            ));
+        }
+        if self.catalog_cost <= 0.0 || self.bid_floor < 0.0 {
+            return Err("competitor.catalog_cost must be > 0 and bid_floor >= 0".into());
+        }
+        if !(0.0..0.5).contains(&self.bid_jitter) {
+            return Err(format!("competitor.bid_jitter {} outside [0, 0.5)", self.bid_jitter));
+        }
+        let max_fail = self.failure_base + self.failure_spread;
+        if self.failure_base < 0.0 || self.failure_spread < 0.0 || max_fail > 1.0 {
+            return Err(format!(
+                "competitor failure rate range [{}, {}] must sit inside [0, 1]",
+                self.failure_base, max_fail,
+            ));
+        }
+        if self.failure_skew < 1.0 {
+            return Err("competitor.failure_skew must be >= 1.0 (higher = rarer bad seeds)".into());
+        }
+        if self.capability.is_empty() {
+            return Err("competitor.capability must list at least one destination when enabled".into());
+        }
+        Ok(())
     }
 }
 

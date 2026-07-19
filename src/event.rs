@@ -55,6 +55,19 @@ pub enum GameEvent {
     BidPlaced { contract_name: String, amount: f64 },
     ContractAwarded { contract_name: String, amount: f64 },
     BidRejected { contract_name: String },
+    /// A competitor won the award. The winning price is public
+    /// market news — losing teaches the player the going rate.
+    ContractAwardedToCompetitor {
+        contract_name: String,
+        company: String,
+        amount: f64,
+        /// True when the player also bid (and lost) — bumps importance.
+        player_had_bid: bool,
+    },
+    /// A competitor flew an awarded contract (abstractly).
+    CompetitorLaunch { company: String, contract_name: String, success: bool },
+    /// A competitor's manufacturing line finished a vehicle.
+    CompetitorRocketBuilt { company: String, rocket_name: String },
     LaunchSuccess { rocket_name: String, destination: String },
     LaunchPartialFailure { rocket_name: String, reason: String },
     LaunchFailure { rocket_name: String, reason: String },
@@ -165,6 +178,24 @@ impl fmt::Display for GameEvent {
                 write!(f, "Contract awarded: {} at {}", contract_name, crate::resources::format_money(*amount)),
             GameEvent::BidRejected { contract_name } =>
                 write!(f, "No award on {}: the bid exceeded the customer's budget", contract_name),
+            GameEvent::ContractAwardedToCompetitor { contract_name, company, amount, player_had_bid } => {
+                if *player_had_bid {
+                    write!(f, "Outbid: {} goes to {} at {}",
+                        contract_name, company, crate::resources::format_money(*amount))
+                } else {
+                    write!(f, "{} awarded to {} at {}",
+                        contract_name, company, crate::resources::format_money(*amount))
+                }
+            }
+            GameEvent::CompetitorLaunch { company, contract_name, success } => {
+                if *success {
+                    write!(f, "{} launched {} successfully", company, contract_name)
+                } else {
+                    write!(f, "{} launch failure — {} lost", company, contract_name)
+                }
+            }
+            GameEvent::CompetitorRocketBuilt { company, rocket_name } =>
+                write!(f, "{} rolled out a new {}", company, rocket_name),
             GameEvent::LaunchSuccess { rocket_name, destination } =>
                 write!(f, "Launch success: {} to {}", rocket_name, destination),
             GameEvent::LaunchPartialFailure { rocket_name, reason } =>
@@ -221,8 +252,15 @@ pub enum EventImportance {
 impl GameEvent {
     pub fn importance(&self) -> EventImportance {
         match self {
-            GameEvent::DayAdvanced | GameEvent::MonthStart | GameEvent::SalariesPaid { .. } =>
+            GameEvent::DayAdvanced | GameEvent::MonthStart | GameEvent::SalariesPaid { .. }
+            | GameEvent::CompetitorRocketBuilt { .. } =>
                 EventImportance::Routine,
+            GameEvent::ContractAwardedToCompetitor { player_had_bid, .. } => {
+                if *player_had_bid { EventImportance::Notable } else { EventImportance::Routine }
+            }
+            GameEvent::CompetitorLaunch { success, .. } => {
+                if *success { EventImportance::Routine } else { EventImportance::Notable }
+            }
             GameEvent::GameStarted
             | GameEvent::MoneyChanged { .. }
             | GameEvent::TeamHired { .. }
