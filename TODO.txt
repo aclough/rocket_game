@@ -13,3 +13,5 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 [] Double check improvement difficulty over time increase
 [] Fix columns in contract view
 [] Duplicate color for selection / borderline in contracts view
+[] Check on grandfathered power
+    [] Maybe add a default battery?

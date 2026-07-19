@@ -2,21 +2,26 @@
 //!
 //! Every seed must offer a viable first year: enough contracts, and
 //! enough total contract value, in the payload/destination class a
-//! starting company can actually win. A fresh company has reputation
-//! 0, so only markets with `min_reputation <= 0` offer it anything,
-//! and its first vehicle demonstrably lifts ~500 kg to LEO (see
-//! `policy::tests`). These floors exist so that when M2 adds
-//! per-seed market variance, no seed can be silently starved.
+//! starting company can actually win — its first vehicle demonstrably
+//! lifts ~500 kg to LEO (see `policy::tests`). As of M3 every active
+//! market is *visible* at reputation 0 (awards, not visibility, are
+//! reputation-weighted), so "achievable" is a payload/destination
+//! filter, not a visibility one. These floors exist so no seed can be
+//! silently starved.
 //!
 //! Floors are set at the measured baseline minimum (default balance,
-//! 200 seeds, 2026-07, re-measured after the full M2 market layer:
-//! count min 3 / median 7 / max 14, value min $7.53M / median $30.7M
-//! / max $65.9M — the thin seeds are year-1 recessions suppressing
-//! rideshare volume; campaigns only add). Re-measure with
+//! 200 seeds, 2026-07, re-measured after M3 Task 1 — per-market
+//! world-query streams + deterministic Steady cadence: count min 5 /
+//! median 6 / max 7, value min $12.29M / median $27.88M / max
+//! $57.44M). The M3 stream changes made the floor nearly
+//! deterministic: Steady markets issue contracts by volume
+//! accumulation (no count draw to get unlucky on), and each market
+//! draws from its own monthly stream, so no other market's volume
+//! can shift rideshare's draws. Residual spread comes from the
+//! economy cycle and payload/payment draws. Re-measure with
 //! `measure_year1_distribution` (`cargo test --test seed_fairness --
 //! --ignored --nocapture`) and update floors alongside any
-//! market/balance change. The 10x min-to-max disparity is an M4
-//! balance question, not a bug — see ROADMAP.md.
+//! market/balance change.
 
 use std::collections::HashSet;
 
@@ -61,51 +66,61 @@ fn assert_year1_floor(seed: u64) {
     let value: f64 = achievable.iter().map(|c| c.payment).sum();
 
     assert!(
-        count >= 2,
-        "seed {seed}: only {count} achievable year-1 contracts (floor 2, baseline min 2)",
+        count >= 4,
+        "seed {seed}: only {count} achievable year-1 contracts (floor 4, baseline min 5)",
     );
     assert!(
-        value >= 5_000_000.0,
-        "seed {seed}: achievable year-1 contract value ${value:.0} below $5M floor (baseline min $6.05M)",
+        value >= 9_000_000.0,
+        "seed {seed}: achievable year-1 contract value ${value:.0} below $9M floor (baseline min $12.29M)",
     );
 }
 
-/// The additive-only property, asserted directly (M2 Task 6): with
-/// all variance layers live, a seed's year-1 offering must contain
-/// the mainstay-only baseline exactly, and may only add to it. At
-/// reputation 0 only the (pinned) rideshare market draws from the
-/// monthly generation stream, so the comparison is exact, not
-/// statistical.
+/// The additive-only property, asserted directly (M2 Task 6,
+/// strengthened in M3): the opening-floor markets' year-1 offering
+/// must be byte-identical whether or not any other market exists.
+/// Per-market world-query streams make this exact — removing every
+/// non-opening-floor archetype from the config cannot change a
+/// single draw in an opening-floor market's stream. Other markets
+/// and variance layers may only ever ADD to the year-1 offering.
 fn assert_year1_additive(seed: u64) {
     let full = year1_offered_contracts(seed);
 
-    let mut stripped_cfg = BalanceConfig::default();
-    for arch in &mut stripped_cfg.markets.archetypes {
-        arch.campaign = None;
-    }
-    let baseline = year1_offered_with(seed, stripped_cfg);
+    let mut floor_cfg = BalanceConfig::default();
+    floor_cfg.markets.archetypes.retain(|a| {
+        a.template.rep_target <= 0.0 && a.emergence.is_none()
+    });
+    assert!(
+        !floor_cfg.markets.archetypes.is_empty(),
+        "no opening-floor archetypes in the default config",
+    );
+    let floor_ids: HashSet<_> = floor_cfg.markets.archetypes.iter()
+        .map(|a| a.template.id)
+        .collect();
+    let baseline = year1_offered_with(seed, floor_cfg);
 
-    // The full run's non-campaign contracts are byte-for-byte the
-    // baseline offering.
+    // Contract ids shift with other markets present, so compare by
+    // content (name, payload, payment, deadlines).
     let key = |c: &Contract| {
-        (c.name.clone(), c.payload_kg.to_bits(), c.payment.to_bits(), c.deadline)
+        (c.name.clone(), c.payload_kg.to_bits(), c.payment.to_bits(),
+         c.deadline, c.bid_deadline)
     };
-    let base_contracts: Vec<_> = full.iter()
-        .filter(|c| c.campaign_id.is_none())
+    let floor_contracts: Vec<_> = full.iter()
+        .filter(|c| floor_ids.contains(&c.market_id))
         .map(key)
         .collect();
     let baseline_contracts: Vec<_> = baseline.iter().map(key).collect();
     assert_eq!(
-        base_contracts, baseline_contracts,
-        "seed {seed}: variance layers altered the baseline year-1 offering \
-         instead of only adding to it",
+        floor_contracts, baseline_contracts,
+        "seed {seed}: the rest of the market table altered the opening-floor \
+         year-1 offering instead of only adding to it",
     );
 
-    // And therefore total value can only be >= the baseline's.
+    // And therefore the full offering's value can only be >= the
+    // floor-only baseline's.
     let value = |cs: &[Contract]| cs.iter().map(|c| c.payment).sum::<f64>();
     assert!(
         value(&full) >= value(&baseline),
-        "seed {seed}: full-variance year-1 value below mainstay-only baseline",
+        "seed {seed}: full-config year-1 value below opening-floor baseline",
     );
 }
 

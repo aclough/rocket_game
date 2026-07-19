@@ -1684,16 +1684,24 @@ impl GameState {
                 self.check_tech_unlocks(&mut events);
             }
 
-            // Generate monthly contracts from all active markets
-            let rep = self.player_company.reputation.total();
-            let query = format!("contracts_{}_{}", self.date.year, self.date.month);
-            let mut rng = self.seed.world_query(&query);
+            // Generate monthly solicitations from all active markets.
+            // No reputation gate (M3): visibility is universal, the
+            // reputation question lives in award scoring.
+            //
+            // Each market draws from its own monthly stream, so one
+            // market's volume can never shift another's draws — the
+            // year-1 floor can't be starved by stream reshuffling,
+            // and the additive-only property holds exactly.
             let econ_mod = self.economy.modifier;
             let mut generated = 0u32;
-            for market in &self.markets {
+            for market in self.markets.iter_mut() {
+                let query = format!(
+                    "contracts_{}_{}_{}", self.date.year, self.date.month, market.id.0,
+                );
+                let mut rng = self.seed.world_query(&query);
                 let cs = contract::generate_market_contracts(
                     market, &mut rng, &mut self.next_contract_id,
-                    self.date, rep, econ_mod, &self.balance.markets,
+                    self.date, econ_mod, &self.balance.markets,
                 );
                 generated += cs.len() as u32;
                 self.available_contracts.extend(cs);
@@ -1716,7 +1724,7 @@ impl GameState {
                 let Some(spec) = &arch.campaign else { continue };
                 let Some(market) = self.markets.iter().find(|m| m.id == arch.template.id)
                 else { continue };
-                if !market.active || rep < market.min_reputation {
+                if !market.active {
                     continue;
                 }
                 if let Some(campaign) = contract::spawn_campaign(
@@ -1751,6 +1759,11 @@ impl GameState {
         // Issue due campaign mission contracts (daily; intervals are
         // day-grained, not month-grained).
         self.issue_campaign_contracts(&mut events);
+
+        // Resolve sealed bids on solicitations whose window closed
+        // (before delivery-deadline expiry: bid windows are shorter
+        // than any delivery deadline, so awards happen first).
+        self.resolve_bids(&mut events);
 
         // Expire contracts past deadline
         self.expire_contracts(&mut events);
@@ -2063,6 +2076,65 @@ impl GameState {
         }
     }
 
+    /// Resolve solicitations whose bid window has closed. With the
+    /// player as sole bidder (M3 Task 1), a bid wins iff it fits the
+    /// customer's hidden budget; `contract::bid_score` ranks bidders
+    /// once DinoSoar enters (Task 2). Unbid solicitations lapse
+    /// quietly.
+    fn resolve_bids(&mut self, events: &mut Vec<GameEvent>) {
+        let mut i = 0;
+        while i < self.available_contracts.len() {
+            let c = &self.available_contracts[i];
+            let due = c.bid_deadline.map_or(false, |bd| self.date > bd);
+            if !due {
+                i += 1;
+                continue;
+            }
+            let mut c = self.available_contracts.remove(i);
+            match c.player_bid {
+                Some(bid) if bid <= c.budget_ceiling => {
+                    c.payment = bid;
+                    c.status = contract::ContractStatus::Accepted;
+                    let evt = GameEvent::ContractAwarded {
+                        contract_name: c.name.clone(),
+                        amount: bid,
+                    };
+                    self.player_company.active_contracts.push(c);
+                    self.event_log.push(self.date, evt.clone());
+                    events.push(evt);
+                }
+                Some(_) => {
+                    // Over budget: no award, and the customer doesn't
+                    // say what the budget was.
+                    let evt = GameEvent::BidRejected {
+                        contract_name: c.name.clone(),
+                    };
+                    self.event_log.push(self.date, evt.clone());
+                    events.push(evt);
+                }
+                None => {} // No bids: lapses without ceremony.
+            }
+        }
+    }
+
+    /// Place (or revise) a sealed bid on an available solicitation.
+    /// Returns None if the index is invalid, the contract is
+    /// pre-priced (campaign missions, legacy saves), or the bid is
+    /// not positive.
+    pub fn place_bid(&mut self, index: usize, bid: f64) -> Option<GameEvent> {
+        let c = self.available_contracts.get_mut(index)?;
+        if !c.is_solicitation() || bid <= 0.0 {
+            return None;
+        }
+        c.player_bid = Some(bid);
+        let evt = GameEvent::BidPlaced {
+            contract_name: c.name.clone(),
+            amount: bid,
+        };
+        self.event_log.push(self.date, evt.clone());
+        Some(evt)
+    }
+
     /// Expire contracts past their deadline and update reputation.
     fn expire_contracts(&mut self, events: &mut Vec<GameEvent>) {
         // Check available contracts
@@ -2111,9 +2183,13 @@ impl GameState {
             .fold(1.0, f64::max)
     }
 
-    /// Accept a contract from the available market.
+    /// Accept a pre-priced contract from the available market
+    /// (campaign missions and pre-M3 saves). Solicitations must be
+    /// bid on instead — see [`GameState::place_bid`].
     pub fn accept_contract(&mut self, index: usize) -> Option<GameEvent> {
-        if index >= self.available_contracts.len() {
+        if index >= self.available_contracts.len()
+            || self.available_contracts[index].is_solicitation()
+        {
             return None;
         }
         let mut c = self.available_contracts.remove(index);
@@ -4390,6 +4466,9 @@ mod tests {
             status: ContractStatus::Accepted,
             market_id: Default::default(),
             campaign_id: None,
+            bid_deadline: None,
+            budget_ceiling: 0.0,
+            player_bid: None,
         };
         let contract_b = Contract {
             id: ContractId(2), name: "B".into(),
@@ -4398,6 +4477,9 @@ mod tests {
             status: ContractStatus::Accepted,
             market_id: Default::default(),
             campaign_id: None,
+            bid_deadline: None,
+            budget_ceiling: 0.0,
+            player_bid: None,
         };
         gs.player_company.active_contracts.push(contract_a);
         gs.player_company.active_contracts.push(contract_b);
@@ -5177,6 +5259,9 @@ mod tests {
             status: crate::contract::ContractStatus::Accepted,
             market_id: crate::contract::MarketId::default(),
             campaign_id: None,
+            bid_deadline: None,
+            budget_ceiling: 0.0,
+            player_bid: None,
         });
         gs.player_company.active_contracts.len() - 1
     }

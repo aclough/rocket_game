@@ -1,14 +1,18 @@
 //! M1 Task 4: determinism smoke test + metric-band regression tests.
 //!
 //! Bands are set around the measured baseline (basic policy, default
-//! balance, 200 seeds × 8 years, 2026-07, re-measured after the M2
-//! full M2 market layer — archetypes, volume growth, contract
-//! character axes, cadence personality, and anchor campaigns):
-//! 0/200 bankrupt, 24–30 launches per seed, per-seed success ≥ 89%,
-//! first profitable year within 5 years of start, min money ≥ $82M,
-//! final money ≥ $379M. Bands are
-//! regression protection around observed reality, not aspirations —
-//! M4 retunes them.
+//! balance, 200 seeds × 8 years, 2026-07, re-measured after M3
+//! Task 1 — sealed-bid awards with a 30-day window, interim
+//! reference-price bot bidding, campaigns off, per-market world-query
+//! streams, deterministic Steady cadence): 0/200 bankrupt, 20–25
+//! launches per seed, per-seed success ≥ 87%, aggregate success
+//! 98.5%, min money ≥ $69.5M, 190/200 seeds profitable after 8
+//! years, 199/200 with a first profitable year (latest start+7).
+//! Profitability became a fleet-level band in M3: the bid-award
+//! latency slowed the bot's cash cycle and campaigns-off removed
+//! side income, so a thin tail of seeds now ends below starting
+//! money — Task 3's rule engine and M4 tuning address it. Bands are
+//! regression protection around observed reality, not aspirations.
 //!
 //! When changing balance values or game constants, re-measure with
 //! `cargo run --release --bin simulate -- --seeds 1..200 --years 8
@@ -45,45 +49,58 @@ fn assert_bands(summaries: &[RunSummary]) {
     let starting_money = BalanceConfig::default().costs.starting_money;
     let mut launches = 0usize;
     let mut successes = 0usize;
+    let mut profitable = 0usize;
+    let mut with_fpy = 0usize;
 
     for s in summaries {
         assert!(!s.bankrupt, "seed {}: went bankrupt (final ${:.0})", s.seed, s.final_money);
         assert!(
-            s.min_money > 0.0,
-            "seed {}: money went negative (min ${:.0})", s.seed, s.min_money,
+            s.min_money > 60_000_000.0,
+            "seed {}: money dipped below $60M (min ${:.0}, baseline min $69.5M)",
+            s.seed, s.min_money,
         );
+        if s.final_money > starting_money {
+            profitable += 1;
+        }
         assert!(
-            s.final_money > starting_money,
-            "seed {}: not profitable after run (final ${:.0} <= starting ${:.0})",
-            s.seed, s.final_money, starting_money,
-        );
-        assert!(
-            (15..=45).contains(&s.launches),
-            "seed {}: {} launches outside band 15..=45 (baseline 23..=30)",
+            (15..=35).contains(&s.launches),
+            "seed {}: {} launches outside band 15..=35 (baseline 20..=25)",
             s.seed, s.launches,
         );
         let rate = s.successes as f64 / s.launches as f64;
         assert!(
             rate >= 0.85,
-            "seed {}: launch success rate {:.0}% below 85% (baseline min 93%)",
+            "seed {}: launch success rate {:.0}% below 85% (baseline min 87%)",
             s.seed, rate * 100.0,
         );
-        let fpy = s.first_profitable_year.unwrap_or_else(|| {
-            panic!("seed {}: never had a profitable year", s.seed)
-        });
-        assert!(
-            fpy <= s.start_year + 5,
-            "seed {}: first profitable year {} later than start+5 (baseline max start+5)",
-            s.seed, fpy,
-        );
+        if let Some(fpy) = s.first_profitable_year {
+            with_fpy += 1;
+            assert!(
+                fpy <= s.start_year + 7,
+                "seed {}: first profitable year {} later than start+7 (baseline max start+7)",
+                s.seed, fpy,
+            );
+        }
         launches += s.launches;
         successes += s.successes;
     }
 
+    // Profitability is a fleet-level band under bid-award latency
+    // (baseline 190/200 profitable, 199/200 with a profitable year).
+    let n = summaries.len() as f64;
+    assert!(
+        profitable as f64 / n >= 0.88,
+        "only {profitable}/{n} seeds profitable after run (band >= 88%, baseline 95%)",
+    );
+    assert!(
+        with_fpy as f64 / n >= 0.95,
+        "only {with_fpy}/{n} seeds ever had a profitable year (band >= 95%, baseline 99.5%)",
+    );
+
     let aggregate = successes as f64 / launches as f64;
     assert!(
         aggregate >= 0.95,
-        "aggregate launch success rate {:.1}% below 95% (baseline 98.6%)",
+        "aggregate launch success rate {:.1}% below 95% (baseline 98.5%)",
         aggregate * 100.0,
     );
 }

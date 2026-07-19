@@ -52,6 +52,9 @@ pub enum GameEvent {
     ContractsRefreshed { count: u32 },
     ContractAccepted { contract_name: String },
     ContractExpired { contract_name: String },
+    BidPlaced { contract_name: String, amount: f64 },
+    ContractAwarded { contract_name: String, amount: f64 },
+    BidRejected { contract_name: String },
     LaunchSuccess { rocket_name: String, destination: String },
     LaunchPartialFailure { rocket_name: String, reason: String },
     LaunchFailure { rocket_name: String, reason: String },
@@ -156,6 +159,12 @@ impl fmt::Display for GameEvent {
                 write!(f, "Accepted contract: {}", contract_name),
             GameEvent::ContractExpired { contract_name } =>
                 write!(f, "Contract expired: {}", contract_name),
+            GameEvent::BidPlaced { contract_name, amount } =>
+                write!(f, "Bid placed: {} at {}", contract_name, crate::resources::format_money(*amount)),
+            GameEvent::ContractAwarded { contract_name, amount } =>
+                write!(f, "Contract awarded: {} at {}", contract_name, crate::resources::format_money(*amount)),
+            GameEvent::BidRejected { contract_name } =>
+                write!(f, "No award on {}: the bid exceeded the customer's budget", contract_name),
             GameEvent::LaunchSuccess { rocket_name, destination } =>
                 write!(f, "Launch success: {} to {}", rocket_name, destination),
             GameEvent::LaunchPartialFailure { rocket_name, reason } =>
@@ -245,6 +254,9 @@ impl GameEvent {
             | GameEvent::ContractsRefreshed { .. }
             | GameEvent::ContractAccepted { .. }
             | GameEvent::ContractExpired { .. }
+            | GameEvent::BidPlaced { .. }
+            | GameEvent::ContractAwarded { .. }
+            | GameEvent::BidRejected { .. }
             | GameEvent::LaunchSuccess { .. }
             | GameEvent::LaunchPartialFailure { .. }
             | GameEvent::LaunchFailure { .. }

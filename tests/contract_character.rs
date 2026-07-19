@@ -43,7 +43,6 @@ fn per_market_deadline_windows_honored() {
         // Pin cadence: this test is about deadline windows, and lumpy/
         // burst markets can legitimately go months without contracts.
         market.cadence = rocket_tycoon::contract::Cadence::Steady;
-        let reputation = market.min_reputation + 100.0;
 
         let mut rng = StdRng::seed_from_u64(7);
         let mut next_id = 1u64;
@@ -53,7 +52,7 @@ fn per_market_deadline_windows_honored() {
             // Check each batch against its own issue date, so a
             // deadline can't hide behind a neighboring month's window.
             for c in generate_market_contracts(
-                &market, &mut rng, &mut next_id, date, reputation, 1.0, &markets_cfg,
+                &mut market, &mut rng, &mut next_id, date, 1.0, &markets_cfg,
             ) {
                 let span = date.days_until(&c.deadline);
                 assert!(
@@ -89,12 +88,11 @@ fn global_deadline_fallback_used_when_unset() {
     market.deadline_days = None;
     market.base_volume = 5.0;
     market.cadence = rocket_tycoon::contract::Cadence::Steady;
-    let reputation = market.min_reputation + 100.0;
 
     let mut rng = StdRng::seed_from_u64(11);
     let mut next_id = 1u64;
     let contracts = generate_market_contracts(
-        &market, &mut rng, &mut next_id, current_date, reputation, 1.0, &markets_cfg,
+        &mut market, &mut rng, &mut next_id, current_date, 1.0, &markets_cfg,
     );
 
     assert!(
@@ -198,6 +196,9 @@ fn expiry_applies_market_severity_end_to_end() {
             status: ContractStatus::Accepted,
             market_id: MARKET_COTS,
             campaign_id: None,
+            bid_deadline: None,
+            budget_ceiling: 0.0,
+            player_bid: None,
         });
         gs.advance_day();
 
@@ -223,6 +224,9 @@ fn expiry_applies_market_severity_end_to_end() {
             status: ContractStatus::Accepted,
             market_id: MARKET_GOV_SCIENCE,
             campaign_id: None,
+            bid_deadline: None,
+            budget_ceiling: 0.0,
+            player_bid: None,
         });
         gs.advance_day();
 

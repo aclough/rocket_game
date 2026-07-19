@@ -415,6 +415,8 @@ pub enum InputMode {
     SelectThirdParty { selected: usize },
     /// Typing rocket name.
     RocketName { buffer: String },
+    /// Entering a sealed bid (in $M) on an available solicitation.
+    BidEntry { contract_index: usize, buffer: String },
     /// Persistent rocket designer screen.
     RocketDesigner { state: Box<RocketDesignerState> },
     /// Per-stage power-source editor opened from the rocket designer.
@@ -1207,15 +1209,29 @@ impl App {
 
     fn handle_contracts_key(&mut self, key: KeyCode) {
         match key {
-            KeyCode::Char('a') | KeyCode::Enter => {
-                // Accept the selected contract (if it's in the available section)
+            KeyCode::Char('a') | KeyCode::Char('b') | KeyCode::Enter => {
                 let avail_len = self.game.available_contracts.len();
-                if self.selected_item < avail_len {
+                if self.selected_item >= avail_len {
+                    self.status_message = Some("Already accepted".into());
+                    return;
+                }
+                if self.game.available_contracts[self.selected_item].is_solicitation() {
+                    // Sealed bid: open the price-entry modal, seeded
+                    // with any pending bid so it can be revised.
+                    let buffer = self.game.available_contracts[self.selected_item]
+                        .player_bid
+                        .map(|b| format!("{}", b / 1_000_000.0))
+                        .unwrap_or_default();
+                    self.enter_modal(InputMode::BidEntry {
+                        contract_index: self.selected_item,
+                        buffer,
+                    });
+                } else {
+                    // Pre-priced contract (campaign mission / legacy
+                    // save): accept directly.
                     if let Some(evt) = self.game.accept_contract(self.selected_item) {
                         self.status_message = Some(format!("{}", evt));
                     }
-                } else {
-                    self.status_message = Some("Already accepted".into());
                 }
             }
             _ => {}
@@ -1513,6 +1529,34 @@ impl App {
                             self.game.event_log.push(self.game.date, evt);
                             self.status_message = Some("Engine contracted".into());
                         }
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::BidEntry { contract_index, buffer } => {
+                match key {
+                    KeyCode::Esc => { self.exit_modal(); }
+                    KeyCode::Enter => {
+                        let index = *contract_index;
+                        let parsed = buffer.trim().parse::<f64>();
+                        self.exit_modal();
+                        match parsed {
+                            Ok(m) if m > 0.0 => {
+                                let bid = m * 1_000_000.0;
+                                if let Some(evt) = self.game.place_bid(index, bid) {
+                                    self.status_message = Some(format!("{}", evt));
+                                } else {
+                                    self.status_message = Some("Could not place bid".into());
+                                }
+                            }
+                            _ => {
+                                self.status_message = Some("Bid must be a positive number of $M".into());
+                            }
+                        }
+                    }
+                    KeyCode::Backspace => { buffer.pop(); }
+                    KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
+                        buffer.push(c);
                     }
                     _ => {}
                 }
@@ -3331,6 +3375,10 @@ mod market_discovery_render_tests {
             "annual_growth", "presence_probability", "quiet_chance",
             "burst_chance", "failure_severity", "spawn_chance",
             "volume_mult", "base_volume", "trigger_year",
+            // M3 award internals: the customer's budget and the
+            // scoring weights are never shown.
+            "budget_ceiling", "budget_tolerance", "rep_target",
+            "w_cost", "w_rep", "rep_scale",
         ] {
             assert!(
                 !text.contains(leak),

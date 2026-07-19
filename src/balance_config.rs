@@ -308,6 +308,12 @@ pub struct MarketsConfig {
     pub payment_variance_min: f64,
     /// Upper bound of the per-contract payment variance multiplier.
     pub payment_variance_max: f64,
+    /// Days from a solicitation's issue to its bid deadline (global —
+    /// deliberately not a per-market character axis).
+    pub bid_window_days: u32,
+    /// Width of the "near target" band in the logistic reputation
+    /// factor used by award scoring (see `contract::rep_factor`).
+    pub rep_scale: f64,
     /// Market templates + perturbation specs, realized per seed at
     /// game start (see [`crate::contract::MarketArchetype`]).
     pub archetypes: Vec<MarketArchetype>,
@@ -320,6 +326,8 @@ impl Default for MarketsConfig {
             deadline_max_days: 180,
             payment_variance_min: 0.8,
             payment_variance_max: 1.2,
+            bid_window_days: 30,
+            rep_scale: 10.0,
             archetypes: crate::contract::default_archetypes(),
         }
     }
@@ -331,6 +339,12 @@ impl MarketsConfig {
     /// reputation 0 from game start form the guaranteed opening
     /// floor, so their per-seed draws may only raise them.
     pub fn validate(&self) -> Result<(), String> {
+        if self.bid_window_days < 1 {
+            return Err("bid_window_days must be >= 1".into());
+        }
+        if self.rep_scale <= 0.0 {
+            return Err(format!("rep_scale {} must be positive", self.rep_scale));
+        }
         let mut keys = std::collections::HashSet::new();
         let mut ids = std::collections::HashSet::new();
         for a in &self.archetypes {
@@ -394,6 +408,22 @@ impl MarketsConfig {
                     a.key, a.template.failure_severity,
                 ));
             }
+            if a.template.w_cost < 0.0 || a.template.w_rep < 0.0
+                || a.template.w_cost + a.template.w_rep <= 0.0
+            {
+                return Err(format!(
+                    "archetype `{}`: award weights (w_cost {}, w_rep {}) must be \
+                     non-negative and not both zero",
+                    a.key, a.template.w_cost, a.template.w_rep,
+                ));
+            }
+            if a.template.budget_tolerance < 1.0 {
+                return Err(format!(
+                    "archetype `{}`: budget_tolerance {} must be >= 1.0 — a \
+                     reference-priced bid must always fit the customer's budget",
+                    a.key, a.template.budget_tolerance,
+                ));
+            }
             if let Some(c) = &a.campaign {
                 if !(0.0..=1.0).contains(&c.spawn_chance_per_month) {
                     return Err(format!(
@@ -449,17 +479,17 @@ impl MarketsConfig {
                 }
             }
             // Additive-only rule for the reputation-0 opening floor.
-            if a.template.min_reputation <= 0.0 && a.emergence.is_none() {
+            if a.template.rep_target <= 0.0 && a.emergence.is_none() {
                 if a.presence_probability < 1.0 {
                     return Err(format!(
-                        "archetype `{}`: opening-floor market (min_reputation <= 0, \
+                        "archetype `{}`: opening-floor market (rep_target <= 0, \
                          start-active) must have presence_probability 1.0",
                         a.key,
                     ));
                 }
                 if a.volume_mult_range.0 < 1.0 || a.rate_mult_range.0 < 1.0 {
                     return Err(format!(
-                        "archetype `{}`: opening-floor market (min_reputation <= 0, \
+                        "archetype `{}`: opening-floor market (rep_target <= 0, \
                          start-active) must have multiplier floors >= 1.0 \
                          (additive-only year-1 variance)",
                         a.key,
@@ -467,7 +497,7 @@ impl MarketsConfig {
                 }
                 if a.annual_growth_range.0 < 0.0 {
                     return Err(format!(
-                        "archetype `{}`: opening-floor market (min_reputation <= 0, \
+                        "archetype `{}`: opening-floor market (rep_target <= 0, \
                          start-active) must have annual_growth_range floor >= 0 \
                          (the floor may only rise)",
                         a.key,
@@ -475,7 +505,7 @@ impl MarketsConfig {
                 }
                 if a.template.cadence != crate::contract::Cadence::Steady {
                     return Err(format!(
-                        "archetype `{}`: opening-floor market (min_reputation <= 0, \
+                        "archetype `{}`: opening-floor market (rep_target <= 0, \
                          start-active) must have Steady cadence — lumpy/burst \
                          variance can starve a seed's first year even at \
                          conserved volume",

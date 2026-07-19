@@ -344,8 +344,15 @@ impl BasicPolicy {
         let active_index = match pending {
             Some(i) => i,
             None => {
-                // 2) Accept the best-paying available contract the
-                //    template can lift.
+                // 2) Pursue the best-paying available contract the
+                //    template can lift. Solicitations are bid at the
+                //    reference payment (interim until the Task 3 rule
+                //    engine) — one outstanding bid at a time, awarded
+                //    at the bid deadline. Pre-priced contracts are
+                //    accepted directly as before.
+                if game.available_contracts.iter().any(|c| c.player_bid.is_some()) {
+                    return; // Waiting on a sealed bid to resolve.
+                }
                 let mut best: Option<(usize, f64)> = None;
                 let candidates: Vec<(usize, String, f64, f64)> = game.available_contracts
                     .iter().enumerate()
@@ -357,6 +364,13 @@ impl BasicPolicy {
                     }
                     if best.map_or(true, |(_, p)| payment > p) {
                         best = Some((i, payment));
+                    }
+                }
+                if let Some((avail_index, _)) = best {
+                    if game.available_contracts[avail_index].is_solicitation() {
+                        let reference = game.available_contracts[avail_index].payment;
+                        game.place_bid(avail_index, reference);
+                        return; // Award arrives at the bid deadline.
                     }
                 }
                 let Some((avail_index, _)) = best else {

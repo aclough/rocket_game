@@ -398,7 +398,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                         };
                         lines.push(Line::from(Span::styled(
                             format!(
-                                "        ⚠ {}: {} ({})",
+                                "        ▲ {}: {} ({})",
                                 flaw.description, consequence_str, format_flaw_rate(flaw),
                             ),
                             Style::default().fg(Color::Red),
@@ -479,7 +479,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                     };
                     lines.push(Line::from(Span::styled(
                         format!(
-                            "        ⚠ {}: {} ({:.0}%/flight)",
+                            "        ▲ {}: {} ({:.0}%/flight)",
                             flaw.description, consequence_str, flaw.activation_chance * 100.0,
                         ),
                         Style::default().fg(Color::Red),
@@ -638,7 +638,7 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                         };
                         lines.push(Line::from(Span::styled(
                             format!(
-                                "        ⚠ {}: {} ({})",
+                                "        ▲ {}: {} ({})",
                                 flaw.description, consequence_str, format_flaw_rate(flaw),
                             ),
                             Style::default().fg(Color::Red),
@@ -871,7 +871,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                         };
                         lines.push(Line::from(Span::styled(
                             format!(
-                                "        ⚠ {}: {} ({})",
+                                "        ▲ {}: {} ({})",
                                 flaw.description, consequence_str, format_flaw_rate(flaw),
                             ),
                             Style::default().fg(Color::Red),
@@ -1135,12 +1135,28 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
                         ContractReadiness::Impossible => Style::default().fg(Color::Red),
                     }
                 };
-                lines.push(Line::from(Span::styled(
+                let text = if let Some(bid_by) = c.bid_deadline {
+                    // Solicitation: the price is the player's to name.
+                    // The reference payment and budget ceiling stay
+                    // hidden (discovery rule).
+                    let bid_status = match c.player_bid {
+                        Some(b) => format!("bid {}", format_money(b)),
+                        None => "no bid".to_string(),
+                    };
+                    let rep_tag = if rep < 0.8 * market.rep_target {
+                        "  ▲rep"
+                    } else {
+                        ""
+                    };
+                    format!("{}{}  →{}  {:.0} kg  {}  bids close {}  by {}{}",
+                        marker, c.name, dest_name,
+                        c.payload_kg, bid_status, bid_by, c.deadline, rep_tag)
+                } else {
                     format!("{}{}  →{}  {:.0} kg  {}  by {}",
                         marker, c.name, dest_name,
-                        c.payload_kg, format_money(c.payment), c.deadline),
-                    style,
-                )));
+                        c.payload_kg, format_money(c.payment), c.deadline)
+                };
+                lines.push(Line::from(Span::styled(text, style)));
             }
         }
 
@@ -1209,7 +1225,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(" Contracts  [A] Accept ");
+        .title(" Contracts  [B] Bid / Accept ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -2052,7 +2068,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                     if risk > 0.0 {
                         lines.push(Line::from(Span::styled(
                             format!(
-                                "        ⚠ Flow separation risk: {:.0}%/engine, Isp penalty: {:.0}%  (exit {:.0} kPa)",
+                                "        ▲ Flow separation risk: {:.0}%/engine, Isp penalty: {:.0}%  (exit {:.0} kPa)",
                                 risk * 100.0,
                                 (1.0 - isp_frac) * 100.0,
                                 stage.engine.exit_pressure_pa / 1000.0,
@@ -2262,6 +2278,26 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);
         }
+        InputMode::BidEntry { contract_index, buffer } => {
+            let name = app.game.available_contracts
+                .get(*contract_index)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
+            let lines = vec![
+                Line::from(""),
+                Line::from(format!("  {}", name)),
+                Line::from(""),
+                Line::from("  Enter sealed bid in $M (Enter to submit, Esc to cancel):"),
+                Line::from(""),
+                Line::from(format!("  > {}█  ($M)", buffer)),
+            ];
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Place Bid ")
+                .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
         InputMode::RocketPickEngine { state, selected, .. } => {
             draw_rocket_pick_engine_modal(frame, app, state, *selected, modal_area);
         }
@@ -2333,7 +2369,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(format!(
                     "  Destination: {}{}",
                     contract::destination_display_name(&destination_for_summary),
-                    if destination_conflict { "  ⚠ contracts disagree" } else { "" },
+                    if destination_conflict { "  ▲ contracts disagree" } else { "" },
                 )),
                 Line::from(format!("  Payload mass: {}", format_mass(payload_mass))),
                 Line::from(""),

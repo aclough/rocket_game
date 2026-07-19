@@ -44,6 +44,26 @@ pub struct Contract {
     /// campaign (correlated series, block-buy pricing).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub campaign_id: Option<CampaignId>,
+    /// When bids close (M3). None = pre-priced accept-at-payment flow
+    /// (campaign missions and contracts from pre-M3 saves).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bid_deadline: Option<GameDate>,
+    /// The customer's hidden budget ceiling — bids above it lose even
+    /// unopposed. Never shown in the UI (discovery rule). Unused when
+    /// `bid_deadline` is None.
+    #[serde(default)]
+    pub budget_ceiling: f64,
+    /// The player's sealed bid, revisable until `bid_deadline`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub player_bid: Option<f64>,
+}
+
+impl Contract {
+    /// Solicitations are priced by sealed bid; pre-priced contracts
+    /// (campaign missions, pre-M3 saves) keep the legacy accept flow.
+    pub fn is_solicitation(&self) -> bool {
+        self.bid_deadline.is_some()
+    }
 }
 
 /// How sensitive a market is to economic cycles.
@@ -153,7 +173,24 @@ pub struct Market {
     /// Contracts per month before modifiers.
     pub base_volume: f64,
     pub destinations: Vec<MarketDestination>,
-    pub min_reputation: f64,
+    /// The reputation this market's customers expect (M3 award
+    /// scoring): well below it your bids score near zero on the
+    /// reputation axis, well above it saturates. May be negative
+    /// (cubesat customers will fly with anyone). Replaces the old
+    /// `min_reputation` visibility gate — every active market's
+    /// solicitations are visible regardless of reputation.
+    #[serde(alias = "min_reputation")]
+    pub rep_target: f64,
+    /// Award-scoring weight on price (budget / bid).
+    #[serde(default = "default_w_cost")]
+    pub w_cost: f64,
+    /// Award-scoring weight on the logistic reputation factor.
+    #[serde(default = "default_w_rep")]
+    pub w_rep: f64,
+    /// Budget ceiling as a multiple of the reference payment (>= 1.0
+    /// so a reference-priced bid is always within budget).
+    #[serde(default = "default_budget_tolerance")]
+    pub budget_tolerance: f64,
     pub economy_sensitivity: EconomySensitivity,
     pub name_prefixes: Vec<String>,
     pub modifiers: Vec<MarketModifier>,
@@ -177,10 +214,51 @@ pub struct Market {
     /// How this market's contracts arrive over time.
     #[serde(default)]
     pub cadence: Cadence,
+    /// Fractional volume carried between months (Steady cadence
+    /// only): monthly count = floor of accumulated volume, so
+    /// "steady" is literally steady. This is what makes the year-1
+    /// opening floor deterministic instead of statistical — a run of
+    /// unlucky draws can never starve a Steady market's year
+    /// (opening-floor markets are required to be Steady).
+    #[serde(default)]
+    pub volume_accumulator: f64,
 }
 
 fn default_severity() -> f64 {
     1.0
+}
+
+fn default_w_cost() -> f64 {
+    0.7
+}
+
+fn default_w_rep() -> f64 {
+    0.3
+}
+
+fn default_budget_tolerance() -> f64 {
+    1.2
+}
+
+/// Logistic reputation factor for award scoring: 0.5 at the market's
+/// target, saturating toward 1 well above it and toward 0 well below.
+/// Handles negative reputations and negative targets with no special
+/// cases. `rep_scale` (global config) sets how wide "near target" is.
+pub fn rep_factor(reputation: f64, rep_target: f64, rep_scale: f64) -> f64 {
+    1.0 / (1.0 + ((rep_target - reputation) / rep_scale).exp())
+}
+
+/// Score a sealed bid for award resolution. Higher wins. Bids above
+/// the budget ceiling must be rejected by the caller before scoring.
+pub fn bid_score(
+    bid: f64,
+    budget_ceiling: f64,
+    reputation: f64,
+    market: &Market,
+    rep_scale: f64,
+) -> f64 {
+    market.w_cost * (budget_ceiling / bid)
+        + market.w_rep * rep_factor(reputation, market.rep_target, rep_scale)
 }
 
 impl Market {
@@ -225,23 +303,39 @@ impl Market {
     }
 }
 
-/// Generate contracts for a single market for one month.
+/// Generate contracts for a single market for one month. Every
+/// active market generates regardless of player reputation — the
+/// reputation question moved from visibility to award scoring (M3).
 pub fn generate_market_contracts(
-    market: &Market,
+    market: &mut Market,
     rng: &mut StdRng,
     next_contract_id: &mut u64,
     current_date: GameDate,
-    reputation: f64,
     economy_modifier: f64,
     markets_cfg: &MarketsConfig,
 ) -> Vec<Contract> {
-    if !market.active || reputation < market.min_reputation {
+    if !market.active {
         return Vec::new();
     }
 
     let effective_volume = market.effective_volume(economy_modifier, current_date);
-    let cadence_mult = market.cadence.monthly_multiplier(rng);
-    let count = (effective_volume * cadence_mult + rng.gen::<f64>()) as u32;
+    let count = match market.cadence {
+        // Steady is literally steady: volume accumulates and each
+        // whole contract is issued as soon as it's earned. No draw —
+        // a Steady market's monthly counts are a deterministic
+        // function of its volume curve.
+        Cadence::Steady => {
+            market.volume_accumulator += effective_volume;
+            let whole = market.volume_accumulator.floor();
+            market.volume_accumulator -= whole;
+            whole as u32
+        }
+        // Lumpy/Burst keep their randomness — that's their character.
+        _ => {
+            let cadence_mult = market.cadence.monthly_multiplier(rng);
+            (effective_volume * cadence_mult + rng.gen::<f64>()) as u32
+        }
+    };
     let rate_mult = market.rate_multiplier(economy_modifier);
 
     let mut contracts = Vec::new();
@@ -317,6 +411,9 @@ fn generate_single_contract(
         status: ContractStatus::Available,
         market_id: market.id,
         campaign_id: None,
+        bid_deadline: Some(current_date.add_days(markets_cfg.bid_window_days)),
+        budget_ceiling: payment * market.budget_tolerance,
+        player_bid: None,
     })
 }
 
@@ -442,6 +539,11 @@ pub fn campaign_contract(
         status: ContractStatus::Available,
         market_id: campaign.market_id,
         campaign_id: Some(campaign.id),
+        // Block price locked at announcement: campaign missions keep
+        // the pre-priced accept flow, no bidding.
+        bid_deadline: None,
+        budget_ceiling: 0.0,
+        player_bid: None,
     }
 }
 
@@ -486,7 +588,10 @@ pub fn initial_markets() -> Vec<Market> {
                     rate_per_kg: 80_000.0, weight: 0.4,
                 },
             ],
-            min_reputation: 50.0,
+            rep_target: 50.0,
+            w_cost: 0.6,
+            w_rep: 0.4,
+            budget_tolerance: 1.2,
             economy_sensitivity: EconomySensitivity::Moderate,
             name_prefixes: vec!["ComSat".into(), "BroadcastSat".into(), "RelaySat".into()],
             modifiers: Vec::new(),
@@ -495,6 +600,7 @@ pub fn initial_markets() -> Vec<Market> {
             deadline_days: Some((90, 240)),
             failure_severity: 1.2,
             cadence: Cadence::Steady,
+            volume_accumulator: 0.0,
         },
         Market {
             id: MARKET_GOV_SCIENCE,
@@ -529,7 +635,10 @@ pub fn initial_markets() -> Vec<Market> {
                     rate_per_kg: 120_000.0, weight: 0.1,
                 },
             ],
-            min_reputation: 40.0,
+            rep_target: 40.0,
+            w_cost: 0.4,
+            w_rep: 0.6,
+            budget_tolerance: 1.3,
             economy_sensitivity: EconomySensitivity::Low,
             name_prefixes: vec!["Observatory".into(), "SciSat".into(), "Probe".into(), "WeatherSat".into()],
             modifiers: Vec::new(),
@@ -538,6 +647,7 @@ pub fn initial_markets() -> Vec<Market> {
             deadline_days: Some((120, 360)),
             failure_severity: 0.7,
             cadence: Cadence::Steady,
+            volume_accumulator: 0.0,
         },
         Market {
             id: MARKET_RIDESHARE,
@@ -557,7 +667,10 @@ pub fn initial_markets() -> Vec<Market> {
                     rate_per_kg: 30_000.0, weight: 0.4,
                 },
             ],
-            min_reputation: 0.0,
+            rep_target: -10.0,
+            w_cost: 0.8,
+            w_rep: 0.2,
+            budget_tolerance: 1.15,
             economy_sensitivity: EconomySensitivity::Moderate,
             name_prefixes: vec!["CubeSat Bundle".into(), "University Payload".into(), "TechDemo".into()],
             modifiers: Vec::new(),
@@ -566,6 +679,7 @@ pub fn initial_markets() -> Vec<Market> {
             deadline_days: Some((60, 150)),
             failure_severity: 1.0,
             cadence: Cadence::Steady,
+            volume_accumulator: 0.0,
         },
     ]
 }
@@ -587,7 +701,10 @@ pub fn event_market_templates() -> Vec<Market> {
                     rate_per_kg: 40_000.0, weight: 1.0,
                 },
             ],
-            min_reputation: 60.0,
+            rep_target: 60.0,
+            w_cost: 0.5,
+            w_rep: 0.5,
+            budget_tolerance: 1.25,
             economy_sensitivity: EconomySensitivity::Low,
             name_prefixes: vec!["ISS Resupply".into(), "Station Cargo".into(), "Crew Rotation".into()],
             modifiers: Vec::new(),
@@ -596,6 +713,7 @@ pub fn event_market_templates() -> Vec<Market> {
             deadline_days: Some((90, 270)),
             failure_severity: 2.0,
             cadence: Cadence::Steady,
+            volume_accumulator: 0.0,
         },
         Market {
             id: MARKET_LEO_CONSTELLATION,
@@ -615,7 +733,10 @@ pub fn event_market_templates() -> Vec<Market> {
                     rate_per_kg: 20_000.0, weight: 0.4,
                 },
             ],
-            min_reputation: 20.0,
+            rep_target: 20.0,
+            w_cost: 0.8,
+            w_rep: 0.2,
+            budget_tolerance: 1.15,
             economy_sensitivity: EconomySensitivity::High,
             name_prefixes: vec!["Constellation Batch".into(), "LEO Deploy".into(), "Network Sat".into()],
             modifiers: Vec::new(),
@@ -624,6 +745,7 @@ pub fn event_market_templates() -> Vec<Market> {
             deadline_days: Some((60, 180)),
             failure_severity: 1.0,
             cadence: Cadence::Burst { burst_chance: 0.2 },
+            volume_accumulator: 0.0,
         },
         Market {
             id: MARKET_MEO_CONSTELLATION,
@@ -638,7 +760,10 @@ pub fn event_market_templates() -> Vec<Market> {
                     rate_per_kg: 25_000.0, weight: 1.0,
                 },
             ],
-            min_reputation: 30.0,
+            rep_target: 30.0,
+            w_cost: 0.8,
+            w_rep: 0.2,
+            budget_tolerance: 1.15,
             economy_sensitivity: EconomySensitivity::High,
             name_prefixes: vec!["NavSat Batch".into(), "MEO Deploy".into(), "Constellation Unit".into()],
             modifiers: Vec::new(),
@@ -647,6 +772,7 @@ pub fn event_market_templates() -> Vec<Market> {
             deadline_days: Some((90, 210)),
             failure_severity: 1.0,
             cadence: Cadence::Burst { burst_chance: 0.2 },
+            volume_accumulator: 0.0,
         },
         Market {
             id: MARKET_NSSL,
@@ -677,7 +803,10 @@ pub fn event_market_templates() -> Vec<Market> {
                     rate_per_kg: 70_000.0, weight: 0.25,
                 },
             ],
-            min_reputation: 80.0,
+            rep_target: 80.0,
+            w_cost: 0.35,
+            w_rep: 0.65,
+            budget_tolerance: 1.4,
             economy_sensitivity: EconomySensitivity::None,
             name_prefixes: vec!["NatSec Payload".into(), "Defense Sat".into(), "Classified Mission".into()],
             modifiers: Vec::new(),
@@ -686,6 +815,7 @@ pub fn event_market_templates() -> Vec<Market> {
             deadline_days: Some((120, 360)),
             failure_severity: 1.5,
             cadence: Cadence::Lumpy { quiet_chance: 0.5 },
+            volume_accumulator: 0.0,
         },
         Market {
             id: MARKET_EARTH_OBS,
@@ -705,7 +835,10 @@ pub fn event_market_templates() -> Vec<Market> {
                     rate_per_kg: 35_000.0, weight: 0.6,
                 },
             ],
-            min_reputation: 10.0,
+            rep_target: 10.0,
+            w_cost: 0.75,
+            w_rep: 0.25,
+            budget_tolerance: 1.15,
             economy_sensitivity: EconomySensitivity::Moderate,
             name_prefixes: vec!["ImagingSat".into(), "RadarSat".into(), "EarthWatch".into()],
             modifiers: Vec::new(),
@@ -714,6 +847,7 @@ pub fn event_market_templates() -> Vec<Market> {
             deadline_days: Some((60, 180)),
             failure_severity: 1.0,
             cadence: Cadence::Lumpy { quiet_chance: 0.4 },
+            volume_accumulator: 0.0,
         },
     ]
 }
@@ -868,6 +1002,11 @@ pub fn realize_markets(seed: &GameSeed, archetypes: &[MarketArchetype]) -> Vec<R
 /// The two mainstays (Rideshare, GEO Comsats) are pinned at exactly
 /// (1.0, 1.0) — identical in every world; everything else varies per
 /// seed. Perturbation ranges are first-guess values for M4 to tune.
+///
+/// Campaigns are OFF by default as of M3 (every `campaign: None`):
+/// the M2 playtest found pre-priced campaigns didn't register as
+/// events; they return post-M3 as block-bid solicitations. The
+/// machinery stays live for configs that opt in.
 pub fn default_archetypes() -> Vec<MarketArchetype> {
     let base = initial_markets();
     let event = event_market_templates();
@@ -896,16 +1035,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
         pinned(
             "market_geo_comsats",
             (-0.02, 0.02),
-            Some(CampaignSpec {
-                spawn_chance_per_month: 0.015,
-                mission_count_range: (2, 4),
-                interval_days_range: (90, 180),
-                discount_range: (0.10, 0.20),
-                program_names: vec![
-                    "GlobalRelay Fleet".into(), "TransComm Block".into(),
-                    "Meridian Comms".into(), "EchoWave Series".into(),
-                ],
-            }),
+            None,
             by_id(MARKET_GEO_COMSATS, &base),
         ),
         MarketArchetype {
@@ -923,16 +1053,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
         pinned(
             "market_rideshare",
             (0.02, 0.08),
-            Some(CampaignSpec {
-                spawn_chance_per_month: 0.02,
-                mission_count_range: (3, 5),
-                interval_days_range: (60, 120),
-                discount_range: (0.10, 0.20),
-                program_names: vec![
-                    "Orbital Classroom".into(), "Pathfinder Series".into(),
-                    "SmallSat Express".into(), "Horizon Initiative".into(),
-                ],
-            }),
+            None,
             by_id(MARKET_RIDESHARE, &base),
         ),
         MarketArchetype {
@@ -948,17 +1069,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                 flavor: "NASA announces Commercial Orbital Transportation Services program".into(),
                 cross_effects: Vec::new(),
             }),
-            campaign: Some(CampaignSpec {
-                spawn_chance_per_month: 0.03,
-                mission_count_range: (4, 8),
-                interval_days_range: (60, 120),
-                discount_range: (0.15, 0.25),
-                program_names: vec![
-                    "Station Logistics Block".into(),
-                    "Orbital Resupply Series".into(),
-                    "Crew Rotation Block".into(),
-                ],
-            }),
+            campaign: None,
             template: by_id(MARKET_COTS, &event),
         },
         MarketArchetype {
@@ -983,16 +1094,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                     },
                 }],
             }),
-            campaign: Some(CampaignSpec {
-                spawn_chance_per_month: 0.04,
-                mission_count_range: (4, 8),
-                interval_days_range: (45, 90),
-                discount_range: (0.15, 0.30),
-                program_names: vec![
-                    "Meridian Constellation".into(), "SkyWeb Deployment".into(),
-                    "Aurora Network".into(), "LinkNet Buildout".into(),
-                ],
-            }),
+            campaign: None,
             template: by_id(MARKET_LEO_CONSTELLATION, &event),
         },
         MarketArchetype {
@@ -1017,16 +1119,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                     },
                 }],
             }),
-            campaign: Some(CampaignSpec {
-                spawn_chance_per_month: 0.04,
-                mission_count_range: (3, 6),
-                interval_days_range: (60, 120),
-                discount_range: (0.15, 0.30),
-                program_names: vec![
-                    "NavGrid Deployment".into(), "PathStar Series".into(),
-                    "Compass Network".into(),
-                ],
-            }),
+            campaign: None,
             template: by_id(MARKET_MEO_CONSTELLATION, &event),
         },
         MarketArchetype {
@@ -1042,16 +1135,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                 flavor: "National security space launch program opens to new providers".into(),
                 cross_effects: Vec::new(),
             }),
-            campaign: Some(CampaignSpec {
-                spawn_chance_per_month: 0.02,
-                mission_count_range: (2, 4),
-                interval_days_range: (120, 240),
-                discount_range: (0.10, 0.20),
-                program_names: vec![
-                    "Assured Access Block".into(), "Sentinel Series".into(),
-                    "Vanguard Buy".into(),
-                ],
-            }),
+            campaign: None,
             template: by_id(MARKET_NSSL, &event),
         },
         MarketArchetype {
@@ -1067,16 +1151,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                 flavor: "Commercial Earth observation market taking off".into(),
                 cross_effects: Vec::new(),
             }),
-            campaign: Some(CampaignSpec {
-                spawn_chance_per_month: 0.02,
-                mission_count_range: (3, 5),
-                interval_days_range: (60, 120),
-                discount_range: (0.10, 0.20),
-                program_names: vec![
-                    "EarthWatch Program".into(), "TerraScan Series".into(),
-                    "GeoSight Fleet".into(),
-                ],
-            }),
+            campaign: None,
             template: by_id(MARKET_EARTH_OBS, &event),
         },
     ]
@@ -1109,22 +1184,85 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_contracts_respects_reputation() {
+    fn test_generation_ignores_reputation() {
+        // M3: reputation gates awards via scoring, not visibility —
+        // every active market generates solicitations.
         let markets = initial_markets();
         let mut rng = make_rng();
         let date = GameDate::new(2001, 1, 1);
         let mut next_id = 1u64;
 
-        // Rideshare (rep 0) should work, GEO (rep 50) should not
-        let rideshare = markets.iter().find(|m| m.id == MARKET_RIDESHARE).unwrap();
-        let geo = markets.iter().find(|m| m.id == MARKET_GEO_COMSATS).unwrap();
+        let mut geo = markets.iter().find(|m| m.id == MARKET_GEO_COMSATS).unwrap().clone();
+        let cs = generate_market_contracts(&mut geo, &mut rng, &mut next_id, date, 1.0, &mcfg());
+        // GEO base_volume 1.5: generates at least one most months.
+        assert!(
+            !cs.is_empty(),
+            "GEO (rep_target 50) must generate solicitations regardless of reputation",
+        );
+        assert!(cs.iter().all(|c| c.market_id == MARKET_GEO_COMSATS));
+    }
 
-        let cs = generate_market_contracts(rideshare, &mut rng, &mut next_id, date, 0.0, 1.0, &mcfg());
-        // May or may not generate (volume 0.5 + random), but shouldn't error
-        assert!(cs.iter().all(|c| c.market_id == MARKET_RIDESHARE));
+    #[test]
+    fn test_generated_contracts_are_solicitations() {
+        let markets = initial_markets();
+        let mut rng = make_rng();
+        let date = GameDate::new(2001, 1, 1);
+        let mut next_id = 1u64;
+        let cfg = mcfg();
 
-        let cs = generate_market_contracts(geo, &mut rng, &mut next_id, date, 10.0, 1.0, &mcfg());
-        assert!(cs.is_empty(), "GEO should require rep 50");
+        let mut geo = markets.iter().find(|m| m.id == MARKET_GEO_COMSATS).unwrap().clone();
+        let cs = generate_market_contracts(&mut geo, &mut rng, &mut next_id, date, 1.0, &cfg);
+        for c in &cs {
+            assert!(c.is_solicitation());
+            assert_eq!(c.bid_deadline, Some(date.add_days(cfg.bid_window_days)));
+            assert!(
+                (c.budget_ceiling - c.payment * geo.budget_tolerance).abs() < 1e-6,
+                "ceiling must be reference payment x budget_tolerance",
+            );
+            assert!(c.player_bid.is_none());
+        }
+    }
+
+    #[test]
+    fn test_rep_factor_shape() {
+        let scale = 10.0;
+        // At target: exactly 0.5.
+        assert!((rep_factor(50.0, 50.0, scale) - 0.5).abs() < 1e-12);
+        // Well above saturates toward 1; well below decays toward 0.
+        assert!(rep_factor(90.0, 50.0, scale) > 0.98);
+        assert!(rep_factor(10.0, 50.0, scale) < 0.02);
+        // Monotonic in reputation.
+        assert!(rep_factor(55.0, 50.0, scale) > rep_factor(45.0, 50.0, scale));
+        // Negative targets and negative reputations need no special
+        // cases: a rep-0 startup is comfortably above a -10 target.
+        assert!(rep_factor(0.0, -10.0, scale) > 0.7);
+        assert!(rep_factor(-30.0, -10.0, scale) < 0.2);
+    }
+
+    #[test]
+    fn test_bid_score_tradeoffs() {
+        let market = &initial_markets()[0]; // GEO: w_cost 0.6, w_rep 0.4
+        let scale = 10.0;
+        let ceiling = 12_000_000.0;
+        // Lower bid scores higher at equal reputation.
+        assert!(
+            bid_score(9e6, ceiling, 50.0, market, scale)
+                > bid_score(11e6, ceiling, 50.0, market, scale),
+        );
+        // Higher reputation scores higher at equal bid.
+        assert!(
+            bid_score(1e7, ceiling, 60.0, market, scale)
+                > bid_score(1e7, ceiling, 40.0, market, scale),
+        );
+        // A rep-heavy market forgives a higher bid more than a
+        // cost-heavy one: the incumbent premium.
+        let gov = &initial_markets()[1]; // gov science: 0.4/0.6
+        let rideshare = &initial_markets()[2]; // rideshare: 0.8/0.2
+        let premium_gov = bid_score(1.2e7, ceiling, 80.0, gov, scale)
+            - bid_score(1e7, ceiling, 0.0, gov, scale);
+        let premium_ride = bid_score(1.2e7, ceiling, 80.0, rideshare, scale)
+            - bid_score(1e7, ceiling, 0.0, rideshare, scale);
+        assert!(premium_gov > premium_ride);
     }
 
     #[test]
@@ -1181,7 +1319,7 @@ mod tests {
         for m in 0..months {
             let date = GameDate::new(2001 + m / 12, m % 12 + 1, 1);
             let cs = generate_market_contracts(
-                &market, &mut rng, &mut next_id, date, 0.0, 1.0, &mcfg(),
+                &mut market, &mut rng, &mut next_id, date, 1.0, &mcfg(),
             );
             counts.push(cs.len());
         }
@@ -1298,10 +1436,10 @@ mod tests {
 
     #[test]
     fn test_contract_has_market_id() {
-        let market = &initial_markets()[2]; // Rideshare
+        let mut market = initial_markets()[2].clone(); // Rideshare
         let mut rng = make_rng();
         let mut next_id = 1u64;
-        let cs = generate_market_contracts(market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 0.0, 1.0, &mcfg());
+        let cs = generate_market_contracts(&mut market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 1.0, &mcfg());
         for c in &cs {
             assert_eq!(c.market_id, MARKET_RIDESHARE);
         }
@@ -1309,10 +1447,10 @@ mod tests {
 
     #[test]
     fn test_inactive_market_generates_nothing() {
-        let market = &event_market_templates()[0]; // COTS, inactive
+        let mut market = event_market_templates()[0].clone(); // COTS, inactive
         let mut rng = make_rng();
         let mut next_id = 1u64;
-        let cs = generate_market_contracts(market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 200.0, 1.0, &mcfg());
+        let cs = generate_market_contracts(&mut market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 1.0, &mcfg());
         assert!(cs.is_empty());
     }
 }

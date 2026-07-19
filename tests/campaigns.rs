@@ -271,7 +271,9 @@ fn validation_rejects_bad_campaign_specs() {
             .iter_mut()
             .find(|a| a.key == "market_rideshare")
             .expect("market_rideshare archetype exists");
-        let mut spec = arch.campaign.clone().expect("market_rideshare has a campaign spec");
+        // Defaults ship with campaigns off (M3), so seed a valid spec
+        // and then break it.
+        let mut spec = rigged_spec();
         mutate(&mut spec);
         arch.campaign = Some(spec);
         config
