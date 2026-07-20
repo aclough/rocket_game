@@ -89,7 +89,114 @@ impl GameState {
                 campaign.next_issue_date = self.date.add_days(campaign.interval_days);
             }
         }
-        self.active_campaigns.retain(|c| c.missions_issued < c.missions_total);
+        // A fully-issued campaign stays tracked until its outstanding
+        // missions resolve (fly or expire), so the program clause can
+        // still catch a late miss; it retires once nothing references
+        // it.
+        let outstanding: std::collections::HashSet<contract::CampaignId> =
+            self.player_company.active_contracts.iter()
+                .chain(self.competitors.iter()
+                    .flat_map(|k| k.company.active_contracts.iter()))
+                .filter_map(|k| k.campaign_id)
+                .collect();
+        self.active_campaigns.retain(|c|
+            c.missions_issued < c.missions_total || outstanding.contains(&c.id)
+        );
+    }
+
+    /// Program-clause strike: the winner of `campaign_id` let a
+    /// mission expire. Applies the extra reputation hit (on top of the
+    /// normal expiry hit the caller already applied), and after
+    /// `campaign_max_misses` strikes the customer cancels the
+    /// remainder — the campaign is dropped with its unissued missions
+    /// and the winner takes the one-time cancellation hit.
+    fn campaign_mission_missed(
+        &mut self,
+        campaign_id: contract::CampaignId,
+        contract_name: &str,
+        severity: f64,
+        events: &mut Vec<GameEvent>,
+    ) {
+        let Some(idx) = self.active_campaigns.iter()
+            .position(|c| c.id == campaign_id)
+        else {
+            return;
+        };
+        let (by_player, company_name) = match &self.active_campaigns[idx].status {
+            contract::CampaignStatus::Won { by_player, company } =>
+                (*by_player, company.clone()),
+            _ => return,
+        };
+
+        let miss_penalty = self.balance.markets.campaign_miss_rep_penalty;
+        let cancel_penalty = self.balance.markets.campaign_cancel_rep_penalty;
+        let max_misses = self.balance.markets.campaign_max_misses;
+        let rep_cfg = self.balance.reputation.clone();
+        let apply_hit = |gs: &mut Self, mult: f64| {
+            if mult <= 0.0 {
+                return;
+            }
+            if by_player {
+                gs.player_company.reputation.on_contract_expired(&rep_cfg, severity * mult);
+            } else if let Some(comp) = gs.competitors.iter_mut()
+                .find(|k| k.company.name == company_name)
+            {
+                comp.company.reputation.on_contract_expired(&rep_cfg, severity * mult);
+            }
+        };
+        apply_hit(self, miss_penalty);
+
+        let campaign = &mut self.active_campaigns[idx];
+        campaign.missions_missed += 1;
+        let misses = campaign.missions_missed;
+        let evt = GameEvent::CampaignMissionMissed {
+            program: campaign.name.clone(),
+            company: company_name.clone(),
+            contract_name: contract_name.to_string(),
+            misses,
+            max_misses,
+        };
+        self.event_log.push(self.date, evt.clone());
+        events.push(evt);
+
+        let missions_remaining =
+            self.active_campaigns[idx].missions_total - self.active_campaigns[idx].missions_issued;
+        if misses >= max_misses && missions_remaining > 0 {
+            let campaign = self.active_campaigns.remove(idx);
+            apply_hit(self, cancel_penalty);
+            let evt = GameEvent::CampaignCancelled {
+                program: campaign.name.clone(),
+                company: company_name,
+                by_player,
+                missions_remaining,
+            };
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+        }
+    }
+
+    /// Expire competitors' overdue campaign missions. Single awards
+    /// reserve a vehicle up front and always fly by their deadline,
+    /// but a won program's missions issue on cadence and can outrun
+    /// the line — when one expires it costs the normal expiry hit,
+    /// leaves the books, drops its scheduled launch, and strikes the
+    /// program clause.
+    pub(super) fn expire_competitor_campaign_missions(&mut self, events: &mut Vec<GameEvent>) {
+        for ci in 0..self.competitors.len() {
+            let expired: Vec<(contract::ContractId, contract::CampaignId, String, contract::MarketId)> =
+                self.competitors[ci].company.active_contracts.iter()
+                    .filter(|c| c.campaign_id.is_some() && self.date > c.deadline)
+                    .map(|c| (c.id, c.campaign_id.unwrap(), c.name.clone(), c.market_id))
+                    .collect();
+            for (cid, campaign_id, name, market_id) in expired {
+                let severity = self.market_failure_severity(market_id);
+                let comp = &mut self.competitors[ci];
+                comp.company.active_contracts.retain(|c| c.id != cid);
+                comp.scheduled_launches.retain(|sl| sl.contract_id != cid);
+                comp.company.reputation.on_contract_expired(&self.balance.reputation, severity);
+                self.campaign_mission_missed(campaign_id, &name, severity, events);
+            }
+        }
     }
 
     /// Place (or revise) the player's sealed block bid — one price per
@@ -176,6 +283,22 @@ impl GameState {
                 }
             }
 
+            // Block awards land in the same price-discovery history
+            // as single solicitations, tagged with the mission count
+            // (the amount is per mission).
+            let record_date = self.date;
+            let record_outcome =
+                move |outcome: contract::AwardOutcome, c: &contract::Campaign| {
+                    contract::AwardRecord {
+                        date: record_date,
+                        market_id: c.market_id,
+                        contract_name: c.name.clone(),
+                        destination: c.destination.clone(),
+                        payload_kg: c.payload_kg,
+                        missions: Some(c.missions_total),
+                        outcome,
+                    }
+                };
             match winner {
                 Some((None, bid)) => {
                     let name = self.player_company.name.clone();
@@ -193,6 +316,11 @@ impl GameState {
                         amount: bid,
                         missions: campaign.missions_total,
                     };
+                    let record = record_outcome(
+                        contract::AwardOutcome::PlayerWon { amount: bid },
+                        campaign,
+                    );
+                    self.push_award_record(record);
                     self.event_log.push(self.date, evt.clone());
                     events.push(evt);
                     // Winning a program is a decision point (schedule
@@ -211,20 +339,34 @@ impl GameState {
                     campaign.next_issue_date = self.date;
                     let evt = GameEvent::CampaignAwardedToCompetitor {
                         program: campaign.name.clone(),
-                        company: company_name,
+                        company: company_name.clone(),
                         amount: bid,
                         missions: campaign.missions_total,
                         player_bid,
                     };
+                    let record = record_outcome(
+                        contract::AwardOutcome::CompetitorWon {
+                            company: company_name,
+                            amount: bid,
+                            player_bid,
+                        },
+                        campaign,
+                    );
+                    self.push_award_record(record);
                     self.event_log.push(self.date, evt.clone());
                     events.push(evt);
                     i += 1;
                 }
                 None => {
                     let campaign = self.active_campaigns.remove(i);
-                    if player_bid.is_some() {
+                    if let Some(bid) = player_bid {
                         // Over budget: no award, and the customer
                         // doesn't say what the budget was.
+                        let record = record_outcome(
+                            contract::AwardOutcome::PlayerRejected { bid },
+                            &campaign,
+                        );
+                        self.push_award_record(record);
                         let evt = GameEvent::CampaignBidRejected {
                             program: campaign.name.clone(),
                         };
@@ -399,6 +541,7 @@ impl GameState {
                     contract_name: c.name.clone(),
                     destination: c.destination.clone(),
                     payload_kg: c.payload_kg,
+                    missions: None,
                     outcome,
                 }
             };
@@ -629,16 +772,21 @@ impl GameState {
         let mut expired_accepted = Vec::new();
         for (i, c) in self.player_company.active_contracts.iter().enumerate() {
             if self.date > c.deadline {
-                expired_accepted.push((i, c.name.clone(), c.market_id));
+                expired_accepted.push((i, c.name.clone(), c.market_id, c.campaign_id));
             }
         }
-        for (i, name, market_id) in expired_accepted.into_iter().rev() {
+        for (i, name, market_id, campaign_id) in expired_accepted.into_iter().rev() {
             self.player_company.active_contracts.remove(i);
             let severity = self.market_failure_severity(market_id);
             self.player_company.reputation.on_contract_expired(&self.balance.reputation, severity);
-            let evt = GameEvent::ContractExpired { contract_name: name };
+            let evt = GameEvent::ContractExpired { contract_name: name.clone() };
             self.event_log.push(self.date, evt.clone());
             events.push(evt);
+            // A missed program mission also strikes the campaign
+            // clause on top of the normal expiry hit.
+            if let Some(campaign_id) = campaign_id {
+                self.campaign_mission_missed(campaign_id, &name, severity, events);
+            }
         }
     }
 

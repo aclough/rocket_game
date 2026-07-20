@@ -78,6 +78,10 @@ pub struct AwardRecord {
     pub contract_name: String,
     pub destination: String,
     pub payload_kg: f64,
+    /// Some(n) when this was a campaign block award: the amount is
+    /// per mission, n missions in the block. None = single contract.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub missions: Option<u32>,
     pub outcome: AwardOutcome,
 }
 
@@ -519,6 +523,11 @@ pub struct Campaign {
     pub payment_per_mission: f64,
     pub missions_total: u32,
     pub missions_issued: u32,
+    /// Missions the winner let expire — the program-clause strike
+    /// count. At `campaign_max_misses` the customer cancels the
+    /// remainder.
+    #[serde(default)]
+    pub missions_missed: u32,
     pub next_issue_date: GameDate,
     pub interval_days: u32,
     #[serde(default = "pre_redesign_campaign_status")]
@@ -597,6 +606,7 @@ pub fn spawn_campaign(
         payment_per_mission,
         missions_total,
         missions_issued: 0,
+        missions_missed: 0,
         next_issue_date: current_date,
         interval_days,
         status: CampaignStatus::Soliciting {

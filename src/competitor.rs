@@ -424,6 +424,7 @@ mod tests {
             payment_per_mission: 200_000_000.0,
             missions_total: 3,
             missions_issued: 0,
+            missions_missed: 0,
             next_issue_date: GameDate::default_start(),
             interval_days: 30,
             status: crate::contract::CampaignStatus::Soliciting {

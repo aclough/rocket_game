@@ -289,6 +289,15 @@ fn won_campaign_issues_preaccepted_missions_and_retires() {
     }
     assert!(awarded, "sole in-budget block bid must win at resolution");
     assert_eq!(gs.speed, GameSpeed::Paused, "winning a program pauses the game");
+    // The block award lands in the price-discovery history, tagged
+    // with its mission count.
+    let record = gs.award_history.last().expect("award recorded");
+    assert_eq!(record.missions, Some(2), "block record carries its mission count");
+    assert!(
+        matches!(record.outcome,
+            rocket_tycoon::contract::AwardOutcome::PlayerWon { amount } if amount == bid),
+        "history records the player's winning block price",
+    );
     {
         let c = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap();
         assert_eq!(c.payment_per_mission, bid, "won price becomes the block price");
@@ -332,9 +341,27 @@ fn won_campaign_issues_preaccepted_missions_and_retires() {
         mission_days[0].1.days_until(&mission_days[1].1), 30,
         "missions should follow the program cadence",
     );
+    // Fully issued, but the missions are still outstanding: the
+    // campaign stays tracked (so the program clause can catch a late
+    // miss) and only retires once nothing references it. Both issued
+    // missions expiring is enough to clear it — though at two misses
+    // that exit also exercises the cancellation strikes.
+    {
+        let c = gs.active_campaigns.iter().find(|c| c.id == cid)
+            .expect("fully-issued campaign stays tracked while missions are outstanding");
+        assert_eq!(c.missions_issued, c.missions_total);
+    }
+    let last_deadline = gs.player_company.active_contracts.iter()
+        .filter(|c| c.campaign_id == Some(cid))
+        .map(|c| c.deadline)
+        .max()
+        .expect("missions outstanding");
+    while gs.date <= last_deadline.add_days(1) {
+        gs.advance_day();
+    }
     assert!(
         gs.active_campaigns.iter().all(|c| c.id != cid),
-        "a campaign with all missions issued should have been retired",
+        "a campaign retires once every mission has resolved",
     );
 }
 
@@ -503,6 +530,223 @@ fn bids_only_land_on_soliciting_campaigns() {
     assert!(matches!(c.status, CampaignStatus::Won { .. }), "revised bid should still win");
     assert_eq!(c.payment_per_mission, (reference * 0.9), "last revision is the sealed bid");
     assert!(gs.place_campaign_bid(cid, 1.0).is_none(), "resolved campaigns take no bids");
+}
+
+/// A player-won campaign injected directly (skipping the bid phase)
+/// with a chosen mission count and daily issue cadence, so clause
+/// tests can march missions out and expire them quickly.
+fn won_campaign_fixture(gs: &GameState, id: u64, missions: u32) -> rocket_tycoon::contract::Campaign {
+    rocket_tycoon::contract::Campaign {
+        id: rocket_tycoon::contract::CampaignId(id),
+        name: "Clause Probe".into(),
+        market_id: MARKET_RIDESHARE,
+        destination: "leo".into(),
+        destination_display: "LEO".into(),
+        payload_kg: 300.0,
+        payment_per_mission: 4_000_000.0,
+        missions_total: missions,
+        missions_issued: 0,
+        missions_missed: 0,
+        next_issue_date: gs.date,
+        interval_days: 1,
+        status: CampaignStatus::Won { by_player: true, company: "Test".into() },
+    }
+}
+
+/// Missing a program mission costs the normal expiry hit PLUS the
+/// configured program multiplier: total = expiry_penalty x severity x
+/// (1 + campaign_miss_rep_penalty). Locks the strike counter and the
+/// CampaignMissionMissed event alongside the arithmetic.
+#[test]
+fn missed_mission_takes_extra_rep_hit_and_strikes() {
+    let mut gs = campaign_world(50);
+    let cid = rocket_tycoon::contract::CampaignId(8001);
+    gs.active_campaigns.push(won_campaign_fixture(&gs, 8001, 4));
+
+    // Issue mission 1, then force it overdue.
+    gs.advance_day();
+    let mission = gs.player_company.active_contracts.iter_mut()
+        .find(|c| c.campaign_id == Some(cid))
+        .expect("mission 1 should have issued pre-accepted");
+    mission.deadline = gs.date;
+    let severity = gs.markets.iter()
+        .find(|m| m.id == MARKET_RIDESHARE).unwrap().failure_severity;
+    let expiry_before = gs.player_company.reputation.expiry_factor;
+
+    let events = gs.advance_day();
+
+    let expected_drop = gs.balance.reputation.expiry_penalty * severity
+        * (1.0 + gs.balance.markets.campaign_miss_rep_penalty);
+    let actual_drop = expiry_before - gs.player_company.reputation.expiry_factor;
+    assert!(
+        (actual_drop - expected_drop).abs() < 1e-9,
+        "miss should cost normal + program hit: expected {expected_drop}, got {actual_drop}",
+    );
+    let c = gs.active_campaigns.iter().find(|c| c.id == cid)
+        .expect("one strike does not cancel a program");
+    assert_eq!(c.missions_missed, 1);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            rocket_tycoon::event::GameEvent::CampaignMissionMissed { misses: 1, max_misses: 2, .. },
+        )),
+        "the strike should be announced with its count, got {events:?}",
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e, rocket_tycoon::event::GameEvent::CampaignCancelled { .. },
+        )),
+        "one strike must not cancel",
+    );
+}
+
+/// At `campaign_max_misses` strikes with missions still unissued, the
+/// customer cancels the remainder: the campaign is dropped, unissued
+/// missions never appear, the cancel hit lands on top, and the event
+/// is Critical for the player.
+#[test]
+fn program_cancelled_after_max_misses() {
+    let mut gs = campaign_world(51);
+    let cid = rocket_tycoon::contract::CampaignId(8002);
+    // 5 missions: with daily issuance, day N issues mission N before
+    // day N's expiry lands the strike, so cancellation on the third
+    // day happens with missions 1-3 out the door and 4-5 forfeited.
+    gs.active_campaigns.push(won_campaign_fixture(&gs, 8002, 5));
+
+    let severity = gs.markets.iter()
+        .find(|m| m.id == MARKET_RIDESHARE).unwrap().failure_severity;
+    let expiry_before = gs.player_company.reputation.expiry_factor;
+
+    // Strike 1: issue mission 1, expire it.
+    gs.advance_day();
+    gs.player_company.active_contracts.iter_mut()
+        .find(|c| c.campaign_id == Some(cid))
+        .expect("mission 1 issued")
+        .deadline = gs.date;
+    gs.advance_day();
+
+    // Strike 2 (issued the same tick that expired mission 1): expire
+    // mission 2 → cancellation with 2 missions unissued.
+    gs.player_company.active_contracts.iter_mut()
+        .find(|c| c.campaign_id == Some(cid))
+        .expect("mission 2 issued")
+        .deadline = gs.date;
+    let events = gs.advance_day();
+
+    let cancelled = events.iter().find_map(|e| match e {
+        rocket_tycoon::event::GameEvent::CampaignCancelled {
+            by_player, missions_remaining, ..
+        } => Some((*by_player, *missions_remaining)),
+        _ => None,
+    });
+    let (by_player, remaining) = cancelled
+        .unwrap_or_else(|| panic!("second strike should cancel, got {events:?}"));
+    assert!(by_player, "the player's program was cancelled");
+    assert_eq!(remaining, 2, "missions 4 and 5 were never issued");
+    assert!(
+        gs.active_campaigns.iter().all(|c| c.id != cid),
+        "a cancelled campaign is dropped immediately",
+    );
+    assert!(
+        rocket_tycoon::event::GameEvent::CampaignCancelled {
+            program: String::new(), company: String::new(),
+            by_player: true, missions_remaining: 0,
+        }.importance() == rocket_tycoon::event::EventImportance::Critical,
+        "a player cancellation is Critical",
+    );
+
+    // Two misses (normal + program each) plus the one-time cancel hit.
+    let unit = gs.balance.reputation.expiry_penalty * severity;
+    let expected_drop = 2.0 * unit * (1.0 + gs.balance.markets.campaign_miss_rep_penalty)
+        + unit * gs.balance.markets.campaign_cancel_rep_penalty;
+    let actual_drop = expiry_before - gs.player_company.reputation.expiry_factor;
+    assert!(
+        (actual_drop - expected_drop).abs() < 1e-9,
+        "cancellation arithmetic: expected {expected_drop}, got {actual_drop}",
+    );
+
+    // Mission 3 slipped out the door on the cancellation tick (issue
+    // runs before expiry), but the forfeited missions 4 and 5 must
+    // never appear.
+    for _ in 0..5 {
+        gs.advance_day();
+    }
+    let issued: Vec<&str> = gs.player_company.active_contracts.iter()
+        .filter(|c| c.campaign_id == Some(cid))
+        .map(|c| c.name.as_str())
+        .collect();
+    assert!(
+        issued.iter().all(|n| !n.contains("Flight 4") && !n.contains("Flight 5")),
+        "forfeited missions must never issue, got {issued:?}",
+    );
+}
+
+/// Q1 rule: an announcement pauses the game only when some player
+/// Testing design can lift the payload (with the shared bid margin);
+/// programs beyond the fleet are Notable ticker news, liftable ones
+/// are Critical decision points.
+#[test]
+fn announcement_pauses_only_when_liftable() {
+    use rocket_tycoon::event::{EventImportance, GameEvent};
+
+    // Case 1: fresh company, no Testing design → no pause, Notable.
+    let mut gs = campaign_world(60);
+    let mut announced = None;
+    for _ in 0..70u32 {
+        gs.speed = GameSpeed::Normal;
+        let events = gs.advance_day();
+        if let Some(e) = events.iter().find(|e| matches!(e, GameEvent::CampaignAnnounced { .. })) {
+            announced = Some(e.clone());
+            break;
+        }
+    }
+    let evt = announced.expect("a campaign should announce within 70 days");
+    match &evt {
+        GameEvent::CampaignAnnounced { liftable, .. } => {
+            assert!(!liftable, "no Testing design → not liftable");
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(evt.importance(), EventImportance::Notable);
+    assert_eq!(gs.speed, GameSpeed::Normal, "an unliftable announcement must not pause");
+
+    // Case 2: graft DinoSoar's Testing-status Brontosaur onto the
+    // player (the tests/bid_rules.rs pattern) → pause, Critical.
+    let mut config = BalanceConfig::default();
+    config.competitor.enabled = false;
+    let arch = config.markets.archetypes.iter_mut()
+        .find(|a| a.key == "market_rideshare").unwrap();
+    arch.campaign = Some(CampaignSpec {
+        spawn_chance_per_month: 1.0,
+        mission_count_range: (2, 2),
+        interval_days_range: (30, 30),
+        discount_range: (0.1, 0.1),
+        program_names: vec!["Liftable Program".into()],
+        bid_window_days: 20,
+    });
+    let mut gs = GameState::with_balance("Test".into(), 61, config.clone());
+    let dino = rocket_tycoon::competitor::realize_dinosoar(&gs.seed, &config);
+    gs.player_company.rocket_projects = dino.company.rocket_projects.clone();
+    gs.player_company.engine_projects = dino.company.engine_projects.clone();
+
+    let mut announced = None;
+    for _ in 0..70u32 {
+        gs.speed = GameSpeed::Normal;
+        let events = gs.advance_day();
+        if let Some(e) = events.iter().find(|e| matches!(e, GameEvent::CampaignAnnounced { .. })) {
+            announced = Some(e.clone());
+            break;
+        }
+    }
+    let evt = announced.expect("a campaign should announce within 70 days");
+    match &evt {
+        GameEvent::CampaignAnnounced { liftable, .. } => {
+            assert!(liftable, "a Testing design that clears the payload → liftable");
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(evt.importance(), EventImportance::Critical);
+    assert_eq!(gs.speed, GameSpeed::Paused, "a liftable announcement stops the clock");
 }
 
 #[test]

@@ -53,6 +53,7 @@ fn contested_campaign(id: u64, name: &str, bid_deadline: GameDate, next_issue_da
         payment_per_mission: 200_000_000.0,
         missions_total: 3,
         missions_issued: 0,
+        missions_missed: 0,
         next_issue_date,
         interval_days: 30,
         status: CampaignStatus::Soliciting {
@@ -156,6 +157,21 @@ fn dino_outbids_expensive_player() {
         !gs.available_contracts.iter().any(|c| c.campaign_id == Some(cid)),
         "seed {seed}: a resolved campaign's missions never pass through the open market",
     );
+
+    // The loss lands in the price-discovery history: winner's public
+    // per-mission price, the player's own losing bid, block size.
+    let record = gs.award_history.iter().rev()
+        .find(|r| r.contract_name == program)
+        .expect("block loss should be recorded");
+    assert_eq!(record.missions, Some(3));
+    match &record.outcome {
+        rocket_tycoon::contract::AwardOutcome::CompetitorWon { company, amount, player_bid: pb } => {
+            assert_eq!(company, "DinoSoar");
+            assert_eq!(*amount, expected_bid);
+            assert_eq!(*pb, Some(player_bid));
+        }
+        other => panic!("seed {seed}: expected CompetitorWon record, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------
@@ -298,6 +314,7 @@ fn dino_ignores_small_payload_blocks() {
         payment_per_mission: 4_000_000.0,
         missions_total: 3,
         missions_issued: 0,
+        missions_missed: 0,
         next_issue_date: gs.date,
         interval_days: 30,
         status: CampaignStatus::Soliciting {
@@ -414,6 +431,78 @@ fn dino_block_missions_launch_on_cadence() {
     assert!(
         gs.competitors[0].scheduled_launches.iter().all(|sl| !mission_ids.contains(&sl.contract_id)),
         "seed {seed}: none of this campaign's missions should still have a pending scheduled launch",
+    );
+}
+
+// ---------------------------------------------------------------
+// 5b. Dino eats the same program clause.
+// ---------------------------------------------------------------
+
+/// The program clause binds every winner: when DinoSoar lets a won
+/// mission expire, the contract leaves its books, its scheduled launch
+/// is dropped, its reputation takes the normal + program hit, and the
+/// campaign records the strike with a public CampaignMissionMissed.
+#[test]
+fn dino_missed_mission_strikes_the_clause() {
+    let seed = 7107;
+    let mut gs = fresh_game(seed);
+
+    let bid_deadline = gs.date.add_days(2);
+    let cid = CampaignId(7010);
+    let program = "Overreach Program";
+    gs.active_campaigns.push(contested_campaign(7010, program, bid_deadline, gs.date));
+
+    while gs.date < bid_deadline {
+        gs.advance_day();
+    }
+    let events = gs.advance_day();
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::CampaignAwardedToCompetitor { .. })),
+        "seed {seed}: expected DinoSoar to win {program} unopposed, got {events:?}",
+    );
+
+    // Force the issued mission overdue before its scheduled launch
+    // day (launch = issue + 30-day lead, so an immediate deadline
+    // always beats it).
+    let mission_id = {
+        let c = gs.competitors[0].company.active_contracts.iter_mut()
+            .find(|c| c.campaign_id == Some(cid))
+            .expect("Flight 1 should be on DinoSoar's books");
+        c.deadline = gs.date;
+        c.id
+    };
+    let expiry_before = gs.competitors[0].company.reputation.expiry_factor;
+    let severity = gs.markets.iter()
+        .find(|m| m.id == MARKET_GEO_COMSATS).unwrap().failure_severity;
+
+    let events = gs.advance_day();
+
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            GameEvent::CampaignMissionMissed { company, misses: 1, .. } if company == "DinoSoar",
+        )),
+        "seed {seed}: the strike should be public news, got {events:?}",
+    );
+    let expected_drop = gs.balance.reputation.expiry_penalty * severity
+        * (1.0 + gs.balance.markets.campaign_miss_rep_penalty);
+    let actual_drop = expiry_before - gs.competitors[0].company.reputation.expiry_factor;
+    assert!(
+        (actual_drop - expected_drop).abs() < 1e-9,
+        "seed {seed}: dino's miss should cost normal + program hit \
+         (expected {expected_drop}, got {actual_drop})",
+    );
+    assert!(
+        !gs.competitors[0].company.active_contracts.iter().any(|c| c.id == mission_id),
+        "seed {seed}: the expired mission should leave DinoSoar's books",
+    );
+    assert!(
+        !gs.competitors[0].scheduled_launches.iter().any(|sl| sl.contract_id == mission_id),
+        "seed {seed}: the expired mission's scheduled launch should be dropped",
+    );
+    assert_eq!(
+        gs.active_campaigns.iter().find(|c| c.id == cid).unwrap().missions_missed, 1,
+        "seed {seed}: the campaign should carry the strike",
     );
 }
 

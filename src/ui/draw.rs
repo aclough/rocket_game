@@ -1225,7 +1225,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(" Contracts  [B] Bid / Accept  [R] Bid Rules  [H] History ");
+        .title(" Contracts  [B] Bid / Accept  [R] Bid Rules  [P] Programs  [H] History ");
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -2380,10 +2380,15 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                         Color::Yellow,
                     ),
                 };
+                // Campaign block awards: amounts are per mission, so
+                // tag the row with the block size.
+                let block_tag = r.missions
+                    .map(|n| format!(" x{n}"))
+                    .unwrap_or_default();
                 lines.push(Line::from(format!(
-                    "  {:04}-{:02}-{:02}  {:<18} {:>6.0} kg →{:<4} {}",
+                    "  {:04}-{:02}-{:02}  {:<18} {:>6.0} kg →{:<4} {}{}",
                     r.date.year, r.date.month, r.date.day,
-                    market, r.payload_kg, dest, outcome,
+                    market, r.payload_kg, dest, outcome, block_tag,
                 )).style(Style::default().fg(color)));
             }
             if app.game.award_history.is_empty() {
@@ -2392,6 +2397,94 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(" Award History ")
+                .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::Campaigns { selected } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from("  Anchor-customer programs: one sealed price per mission"),
+                Line::from("  wins the whole block. Enter/B bids on a soliciting"),
+                Line::from("  program, ↑/↓ select, Esc closes."),
+                Line::from(""),
+            ];
+            for (i, c) in app.game.active_campaigns.iter().enumerate() {
+                let market: String = app.game.markets.iter()
+                    .find(|m| m.id == c.market_id)
+                    .map(|m| m.name.chars().take(18).collect())
+                    .unwrap_or_else(|| "?".into());
+                let marker = if i == *selected { "▶ " } else { "  " };
+                // Status is strictly public knowledge: bids close /
+                // your own sealed bid / the announced winning price.
+                // The hidden reference and ceiling never render.
+                let (status, color) = match &c.status {
+                    crate::contract::CampaignStatus::Soliciting { bid_deadline, player_bid, .. } => {
+                        let bid = player_bid
+                            .map(|b| format!("  your bid {}/ea", format_money(b)))
+                            .unwrap_or_default();
+                        (format!(
+                            "bids close {:04}-{:02}-{:02}{}",
+                            bid_deadline.year, bid_deadline.month, bid_deadline.day, bid,
+                        ), Color::Yellow)
+                    }
+                    crate::contract::CampaignStatus::Won { by_player, company } => {
+                        let holder = if *by_player { "yours" } else { company.as_str() };
+                        let strikes = if c.missions_missed > 0 {
+                            format!("  ▲{} missed", c.missions_missed)
+                        } else {
+                            String::new()
+                        };
+                        (format!(
+                            "{holder} at {}/ea — flight {}/{}{}",
+                            format_money(c.payment_per_mission),
+                            c.missions_issued, c.missions_total, strikes,
+                        ), if *by_player { Color::Green } else { Color::Red })
+                    }
+                };
+                lines.push(Line::from(format!(
+                    "  {marker}{:<24} {:<18} {:>6.0} kg →{:<4} x{}",
+                    c.name.chars().take(24).collect::<String>(),
+                    market, c.payload_kg, c.destination_display, c.missions_total,
+                )));
+                lines.push(Line::from(format!("        {status}"))
+                    .style(Style::default().fg(color)));
+            }
+            if app.game.active_campaigns.is_empty() {
+                lines.push(Line::from("  (no active programs — announcements appear in Events)"));
+            }
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Programs ")
+                .style(Style::default().fg(Color::Yellow));
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, modal_area);
+        }
+        InputMode::CampaignBidEntry { campaign_id, buffer, .. } => {
+            let (name, missions) = app.game.active_campaigns.iter()
+                .find(|c| c.id == *campaign_id)
+                .map(|c| (c.name.clone(), c.missions_total))
+                .unwrap_or_default();
+            let total = buffer.trim().parse::<f64>().ok()
+                .filter(|m| *m > 0.0)
+                .map(|m| format!(
+                    "  Block total: {} over {} missions",
+                    format_money(m * 1_000_000.0 * missions as f64), missions,
+                ))
+                .unwrap_or_default();
+            let lines = vec![
+                Line::from(""),
+                Line::from(format!("  {} — {} missions", name, missions)),
+                Line::from(""),
+                Line::from("  Enter sealed price per mission in $M"),
+                Line::from("  (Enter to submit, Esc to cancel):"),
+                Line::from(""),
+                Line::from(format!("  > {}█  ($M per mission)", buffer)),
+                Line::from(total),
+            ];
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Block Bid ")
                 .style(Style::default().fg(Color::Yellow));
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, modal_area);

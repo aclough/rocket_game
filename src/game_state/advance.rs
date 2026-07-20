@@ -360,6 +360,32 @@ impl GameState {
                     contract::CampaignStatus::Soliciting { bid_deadline, .. } => bid_deadline,
                     _ => self.date,
                 };
+                // Same capability rule as the bid-rule engine: a
+                // Testing design that clears the payload with the
+                // shared safety margin. Liftable programs stop the
+                // clock — a block commitment is a decision, not a
+                // ticker item.
+                let dest = campaign.destination.clone();
+                let mut liftable = false;
+                for rp in &self.player_company.rocket_projects {
+                    if !matches!(rp.status,
+                        crate::rocket_project::RocketDesignStatus::Testing { .. })
+                    {
+                        continue;
+                    }
+                    let cap = *self.payload_capability_cache
+                        .entry((rp.project_id, rp.revision, dest.clone()))
+                        .or_insert_with(|| crate::rocket_project::max_payload_to(
+                            &rp.design, "earth_surface", &dest,
+                        ));
+                    if campaign.payload_kg <= cap * crate::game_state::BID_PAYLOAD_MARGIN {
+                        liftable = true;
+                        break;
+                    }
+                }
+                if liftable {
+                    self.speed = GameSpeed::Paused;
+                }
                 let evt = GameEvent::CampaignAnnounced {
                     program: campaign.name.clone(),
                     market_name,
@@ -367,6 +393,7 @@ impl GameState {
                     payload_kg: campaign.payload_kg,
                     destination: campaign.destination_display.clone(),
                     bid_deadline,
+                    liftable,
                 };
                 self.event_log.push(self.date, evt.clone());
                 events.push(evt);
@@ -393,8 +420,10 @@ impl GameState {
         // than any delivery deadline, so awards happen first).
         self.resolve_bids(&mut events);
 
-        // Expire contracts past deadline
+        // Expire contracts past deadline (player, then competitors'
+        // overdue campaign missions — both feed the program clause).
         self.expire_contracts(&mut events);
+        self.expire_competitor_campaign_missions(&mut events);
 
         // Fly competitors' awarded contracts that reached their
         // scheduled launch day (abstract launches — real inventory,

@@ -96,6 +96,9 @@ pub enum GameEvent {
     EconomicShift { condition: String, description: String },
     /// An anchor customer announced a multi-mission program and opened
     /// sealed block bidding (one price per mission for the whole block).
+    /// `liftable` = some player Testing design can carry the payload —
+    /// those announcements are a pausing decision point; the rest are
+    /// background market news.
     CampaignAnnounced {
         program: String,
         market_name: String,
@@ -103,6 +106,7 @@ pub enum GameEvent {
         payload_kg: f64,
         destination: String,
         bid_deadline: crate::calendar::GameDate,
+        liftable: bool,
     },
     /// The player sealed a block bid on a campaign (per-mission price).
     CampaignBidPlaced { program: String, amount: f64, missions: u32 },
@@ -125,6 +129,23 @@ pub enum GameEvent {
     /// A won campaign issued its next mission as a pre-accepted
     /// contract at the block price.
     CampaignMissionIssued { contract_name: String, amount: f64 },
+    /// A program's winner let a mission expire — a strike against the
+    /// program clause (`misses`/`max_misses` used).
+    CampaignMissionMissed {
+        program: String,
+        company: String,
+        contract_name: String,
+        misses: u32,
+        max_misses: u32,
+    },
+    /// The customer cancelled the remainder of a program after too
+    /// many missed missions.
+    CampaignCancelled {
+        program: String,
+        company: String,
+        by_player: bool,
+        missions_remaining: u32,
+    },
 }
 
 impl fmt::Display for GameEvent {
@@ -268,7 +289,7 @@ impl fmt::Display for GameEvent {
             GameEvent::EconomicShift { condition, description } =>
                 write!(f, "Economic shift — {}: {}", condition, description),
             GameEvent::CampaignAnnounced {
-                program, market_name, missions, payload_kg, destination, bid_deadline,
+                program, market_name, missions, payload_kg, destination, bid_deadline, ..
             } =>
                 write!(f, "New program: {} ({}) — {} flights of {:.0} kg to {}, block bids close {}",
                     program, market_name, missions, payload_kg, destination, bid_deadline),
@@ -293,6 +314,12 @@ impl fmt::Display for GameEvent {
             GameEvent::CampaignMissionIssued { contract_name, amount } =>
                 write!(f, "Program mission issued: {} at {}",
                     contract_name, crate::resources::format_money(*amount)),
+            GameEvent::CampaignMissionMissed { program, company, contract_name, misses, max_misses } =>
+                write!(f, "Program mission missed: {} let {} expire ({} strike {}/{})",
+                    company, contract_name, program, misses, max_misses),
+            GameEvent::CampaignCancelled { program, company, missions_remaining, .. } =>
+                write!(f, "Program cancelled: the customer pulled {} from {} after repeated misses ({} missions forfeited)",
+                    program, company, missions_remaining),
         }
     }
 }
@@ -370,10 +397,6 @@ impl GameEvent {
             | GameEvent::ImprovementDiscovered { .. }
             | GameEvent::ImprovementActualized { .. }
             | GameEvent::TechDeficienciesFound { .. }
-            // Announcement importance is Notable for now; the campaign
-            // redesign's Task 3 upgrades liftable announcements to a
-            // pausing decision event.
-            | GameEvent::CampaignAnnounced { .. }
             | GameEvent::CampaignBidPlaced { .. }
             | GameEvent::CampaignAwarded { .. }
             | GameEvent::CampaignBidRejected { .. }
@@ -381,7 +404,19 @@ impl GameEvent {
             // the price sets the market), unlike routine per-contract
             // competitor awards.
             | GameEvent::CampaignAwardedToCompetitor { .. }
-            | GameEvent::CampaignMissionIssued { .. } => EventImportance::Notable,
+            | GameEvent::CampaignMissionIssued { .. }
+            | GameEvent::CampaignMissionMissed { .. } => EventImportance::Notable,
+            // Losing your own program is a Critical stop-the-presses
+            // moment; a competitor fumbling theirs is market news.
+            GameEvent::CampaignCancelled { by_player, .. } => {
+                if *by_player { EventImportance::Critical } else { EventImportance::Notable }
+            }
+            // A program you could actually fly is a pausing decision
+            // point (the game stops at announcement); one beyond your
+            // fleet is background market news.
+            GameEvent::CampaignAnnounced { liftable, .. } => {
+                if *liftable { EventImportance::Critical } else { EventImportance::Notable }
+            }
             GameEvent::SpacecraftLost { .. }
             | GameEvent::EconomicShift { .. } => EventImportance::Critical,
         }

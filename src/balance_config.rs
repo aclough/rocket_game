@@ -316,10 +316,27 @@ pub struct MarketsConfig {
     /// Width of the "near target" band in the logistic reputation
     /// factor used by award scoring (see `contract::rep_factor`).
     pub rep_scale: f64,
+    /// Campaign clause: extra reputation hit for missing a won
+    /// program's mission, as a multiplier on the normal expiry hit
+    /// (2.0 = the miss costs the normal hit plus twice it again).
+    #[serde(default = "default_campaign_miss_rep_penalty")]
+    pub campaign_miss_rep_penalty: f64,
+    /// Campaign clause: missed missions before the customer cancels
+    /// the remainder of the program.
+    #[serde(default = "default_campaign_max_misses")]
+    pub campaign_max_misses: u32,
+    /// Campaign clause: the one-time reputation hit when a program is
+    /// cancelled, as a multiplier on the normal expiry hit.
+    #[serde(default = "default_campaign_cancel_rep_penalty")]
+    pub campaign_cancel_rep_penalty: f64,
     /// Market templates + perturbation specs, realized per seed at
     /// game start (see [`crate::contract::MarketArchetype`]).
     pub archetypes: Vec<MarketArchetype>,
 }
+
+fn default_campaign_miss_rep_penalty() -> f64 { 2.0 }
+fn default_campaign_max_misses() -> u32 { 2 }
+fn default_campaign_cancel_rep_penalty() -> f64 { 4.0 }
 
 impl Default for MarketsConfig {
     fn default() -> Self {
@@ -330,6 +347,9 @@ impl Default for MarketsConfig {
             payment_variance_max: 1.2,
             bid_window_days: 30,
             rep_scale: 10.0,
+            campaign_miss_rep_penalty: default_campaign_miss_rep_penalty(),
+            campaign_max_misses: default_campaign_max_misses(),
+            campaign_cancel_rep_penalty: default_campaign_cancel_rep_penalty(),
             archetypes: crate::contract::default_archetypes(),
         }
     }
@@ -346,6 +366,12 @@ impl MarketsConfig {
         }
         if self.rep_scale <= 0.0 {
             return Err(format!("rep_scale {} must be positive", self.rep_scale));
+        }
+        if self.campaign_miss_rep_penalty < 0.0 || self.campaign_cancel_rep_penalty < 0.0 {
+            return Err("campaign miss/cancel rep penalties must be >= 0".into());
+        }
+        if self.campaign_max_misses < 1 {
+            return Err("campaign_max_misses must be >= 1".into());
         }
         let mut keys = std::collections::HashSet::new();
         let mut ids = std::collections::HashSet::new();

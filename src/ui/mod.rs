@@ -422,6 +422,17 @@ pub enum InputMode {
     BidRules { selected: usize },
     /// Browsing observed award outcomes (price-discovery history).
     AwardHistory { scroll: usize },
+    /// Browsing anchor-customer programs; Enter/B on a soliciting one
+    /// opens block-bid entry. Auto-opens when a liftable program is
+    /// announced (the announcement pauses the game).
+    Campaigns { selected: usize },
+    /// Entering a sealed block bid (per-mission price in $M) on a
+    /// soliciting campaign. Esc returns to the programs list.
+    CampaignBidEntry {
+        campaign_id: crate::contract::CampaignId,
+        selected: usize,
+        buffer: String,
+    },
     /// Persistent rocket designer screen.
     RocketDesigner { state: Box<RocketDesignerState> },
     /// Per-stage power-source editor opened from the rocket designer.
@@ -875,6 +886,22 @@ impl App {
                         self.active_tab = idx;
                     }
                 }
+                // A liftable program announcement already paused the
+                // game; open the programs modal on it so the block-bid
+                // decision is one keypress away.
+                if matches!(self.input_mode, InputMode::Normal) {
+                    if let Some(crate::event::GameEvent::CampaignAnnounced { program, .. }) =
+                        day_events.iter().find(|e| matches!(
+                            e,
+                            crate::event::GameEvent::CampaignAnnounced { liftable: true, .. },
+                        ))
+                    {
+                        let selected = self.game.active_campaigns.iter()
+                            .position(|c| c.name == *program)
+                            .unwrap_or(0);
+                        self.enter_modal(InputMode::Campaigns { selected });
+                    }
+                }
                 last_tick = Instant::now();
             }
         }
@@ -1240,6 +1267,9 @@ impl App {
             }
             KeyCode::Char('h') | KeyCode::Char('H') => {
                 self.enter_modal(InputMode::AwardHistory { scroll: 0 });
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                self.enter_modal(InputMode::Campaigns { selected: 0 });
             }
             _ => {}
         }
@@ -1620,6 +1650,78 @@ impl App {
                         if *scroll + 1 < len => {
                             *scroll += 1;
                         }
+                    _ => {}
+                }
+            }
+            InputMode::Campaigns { selected } => {
+                let len = self.game.active_campaigns.len();
+                match key {
+                    KeyCode::Esc | KeyCode::Char('p') | KeyCode::Char('P') => {
+                        self.exit_modal();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        *selected = selected.saturating_sub(1);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') if *selected + 1 < len => {
+                        *selected += 1;
+                    }
+                    KeyCode::Enter | KeyCode::Char('b') | KeyCode::Char('B') => {
+                        let sel = *selected;
+                        let Some(c) = self.game.active_campaigns.get(sel) else {
+                            return;
+                        };
+                        match c.status {
+                            crate::contract::CampaignStatus::Soliciting { player_bid, .. } => {
+                                // Seed the buffer with any pending bid
+                                // so it can be revised.
+                                let buffer = player_bid
+                                    .map(|b| format!("{}", b / 1_000_000.0))
+                                    .unwrap_or_default();
+                                let id = c.id;
+                                self.input_mode = InputMode::CampaignBidEntry {
+                                    campaign_id: id,
+                                    selected: sel,
+                                    buffer,
+                                };
+                            }
+                            crate::contract::CampaignStatus::Won { .. } => {
+                                self.status_message =
+                                    Some("Program already awarded".into());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            InputMode::CampaignBidEntry { campaign_id, selected, buffer } => {
+                match key {
+                    KeyCode::Esc => {
+                        self.input_mode = InputMode::Campaigns { selected: *selected };
+                    }
+                    KeyCode::Enter => {
+                        let id = *campaign_id;
+                        let back = *selected;
+                        let parsed = buffer.trim().parse::<f64>();
+                        match parsed {
+                            Ok(m) if m > 0.0 => {
+                                let bid = m * 1_000_000.0;
+                                if let Some(evt) = self.game.place_campaign_bid(id, bid) {
+                                    self.status_message = Some(format!("{}", evt));
+                                } else {
+                                    self.status_message = Some("Could not place block bid".into());
+                                }
+                            }
+                            _ => {
+                                self.status_message =
+                                    Some("Bid must be a positive number of $M per mission".into());
+                            }
+                        }
+                        self.input_mode = InputMode::Campaigns { selected: back };
+                    }
+                    KeyCode::Backspace => { buffer.pop(); }
+                    KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
+                        buffer.push(c);
+                    }
                     _ => {}
                 }
             }
@@ -3402,6 +3504,7 @@ mod market_discovery_render_tests {
             payment_per_mission: 4_050_000.0,
             missions_total: 4,
             missions_issued: 0,
+            missions_missed: 0,
             next_issue_date: game.date,
             interval_days: 90,
             status: crate::contract::CampaignStatus::Won {
@@ -3515,6 +3618,7 @@ mod market_discovery_render_tests {
             contract_name: name.into(),
             destination: "gto".into(),
             payload_kg: 4_200.0,
+            missions: None,
             outcome,
         };
         game.award_history.push(mk("WonSat", AwardOutcome::PlayerWon {
@@ -3559,6 +3663,145 @@ mod market_discovery_render_tests {
                 "hidden parameter `{leak}` leaked into the award-history modal",
             );
         }
+    }
+
+    /// A campaign block award renders in the history with its block
+    /// size (the amount is per mission).
+    #[test]
+    fn award_history_tags_block_awards() {
+        use crate::contract::{AwardOutcome, AwardRecord, MARKET_GEO_COMSATS};
+
+        let mut game = crate::game_state::GameState::new(
+            "History Test".into(), 100_000_000.0, 7,
+        );
+        game.award_history.push(AwardRecord {
+            date: game.date,
+            market_id: MARKET_GEO_COMSATS,
+            contract_name: "Meridian Fleet".into(),
+            destination: "gto".into(),
+            payload_kg: 5_000.0,
+            missions: Some(3),
+            outcome: AwardOutcome::PlayerWon { amount: 88_000_000.0 },
+        });
+        let mut app = App::new(game);
+        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.handle_key(KeyCode::Char('h'));
+
+        let backend = TestBackend::new(140, 50);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw::draw(frame, &app)).unwrap();
+        let text: String = terminal.backend().buffer()
+            .content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            text.contains("x3"),
+            "a block award should carry its mission count",
+        );
+    }
+
+    /// 'p' on the Contracts pane opens the programs modal: soliciting
+    /// programs show only public facts (never the hidden reference or
+    /// ceiling), Enter opens block-bid entry with a live block total,
+    /// and a committed bid lands on the campaign and renders back.
+    #[test]
+    fn p_opens_programs_modal_bids_and_hides_internals() {
+        use crate::contract::{Campaign, CampaignId, CampaignStatus, MARKET_GEO_COMSATS};
+
+        let mut game = crate::game_state::GameState::new(
+            "Programs Test".into(), 100_000_000.0, 7,
+        );
+        // Distinctive hidden numbers: if either renders anywhere the
+        // leak assertions below trip.
+        let mk = |id: u64, name: &str, status: CampaignStatus| Campaign {
+            id: CampaignId(id),
+            name: name.into(),
+            market_id: MARKET_GEO_COMSATS,
+            destination: "gto".into(),
+            destination_display: "GTO".into(),
+            payload_kg: 5_000.0,
+            payment_per_mission: 137_930_000.0,
+            missions_total: 3,
+            missions_issued: 1,
+            missions_missed: 0,
+            next_issue_date: game.date,
+            interval_days: 30,
+            status,
+        };
+        game.active_campaigns.push(mk(1, "Sealed Program", CampaignStatus::Soliciting {
+            bid_deadline: game.date.add_days(20),
+            budget_ceiling_per_mission: 262_070_000.0,
+            player_bid: None,
+        }));
+        game.active_campaigns.push(mk(2, "Rival Program", CampaignStatus::Won {
+            by_player: false,
+            company: "DinoSoar".into(),
+        }));
+
+        let mut app = App::new(game);
+        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.handle_key(KeyCode::Char('p'));
+        assert!(
+            matches!(app.input_mode, InputMode::Campaigns { selected: 0 }),
+            "'p' should open the programs modal",
+        );
+
+        let render = |app: &App| -> String {
+            let backend = TestBackend::new(140, 50);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|frame| draw::draw(frame, app)).unwrap();
+            terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+        };
+        let text = render(&app);
+        assert!(text.contains("Programs"), "modal title should render");
+        assert!(text.contains("Sealed Program") && text.contains("Rival Program"));
+        assert!(text.contains("bids close"), "a soliciting program shows its deadline");
+        assert!(
+            text.contains("DinoSoar") && text.contains("1/3"),
+            "a rival-held program shows its holder and flight progress",
+        );
+        // The rival's won price is public news; the soliciting
+        // program's reference must NOT be visible even though it's
+        // the same field.
+        assert!(
+            text.contains("137.9"),
+            "the won program's public price should render",
+        );
+        assert_eq!(
+            text.matches("137.9").count(), 1,
+            "the soliciting program's hidden reference must not render",
+        );
+        assert!(
+            !text.contains("262.1") && !text.contains("262,"),
+            "the hidden ceiling must never render",
+        );
+
+        // Enter on the soliciting program → block-bid entry with a
+        // live block total; Enter commits the sealed bid.
+        app.handle_key(KeyCode::Enter);
+        assert!(
+            matches!(app.input_mode, InputMode::CampaignBidEntry { .. }),
+            "Enter on a soliciting program should open block-bid entry",
+        );
+        for c in "85.5".chars() {
+            app.handle_key(KeyCode::Char(c));
+        }
+        let text = render(&app);
+        assert!(text.contains("per mission"), "entry is priced per mission");
+        assert!(
+            text.contains("Block total") && text.contains("256.5"),
+            "the block total (bid x missions) should render live",
+        );
+        app.handle_key(KeyCode::Enter);
+        assert!(
+            matches!(app.input_mode, InputMode::Campaigns { .. }),
+            "committing the bid returns to the programs list",
+        );
+        let bid = match &app.game.active_campaigns[0].status {
+            CampaignStatus::Soliciting { player_bid, .. } => *player_bid,
+            other => panic!("expected Soliciting, got {other:?}"),
+        };
+        assert_eq!(bid, Some(85_500_000.0), "the sealed bid should land on the campaign");
+        let text = render(&app);
+        assert!(text.contains("your bid"), "the player's own sealed bid renders back");
     }
 }
 
