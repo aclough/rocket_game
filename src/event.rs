@@ -112,6 +112,16 @@ pub enum GameEvent {
     /// The player's block bid exceeded the customer's (undisclosed)
     /// budget and the program found no launcher — it lapses.
     CampaignBidRejected { program: String },
+    /// A competitor won the whole program. The per-mission price is
+    /// public market news; `player_bid` is set when the player bid
+    /// and lost.
+    CampaignAwardedToCompetitor {
+        program: String,
+        company: String,
+        amount: f64,
+        missions: u32,
+        player_bid: Option<f64>,
+    },
     /// A won campaign issued its next mission as a pre-accepted
     /// contract at the block price.
     CampaignMissionIssued { contract_name: String, amount: f64 },
@@ -270,6 +280,16 @@ impl fmt::Display for GameEvent {
                     program, crate::resources::format_money(*amount), missions),
             GameEvent::CampaignBidRejected { program } =>
                 write!(f, "No award on {}: the block bid exceeded the customer's budget", program),
+            GameEvent::CampaignAwardedToCompetitor { program, company, amount, missions, player_bid } => {
+                match player_bid {
+                    Some(b) => write!(f, "Outbid: {} program goes to {} at {}/mission x {} (you bid {})",
+                        program, company,
+                        crate::resources::format_money(*amount), missions,
+                        crate::resources::format_money(*b)),
+                    None => write!(f, "{} program awarded to {} at {}/mission x {}",
+                        program, company, crate::resources::format_money(*amount), missions),
+                }
+            }
             GameEvent::CampaignMissionIssued { contract_name, amount } =>
                 write!(f, "Program mission issued: {} at {}",
                     contract_name, crate::resources::format_money(*amount)),
@@ -357,6 +377,10 @@ impl GameEvent {
             | GameEvent::CampaignBidPlaced { .. }
             | GameEvent::CampaignAwarded { .. }
             | GameEvent::CampaignBidRejected { .. }
+            // Losing a program is always news (programs are rare and
+            // the price sets the market), unlike routine per-contract
+            // competitor awards.
+            | GameEvent::CampaignAwardedToCompetitor { .. }
             | GameEvent::CampaignMissionIssued { .. } => EventImportance::Notable,
             GameEvent::SpacecraftLost { .. }
             | GameEvent::EconomicShift { .. } => EventImportance::Critical,

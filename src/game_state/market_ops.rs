@@ -21,8 +21,20 @@ impl GameState {
             self.balance.markets.deadline_max_days,
         );
         for i in 0..self.active_campaigns.len() {
-            let by_player = match &self.active_campaigns[i].status {
-                contract::CampaignStatus::Won { by_player, .. } => *by_player,
+            // by_player, or the winning competitor's index for a
+            // competitor-won program.
+            let winner_ci = match &self.active_campaigns[i].status {
+                contract::CampaignStatus::Won { by_player: true, .. } => None,
+                contract::CampaignStatus::Won { by_player: false, company } => {
+                    match self.competitors.iter()
+                        .position(|k| k.company.name == *company)
+                    {
+                        Some(ci) => Some(ci),
+                        // Winner vanished (competitor disabled after a
+                        // save): missions still tick away, unserved.
+                        None => continue,
+                    }
+                }
                 contract::CampaignStatus::Soliciting { .. } => continue,
             };
             while self.active_campaigns[i].missions_issued
@@ -43,19 +55,34 @@ impl GameState {
                 let mut c = contract::campaign_contract(
                     campaign, window, &mut rng, &mut self.next_contract_id, self.date,
                 );
-                if by_player {
-                    c.status = contract::ContractStatus::Accepted;
-                    let evt = GameEvent::CampaignMissionIssued {
-                        contract_name: c.name.clone(),
-                        amount: c.payment,
-                    };
-                    self.player_company.active_contracts.push(c);
-                    self.event_log.push(self.date, evt.clone());
-                    events.push(evt);
+                c.status = contract::ContractStatus::Accepted;
+                match winner_ci {
+                    None => {
+                        let evt = GameEvent::CampaignMissionIssued {
+                            contract_name: c.name.clone(),
+                            amount: c.payment,
+                        };
+                        self.player_company.active_contracts.push(c);
+                        self.event_log.push(self.date, evt.clone());
+                        events.push(evt);
+                    }
+                    Some(ci) => {
+                        // The winner's missions schedule abstract
+                        // launches like any competitor award; the
+                        // block award was the news, the launches will
+                        // be the rest.
+                        let launch_date = {
+                            let d = self.date.add_days(self.balance.competitor.launch_lead_days);
+                            if d > c.deadline { c.deadline } else { d }
+                        };
+                        let comp = &mut self.competitors[ci];
+                        comp.scheduled_launches.push(crate::competitor::ScheduledLaunch {
+                            contract_id: c.id,
+                            launch_date,
+                        });
+                        comp.company.active_contracts.push(c);
+                    }
                 }
-                // Competitor-won campaigns schedule abstract launches
-                // instead of player-visible contracts (campaign plan
-                // Task 2); until then a competitor never wins a block.
 
                 let campaign = &mut self.active_campaigns[i];
                 campaign.missions_issued += 1;
@@ -91,12 +118,12 @@ impl GameState {
         Some(evt)
     }
 
-    /// Resolve campaigns whose block-bid window has closed. Scoring is
-    /// the same logistic formula as single solicitations, evaluated
-    /// once for the whole block; the winner's `payment_per_mission`
-    /// becomes the won bid and missions start issuing. With the player
-    /// as sole bidder (campaign plan Task 1) an in-budget bid wins
-    /// outright; competitor block bids enter in Task 2. Unbid programs
+    /// Resolve campaigns whose block-bid window has closed. Bids are
+    /// gathered like single solicitations — the player's sealed price
+    /// first, then each competitor's scripted block bid — and scored
+    /// once for the whole block with the same logistic formula; ties
+    /// break toward the player. The winner's `payment_per_mission`
+    /// becomes the won bid and missions start issuing. Unbid programs
     /// lapse quietly — the customer found no launcher.
     pub(super) fn resolve_campaign_bids(&mut self, events: &mut Vec<GameEvent>) {
         let mut i = 0;
@@ -112,9 +139,45 @@ impl GameState {
                 continue;
             }
 
-            let winner = player_bid.filter(|&bid| bid <= ceiling);
+            let market = self.markets.iter()
+                .find(|m| m.id == self.active_campaigns[i].market_id)
+                .cloned();
+            let rep_scale = self.balance.markets.rep_scale;
+            let score = |bid: f64, rep: f64| {
+                market.as_ref().map_or(0.0, |m| {
+                    contract::bid_score(bid, ceiling, rep, m, rep_scale)
+                })
+            };
+
+            // (bidder, bid): bidder None = player, Some(ci) = competitor.
+            // Player first + strict `>` replacement = ties break toward
+            // the player, exactly like resolve_bids.
+            let mut winner: Option<(Option<usize>, f64)> = None;
+            let mut best_score = f64::NEG_INFINITY;
+            let mut consider = |who: Option<usize>, bid: f64, s: f64| {
+                if s > best_score {
+                    best_score = s;
+                    winner = Some((who, bid));
+                }
+            };
+            if let Some(bid) = player_bid {
+                if bid <= ceiling {
+                    consider(None, bid, score(bid, self.player_company.reputation.total()));
+                }
+            }
+            {
+                let campaign = &self.active_campaigns[i];
+                for (ci, comp) in self.competitors.iter().enumerate() {
+                    if let Some(bid) = comp.compute_block_bid(campaign, &self.balance, &self.seed) {
+                        if bid <= ceiling {
+                            consider(Some(ci), bid, score(bid, comp.company.reputation.total()));
+                        }
+                    }
+                }
+            }
+
             match winner {
-                Some(bid) => {
+                Some((None, bid)) => {
                     let name = self.player_company.name.clone();
                     let campaign = &mut self.active_campaigns[i];
                     campaign.payment_per_mission = bid;
@@ -135,6 +198,26 @@ impl GameState {
                     // Winning a program is a decision point (schedule
                     // builds for the whole block) — stop the clock.
                     self.speed = GameSpeed::Paused;
+                    i += 1;
+                }
+                Some((Some(ci), bid)) => {
+                    let company_name = self.competitors[ci].company.name.clone();
+                    let campaign = &mut self.active_campaigns[i];
+                    campaign.payment_per_mission = bid;
+                    campaign.status = contract::CampaignStatus::Won {
+                        by_player: false,
+                        company: company_name.clone(),
+                    };
+                    campaign.next_issue_date = self.date;
+                    let evt = GameEvent::CampaignAwardedToCompetitor {
+                        program: campaign.name.clone(),
+                        company: company_name,
+                        amount: bid,
+                        missions: campaign.missions_total,
+                        player_bid,
+                    };
+                    self.event_log.push(self.date, evt.clone());
+                    events.push(evt);
                     i += 1;
                 }
                 None => {
@@ -468,10 +551,13 @@ impl GameState {
                             Some((contract, rocket))
                         }
                         (Some(_), None) => {
-                            // The readiness gate makes this unreachable
-                            // (rockets are only consumed here, and every
-                            // award reserves one). Retry defensively.
-                            debug_assert!(false, "competitor launch with no vehicle in stock");
+                            // Out of stock: single awards reserve a
+                            // rocket up front, but a won campaign's
+                            // missions issue on cadence and can outpace
+                            // the line. Retry weekly until a vehicle
+                            // integrates (the miss/cancellation clause
+                            // in campaign plan Task 3 puts a price on
+                            // running this late).
                             comp.scheduled_launches.push(crate::competitor::ScheduledLaunch {
                                 contract_id: launch.contract_id,
                                 launch_date: self.date.add_days(7),

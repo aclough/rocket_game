@@ -681,6 +681,11 @@ pub struct CompetitorConfig {
     /// Symmetric per-contract price noise (0.05 = ±5%), seeded per
     /// contract from the world seed.
     pub bid_jitter: f64,
+    /// Discount on the margin (not the bid) for campaign block bids
+    /// (0.10 = 10% keener): an incumbent prices guaranteed volume
+    /// slightly below its one-off rate. The bid floor still applies.
+    #[serde(default = "default_block_discount")]
+    pub block_discount: f64,
     /// Days between an award and the scripted launch (clamped to the
     /// contract deadline).
     pub launch_lead_days: u32,
@@ -693,6 +698,10 @@ pub struct CompetitorConfig {
     pub failure_skew: f64,
     /// Destinations served and per-destination payload limits.
     pub capability: Vec<DestinationCapability>,
+}
+
+fn default_block_discount() -> f64 {
+    0.10
 }
 
 impl Default for CompetitorConfig {
@@ -714,6 +723,7 @@ impl Default for CompetitorConfig {
             margin_max: 20.0,
             bid_floor: 60_000_000.0,
             bid_jitter: 0.05,
+            block_discount: 0.10,
             launch_lead_days: 30,
             failure_base: 0.003,
             failure_spread: 0.047,
@@ -751,6 +761,11 @@ impl CompetitorConfig {
         }
         if !(0.0..0.5).contains(&self.bid_jitter) {
             return Err(format!("competitor.bid_jitter {} outside [0, 0.5)", self.bid_jitter));
+        }
+        if !(0.0..1.0).contains(&self.block_discount) {
+            return Err(format!(
+                "competitor.block_discount {} outside [0, 1)", self.block_discount,
+            ));
         }
         let max_fail = self.failure_base + self.failure_spread;
         if self.failure_base < 0.0 || self.failure_spread < 0.0 || max_fail > 1.0 {

@@ -75,39 +75,80 @@ impl Competitor {
         }
     }
 
-    /// Whether the catalog vehicle can serve this contract at all
+    /// Whether the catalog vehicle can serve a mission at all
     /// (destination in the capability table, payload within it).
-    pub fn can_lift(&self, contract: &Contract, balance: &BalanceConfig) -> bool {
+    pub fn can_lift(&self, destination: &str, payload_kg: f64, balance: &BalanceConfig) -> bool {
         balance.competitor.capability.iter().any(|cap| {
-            cap.location_id == contract.destination
-                && contract.payload_kg <= cap.max_payload_kg
+            cap.location_id == destination && payload_kg <= cap.max_payload_kg
         })
     }
 
-    /// The scripted sealed bid for a solicitation, or None when the
-    /// competitor declines (can't lift it, or no free stock — the same
-    /// readiness gate the player's rules get in Task 3).
+    /// The one margin-pricing rule behind every scripted bid, or None
+    /// when the competitor declines (can't lift it, or no free stock —
+    /// the same readiness gate the player's rules get).
     ///
-    /// bid = marginal cost × margin, where the margin relaxes from
-    /// `margin_max` (one rocket left) toward `margin_min` as free
-    /// stock grows, jittered per contract from the world seed, and
-    /// never below `bid_floor`.
-    pub fn compute_bid(&self, contract: &Contract, balance: &BalanceConfig, seed: &GameSeed) -> Option<f64> {
+    /// bid = marginal cost × margin × margin_factor, where the margin
+    /// relaxes from `margin_max` (one rocket left) toward `margin_min`
+    /// as free stock grows, jittered per `jitter_key` from the world
+    /// seed, and never below `bid_floor`.
+    fn scripted_bid(
+        &self,
+        destination: &str,
+        payload_kg: f64,
+        jitter_key: &str,
+        margin_factor: f64,
+        balance: &BalanceConfig,
+        seed: &GameSeed,
+    ) -> Option<f64> {
         let cfg = &balance.competitor;
-        if !self.can_lift(contract, balance) {
+        if !self.can_lift(destination, payload_kg, balance) {
             return None;
         }
         let free = self.free_stock();
         if free == 0 {
             return None;
         }
-        let margin = cfg.margin_min + (cfg.margin_max - cfg.margin_min) / free as f64;
+        let margin =
+            (cfg.margin_min + (cfg.margin_max - cfg.margin_min) / free as f64) * margin_factor;
         let mut bid = self.marginal_cost(balance) * margin;
-        let mut rng = seed.world_query(&format!("dino_bid_{}", contract.id.0));
+        let mut rng = seed.world_query(jitter_key);
         let u: f64 = rng.gen();
         bid *= 1.0 + cfg.bid_jitter * (2.0 * u - 1.0);
         bid = bid.max(cfg.bid_floor);
         Some((bid / 10_000.0).round() * 10_000.0)
+    }
+
+    /// The scripted sealed bid for a single solicitation.
+    pub fn compute_bid(&self, contract: &Contract, balance: &BalanceConfig, seed: &GameSeed) -> Option<f64> {
+        self.scripted_bid(
+            &contract.destination,
+            contract.payload_kg,
+            &format!("dino_bid_{}", contract.id.0),
+            1.0,
+            balance,
+            seed,
+        )
+    }
+
+    /// The scripted sealed block bid for a campaign (one price per
+    /// mission): the single-bid rule with the configured volume
+    /// discount on the margin — an incumbent prices guaranteed volume
+    /// slightly keener — jittered per campaign. The bid floor still
+    /// applies, so small-payload programs stay priced out.
+    pub fn compute_block_bid(
+        &self,
+        campaign: &crate::contract::Campaign,
+        balance: &BalanceConfig,
+        seed: &GameSeed,
+    ) -> Option<f64> {
+        self.scripted_bid(
+            &campaign.destination,
+            campaign.payload_kg,
+            &format!("dino_block_bid_{}", campaign.id.0),
+            1.0 - balance.competitor.block_discount,
+            balance,
+            seed,
+        )
     }
 }
 
@@ -358,6 +399,58 @@ mod tests {
             "bid should fall as free stock grows (scarce ${scarce:.0} vs flush ${flush:.0})",
         );
         assert!(flush >= cfg.competitor.bid_floor);
+    }
+
+    #[test]
+    fn test_block_bid_is_discounted_single_bid() {
+        // With jitter zeroed the two rules differ only by the margin
+        // discount, so the relationship is exact.
+        let mut cfg = BalanceConfig::default();
+        cfg.competitor.bid_jitter = 0.0;
+        let seed = GameSeed::new(13);
+        let d = realize_dinosoar(&seed, &cfg);
+        let contract = Contract {
+            destination: "gto".into(),
+            payload_kg: 5_000.0,
+            ..crate::contract::test_support::solicitation_fixture()
+        };
+        let campaign = crate::contract::Campaign {
+            id: crate::contract::CampaignId(1),
+            name: "Discount Probe".into(),
+            market_id: crate::contract::MarketId(1),
+            destination: "gto".into(),
+            destination_display: "GTO".into(),
+            payload_kg: 5_000.0,
+            payment_per_mission: 200_000_000.0,
+            missions_total: 3,
+            missions_issued: 0,
+            next_issue_date: GameDate::default_start(),
+            interval_days: 30,
+            status: crate::contract::CampaignStatus::Soliciting {
+                bid_deadline: GameDate::default_start(),
+                budget_ceiling_per_mission: 240_000_000.0,
+                player_bid: None,
+            },
+        };
+        let single = d.compute_bid(&contract, &cfg, &seed).expect("single bid");
+        let block = d.compute_block_bid(&campaign, &cfg, &seed).expect("block bid");
+        let expected = ((single * (1.0 - cfg.competitor.block_discount)) / 10_000.0).round() * 10_000.0;
+        assert!(
+            (block - expected).abs() < 10_000.0 + 1e-6,
+            "block bid ${block:.0} should be the single bid ${single:.0} with a \
+             {}% keener margin (expected ~${expected:.0})",
+            cfg.competitor.block_discount * 100.0,
+        );
+        assert!(block >= cfg.competitor.bid_floor);
+
+        // The discount never takes a block bid below the floor: even a
+        // total margin collapse stays floored.
+        let mut floor_cfg = cfg.clone();
+        floor_cfg.competitor.margin_min = 1.0;
+        floor_cfg.competitor.margin_max = 1.0;
+        floor_cfg.competitor.block_discount = 0.9;
+        let floored = d.compute_block_bid(&campaign, &floor_cfg, &seed).expect("floored bid");
+        assert_eq!(floored, floor_cfg.competitor.bid_floor);
     }
 
     #[test]
