@@ -94,6 +94,27 @@ pub enum GameEvent {
     TechDeficienciesFound { engine_name: String, tech_name: String, deficiencies: String },
     /// Major economic shift affecting the launch market.
     EconomicShift { condition: String, description: String },
+    /// An anchor customer announced a multi-mission program and opened
+    /// sealed block bidding (one price per mission for the whole block).
+    CampaignAnnounced {
+        program: String,
+        market_name: String,
+        missions: u32,
+        payload_kg: f64,
+        destination: String,
+        bid_deadline: crate::calendar::GameDate,
+    },
+    /// The player sealed a block bid on a campaign (per-mission price).
+    CampaignBidPlaced { program: String, amount: f64, missions: u32 },
+    /// The player won a campaign: every mission will issue pre-accepted
+    /// at this per-mission price.
+    CampaignAwarded { program: String, amount: f64, missions: u32 },
+    /// The player's block bid exceeded the customer's (undisclosed)
+    /// budget and the program found no launcher — it lapses.
+    CampaignBidRejected { program: String },
+    /// A won campaign issued its next mission as a pre-accepted
+    /// contract at the block price.
+    CampaignMissionIssued { contract_name: String, amount: f64 },
 }
 
 impl fmt::Display for GameEvent {
@@ -236,6 +257,22 @@ impl fmt::Display for GameEvent {
                 write!(f, "{} has {} deficiencies: {}", engine_name, tech_name, deficiencies),
             GameEvent::EconomicShift { condition, description } =>
                 write!(f, "Economic shift — {}: {}", condition, description),
+            GameEvent::CampaignAnnounced {
+                program, market_name, missions, payload_kg, destination, bid_deadline,
+            } =>
+                write!(f, "New program: {} ({}) — {} flights of {:.0} kg to {}, block bids close {}",
+                    program, market_name, missions, payload_kg, destination, bid_deadline),
+            GameEvent::CampaignBidPlaced { program, amount, missions } =>
+                write!(f, "Block bid placed: {} at {}/mission x {}",
+                    program, crate::resources::format_money(*amount), missions),
+            GameEvent::CampaignAwarded { program, amount, missions } =>
+                write!(f, "Program won: {} at {}/mission x {}",
+                    program, crate::resources::format_money(*amount), missions),
+            GameEvent::CampaignBidRejected { program } =>
+                write!(f, "No award on {}: the block bid exceeded the customer's budget", program),
+            GameEvent::CampaignMissionIssued { contract_name, amount } =>
+                write!(f, "Program mission issued: {} at {}",
+                    contract_name, crate::resources::format_money(*amount)),
         }
     }
 }
@@ -312,7 +349,15 @@ impl GameEvent {
             | GameEvent::MidFlightFlawActivated { .. }
             | GameEvent::ImprovementDiscovered { .. }
             | GameEvent::ImprovementActualized { .. }
-            | GameEvent::TechDeficienciesFound { .. } => EventImportance::Notable,
+            | GameEvent::TechDeficienciesFound { .. }
+            // Announcement importance is Notable for now; the campaign
+            // redesign's Task 3 upgrades liftable announcements to a
+            // pausing decision event.
+            | GameEvent::CampaignAnnounced { .. }
+            | GameEvent::CampaignBidPlaced { .. }
+            | GameEvent::CampaignAwarded { .. }
+            | GameEvent::CampaignBidRejected { .. }
+            | GameEvent::CampaignMissionIssued { .. } => EventImportance::Notable,
             GameEvent::SpacecraftLost { .. }
             | GameEvent::EconomicShift { .. } => EventImportance::Critical,
         }

@@ -356,13 +356,17 @@ impl GameState {
                     .find(|m| m.id == campaign.market_id)
                     .map(|m| m.name.clone())
                     .unwrap_or_default();
-                let evt = GameEvent::EconomicShift {
-                    condition: format!("New Program: {}", campaign.name),
-                    description: format!(
-                        "{market_name}: {} flights of {:.0} kg to {}, block-buy pricing",
-                        campaign.missions_total, campaign.payload_kg,
-                        campaign.destination_display,
-                    ),
+                let bid_deadline = match campaign.status {
+                    contract::CampaignStatus::Soliciting { bid_deadline, .. } => bid_deadline,
+                    _ => self.date,
+                };
+                let evt = GameEvent::CampaignAnnounced {
+                    program: campaign.name.clone(),
+                    market_name,
+                    missions: campaign.missions_total,
+                    payload_kg: campaign.payload_kg,
+                    destination: campaign.destination_display.clone(),
+                    bid_deadline,
                 };
                 self.event_log.push(self.date, evt.clone());
                 events.push(evt);
@@ -373,8 +377,11 @@ impl GameState {
             self.ensure_current_month_financials();
         }
 
-        // Issue due campaign mission contracts (daily; intervals are
-        // day-grained, not month-grained).
+        // Resolve campaign block bids whose window closed, then issue
+        // due mission contracts (daily; intervals are day-grained, not
+        // month-grained). Resolution runs first so a just-won program
+        // issues its first mission the same day.
+        self.resolve_campaign_bids(&mut events);
         self.issue_campaign_contracts(&mut events);
 
         // Standing bid rules place the player's automatic bids before

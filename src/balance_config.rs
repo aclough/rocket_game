@@ -460,6 +460,12 @@ impl MarketsConfig {
                         a.key,
                     ));
                 }
+                if c.bid_window_days < 1 {
+                    return Err(format!(
+                        "archetype `{}`: campaign bid_window_days must be >= 1",
+                        a.key,
+                    ));
+                }
             }
             match a.template.cadence {
                 crate::contract::Cadence::Steady => {}

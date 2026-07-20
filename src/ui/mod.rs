@@ -3404,6 +3404,10 @@ mod market_discovery_render_tests {
             missions_issued: 0,
             next_issue_date: game.date,
             interval_days: 90,
+            status: crate::contract::CampaignStatus::Won {
+                by_player: true,
+                company: "Render Test".into(),
+            },
         };
         let mut rng = game.seed.world_query("render_test_campaign");
         let mut next_id = 900_000u64;

@@ -1,13 +1,13 @@
-//! M2 Task 5: anchor-customer campaigns guards.
+//! Anchor-customer campaign guards (block-bid redesign).
 //!
 //! Locks the campaign pipeline end-to-end: `spawn_campaign` draws
-//! parameters within the configured `CampaignSpec` and applies the
-//! block-buy discount correctly, `campaign_contract` produces a
-//! correlated, numbered series of missions, `GameState` announces and
-//! retires campaigns on schedule while a skipped mission never blocks
-//! the next, and `MarketsConfig::validate` rejects malformed specs.
-
-use std::collections::{HashMap, HashSet};
+//! parameters within the configured `CampaignSpec`, applies the
+//! block-buy discount, and opens a sealed solicitation with the hidden
+//! per-mission ceiling; `campaign_contract` produces a correlated,
+//! numbered series of missions; `GameState` announces a program, takes
+//! the player's block bid, awards or lapses it at the deadline, issues
+//! the winner's missions pre-accepted on cadence, and retires the
+//! campaign; and `MarketsConfig::validate` rejects malformed specs.
 
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -15,10 +15,10 @@ use rand::SeedableRng;
 use rocket_tycoon::balance_config::{BalanceConfig, MarketsConfig};
 use rocket_tycoon::calendar::GameDate;
 use rocket_tycoon::contract::{
-    campaign_contract, initial_markets, spawn_campaign, CampaignSpec, Market,
-    MARKET_RIDESHARE,
+    campaign_contract, initial_markets, spawn_campaign, CampaignSpec,
+    CampaignStatus, ContractStatus, Market, MARKET_RIDESHARE,
 };
-use rocket_tycoon::game_state::GameState;
+use rocket_tycoon::game_state::{GameSpeed, GameState};
 
 fn rideshare_market() -> Market {
     initial_markets()
@@ -38,6 +38,7 @@ fn rigged_spec() -> CampaignSpec {
             "Sample Series".into(),
             "Fixture Fleet".into(),
         ],
+        bid_window_days: 20,
     }
 }
 
@@ -100,6 +101,28 @@ fn spawn_draws_params_within_spec() {
             campaign.payment_per_mission > 0.0,
             "seed {seed_value}: payment_per_mission must be positive",
         );
+        // Announcement opens the sealed block-bid window with the same
+        // ceiling rule as single solicitations.
+        match campaign.status {
+            CampaignStatus::Soliciting {
+                bid_deadline, budget_ceiling_per_mission, player_bid,
+            } => {
+                assert_eq!(
+                    bid_deadline,
+                    current_date.add_days(spec.bid_window_days),
+                    "seed {seed_value}: bid deadline should be announcement + window",
+                );
+                let expected_ceiling =
+                    campaign.payment_per_mission * market.budget_tolerance;
+                assert!(
+                    (budget_ceiling_per_mission - expected_ceiling).abs() < 1e-6,
+                    "seed {seed_value}: ceiling {} != reference x budget_tolerance {}",
+                    budget_ceiling_per_mission, expected_ceiling,
+                );
+                assert_eq!(player_bid, None, "seed {seed_value}: bids start empty");
+            }
+            ref other => panic!("seed {seed_value}: fresh campaign should be Soliciting, got {other:?}"),
+        }
     }
 }
 
@@ -115,6 +138,7 @@ fn block_buy_price_is_discounted() {
         interval_days_range: (60, 120),
         discount_range: (0.25, 0.25),
         program_names: vec!["Fixed Discount Program".into()],
+        bid_window_days: 20,
     };
     let current_date = GameDate::new(2001, 1, 1);
 
@@ -192,8 +216,9 @@ fn missions_are_correlated_and_numbered() {
     }
 }
 
-#[test]
-fn campaigns_flow_end_to_end_and_retire() {
+/// A GameState with monthly rideshare campaign announcements rigged on
+/// (2 missions, 30-day cadence, 20-day bid window).
+fn campaign_world(seed: u64) -> GameState {
     let mut config = BalanceConfig::default();
     let arch = config
         .markets
@@ -207,59 +232,277 @@ fn campaigns_flow_end_to_end_and_retire() {
         interval_days_range: (30, 30),
         discount_range: (0.1, 0.1),
         program_names: vec!["End To End Program".into()],
+        bid_window_days: 20,
     });
+    GameState::with_balance("Test".into(), seed, config)
+}
 
-    let mut gs = GameState::with_balance("Test".into(), 42, config);
-
-    let mut seen_contract_ids: HashSet<u64> = HashSet::new();
-    // campaign_id -> (payload_kg, destination, payment, market_id)
-    let mut campaign_facts: HashMap<u64, (f64, String, f64, u64)> = HashMap::new();
-    // campaign_id -> first-seen day of each mission (in issue order).
-    let mut campaign_issue_days: HashMap<u64, Vec<u32>> = HashMap::new();
-    let mut saw_any_campaign_contract = false;
-
-    for day in 0..150u32 {
+/// Advance until the first campaign announcement and return its id.
+fn advance_to_announcement(gs: &mut GameState) -> rocket_tycoon::contract::CampaignId {
+    for _ in 0..70u32 {
         gs.advance_day();
+        if let Some(c) = gs.active_campaigns.first() {
+            return c.id;
+        }
+    }
+    panic!("no campaign announced within 70 days at spawn chance 1.0");
+}
 
-        for c in &gs.available_contracts {
-            let Some(cid) = c.campaign_id else { continue };
-            if !seen_contract_ids.insert(c.id.0) {
-                continue;
+#[test]
+fn won_campaign_issues_preaccepted_missions_and_retires() {
+    let mut gs = campaign_world(42);
+    let cid = advance_to_announcement(&mut gs);
+
+    let (reference, deadline) = {
+        let c = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap();
+        match c.status {
+            CampaignStatus::Soliciting { bid_deadline, .. } =>
+                (c.payment_per_mission, bid_deadline),
+            ref other => panic!("fresh campaign should be Soliciting, got {other:?}"),
+        }
+    };
+
+    // Bid exactly the hidden reference: always within the ceiling
+    // (budget_tolerance >= 1), so the sole bidder must win.
+    let bid = reference;
+    gs.place_campaign_bid(cid, bid).expect("bid on a soliciting campaign");
+
+    // Run through the deadline; capture the award.
+    let mut awarded = false;
+    while gs.date <= deadline {
+        for evt in gs.advance_day() {
+            if let rocket_tycoon::event::GameEvent::CampaignAwarded { amount, missions, .. } = evt {
+                assert_eq!(amount, bid, "award should be at the player's block bid");
+                assert_eq!(missions, 2);
+                awarded = true;
             }
-            saw_any_campaign_contract = true;
-
-            let entry = campaign_facts.entry(cid.0).or_insert((
-                c.payload_kg,
-                c.destination.clone(),
-                c.payment,
-                c.market_id.0,
-            ));
-            assert_eq!(entry.0, c.payload_kg, "campaign {}: payload_kg drifted between missions", cid.0);
-            assert_eq!(entry.1, c.destination, "campaign {}: destination drifted between missions", cid.0);
-            assert_eq!(entry.2, c.payment, "campaign {}: payment drifted between missions", cid.0);
-            assert_eq!(entry.3, c.market_id.0, "campaign {}: market_id drifted between missions", cid.0);
-
-            campaign_issue_days.entry(cid.0).or_default().push(day);
         }
-        // Never accept any contract: demonstrates skipped missions
-        // don't block later ones.
     }
-
-    assert!(saw_any_campaign_contract, "no campaign mission contracts were ever announced");
-
-    for (cid, days) in &campaign_issue_days {
-        for w in days.windows(2) {
-            assert_eq!(
-                w[1] - w[0], 30,
-                "campaign {cid}: consecutive missions issued {} days apart, expected 30", w[1] - w[0],
-            );
+    // Resolution happens the first day after the deadline.
+    if !awarded {
+        for evt in gs.advance_day() {
+            if let rocket_tycoon::event::GameEvent::CampaignAwarded { amount, .. } = evt {
+                assert_eq!(amount, bid);
+                awarded = true;
+            }
+        }
+    }
+    assert!(awarded, "sole in-budget block bid must win at resolution");
+    assert_eq!(gs.speed, GameSpeed::Paused, "winning a program pauses the game");
+    {
+        let c = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap();
+        assert_eq!(c.payment_per_mission, bid, "won price becomes the block price");
+        match &c.status {
+            CampaignStatus::Won { by_player: true, company } =>
+                assert_eq!(company, "Test"),
+            other => panic!("campaign should be player-won, got {other:?}"),
         }
     }
 
+    // Mission 1 issues the day of resolution, mission 2 thirty days
+    // later; both arrive pre-accepted at the won price and never pass
+    // through the open market.
+    let mut mission_days: Vec<(String, GameDate)> = Vec::new();
+    for _ in 0..40u32 {
+        for c in &gs.player_company.active_contracts {
+            if c.campaign_id == Some(cid)
+                && !mission_days.iter().any(|(n, _)| *n == c.name)
+            {
+                assert!(
+                    matches!(c.status, ContractStatus::Accepted),
+                    "campaign missions must arrive pre-accepted",
+                );
+                assert_eq!(c.payment, bid, "missions must pay the won block price");
+                mission_days.push((c.name.clone(), gs.date));
+            }
+        }
+        assert!(
+            gs.available_contracts.iter().all(|c| c.campaign_id != Some(cid)),
+            "won-campaign missions must never appear as open offers",
+        );
+        if mission_days.len() == 2 {
+            break;
+        }
+        gs.advance_day();
+    }
+    assert_eq!(mission_days.len(), 2, "both missions should have issued");
+    assert!(mission_days[0].0.contains("Flight 1"));
+    assert!(mission_days[1].0.contains("Flight 2"));
+    assert_eq!(
+        mission_days[0].1.days_until(&mission_days[1].1), 30,
+        "missions should follow the program cadence",
+    );
     assert!(
-        gs.active_campaigns.iter().all(|c| c.missions_issued < c.missions_total),
+        gs.active_campaigns.iter().all(|c| c.id != cid),
         "a campaign with all missions issued should have been retired",
     );
+}
+
+/// Winnable-floor analog of `assert_year1_reference_bid_wins`: across
+/// many worlds, bidding a campaign at its hidden reference must always
+/// win while the player is the sole bidder (tolerance >= 1 guarantees
+/// reference <= ceiling).
+#[test]
+fn reference_block_bid_wins_across_seeds() {
+    for seed in 1..=20u64 {
+        let mut gs = campaign_world(seed);
+        let cid = advance_to_announcement(&mut gs);
+        let (reference, deadline) = {
+            let c = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap();
+            match c.status {
+                CampaignStatus::Soliciting { bid_deadline, .. } =>
+                    (c.payment_per_mission, bid_deadline),
+                ref other => panic!("seed {seed}: expected Soliciting, got {other:?}"),
+            }
+        };
+        gs.place_campaign_bid(cid, reference).expect("bid lands");
+        while gs.date <= deadline.add_days(1) {
+            gs.advance_day();
+        }
+        // The campaign either still exists as Won, or won and already
+        // finished issuing (2 missions, 30-day gap — can't happen in a
+        // 21-day window, but keep the check honest via contracts).
+        let won_live = gs.active_campaigns.iter().any(|c|
+            c.id == cid && matches!(c.status, CampaignStatus::Won { by_player: true, .. }));
+        let issued = gs.player_company.active_contracts.iter()
+            .any(|c| c.campaign_id == Some(cid));
+        assert!(
+            won_live || issued,
+            "seed {seed}: a sole reference block bid must win",
+        );
+    }
+}
+
+#[test]
+fn campaign_status_survives_save_roundtrip() {
+    let dir = std::env::temp_dir().join("rocket_tycoon_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("campaign_roundtrip_{}.json", std::process::id()));
+
+    // Soliciting with a sealed bid.
+    let mut gs = campaign_world(46);
+    let cid = advance_to_announcement(&mut gs);
+    let reference = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap()
+        .payment_per_mission;
+    gs.place_campaign_bid(cid, reference * 1.1).expect("bid lands");
+    rocket_tycoon::save::save_game(&gs, &path).expect("save");
+    let loaded = rocket_tycoon::save::load_game(&path).expect("load");
+    let orig = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap();
+    let back = loaded.active_campaigns.iter().find(|c| c.id == cid)
+        .expect("campaign survives round-trip");
+    assert_eq!(orig, back, "Soliciting campaign (with sealed bid) must round-trip exactly");
+
+    // Won status round-trips too.
+    let deadline = match orig.status {
+        CampaignStatus::Soliciting { bid_deadline, .. } => bid_deadline,
+        ref other => panic!("expected Soliciting, got {other:?}"),
+    };
+    while gs.date <= deadline.add_days(1) {
+        gs.advance_day();
+    }
+    let orig = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap();
+    assert!(matches!(orig.status, CampaignStatus::Won { .. }), "bid within ceiling should win");
+    rocket_tycoon::save::save_game(&gs, &path).expect("save");
+    let loaded = rocket_tycoon::save::load_game(&path).expect("load");
+    let back = loaded.active_campaigns.iter().find(|c| c.id == cid)
+        .expect("won campaign survives round-trip");
+    assert_eq!(orig, back, "Won campaign must round-trip exactly");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn unbid_campaign_lapses_quietly() {
+    let mut gs = campaign_world(43);
+    let cid = advance_to_announcement(&mut gs);
+    let deadline = match gs.active_campaigns.iter().find(|c| c.id == cid).unwrap().status {
+        CampaignStatus::Soliciting { bid_deadline, .. } => bid_deadline,
+        ref other => panic!("expected Soliciting, got {other:?}"),
+    };
+
+    let mut events = Vec::new();
+    while gs.date <= deadline.add_days(1) {
+        events.extend(gs.advance_day());
+    }
+    assert!(
+        gs.active_campaigns.iter().all(|c| c.id != cid),
+        "an unbid campaign should lapse at its deadline",
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e, rocket_tycoon::event::GameEvent::CampaignBidRejected { .. },
+        )),
+        "lapsing without a bid should not announce a rejection",
+    );
+    assert!(
+        gs.player_company.active_contracts.iter().all(|c| c.campaign_id != Some(cid)),
+        "a lapsed campaign must issue no missions",
+    );
+}
+
+#[test]
+fn over_ceiling_block_bid_is_rejected() {
+    let mut gs = campaign_world(44);
+    let cid = advance_to_announcement(&mut gs);
+    let (ceiling, deadline) = match gs.active_campaigns.iter().find(|c| c.id == cid).unwrap().status {
+        CampaignStatus::Soliciting { budget_ceiling_per_mission, bid_deadline, .. } =>
+            (budget_ceiling_per_mission, bid_deadline),
+        ref other => panic!("expected Soliciting, got {other:?}"),
+    };
+
+    gs.place_campaign_bid(cid, ceiling * 2.0).expect("over-ceiling bids are accepted sealed");
+
+    let mut rejected = false;
+    while gs.date <= deadline.add_days(1) {
+        for evt in gs.advance_day() {
+            if matches!(evt, rocket_tycoon::event::GameEvent::CampaignBidRejected { .. }) {
+                rejected = true;
+            }
+        }
+    }
+    assert!(rejected, "an over-ceiling sole bid must be rejected at resolution");
+    assert!(
+        gs.active_campaigns.iter().all(|c| c.id != cid),
+        "a rejected campaign lapses",
+    );
+    assert!(
+        gs.player_company.active_contracts.iter().all(|c| c.campaign_id != Some(cid)),
+        "a rejected campaign must issue no missions",
+    );
+}
+
+#[test]
+fn bids_only_land_on_soliciting_campaigns() {
+    let mut gs = campaign_world(45);
+    let cid = advance_to_announcement(&mut gs);
+
+    assert!(gs.place_campaign_bid(cid, 0.0).is_none(), "non-positive bids refused");
+    assert!(
+        gs.place_campaign_bid(rocket_tycoon::contract::CampaignId(9999), 1.0).is_none(),
+        "unknown campaign refused",
+    );
+
+    // Win it, then confirm re-bidding a resolved campaign is refused.
+    let deadline = match gs.active_campaigns.iter().find(|c| c.id == cid).unwrap().status {
+        CampaignStatus::Soliciting { bid_deadline, .. } => bid_deadline,
+        ref other => panic!("expected Soliciting, got {other:?}"),
+    };
+    let reference = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap().payment_per_mission;
+    gs.place_campaign_bid(cid, reference).expect("first bid lands");
+    // Revision before the deadline is allowed.
+    gs.place_campaign_bid(cid, reference * 0.9).expect("revising a sealed bid is allowed");
+    while gs.date <= deadline.add_days(1) {
+        gs.advance_day();
+        if gs.active_campaigns.iter().any(|c|
+            c.id == cid && matches!(c.status, CampaignStatus::Won { .. }))
+        {
+            break;
+        }
+    }
+    let c = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap();
+    assert!(matches!(c.status, CampaignStatus::Won { .. }), "revised bid should still win");
+    assert_eq!(c.payment_per_mission, (reference * 0.9), "last revision is the sealed bid");
+    assert!(gs.place_campaign_bid(cid, 1.0).is_none(), "resolved campaigns take no bids");
 }
 
 #[test]
@@ -290,6 +533,9 @@ fn validation_rejects_bad_campaign_specs() {
 
     let bad_names = config_with(|s| s.program_names = Vec::new());
     assert!(bad_names.validate().is_err(), "empty program_names should be rejected");
+
+    let bad_window = config_with(|s| s.bid_window_days = 0);
+    assert!(bad_window.validate().is_err(), "bid_window_days 0 should be rejected");
 
     // Sanity: the unmutated default config validates cleanly.
     let good = BalanceConfig::default().markets;

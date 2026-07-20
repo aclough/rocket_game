@@ -488,12 +488,21 @@ pub struct CampaignSpec {
     pub discount_range: (f64, f64),
     /// Program name pool ("Meridian Constellation Flight 3").
     pub program_names: Vec<String>,
+    /// Days between announcement and block-bid close. Longer than
+    /// single-solicitation windows: a program commitment deserves
+    /// deliberation time.
+    #[serde(default = "default_campaign_bid_window_days")]
+    pub bid_window_days: u32,
 }
 
-/// A live anchor-customer program: a series of correlated mission
-/// contracts (same payload, destination, and block-buy price) issued
-/// on a fixed cadence. Missions are ordinary offered contracts — no
-/// exclusivity, and a skipped mission doesn't stop the next one.
+fn default_campaign_bid_window_days() -> u32 {
+    30
+}
+
+/// A live anchor-customer program: a block of correlated missions
+/// (same payload, destination, and per-mission price) competed as one
+/// sealed-bid solicitation, then issued on a fixed cadence to the
+/// winner.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Campaign {
     pub id: CampaignId,
@@ -503,17 +512,49 @@ pub struct Campaign {
     pub destination: String,
     pub destination_display: String,
     pub payload_kg: f64,
-    /// Block-buy price, locked at announcement.
+    /// Per-mission price — the single source of truth for campaign
+    /// pricing. Holds the hidden discounted reference while bids are
+    /// open, then the winning block bid; mission contracts read it at
+    /// issue time.
     pub payment_per_mission: f64,
     pub missions_total: u32,
     pub missions_issued: u32,
     pub next_issue_date: GameDate,
     pub interval_days: u32,
+    #[serde(default = "pre_redesign_campaign_status")]
+    pub status: CampaignStatus,
+}
+
+/// Lifecycle of a campaign after announcement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CampaignStatus {
+    /// Announced; sealed block bids are open until the deadline. The
+    /// per-mission ceiling is hidden from the UI (discovery rule),
+    /// like a single solicitation's `budget_ceiling`.
+    Soliciting {
+        bid_deadline: GameDate,
+        budget_ceiling_per_mission: f64,
+        player_bid: Option<f64>,
+    },
+    /// Awarded: missions issue on cadence to the winner at the won
+    /// `payment_per_mission`.
+    Won { by_player: bool, company: String },
+}
+
+/// Serde default for saves written before campaigns were competed.
+/// No such save can actually contain a campaign (specs shipped as
+/// `None` until the redesign), so treat a hypothetical survivor as a
+/// player-won program — the closest analog of the old open-offer flow.
+fn pre_redesign_campaign_status() -> CampaignStatus {
+    CampaignStatus::Won { by_player: true, company: String::new() }
 }
 
 /// Roll a campaign announcement for a market. Consumes the spawn roll
-/// and, on success, draws the program's parameters. The block-buy
-/// price locks in the announcement-time rate multiplier.
+/// and, on success, draws the program's parameters and opens the
+/// sealed block-bid window. The hidden discounted reference locks in
+/// the announcement-time rate multiplier; the per-mission ceiling
+/// follows the same rule as single solicitations
+/// (reference × `budget_tolerance`).
 pub fn spawn_campaign(
     market: &Market,
     spec: &CampaignSpec,
@@ -558,6 +599,11 @@ pub fn spawn_campaign(
         missions_issued: 0,
         next_issue_date: current_date,
         interval_days,
+        status: CampaignStatus::Soliciting {
+            bid_deadline: current_date.add_days(spec.bid_window_days),
+            budget_ceiling_per_mission: payment_per_mission * market.budget_tolerance,
+            player_bid: None,
+        },
     })
 }
 
@@ -589,8 +635,9 @@ pub fn campaign_contract(
         status: ContractStatus::Available,
         market_id: campaign.market_id,
         campaign_id: Some(campaign.id),
-        // Block price locked at announcement: campaign missions keep
-        // the pre-priced accept flow, no bidding.
+        // The block was competed once at announcement; individual
+        // missions are pre-priced at the won rate, no per-mission
+        // bidding.
         bid_deadline: None,
         budget_ceiling: 0.0,
         player_bid: None,
