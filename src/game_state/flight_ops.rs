@@ -292,6 +292,9 @@ impl GameState {
 
         let flight = Flight {
             id: flight_id,
+            // launch_rocket is the player's pad; competitor flights
+            // stay abstract until they get a real launch path.
+            company: crate::flight::CompanyRef::Player,
             rocket_name: inv_rocket.rocket_name.clone(),
             rocket_project_id: inv_rocket.rocket_project_id,
             design: sim.degraded_design,
@@ -1078,6 +1081,8 @@ impl GameState {
 
         let flight = Flight {
             id: flight_id,
+            // Spacecraft ops are player-only today.
+            company: crate::flight::CompanyRef::Player,
             rocket_name: sc.name.clone(),
             rocket_project_id: crate::rocket_project::RocketProjectId(0), // no project for spacecraft flights
             design: sc.design,

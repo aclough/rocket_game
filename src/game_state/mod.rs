@@ -260,6 +260,18 @@ impl GameState {
         }
     }
 
+    /// Resolve a flight's owning company to the real `Company`. Today
+    /// every flight is player-owned (competitor launches are
+    /// abstract); this is the seam the flight loop resolves through so
+    /// competitor flights can become real without touching the loop's
+    /// company accesses again.
+    pub fn company_mut(&mut self, company: crate::flight::CompanyRef) -> &mut Company {
+        match company {
+            crate::flight::CompanyRef::Player => &mut self.player_company,
+            crate::flight::CompanyRef::Competitor(ci) => &mut self.competitors[ci].company,
+        }
+    }
+
     /// Apply a modification (tankage / power tweak) to an existing
     /// rocket project. Replaces the design's stage_groups, transitions
     /// status back to `InDesign` with `MODIFICATION_WORK_FRACTION` of

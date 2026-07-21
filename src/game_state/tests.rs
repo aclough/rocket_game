@@ -405,6 +405,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
 
     let flight = crate::flight::Flight {
         id: crate::flight::FlightId(1),
+        company: crate::flight::CompanyRef::Player,
         rocket_name: "TestRocket".into(),
         rocket_project_id: RocketProjectId(1),
         design: sim.degraded_design,
@@ -934,6 +935,7 @@ fn arrive_test_flight(
     let rocket = design.instantiate(RocketId(999), "earth_surface", 0.0);
     let flight = Flight {
         id: FlightId(1),
+        company: crate::flight::CompanyRef::Player,
         rocket_name: "Carrier".into(),
         rocket_project_id: RocketProjectId(999),
         design,

@@ -99,10 +99,26 @@ impl FlightLeg {
     }
 }
 
+/// Which company owns and operates a flight. `Player` is the serde
+/// default so every pre-existing save loads unchanged. Today only
+/// player flights exist (competitor launches are abstract); this ref
+/// is what lets the flight loop serve any owner once they don't.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CompanyRef {
+    #[default]
+    Player,
+    /// Index into `GameState::competitors`.
+    Competitor(usize),
+}
+
 /// A rocket in flight through the location graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flight {
     pub id: FlightId,
+    /// Owning company; resolved to a `&mut Company` at the top of each
+    /// flight tick.
+    #[serde(default)]
+    pub company: CompanyRef,
     pub rocket_name: String,
     pub rocket_project_id: RocketProjectId,
     pub design: RocketDesign,
@@ -485,6 +501,7 @@ mod tests {
         );
         let flight = Flight {
             id: FlightId(1),
+            company: CompanyRef::Player,
             rocket_name: "Test".into(),
             rocket_project_id: RocketProjectId(1),
             design,
@@ -517,6 +534,25 @@ mod tests {
         assert_eq!(flight.eta_days(), 2);
         assert_eq!(flight.destination(), "gto");
         assert_eq!(flight.total_payload_kg(), 100.0);
+    }
+
+    /// A flight serialized before `company` existed (the field absent
+    /// from its JSON) must deserialize as player-owned; an explicit
+    /// competitor ref must round-trip intact.
+    #[test]
+    fn company_ref_defaults_to_player_on_old_saves() {
+        let flight = make_two_leg_flight();
+        let mut v = serde_json::to_value(&flight).unwrap();
+        v.as_object_mut().unwrap().remove("company")
+            .expect("company serializes");
+        let back: Flight = serde_json::from_value(v).unwrap();
+        assert_eq!(back.company, CompanyRef::Player);
+
+        let mut flight = make_two_leg_flight();
+        flight.company = CompanyRef::Competitor(0);
+        let v = serde_json::to_value(&flight).unwrap();
+        let back: Flight = serde_json::from_value(v).unwrap();
+        assert_eq!(back.company, CompanyRef::Competitor(0));
     }
 
     /// Build a 2-leg flight (Earth Surface -> LEO -> GTO) using a real
@@ -572,6 +608,7 @@ mod tests {
 
         Flight {
             id: FlightId(1),
+            company: CompanyRef::Player,
             rocket_name: "TwoStage".into(),
             rocket_project_id: RocketProjectId(1),
             design,

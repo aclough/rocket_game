@@ -179,3 +179,29 @@ launches remain permanently abstract.
 
 Not in scope: split/COTS dual awards, cost-realism retune (M4, together with your
 budget_tolerance note), second small-lift competitor (M4).
+
+---
+
+## Execution findings for M4 (recorded at redesign close, 2026-07-20)
+
+1. **Campaigns shift the bands gently upward.** 200-seed re-baseline: launches
+   4–31 (tail above the old 22 is program winners), min-money floor unchanged at
+   $71.9M, 195/200 profitable, aggregate success 95.4%. Blocks add reward without
+   adding downside risk under scripted play.
+2. **DinoSoar is the natural program incumbent.** ~4.7 announcements per 8-year
+   world; DinoSoar wins ~1.2/world, the small-rocket sim bot 0.26, and only ~7%
+   of announcements are liftable by the bot at announcement time. Heavy-payload
+   programs default to the parody incumbent — the planned second small-lift
+   competitor (M4) is what would contest the remainder, and a player who builds
+   medium/heavy lift has a clear prize to chase.
+3. **The clause rarely bites scripted players** (3 missed missions, 0
+   cancellations per 100 worlds): the bot's free-stock gate keeps it honest, and
+   DinoSoar's capacity covers its wins. The clause's real target is human
+   overcommitment — watch playtests before tuning the penalties.
+4. **The cost-realism gap propagates into blocks.** Bids are marginal-cost-based
+   while ceilings are reference-based, so block margins inherit the 3–10×
+   payment/cost scale mismatch already in TODO. Retune both together in M4.
+5. **Flight ownership seam is in (Task 5/Q5-A).** `Flight.company: CompanyRef`
+   with serde default Player + `GameState::company_mut` resolver. The follow-on
+   flight-loop extraction (routing all settlement through the resolver so
+   competitor flights can be real) is a future hygiene pass, now unblocked.
