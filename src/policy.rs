@@ -147,6 +147,42 @@ impl BasicPolicy {
         }
     }
 
+    /// Bid campaign blocks at the same markup as the standing rules.
+    /// Blocks are deliberately NOT auto-bid by the rule engine — a
+    /// human decides them in the Programs modal after the announcement
+    /// pause — so the sim bot places its own. Gate per the plan's Q2
+    /// answer: a capable Testing design with cost history and at least
+    /// one capable vehicle free beyond accepted work.
+    fn bid_campaign_blocks(&mut self, game: &mut GameState) {
+        let soliciting: Vec<(crate::contract::CampaignId, String, f64)> =
+            game.active_campaigns.iter()
+                .filter_map(|c| match c.status {
+                    crate::contract::CampaignStatus::Soliciting { player_bid: None, .. } =>
+                        Some((c.id, c.destination.clone(), c.payload_kg)),
+                    _ => None,
+                })
+                .collect();
+        if soliciting.is_empty() {
+            return;
+        }
+        let accepted_unflown = game.player_accepted_unflown();
+        for (id, dest, payload_kg) in soliciting {
+            let (capable_projects, best_cost) = game.player_capable_cost(&dest, payload_kg);
+            let Some(cost) = best_cost else { continue };
+            let capable_stock = game.player_company.manufacturing.inventory.rockets.iter()
+                .filter(|r| capable_projects.contains(&r.rocket_project_id))
+                .count();
+            if capable_stock <= accepted_unflown {
+                continue;
+            }
+            let bid = ((cost * (1.0 + self.bid_margin)) / 10_000.0).round() * 10_000.0;
+            if bid <= 0.0 {
+                continue;
+            }
+            game.place_campaign_bid(id, bid);
+        }
+    }
+
     /// Install standing bid rules for every market, once. The game's
     /// rule engine handles capability, cost basis, and the readiness
     /// gate from here on.
@@ -456,6 +492,7 @@ impl CompanyPolicy for BasicPolicy {
         self.maybe_design_rocket(game);
         self.maybe_enable_auto_build(game);
         self.ensure_bid_rules(game);
+        self.bid_campaign_blocks(game);
         self.accept_and_launch(game);
     }
 

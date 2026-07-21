@@ -1,22 +1,21 @@
 //! M1 Task 4: determinism smoke test + metric-band regression tests.
 //!
 //! Bands are set around the measured baseline (basic policy, default
-//! balance, 200 seeds × 8 years, 2026-07, re-measured after M3
-//! Task 3 — the bot now prices blind through the standing-rule
-//! engine at its default margin instead of reading the hidden
-//! reference payment, keeps 2 rockets on the shelf, and eats real
-//! rejections when its bid tops an unseen ceiling): 0/200 bankrupt,
-//! 4–22 launches per seed (avg 12.9), per-seed success ≥ 75%,
-//! aggregate success 95.2%, min money $71.9M, 193/200 seeds end
-//! above starting money, 200/200 have a first profitable year
-//! (latest start+6). The launch count fell and the success floor
-//! loosened versus the interim reference-price bot — honest blind
-//! pricing wastes bid windows on rejections and flies fewer, so
-//! early-flight failures weigh more per seed. The 2026-07 margin
-//! sweep (see policy.rs DEFAULT_BID_MARGIN) is the context: an
-//! uncontested market rewards ever-higher margins, so these bands
-//! lock a chosen honest posture, not an optimum. Bands are
-//! regression protection around observed reality, not aspirations.
+//! balance, 200 seeds × 8 years, 2026-07, re-measured after campaign
+//! redesign Task 4 — block-bid campaigns live in GEO Comsats / COTS /
+//! LEO Constellation, the bot bids blocks at its standing margin, and
+//! DinoSoar contests them): 0/200 bankrupt, 4–31 launches per seed
+//! (avg 13.7; the tail above the old 22 is seeds that win a
+//! multi-mission program), per-seed success ≥ 75%, aggregate success
+//! 95.4%, min money $71.9M, 195/200 seeds end above starting money,
+//! 200/200 have a first profitable year (latest start+6). Campaigns
+//! read as a mild positive: extra launches and profit on the seeds
+//! that land a block, identical floors everywhere else. The 2026-07
+//! margin sweep (see policy.rs DEFAULT_BID_MARGIN) is still the
+//! context: an uncontested small-payload market rewards ever-higher
+//! margins, so these bands lock a chosen honest posture, not an
+//! optimum. Bands are regression protection around observed reality,
+//! not aspirations.
 //!
 //! When changing balance values or game constants, re-measure with
 //! `cargo run --release --bin simulate -- --seeds 1..200 --years 8
@@ -67,8 +66,9 @@ fn assert_bands(summaries: &[RunSummary]) {
             profitable += 1;
         }
         assert!(
-            (3..=28).contains(&s.launches),
-            "seed {}: {} launches outside band 3..=28 (baseline 4..=22)",
+            (3..=38).contains(&s.launches),
+            "seed {}: {} launches outside band 3..=38 (baseline 4..=31; the \
+             top is a seed that wins a big block program)",
             s.seed, s.launches,
         );
         let rate = s.successes as f64 / s.launches as f64;
@@ -90,12 +90,12 @@ fn assert_bands(summaries: &[RunSummary]) {
         successes += s.successes;
     }
 
-    // Fleet-level bands (baseline 193/200 end above starting money,
+    // Fleet-level bands (baseline 195/200 end above starting money,
     // 200/200 have a profitable year).
     let n = summaries.len() as f64;
     assert!(
         profitable as f64 / n >= 0.90,
-        "only {profitable}/{n} seeds profitable after run (band >= 90%, baseline 96.5%)",
+        "only {profitable}/{n} seeds profitable after run (band >= 90%, baseline 97.5%)",
     );
     assert!(
         with_fpy as f64 / n >= 0.95,
@@ -105,7 +105,7 @@ fn assert_bands(summaries: &[RunSummary]) {
     let aggregate = successes as f64 / launches as f64;
     assert!(
         aggregate >= 0.93,
-        "aggregate launch success rate {:.1}% below 93% (baseline 95.2%)",
+        "aggregate launch success rate {:.1}% below 93% (baseline 95.4%)",
         aggregate * 100.0,
     );
 }

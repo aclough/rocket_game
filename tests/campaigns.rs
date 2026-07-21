@@ -749,6 +749,61 @@ fn announcement_pauses_only_when_liftable() {
     assert_eq!(gs.speed, GameSpeed::Paused, "a liftable announcement stops the clock");
 }
 
+/// Measurement helper (not a guard): campaign activity under the sim
+/// bot across many worlds — announcement/award/cancel rates for
+/// eyeballing spawn tuning. Run with
+/// `cargo test --release --test campaigns -- --ignored --nocapture`.
+#[test]
+#[ignore = "measurement probe; run explicitly with --ignored --nocapture"]
+fn measure_campaign_activity() {
+    use rocket_tycoon::event::GameEvent;
+
+    let seeds = 100u64;
+    let years = 8u32;
+    let mut announced = 0u32;
+    let mut liftable_at_announce = 0u32;
+    let mut player_won = 0u32;
+    let mut dino_won = 0u32;
+    let mut rejected = 0u32;
+    let mut missed = 0u32;
+    let mut cancelled = 0u32;
+
+    for seed in 1..=seeds {
+        let mut gs = GameState::with_balance(
+            "SimCorp".into(), seed, BalanceConfig::default(),
+        );
+        let mut policy = rocket_tycoon::policy::policy_by_name("basic").unwrap();
+        let end = GameDate::new(gs.date.year + years, gs.date.month, gs.date.day);
+        while gs.date < end {
+            policy.act(&mut gs);
+            for e in gs.advance_day() {
+                match e {
+                    GameEvent::CampaignAnnounced { liftable, .. } => {
+                        announced += 1;
+                        if liftable { liftable_at_announce += 1; }
+                    }
+                    GameEvent::CampaignAwarded { .. } => player_won += 1,
+                    GameEvent::CampaignAwardedToCompetitor { .. } => dino_won += 1,
+                    GameEvent::CampaignBidRejected { .. } => rejected += 1,
+                    GameEvent::CampaignMissionMissed { .. } => missed += 1,
+                    GameEvent::CampaignCancelled { .. } => cancelled += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    println!(
+        "campaign activity over {seeds} seeds x {years}y: \
+         announced {announced} ({:.2}/seed, {:.1}% liftable at announce), \
+         bot won {player_won}, DinoSoar won {dino_won}, bot rejected {rejected}, \
+         missions missed {missed}, programs cancelled {cancelled}",
+        announced as f64 / seeds as f64,
+        100.0 * liftable_at_announce as f64 / announced.max(1) as f64,
+    );
+    assert!(announced > 0, "campaigns should announce somewhere in {seeds} seeds");
+}
+
 #[test]
 fn validation_rejects_bad_campaign_specs() {
     fn config_with<F: FnOnce(&mut CampaignSpec)>(mutate: F) -> MarketsConfig {

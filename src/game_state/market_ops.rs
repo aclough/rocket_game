@@ -395,14 +395,9 @@ impl GameState {
     /// awarded-unflown reservation so the engine can never promise
     /// five launches against one rocket). Same gate shape as
     /// DinoSoar's script and, later, other competitors.
-    pub(super) fn run_bid_rules(&mut self, events: &mut Vec<GameEvent>) {
-        if self.player_company.bid_rules.is_empty() {
-            return;
-        }
-        let total_stock = self.player_company.manufacturing.inventory.rockets.len();
-        if total_stock == 0 {
-            return;
-        }
+    /// Player contracts accepted but not yet on a flight — the
+    /// reservation count every readiness gate subtracts from stock.
+    pub fn player_accepted_unflown(&self) -> usize {
         let in_flight: Vec<contract::ContractId> = self.active_flights.iter()
             .flat_map(|f| f.payloads.iter())
             .filter_map(|p| match p {
@@ -411,10 +406,58 @@ impl GameState {
                 _ => None,
             })
             .collect();
-        let accepted_unflown = self.player_company.active_contracts.iter()
+        self.player_company.active_contracts.iter()
             .filter(|c| matches!(c.status, contract::ContractStatus::Accepted)
                 && !in_flight.contains(&c.id))
-            .count();
+            .count()
+    }
+
+    /// The player's capable Testing designs for a mission, and the
+    /// cheapest mean-of-last-5 marginal cost among those with real
+    /// build history. Capability = payload within `BID_PAYLOAD_MARGIN`
+    /// of the physics cap (cached) — the one rule shared by the
+    /// bid-rule engine, announcement liftability, and the sim bot's
+    /// block bids. Cost is None when no capable design has history.
+    pub fn player_capable_cost(
+        &mut self, destination: &str, payload_kg: f64,
+    ) -> (Vec<RocketProjectId>, Option<f64>) {
+        let mut capable_projects: Vec<RocketProjectId> = Vec::new();
+        let mut best_cost: Option<f64> = None;
+        for rp in &self.player_company.rocket_projects {
+            if !matches!(rp.status, crate::rocket_project::RocketDesignStatus::Testing { .. }) {
+                continue;
+            }
+            let cap = *self.payload_capability_cache
+                .entry((rp.project_id, rp.revision, destination.to_string()))
+                .or_insert_with(|| crate::rocket_project::max_payload_to(
+                    &rp.design, "earth_surface", destination,
+                ));
+            if payload_kg > cap * BID_PAYLOAD_MARGIN {
+                continue;
+            }
+            capable_projects.push(rp.project_id);
+            if let Some(h) = self.player_company.rocket_cost_history.get(&rp.design.id) {
+                if !h.is_empty() {
+                    let recent = &h[h.len().saturating_sub(5)..];
+                    let cost = recent.iter().sum::<f64>() / recent.len() as f64;
+                    if best_cost.is_none_or(|b| cost < b) {
+                        best_cost = Some(cost);
+                    }
+                }
+            }
+        }
+        (capable_projects, best_cost)
+    }
+
+    pub(super) fn run_bid_rules(&mut self, events: &mut Vec<GameEvent>) {
+        if self.player_company.bid_rules.is_empty() {
+            return;
+        }
+        let total_stock = self.player_company.manufacturing.inventory.rockets.len();
+        if total_stock == 0 {
+            return;
+        }
+        let accepted_unflown = self.player_accepted_unflown();
 
         for i in 0..self.available_contracts.len() {
             let (market_id, dest, payload_kg) = {
@@ -435,31 +478,7 @@ impl GameState {
             // Capable designs (Testing only), and the cheapest real
             // marginal cost among those that have been built before.
             // No cost history → no cost basis → no bid.
-            let mut capable_projects: Vec<RocketProjectId> = Vec::new();
-            let mut best_cost: Option<f64> = None;
-            for rp in &self.player_company.rocket_projects {
-                if !matches!(rp.status, crate::rocket_project::RocketDesignStatus::Testing { .. }) {
-                    continue;
-                }
-                let cap = *self.payload_capability_cache
-                    .entry((rp.project_id, rp.revision, dest.clone()))
-                    .or_insert_with(|| crate::rocket_project::max_payload_to(
-                        &rp.design, "earth_surface", &dest,
-                    ));
-                if payload_kg > cap * BID_PAYLOAD_MARGIN {
-                    continue;
-                }
-                capable_projects.push(rp.project_id);
-                if let Some(h) = self.player_company.rocket_cost_history.get(&rp.design.id) {
-                    if !h.is_empty() {
-                        let recent = &h[h.len().saturating_sub(5)..];
-                        let cost = recent.iter().sum::<f64>() / recent.len() as f64;
-                        if best_cost.is_none_or(|b| cost < b) {
-                            best_cost = Some(cost);
-                        }
-                    }
-                }
-            }
+            let (capable_projects, best_cost) = self.player_capable_cost(&dest, payload_kg);
             let Some(cost) = best_cost else { continue };
 
             // Readiness gate: free stock must cover this new bid.

@@ -1110,10 +1110,11 @@ pub fn realize_markets(seed: &GameSeed, archetypes: &[MarketArchetype]) -> Vec<R
 /// (1.0, 1.0) — identical in every world; everything else varies per
 /// seed. Perturbation ranges are first-guess values for M4 to tune.
 ///
-/// Campaigns are OFF by default as of M3 (every `campaign: None`):
-/// the M2 playtest found pre-priced campaigns didn't register as
-/// events; they return post-M3 as block-bid solicitations. The
-/// machinery stays live for configs that opt in.
+/// Campaigns run in three markets (campaign redesign Task 4): GEO
+/// Comsats carries the early game (always present), COTS and LEO
+/// Constellation join when they emerge — block buys are their whole
+/// identity. Spawn chances target roughly one announcement in year 1
+/// (GEO only) growing to ~1-2/year once the event markets open.
 pub fn default_archetypes() -> Vec<MarketArchetype> {
     let base = initial_markets();
     let event = event_market_templates();
@@ -1142,7 +1143,20 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
         pinned(
             "market_geo_comsats",
             (-0.02, 0.02),
-            None,
+            Some(CampaignSpec {
+                spawn_chance_per_month: 0.03,
+                mission_count_range: (3, 5),
+                interval_days_range: (60, 120),
+                discount_range: (0.10, 0.20),
+                program_names: vec![
+                    "Meridian Constellation".into(),
+                    "EchoRelay Fleet".into(),
+                    "PanAm Sat Series".into(),
+                    "Orion Direct Broadcast".into(),
+                    "Concordia Comms Block".into(),
+                ],
+                bid_window_days: 40,
+            }),
             by_id(MARKET_GEO_COMSATS, &base),
         ),
         MarketArchetype {
@@ -1176,7 +1190,21 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                 flavor: "NASA announces Commercial Orbital Transportation Services program".into(),
                 cross_effects: Vec::new(),
             }),
-            campaign: None,
+            // Block buys are the whole point of COTS: resupply cycles
+            // announced as multi-flight programs.
+            campaign: Some(CampaignSpec {
+                spawn_chance_per_month: 0.06,
+                mission_count_range: (4, 8),
+                interval_days_range: (45, 90),
+                discount_range: (0.15, 0.25),
+                program_names: vec![
+                    "Commercial Resupply Cycle A".into(),
+                    "Commercial Resupply Cycle B".into(),
+                    "Station Logistics Block".into(),
+                    "Crew & Cargo Demonstration".into(),
+                ],
+                bid_window_days: 45,
+            }),
             template: by_id(MARKET_COTS, &event),
         },
         MarketArchetype {
@@ -1201,7 +1229,20 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                     },
                 }],
             }),
-            campaign: None,
+            // Constellation build-outs arrive as launch blocks.
+            campaign: Some(CampaignSpec {
+                spawn_chance_per_month: 0.06,
+                mission_count_range: (4, 8),
+                interval_days_range: (45, 90),
+                discount_range: (0.10, 0.20),
+                program_names: vec![
+                    "Starweave Deployment".into(),
+                    "Aurora Broadband Shell".into(),
+                    "Loom Constellation Build-out".into(),
+                    "Skynet Mesh Phase 1".into(),
+                ],
+                bid_window_days: 40,
+            }),
             template: by_id(MARKET_LEO_CONSTELLATION, &event),
         },
         MarketArchetype {
