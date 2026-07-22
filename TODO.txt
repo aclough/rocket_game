@@ -1,20 +1,23 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
-[] Make color coding of contracts take into account spacecraft duration
-[] Timing for batteries and launches, related fenceposts
-    [] If we launch to LEO on the 5th we should arrive on the 5th.
-[] Rebalance work so that hydrolox/full flow take much longer than gas kerolox
-    [] Size should matter too?
-[] Vacuum variants of sea level engines?
-    [] Something that you specify at stage construction rather than a property of the engine?
-[] Don't list flaw count when a design is completed.
-[] Non-vacuum by default
-[] Battery mass?
-[] Double check improvement difficulty over time increase
-[] Fix columns in contract view
-[] Duplicate color for selection / borderline in contracts view
-[] Check on grandfathered power
-    [] Maybe add a default battery?
+Balance:
+[] Fewer, bigger engines seem too superior?
+[] We want engine improvements to get harder quickly the more there are
 [] Cost realism pass: material/build costs vs contract payments are on different scales
     (DinoSoar's heavy costs $8.6M vs GEO payments of $80-400M). Use the sim harness
     to measure ripple effects of retuning.
+
+UI:
+[] Duplicate color for selection / borderline in contracts view
+[] Fix columns in contract view
+[] Non-vacuum by default for engine design
+[] Don't list flaw count when a design is completed.
+
+Power:
+[] Make color coding of contracts take into account spacecraft duration
+[] Check on grandfathered power
+    [] Maybe add a default battery instead?
+[] Timing for batteries and launches, related fenceposts.  We want a launch to LEO on the 1st of the month to arrive in LEO, then deliver any payload, then check battery, then for it to progress to the 2nd.
+
+Tech:
+[] Allow vacuum variants of sea level engines very easily
