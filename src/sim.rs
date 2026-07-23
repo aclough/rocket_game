@@ -21,12 +21,17 @@ pub struct Tally {
     pub launch_successes: u32,
     /// Vehicles destroyed (at launch or mid-flight) or stranded.
     pub vehicles_lost: u32,
+    /// Sum of all contract payments received.
+    pub payment_total: f64,
 }
 
 impl Tally {
     pub fn record_one(&mut self, e: &GameEvent) {
         match e {
-            GameEvent::PaymentReceived { .. } => self.contracts_completed += 1,
+            GameEvent::PaymentReceived { amount, .. } => {
+                self.contracts_completed += 1;
+                self.payment_total += amount;
+            }
             GameEvent::ContractExpired { .. } => self.contracts_expired += 1,
             GameEvent::FlightDeparted { .. } => self.launch_attempts += 1,
             GameEvent::LaunchFailure { .. } => {
@@ -77,6 +82,21 @@ pub struct RunSummary {
     pub launches: usize,
     pub successes: usize,
     pub first_profitable_year: Option<u32>,
+    /// Date of the first launch attempt (None if the run never launched).
+    pub first_launch_date: Option<GameDate>,
+    /// starting_money − balance on the first launch's day: the program
+    /// cost to first flight (pre-launch revenue is zero, so this is pure
+    /// spend).
+    pub dev_spend_at_first_launch: Option<f64>,
+    /// Undiscovered flaws across all player designs (engine + rocket
+    /// projects and contracted engines) on the first launch's day — the
+    /// hidden risk the company flew with.
+    pub undiscovered_flaws_at_first_launch: Option<u32>,
+    /// Mean unit build cost over every rocket the player completed
+    /// (from `rocket_cost_history`, the same source bidding uses).
+    pub mean_rocket_unit_cost: Option<f64>,
+    /// Mean payment across completed contracts.
+    pub mean_contract_payment: Option<f64>,
 }
 
 impl RunSummary {
@@ -89,13 +109,37 @@ impl RunSummary {
         let fpy = self.first_profitable_year
             .map(|y| y.to_string())
             .unwrap_or_else(|| "-".into());
+        let m = |v: Option<f64>| v.map(|x| format!("${:.1}M", x / 1e6))
+            .unwrap_or_else(|| "-".into());
+        let first = match self.first_launch_date {
+            Some(d) => format!(
+                "{:04}-{:02}-{:02} (spend {}, {} hidden flaws)",
+                d.year, d.month, d.day,
+                m(self.dev_spend_at_first_launch),
+                self.undiscovered_flaws_at_first_launch.unwrap_or(0),
+            ),
+            None => "-".into(),
+        };
         format!(
-            "seed {:>5}  final ${:>14.0}  min ${:>14.0}  bankrupt {}  launches {:>3} ({} ok)  first-profitable-year {}",
+            "seed {:>5}  final ${:>14.0}  min ${:>14.0}  bankrupt {}  launches {:>3} ({} ok)  first-profitable-year {}  first-launch {}  unit-cost {}  payment {}",
             self.seed, self.final_money, self.min_money,
             if self.bankrupt { "YES" } else { "no " },
             self.launches, rate, fpy,
+            first,
+            m(self.mean_rocket_unit_cost),
+            m(self.mean_contract_payment),
         )
     }
+}
+
+/// Undiscovered flaws across every player design: engine projects,
+/// rocket projects, and contracted (bought-in) engines.
+fn undiscovered_flaw_count(c: &crate::company::Company) -> u32 {
+    c.engine_projects.iter().flat_map(|p| p.flaws.iter())
+        .chain(c.rocket_projects.iter().flat_map(|p| p.flaws.iter()))
+        .chain(c.contracted_engines.iter().flat_map(|e| e.flaws.iter()))
+        .filter(|f| !f.discovered)
+        .count() as u32
 }
 
 /// Simulate one seed for `years` under `policy`, calling `monthly`
@@ -112,9 +156,11 @@ pub fn run_seed(
     let end = GameDate::new(start.year + years, start.month, start.day);
 
     let mut tally = Tally::default();
-    let mut min_money = gs.player_company.money;
+    let start_money = gs.player_company.money;
+    let mut min_money = start_money;
     // Money at each January 1st, for year-over-year profitability.
-    let mut jan_money: Vec<(u32, f64)> = vec![(start.year, gs.player_company.money)];
+    let mut jan_money: Vec<(u32, f64)> = vec![(start.year, start_money)];
+    let mut first_launch: Option<(GameDate, f64, u32)> = None;
 
     monthly(&metric_row(seed, &gs, &tally));
     while gs.date < end {
@@ -126,6 +172,13 @@ pub fn run_seed(
         let new_events = (gs.event_log.total_pushed() - log_before) as usize;
         for (_, e) in gs.event_log.recent(new_events) {
             tally.record_one(e);
+        }
+        if first_launch.is_none() && tally.launch_attempts > 0 {
+            first_launch = Some((
+                gs.date,
+                start_money - gs.player_company.money,
+                undiscovered_flaw_count(&gs.player_company),
+            ));
         }
         min_money = min_money.min(gs.player_company.money);
         if gs.date.day == 1 {
@@ -140,6 +193,16 @@ pub fn run_seed(
         .find(|w| w[1].1 > w[0].1)
         .map(|w| w[0].0);
 
+    let unit_costs: Vec<f64> = gs.player_company.rocket_cost_history
+        .values()
+        .flatten()
+        .copied()
+        .collect();
+    let mean_rocket_unit_cost = (!unit_costs.is_empty())
+        .then(|| unit_costs.iter().sum::<f64>() / unit_costs.len() as f64);
+    let mean_contract_payment = (tally.contracts_completed > 0)
+        .then(|| tally.payment_total / tally.contracts_completed as f64);
+
     RunSummary {
         seed,
         start_year: start.year,
@@ -149,5 +212,10 @@ pub fn run_seed(
         launches: tally.launch_attempts as usize,
         successes: tally.launch_successes as usize,
         first_profitable_year,
+        first_launch_date: first_launch.map(|(d, _, _)| d),
+        dev_spend_at_first_launch: first_launch.map(|(_, s, _)| s),
+        undiscovered_flaws_at_first_launch: first_launch.map(|(_, _, f)| f),
+        mean_rocket_unit_cost,
+        mean_contract_payment,
     }
 }

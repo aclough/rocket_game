@@ -178,6 +178,27 @@ fn main() -> ExitCode {
             summaries.len(), avg_final, bankrupt, summaries.len(),
             profitable, summaries.len(),
         );
+        // Averages over seeds where the metric exists.
+        let avg_of = |vals: Vec<f64>| (!vals.is_empty())
+            .then(|| vals.iter().sum::<f64>() / vals.len() as f64);
+        let months = avg_of(summaries.iter().filter_map(|s| s.first_launch_date.map(|d|
+            ((d.year - s.start_year) * 12 + d.month) as f64 - 1.0 + (d.day as f64 - 1.0) / 30.0
+        )).collect());
+        let spend = avg_of(summaries.iter().filter_map(|s| s.dev_spend_at_first_launch).collect());
+        let hidden = avg_of(summaries.iter().filter_map(|s| s.undiscovered_flaws_at_first_launch.map(f64::from)).collect());
+        let unit = avg_of(summaries.iter().filter_map(|s| s.mean_rocket_unit_cost).collect());
+        let payment = avg_of(summaries.iter().filter_map(|s| s.mean_contract_payment).collect());
+        let fmt = |v: Option<f64>, scale: f64, suffix: &str| v
+            .map(|x| format!("{:.1}{suffix}", x / scale))
+            .unwrap_or_else(|| "-".into());
+        println!(
+            "── avg first-launch month {}, dev spend {}, hidden flaws {}, unit cost {}, payment {}",
+            fmt(months, 1.0, ""),
+            fmt(spend, 1e6, "M"),
+            fmt(hidden, 1.0, ""),
+            fmt(unit, 1e6, "M"),
+            fmt(payment, 1e6, "M"),
+        );
     }
 
     io::stdout().flush().ok();
