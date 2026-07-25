@@ -770,6 +770,7 @@ fn test_engine_build_accrues_labor_cost() {
         500.0,
         6,
         PropellantPreset::Kerolox,
+        crate::engine::EngineCycle::GasGenerator,
         0,
         0,
         Vec::new(),

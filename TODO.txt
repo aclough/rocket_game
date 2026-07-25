@@ -1,9 +1,5 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
-Balance:
-[] Fewer, bigger engines seem too superior?
-[] We want engine improvements to get harder quickly the more there are
-
 UI:
 [] Duplicate color for selection / borderline in contracts view
 [] Fix columns in contract view

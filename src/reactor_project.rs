@@ -78,7 +78,8 @@ pub const REACTOR_BASE_COMPLEXITY: u32 = 8;
 /// Uses the shared engine design-work curve so reactor and engine
 /// projects feel comparably weighty per team-day.
 pub fn reactor_design_work_required(complexity: u32, balance_cfg: &BalanceConfig) -> f64 {
-    balance_cfg.work.design_work_required(complexity)
+    // Reactors have no scale knob; scale 1.0 skips the size term.
+    balance_cfg.work.design_work_required(complexity, 1.0)
 }
 
 /// Unique identifier for a reactor project.
@@ -266,8 +267,11 @@ impl ReactorProject {
                             flaw_description: self.flaws[idx].description.clone(),
                         });
                     }
-                    // Roll for improvement discovery.
-                    if rng.gen::<f64>() < balance_cfg.flaws.reactor_improvement_discovery_chance {
+                    // Roll for improvement discovery, decaying with
+                    // improvements already found (M4 Task 4e).
+                    let improvement_chance = balance_cfg.flaws.reactor_improvement_discovery_chance
+                        * balance_cfg.flaws.improvement_decay.powi(self.improvements.len() as i32);
+                    if rng.gen::<f64>() < improvement_chance {
                         let improvement = generate_reactor_improvement(rng);
                         events.push(ReactorWorkEvent::ImprovementDiscovered {
                             description: format!("{}: {}", improvement.description, improvement.kind),

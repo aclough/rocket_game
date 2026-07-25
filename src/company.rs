@@ -651,6 +651,7 @@ impl Company {
                                     stage.engine.mass_kg,
                                     ep.complexity,
                                     ep.preset,
+                                    ep.design.cycle,
                                     engine_prior,
                                     ep.revision,
                                     ep.flaws.clone(),
@@ -763,6 +764,7 @@ impl Company {
         let mass_kg = ep.design.mass_kg;
         let complexity = ep.complexity;
         let preset = ep.preset;
+        let cycle = ep.design.cycle;
         let revision = ep.revision;
         let flaws = ep.flaws.clone();
         let improvements: Vec<_> = ep.improvements.iter().filter(|i| i.actualized).cloned().collect();
@@ -777,6 +779,7 @@ impl Company {
             mass_kg,
             complexity,
             preset,
+            cycle,
             engine_prior,
             revision,
             flaws,

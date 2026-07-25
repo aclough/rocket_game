@@ -106,6 +106,153 @@ min above $25M, ≥30% end profitable, per-seed success ≥ 65%, aggregate
 No BasicPolicy touch was needed — its revise-test-fly rhythm survives the
 slower discovery convergence (it just flies with more residue aboard).
 
+### Task 4 plan — engine progression, cost realism, and size scaling
+
+Scope grew per engine_cost_scaling.md (your Q1–Q3 answers there): the
+original big-vs-clustered measurement and research escalation, plus the
+three engine-cost levers folded in. Sub-parts, in proposed order:
+
+**4a. Hydrolox material premium (your priority).** A data-driven
+per-preset `material_multiplier` on the engine BOM — rebalancing BOM
+fractions alone can't get there (superalloys are only $320/kg; even a
+fraction shift maxes out around 1.7×). Sweep range 2–4×. At 3.5× the
+game's RL10-analog lands ~$2.6M and ~10× kerolox per kN (real is ~100×,
+but our absolute scale is compressed ~30×, so ~10× relative is the honest
+equivalent). **Big known ripple:** DinoSoar's 6.6 t hydrolox booster
+engine jumps from ~$8.7M to ~$30M of materials at 3.5×, i.e. its real
+unit cost roughly +$20M — its catalog_cost/margins from Task 2 must be
+re-swept in the same change, and its GEO bids must stay at real prices
+(that's the market anchor). The player's hydrolox upper stage also stops
+being free Isp, which is itself part of the Task 4 goal.
+
+**4b. Cycle premium — complexity and/or BOM (your Q3: both).** One
+correction from the measurements: Task 3 already made complexity
+superlinear, so the *dev-side* cycle premium is now real (FF design work
+is 4.3× a starter engine); a further complexity bump would double-tax dev
+time and flaw counts. Proposal: the unit-cost side of the premium lives
+in a per-cycle material multiplier (e.g. PF 0.8 / GG 1.0 / Expander 1.3 /
+SC 1.6 / FF 2.0, data-driven), and we hold the complexity table steady —
+*unless* the 4d measurement still shows top cycles dominating, in which
+case bumping SC/FF to 9/10 is the fallback sweep point (it feeds design
+work, build labor, and flaw counts all at once, which may be exactly the
+brake big engines need).
+
+**4c. Size terms (folded in per your Q2).** Engine build work gains a
+mass factor `× (engine_mass_kg / 1150)^q`, q ∈ 0.5–0.7, anchored at the
+starter kerolox GG's mass so the bot's pace is unchanged; design work
+gains `× scale^r`, r ∈ 0.3–0.5 (a 4× engine costs ~1.5–2× the dev, the
+F-1 story). Kills the current free amortization where 4×-scale engines
+are the cheapest per kN. **Watch:** DinoSoar's 6.6 t booster engine hits
+the mass factor at ~(5.7)^q ≈ 2.4–3.4× build labor — the same
+line-starvation failure Task 3 caught at build-exponent 2.5. The campaign
+cadence test and its bid readiness gate the sweep; if it starves, either
+q comes down or DinoSoar gets a production-line/config compensation, to
+be decided by measurement, not assumption.
+
+**4d. Measurement: big vs clustered.** Fixed capability target (the
+template's LEO smallsat + a GTO comsat case), two builds of the same
+rocket: one scale-2 engine vs four scale-0.5 engines at equal total
+thrust. Compare unit cost, dev calendar to Testing, launch failure
+probability (per-engine flaw activation already scales 1−(1−p)^n, taxing
+clusters), and $/kg delivered. Run before 4a–4c land and after, so we
+know whether the cost levers alone rebalance the trade or something
+engine-specific is still needed. This answers the TODO "fewer, bigger
+engines seem too superior?".
+
+**4e. Research-improvement escalation.** The TODO "engine improvements
+get harder quickly the more there are": `improvement_discovery_chance`
+(flat 8%/cycle today) decays with improvements already found on that
+design — `chance × decay^n`, `improvement_decay` data-driven in
+FlawsConfig (sweep 0.5–0.8). Same treatment for the reactor chance.
+
+**4f. Re-baseline + bookkeeping.** 200-seed re-baseline (bands moved by
+4a–4c), DinoSoar catalog/margin re-sweep in the same edit, both Balance
+TODO items removed at commit.
+
+Open questions:
+
+- **Q4a:** Hydrolox premium magnitude — comfortable landing ~10× kerolox
+  per kN (multiplier ~3–3.5×), or softer (~2×, keeping DinoSoar's
+  re-tune smaller)?
+- USER: Lets go all the way here.
+- **Q4b:** OK holding the complexity table steady unless 4d's measurement
+  demands the SC/FF bump, per the double-tax argument above?
+- Yeah, we'll try the measurement first
+- **Q4c:** If the size-term sweep starves DinoSoar's line, is giving it
+  an extra production line (config) acceptable as the compensation, or
+  would you rather cap q?
+- USER:  That would be fine.
+
+### Task 4 — landed values and 200-seed result
+
+All five sub-parts landed; one mechanism was added beyond the plan
+because measurement demanded it (flagged below).
+
+- **EngineMaterialsConfig** (new balance section): per-preset material
+  multipliers (hydrolox **3.0×**, others 1.0) × per-cycle multipliers
+  (PF 0.8 / GG 1.0 / Expander 1.3 / SC 1.6 / FF 2.0), applied to the
+  engine BOM in `engine_material_cost` — the single cost source both
+  the player and DinoSoar consume. Materials-only: no labor premium,
+  labor teams stay unspecialized (decision below).
+- **Hydrolox calibration story (4a).** First pass targeted ~10×
+  kerolox per kN off the RL10-vs-Merlin gap, and materials alone
+  couldn't reach it (the 4c mass term removes more flat labor from a
+  small engine than the premium adds), so a "specialist-build
+  surcharge" — the premium applied to expected build labor as cash at
+  order time — was tried and hit 13×/kN. A follow-up research pass
+  killed the target itself: **RL10 over-generalizes.** RS-68, the
+  hydrolox booster *designed to cost*, runs ~$20M at 3,137 kN ≈
+  $6.4k/kN — only **~5× a Merlin** — and RL10's price is mostly a
+  hand-brazed 1960s process (~20 months per combustion chamber,
+  ~1 engine/month; the 3D-printed RL10C-X is ~1/week), i.e. the
+  learning curve's territory, not the BOM's. Decision (yours): drop
+  the surcharge, keep the unspecialized-teams abstraction, tune
+  hydrolox to 3.0× materials-only. Result: hydrolox GG ~2.9×/kN,
+  expander upper ~5.7×/kN — right in the RS-68-grounded band.
+- **Size terms (4c)**: engine build work × (mass/1150 kg)^0.6 (anchored
+  at the starter kerolox GG), engine design work × scale^0.4. Reactors
+  pass scale 1.0.
+- **Improvement decay (4e)**: discovery chance × 0.7^(improvements
+  already found), engines and reactors.
+- **DinoSoar ripple (re-swept in the same change)**: measured marginal
+  cost $36M → **$39M** (hydrolox premium on its 6.6 t booster engine);
+  catalog_cost 36→39M, margins 3-8× → **2.6-7.2×** so its GEO bid
+  range stays ~$103-285M (real prices — the market anchor holds);
+  production_lines 8 → **12** (the mass exponent makes its booster
+  ~2.9× the line-days; 12 is the minimum that keeps a won campaign's
+  cadence, per Q4c). dino_probe: still ~18-21 awards/8y, healthy
+  stock, money growing.
+
+**New engine cost surface** (unit cost, per-kN vs kerolox GG):
+kerolox GG $2.54M (unchanged, the anchor); kerolox SC $5.0M (1.7×/kN);
+kerolox FF $7.7M (2.3×); hydrolox GG upper $0.9M (2.9×); hydrolox
+expander $1.4M (5.7×); hydrolox SC $1.8M (5.0×); methalox FF $6.3M
+(2.4×); hypergolic PF $0.23M. Liquid-space spread went from 4.5× to
+~34×, with the per-kN ordering matching the RS-68/RD-180/Merlin data
+rather than the RL10 outlier.
+
+**4d big-vs-clustered, before → after** (same design, 1×scale-2 vs
+4×scale-0.5 kerolox GG at equal thrust): before, big dominated
+outright — same design time, same launch risk (cluster's ~4× flaw
+activation rate almost exactly cancels its engine-out redundancy), and
+$3.9M vs $7.4M unit cost (clusters paid 4× flat labor). After the size
+terms: big $4.5M vs cluster $5.8M (1.9× → 1.3× gap) and **250 vs 143
+design days** — big engines are now a slower program, clusters a
+faster, costlier one. A real trade; no engine-specific mechanics
+needed, and the SC/FF complexity bump stays on the shelf (Q4b).
+
+**200-seed re-baseline** (8y, final defaults): **1/200 bankrupt**
+(seed 172 — the bot's small hydrolox upper engine builds cheaper under
+the mass term, easing Task 3's 4/200; Task 5 recalibrates toward
+2-4/100), first launch month 16.7 with ~9 hidden flaws, dev spend
+$69M, unit cost $15.0M / payment $30.0M (cost ratio ~50% holds),
+aggregate success 92.9%, 91/200 end above start, 16 survivors dip
+below $0 and recover (worst −$100M), 200/200 reach a profitable year.
+sim_bands re-baselined (band values unchanged from Task 3; only
+recorded baselines moved). Both Balance TODO items ("fewer, bigger
+engines", "improvements get harder") are addressed and removed at
+this commit.
+
 ## 2. Real-world benchmarks (web-verified per Q5; corrections applied and marked ✱)
 
 ### Engines — start of full development → first flight

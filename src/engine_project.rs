@@ -376,7 +376,7 @@ impl EngineProject {
         let propellants = preset.propellants();
         let complexity = balance::combined_complexity(cycle, &propellants);
         let effective = balance::effective_complexity(cycle, &propellants);
-        let work_required = balance_cfg.work.design_work_required(effective);
+        let work_required = balance_cfg.work.design_work_required(effective, scale);
 
         let thrust = baseline.thrust_n * scale;
         let mass = baseline.mass_kg * scale;
@@ -465,7 +465,7 @@ impl EngineProject {
         let propellants = preset.propellants();
         let complexity = balance::combined_complexity(cycle, &propellants);
         let effective = balance::effective_complexity(cycle, &propellants);
-        let work_required = balance_cfg.work.design_work_required(effective);
+        let work_required = balance_cfg.work.design_work_required(effective, scale);
 
         let use_vacuum = if baseline.vacuum_only { true } else { use_vacuum_isp };
         let isp = if use_vacuum { baseline.isp_vac_s } else { baseline.isp_sl_s };
@@ -556,8 +556,12 @@ impl EngineProject {
                             flaw_description: self.flaws[idx].description.clone(),
                         });
                     }
-                    // Roll for improvement discovery
-                    if rng.gen::<f64>() < balance_cfg.flaws.improvement_discovery_chance {
+                    // Roll for improvement discovery. The chance decays
+                    // with improvements already found on this design —
+                    // the low-hanging fruit runs out (M4 Task 4e).
+                    let improvement_chance = balance_cfg.flaws.improvement_discovery_chance
+                        * balance_cfg.flaws.improvement_decay.powi(self.improvements.len() as i32);
+                    if rng.gen::<f64>() < improvement_chance {
                         let improvement = generate_improvement(rng, self.design.cycle);
                         events.push(WorkEvent::ImprovementDiscovered {
                             description: format!("{}: {}", improvement.description, improvement.kind),

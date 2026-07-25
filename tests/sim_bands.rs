@@ -2,23 +2,23 @@
 //!
 //! Bands are set around the measured baseline (basic policy, default
 //! balance, 200 seeds × 8 years, 2026-07, re-measured after the M4
-//! Task 3 dev-time/risk retune — design work × (complexity/5)^2.5,
-//! engine build ^1.5, flaw ground discovery uniform^2 × sqrt(act),
-//! and at most one rocket-destroying flaw discovered per launch —
-//! on top of the Task 2 cost retune):
-//! 4/200 bankrupt (seeds 45/58/88/165 — the 2-4/100 roguelike band),
-//! 9/200 survivors dip below $0 and recover (worst -$89.7M), 4-25
-//! launches per seed, per-seed success ≥ 69%, aggregate success
-//! 92.6%, median survivor min money $88M with 161/200 keeping min
-//! above $25M, 77/200 end above starting money, 199/200 have a first
-//! profitable year (latest start+7). First launch averages month
-//! 17.5 with ~8 undiscovered flaws aboard; dev spend to first launch
-//! ~$69M. Task 5 of the M4 plan does the final difficulty
-//! calibration. The margin-sweep context still applies (see policy.rs
-//! DEFAULT_BID_MARGIN): the uncontested small-payload market rewards
-//! higher margins, so these bands lock a chosen honest posture, not
-//! an optimum. Bands are regression protection around observed
-//! reality, not aspirations.
+//! Task 4 engine-cost retune — hydrolox material premium 3.0×,
+//! per-cycle material multipliers, mass/scale size terms on build and
+//! design work, improvement-discovery decay — on top of the Task 2/3
+//! retunes): 1/200 bankrupt (seed 172; the bot's small hydrolox upper
+//! engine builds cheaper under the mass term, easing Task 3's 4/200 —
+//! Task 5 recalibrates toward 2-4/100), 16/200 survivors dip below $0
+//! and recover (worst -$99.9M, seed 88), 4-26 launches per seed,
+//! per-seed success ≥ 73%, aggregate success 92.9%, 163/200 keep min
+//! money above $25M, 91/200 end above starting money, 200/200 have a
+//! first profitable year (latest start+7). First launch averages
+//! month 16.7 with ~9 undiscovered flaws aboard; dev spend to first
+//! launch ~$69M; unit cost $15.0M vs payment $30.0M (cost ratio ~50%
+//! holds). The margin-sweep context still applies
+//! (see policy.rs DEFAULT_BID_MARGIN): the uncontested small-payload
+//! market rewards higher margins, so these bands lock a chosen honest
+//! posture, not an optimum. Bands are regression protection around
+//! observed reality, not aspirations.
 //!
 //! When changing balance values or game constants, re-measure with
 //! `cargo run --release --bin simulate -- --seeds 1..200 --years 8
@@ -66,7 +66,7 @@ fn assert_bands(summaries: &[RunSummary]) {
         }
         assert!(
             s.min_money > -120_000_000.0,
-            "seed {}: runaway debt below -$120M (min ${:.0}, baseline low -$99.2M)",
+            "seed {}: runaway debt below -$120M (min ${:.0}, baseline low -$99.9M)",
             s.seed, s.min_money,
         );
         if s.min_money > 25_000_000.0 {
@@ -77,14 +77,14 @@ fn assert_bands(summaries: &[RunSummary]) {
         }
         assert!(
             (3..=30).contains(&s.launches),
-            "seed {}: {} launches outside band 3..=30 (baseline 4..=25; the \
+            "seed {}: {} launches outside band 3..=30 (baseline 4..=26; the \
              top is a seed that wins a big block program)",
             s.seed, s.launches,
         );
         let rate = s.successes as f64 / s.launches as f64;
         assert!(
             rate >= 0.65,
-            "seed {}: launch success rate {:.0}% below 65% (baseline min 69%; \
+            "seed {}: launch success rate {:.0}% below 65% (baseline min 73%; \
              low-launch seeds make this floor noisy)",
             s.seed, rate * 100.0,
         );
@@ -100,33 +100,33 @@ fn assert_bands(summaries: &[RunSummary]) {
         successes += s.successes;
     }
 
-    // Fleet-level bands (baseline 77/200 end above starting money,
-    // 161/200 keep min money above $25M, 4/200 bankrupt, 199/200 have
+    // Fleet-level bands (baseline 91/200 end above starting money,
+    // 163/200 keep min money above $25M, 1/200 bankrupt, 200/200 have
     // a profitable year).
     let n = summaries.len() as f64;
     assert!(
         bankrupt as f64 / n <= 0.035,
-        "{bankrupt}/{n} seeds bankrupt (band <= 3.5%, baseline 2.0% — inside \
-         the agreed 2-4/100 roguelike goal; Task 5 does final calibration)",
+        "{bankrupt}/{n} seeds bankrupt (band <= 3.5%, baseline 0.5%; Task 5 \
+         recalibrates toward the 2-4/100 roguelike goal)",
     );
     assert!(
         min_above_25m as f64 / n >= 0.72,
         "only {min_above_25m}/{n} seeds kept min money above $25M (band >= 72%, \
-         baseline 80.5%)",
+         baseline 81.5%)",
     );
     assert!(
         profitable as f64 / n >= 0.30,
-        "only {profitable}/{n} seeds profitable after run (band >= 30%, baseline 38.5%)",
+        "only {profitable}/{n} seeds profitable after run (band >= 30%, baseline 45.5%)",
     );
     assert!(
         with_fpy as f64 / n >= 0.95,
-        "only {with_fpy}/{n} seeds ever had a profitable year (band >= 95%, baseline 99.5%)",
+        "only {with_fpy}/{n} seeds ever had a profitable year (band >= 95%, baseline 100%)",
     );
 
     let aggregate = successes as f64 / launches as f64;
     assert!(
         aggregate >= 0.90,
-        "aggregate launch success rate {:.1}% below 90% (baseline 92.6%)",
+        "aggregate launch success rate {:.1}% below 90% (baseline 92.9%)",
         aggregate * 100.0,
     );
 }

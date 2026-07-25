@@ -211,9 +211,20 @@ pub fn rocket_integration_bom() -> BillOfMaterials {
 /// Fixed mass for rocket integration hardware (kg).
 pub const ROCKET_INTEGRATION_MASS_KG: f64 = 800.0;
 
-/// Cost to manufacture an engine of given mass and propellant type.
-pub fn engine_material_cost(preset: PropellantPreset, engine_mass_kg: f64, prices: &ResourcePrices) -> f64 {
+/// Cost to manufacture an engine of given mass, propellant type, and
+/// cycle. The per-preset and per-cycle premiums (M4 Task 4: hydrolox
+/// hardware ~3.5x, staged-combustion precision ~1.6x, ...) stack on
+/// top of the BOM so every cost consumer agrees.
+pub fn engine_material_cost(
+    preset: PropellantPreset,
+    cycle: crate::engine::EngineCycle,
+    engine_mass_kg: f64,
+    prices: &ResourcePrices,
+    premiums: &crate::balance_config::EngineMaterialsConfig,
+) -> f64 {
     engine_bom(preset).material_cost(engine_mass_kg, prices)
+        * premiums.preset_multiplier(preset)
+        * premiums.cycle_multiplier(cycle)
 }
 
 /// Cost for tank/structure manufacturing of a stage.
@@ -301,9 +312,13 @@ mod tests {
 
     #[test]
     fn test_engine_material_cost_kerolox() {
-        let cost = engine_material_cost(PropellantPreset::Kerolox, 500.0, &ResourcePrices::default());
+        let cost = engine_material_cost(
+            PropellantPreset::Kerolox, crate::engine::EngineCycle::GasGenerator,
+            500.0, &ResourcePrices::default(), &crate::balance_config::EngineMaterialsConfig::default(),
+        );
         // 500kg engine: superalloys(200kg*$320) + steel(125*$12) + alu(50*$20) + plumb(50*$6000) + ...
         // Should be in the hundreds-of-thousands-to-low-millions range
+        // (kerolox GG is the 1.0x anchor for both premium multipliers).
         assert!(cost > 200_000.0, "Kerolox engine cost {} too low", cost);
         assert!(cost < 2_000_000.0, "Kerolox engine cost {} too high", cost);
     }
@@ -311,10 +326,45 @@ mod tests {
     #[test]
     fn test_engine_material_cost_solid_higher() {
         // Solid engines include solid propellant in the casing mass
-        let solid = engine_material_cost(PropellantPreset::Solid, 1000.0, &ResourcePrices::default());
-        let kerolox = engine_material_cost(PropellantPreset::Kerolox, 1000.0, &ResourcePrices::default());
-        // Solid should be cheaper (less superalloy, more cheap steel/propellant)
+        let premiums = crate::balance_config::EngineMaterialsConfig::default();
+        let solid = engine_material_cost(
+            PropellantPreset::Solid, crate::engine::EngineCycle::PressureFed,
+            1000.0, &ResourcePrices::default(), &premiums,
+        );
+        let kerolox = engine_material_cost(
+            PropellantPreset::Kerolox, crate::engine::EngineCycle::GasGenerator,
+            1000.0, &ResourcePrices::default(), &premiums,
+        );
+        // Solid should be cheaper (less superalloy, more cheap
+        // steel/propellant; the pressure-fed cycle discount helps too)
         assert!(solid < kerolox, "Solid {} should be cheaper than kerolox {}", solid, kerolox);
+    }
+
+    #[test]
+    fn test_engine_material_premiums_stack() {
+        // M4 Task 4a/4b: hydrolox hardware carries a big premium, and
+        // cycle multipliers stack on top of it.
+        let premiums = crate::balance_config::EngineMaterialsConfig::default();
+        let prices = ResourcePrices::default();
+        let kerolox_gg = engine_material_cost(
+            PropellantPreset::Kerolox, crate::engine::EngineCycle::GasGenerator,
+            1000.0, &prices, &premiums,
+        );
+        let hydrolox_gg = engine_material_cost(
+            PropellantPreset::Hydrolox, crate::engine::EngineCycle::GasGenerator,
+            1000.0, &prices, &premiums,
+        );
+        let hydrolox_sc = engine_material_cost(
+            PropellantPreset::Hydrolox, crate::engine::EngineCycle::StagedCombustion,
+            1000.0, &prices, &premiums,
+        );
+        // Hydrolox BOM is ~11% pricier per kg; the 3.0x preset premium
+        // puts it ~3.3x kerolox at equal mass.
+        assert!(hydrolox_gg > kerolox_gg * 3.0 && hydrolox_gg < kerolox_gg * 4.0,
+            "hydrolox premium off: {} vs kerolox {}", hydrolox_gg, kerolox_gg);
+        // Staged combustion adds its 1.6x on top.
+        assert!((hydrolox_sc / hydrolox_gg - 1.6).abs() < 0.01,
+            "cycle multiplier should stack: {} vs {}", hydrolox_sc, hydrolox_gg);
     }
 
     #[test]

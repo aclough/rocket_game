@@ -25,6 +25,7 @@ pub struct BalanceConfig {
     pub flaws: FlawsConfig,
     pub reputation: ReputationConfig,
     pub competitor: CompetitorConfig,
+    pub engine_materials: EngineMaterialsConfig,
 }
 
 impl BalanceConfig {
@@ -237,6 +238,20 @@ pub struct WorkConfig {
     /// would build 3.7x slower at 2.5, killing its bid readiness and
     /// campaign cadence; at 1.5 it is 1.55x, which the line absorbs).
     pub engine_build_complexity_exponent: f64,
+    /// Exponent on (engine mass / anchor) for engine build work — M4
+    /// Task 4c. Removes the free amortization where flat per-engine
+    /// labor made 4x-scale engines the cheapest per kN: a big engine
+    /// now takes more line-days to build, a small one fewer.
+    pub engine_build_mass_exponent: f64,
+    /// Mass anchor (kg) for the engine build mass factor — the starter
+    /// kerolox gas-generator's mass, so the early-game pace is
+    /// unchanged by the exponent.
+    pub engine_build_mass_anchor_kg: f64,
+    /// Exponent on engine scale for design work — M4 Task 4c. A
+    /// 4x-scale engine is a genuinely bigger dev program (the F-1
+    /// story: size was itself the problem), ~1.7x the work at the
+    /// default 0.4; a 0.25x engine is ~0.6x.
+    pub engine_design_scale_exponent: f64,
     /// Base days to build a 10-tonne stage.
     pub stage_build_base_days: f64,
     /// Exponent on (stage mass / 10 t) for stage build work.
@@ -266,6 +281,9 @@ impl Default for WorkConfig {
             engine_design_complexity_exponent: 2.5,
             rocket_design_complexity_exponent: 2.5,
             engine_build_complexity_exponent: 1.5,
+            engine_build_mass_exponent: 0.6,
+            engine_build_mass_anchor_kg: 1150.0,
+            engine_design_scale_exponent: 0.4,
             stage_build_base_days: 60.0,
             stage_build_mass_exponent: 0.75,
             rocket_integration_base_days: 20.0,
@@ -280,10 +298,12 @@ impl Default for WorkConfig {
 
 impl WorkConfig {
     /// Work required in days for engine design:
-    /// base_days * (complexity / 5)^exponent.
-    pub fn design_work_required(&self, complexity: u32) -> f64 {
+    /// base_days * (complexity / 5)^exponent * scale^scale_exponent.
+    /// Reactors (no scale knob) pass scale 1.0.
+    pub fn design_work_required(&self, complexity: u32, scale: f64) -> f64 {
         self.engine_design_base_days
             * (complexity as f64 / 5.0).powf(self.engine_design_complexity_exponent)
+            * scale.powf(self.engine_design_scale_exponent)
     }
 
     /// Work required in days for rocket design:
@@ -294,10 +314,12 @@ impl WorkConfig {
     }
 
     /// Work required in days for engine manufacturing:
-    /// base_days * (complexity / 5)^exponent.
-    pub fn engine_build_work(&self, complexity: u32) -> f64 {
+    /// base_days * (complexity / 5)^cx_exponent * (mass / anchor)^mass_exponent.
+    pub fn engine_build_work(&self, complexity: u32, engine_mass_kg: f64) -> f64 {
         self.engine_build_base_days
             * (complexity as f64 / 5.0).powf(self.engine_build_complexity_exponent)
+            * (engine_mass_kg / self.engine_build_mass_anchor_kg)
+                .powf(self.engine_build_mass_exponent)
     }
 
     /// Work required in days for stage manufacturing, based on mass.
@@ -583,6 +605,113 @@ impl MarketsConfig {
 }
 
 // ==========================================
+// Engine material premiums
+// ==========================================
+
+/// Multipliers on engine BOM material cost by propellant preset and by
+/// cycle — M4 Task 4a/4b. The BOM fractions alone can't express the
+/// real cost dividers (superalloys are only $320/kg, so fraction shifts
+/// cap out around 1.7x): hydrogen hardware really costs ~20x kerolox
+/// per engine (RL10 vs Merlin), and top cycles carry a precision
+/// premium. The two multipliers stack:
+/// materials = BOM $/kg x mass x preset_mult x cycle_mult.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EngineMaterialsConfig {
+    /// Kerolox — the anchor, calibrated in the M4 Task 2 pass.
+    pub kerolox: f64,
+    /// Methalox hardware is kerolox-like (Raptor's cheapness is
+    /// production rate, which the learning curve models).
+    pub methalox: f64,
+    /// Deep-cryo hydrogen hardware premium. Benchmarked against
+    /// RS-68 — a hydrolox booster *designed to cost* runs ~$6.4k/kN,
+    /// ~5x a Merlin — not against RL10, whose famous price is mostly
+    /// a hand-brazed 1960s process at ~1 engine/month (the learning
+    /// curve's territory, not the BOM's). At 3.0 a hydrolox GG lands
+    /// ~3x kerolox per kN and an expander upper ~6x.
+    pub hydrolox: f64,
+    /// Storable hypergolics: simple, room-temperature hardware.
+    pub hypergolic: f64,
+    /// Solid motors: cheap cases, propellant already in the BOM.
+    pub solid: f64,
+    /// Electric propulsion BOM is already electronics-heavy.
+    pub xenon: f64,
+    /// Solar sail BOM is already film/structure.
+    pub photon: f64,
+    /// Nuclear-thermal BOM already carries the HEU premium.
+    pub hydrogen: f64,
+    /// Pressure-fed: the simplest possible plumbing.
+    pub pressure_fed: f64,
+    /// Gas generator — the cycle anchor.
+    pub gas_generator: f64,
+    /// Expander: brazed regen nozzles, tight tolerances.
+    pub expander: f64,
+    /// Staged combustion: high-pressure preburner hardware.
+    pub staged_combustion: f64,
+    /// Full-flow staged combustion: two preburners, hottest turbines.
+    pub full_flow: f64,
+    /// Non-chemical cycles: premiums live in their preset/BOM instead.
+    pub nuclear_thermal: f64,
+    pub electric_propulsion: f64,
+    pub solar_sail: f64,
+}
+
+impl Default for EngineMaterialsConfig {
+    fn default() -> Self {
+        EngineMaterialsConfig {
+            kerolox: 1.0,
+            methalox: 1.0,
+            hydrolox: 3.0,
+            hypergolic: 1.0,
+            solid: 1.0,
+            xenon: 1.0,
+            photon: 1.0,
+            hydrogen: 1.0,
+            pressure_fed: 0.8,
+            gas_generator: 1.0,
+            expander: 1.3,
+            staged_combustion: 1.6,
+            full_flow: 2.0,
+            nuclear_thermal: 1.0,
+            electric_propulsion: 1.0,
+            solar_sail: 1.0,
+        }
+    }
+}
+
+impl EngineMaterialsConfig {
+    /// Material multiplier for a propellant preset.
+    pub fn preset_multiplier(&self, preset: crate::engine_project::PropellantPreset) -> f64 {
+        use crate::engine_project::PropellantPreset as P;
+        match preset {
+            P::Kerolox => self.kerolox,
+            P::Methalox => self.methalox,
+            P::Hydrolox => self.hydrolox,
+            P::Hypergolic => self.hypergolic,
+            P::Solid => self.solid,
+            P::Xenon => self.xenon,
+            P::Photon => self.photon,
+            P::Hydrogen => self.hydrogen,
+        }
+    }
+
+    /// Material multiplier for an engine cycle.
+    pub fn cycle_multiplier(&self, cycle: crate::engine::EngineCycle) -> f64 {
+        use crate::engine::EngineCycle as C;
+        match cycle {
+            C::PressureFed => self.pressure_fed,
+            C::GasGenerator => self.gas_generator,
+            C::Expander => self.expander,
+            C::StagedCombustion => self.staged_combustion,
+            C::FullFlow => self.full_flow,
+            C::NuclearThermal => self.nuclear_thermal,
+            C::ElectricPropulsion => self.electric_propulsion,
+            C::SolarSail => self.solar_sail,
+        }
+    }
+}
+
+// ==========================================
 // Flaws & risk
 // ==========================================
 
@@ -609,6 +738,13 @@ pub struct FlawsConfig {
     pub improvement_discovery_chance: f64,
     /// Chance per testing cycle to discover a reactor improvement.
     pub reactor_improvement_discovery_chance: f64,
+    /// Per-improvement decay on the discovery chance — M4 Task 4e:
+    /// effective chance = base x decay^(improvements already found on
+    /// that design). The first few +thrust/+isp tweaks come easily,
+    /// then the design's low-hanging fruit runs out (the TODO "engine
+    /// improvements get harder quickly the more there are"). Applies
+    /// to engines and reactors alike.
+    pub improvement_decay: f64,
     /// Flat probability that a rocket modification introduces a new
     /// undiscovered flaw.
     pub modification_flaw_prob: f64,
@@ -638,6 +774,7 @@ impl Default for FlawsConfig {
             reactor_endurance_fraction: 0.30,
             improvement_discovery_chance: 0.08,
             reactor_improvement_discovery_chance: 0.08,
+            improvement_decay: 0.7,
             modification_flaw_prob: 0.10,
             flaw_discovery_exponent: 2.0,
         }
@@ -719,6 +856,10 @@ pub struct CompetitorConfig {
     pub enabled: bool,
     pub name: String,
     /// Manufacturing teams hired at realization — the capacity knob.
+    /// 8 → 12 in M4 Task 4: the engine-build mass exponent makes the
+    /// 6.6 t booster engine ~2.9x the line-days, and 12 is the minimum
+    /// that keeps a won campaign's 3-mission cadence on schedule (the
+    /// compensation agreed in the Task 4 plan's Q4c).
     pub production_lines: u32,
     /// Floor space units at realization (must comfortably fit
     /// simultaneous stage + integration orders for the catalog vehicle).
@@ -735,7 +876,9 @@ pub struct CompetitorConfig {
     /// manufacturing pipeline has produced cost history, and the book
     /// value of initial stock. Keep near the real build cost (the
     /// pricing basis switches to actual cost history after the first
-    /// build; a large gap makes prices jump).
+    /// build; a large gap makes prices jump). $36M → $39M in M4
+    /// Task 4: the hydrolox material premium on its 6.6 t booster
+    /// engine raised measured marginal cost to ~$39M (dino_probe).
     pub catalog_cost: f64,
     /// Bid = marginal cost × margin. Margin relaxes from margin_max
     /// (one free rocket) toward margin_min as free stock grows.
@@ -743,7 +886,9 @@ pub struct CompetitorConfig {
     /// incumbent prices at what the market bears, disciplined only by
     /// its own stock pressure. Retuned in the M4 cost pass (build
     /// costs rose ~4×) so its GEO bids stay at the same real-world
-    /// prices while the implied markup fell from 8-20× to 3-8×.
+    /// prices while the implied markup fell from 8-20× to 3-8×, then
+    /// to 2.6-7.2 in Task 4 when the hydrolox premium raised its cost
+    /// basis $36M → $39M (bid range stays ~$103-285M).
     pub margin_min: f64,
     pub margin_max: f64,
     /// Absolute lowest bid the script will ever place — the safety
@@ -783,15 +928,15 @@ impl Default for CompetitorConfig {
         CompetitorConfig {
             enabled: true,
             name: "DinoSoar".into(),
-            production_lines: 8,
+            production_lines: 12,
             floor_space: 40,
             starting_money: 3_000_000_000.0,
             initial_stock: 3,
             auto_build_target: 4,
             prior_builds: 40,
-            catalog_cost: 36_000_000.0,
-            margin_min: 3.0,
-            margin_max: 8.0,
+            catalog_cost: 39_000_000.0,
+            margin_min: 2.6,
+            margin_max: 7.2,
             bid_floor: 60_000_000.0,
             bid_jitter: 0.05,
             block_discount: 0.10,
@@ -921,13 +1066,18 @@ mod tests {
     #[test]
     fn test_work_formulas_match_defaults() {
         let work = WorkConfig::default();
-        // Complexity 5 is the anchor: the exponent leaves it unchanged.
-        assert!((work.design_work_required(5) - 120.0).abs() < 0.01);
+        // Complexity 5 at scale 1 is the anchor: exponents leave it unchanged.
+        assert!((work.design_work_required(5, 1.0) - 120.0).abs() < 0.01);
         // 120 * (9/5)^2.5 ≈ 521.6 — superlinear stretch at the top end.
-        assert!((work.design_work_required(9) - 521.63).abs() < 0.01);
+        assert!((work.design_work_required(9, 1.0) - 521.63).abs() < 0.01);
+        // Scale term: 4x engine ≈ 1.74x the dev work (4^0.4).
+        assert!((work.design_work_required(5, 4.0) - 120.0 * 4.0_f64.powf(0.4)).abs() < 0.01);
         assert!((work.rocket_design_work_required(5) - 60.0).abs() < 0.01);
-        // 90 * (6/5)^1.5 ≈ 118.3 — build scales gentler than design.
-        assert!((work.engine_build_work(6) - 118.31).abs() < 0.01);
+        // 90 * (6/5)^1.5 ≈ 118.3 at the 1150 kg mass anchor — build
+        // scales gentler than design.
+        assert!((work.engine_build_work(6, 1150.0) - 118.31).abs() < 0.01);
+        // Mass term: a 2x-mass engine is 2^0.6 ≈ 1.52x the line-days.
+        assert!((work.engine_build_work(6, 2300.0) - 118.31 * 2.0_f64.powf(0.6)).abs() < 0.1);
         assert!((work.stage_build_work(10_000.0) - 60.0).abs() < 0.01);
         assert!((work.rocket_integration_work(2) - 80.0).abs() < 0.01);
         assert!((work.learning_curve_multiplier(1) - 1.0).abs() < 0.01);
