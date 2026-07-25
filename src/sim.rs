@@ -76,8 +76,12 @@ pub fn metric_row(seed: u64, gs: &GameState, tally: &Tally) -> String {
 pub struct RunSummary {
     pub seed: u64,
     pub start_year: u32,
+    /// Money at run end — for a bankrupt run, money on the day the
+    /// harness terminated it (just below [`SIM_DEBT_LIMIT`]).
     pub final_money: f64,
     pub min_money: f64,
+    /// True when the run was terminated at [`SIM_DEBT_LIMIT`], or
+    /// (rarely) survived to the end still below $0.
     pub bankrupt: bool,
     pub launches: usize,
     pub successes: usize,
@@ -142,8 +146,18 @@ fn undiscovered_flaw_count(c: &crate::company::Company) -> u32 {
         .count() as u32
 }
 
+/// Debt at which the harness terminates a run and marks it bankrupt.
+/// The game itself has no death — bankruptcy/firm death arrive with
+/// loans in a later milestone — but for balance measurement a company
+/// $30M in the red is finished: letting it keep playing on unlimited
+/// free debt hides real deaths (M4 Task 5 found seeds grinding from
+/// -$97M back to positive on salary credit that nobody extended).
+pub const SIM_DEBT_LIMIT: f64 = -30_000_000.0;
+
 /// Simulate one seed for `years` under `policy`, calling `monthly`
 /// with a metric row on day 1 of every month (plus the starting day).
+/// The run ends early — bankrupt — if money falls below
+/// [`SIM_DEBT_LIMIT`].
 pub fn run_seed(
     seed: u64,
     years: u32,
@@ -181,6 +195,10 @@ pub fn run_seed(
             ));
         }
         min_money = min_money.min(gs.player_company.money);
+        if gs.player_company.money < SIM_DEBT_LIMIT {
+            monthly(&metric_row(seed, &gs, &tally));
+            break;
+        }
         if gs.date.day == 1 {
             monthly(&metric_row(seed, &gs, &tally));
             if gs.date.month == 1 {

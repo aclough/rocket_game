@@ -253,6 +253,111 @@ recorded baselines moved). Both Balance TODO items ("fewer, bigger
 engines", "improvements get harder") are addressed and removed at
 this commit.
 
+### Task 5 findings — death modes, and the missing bankruptcy rule
+
+Probed the bankrupt/near-bankrupt seeds (`tests/task5_probe.rs`, kept
+as a measurement harness alongside dino_probe). Findings:
+
+**1. The game has no death.** "Bankrupt" in the sim just means money
+< $0 *at the end of the run*; in the game, negative money has no
+consequence at all. Seed 88 is the poster child: a 2004
+triple-failure streak craters reputation to −217, every market gates
+shut, and the bot spends two years flying test masses to grind
+reputation back while running −$97M — hiring, auto-building, and
+launching the whole way down — then climbs back to +$1.8M by 2009. A
+real company dies in early 2005. Unlimited free debt is the
+degenerate mechanic behind the "16 seeds dip below $0 and recover"
+shape: the game is currently *near-death constant, death rare* —
+exactly inverted from the agreed roguelike shape.
+
+**2. Death-mode taxonomy** (nobody dies of block programs):
+- *Failure-streak spiral* (seed 88 pattern): early vehicle losses →
+  reputation deeply negative → markets gate shut → test-mass grind on
+  borrowed money. Recovery is only possible because debt is free.
+- *Niche starvation* (seed 172, the one "bankruptcy"): pipeline
+  healthy, rep +50, two rockets on the shelf — but the late-game
+  market mix offers only contracts it can't lift (GTO/GEO, 2,700-
+  4,100 kg LEO) or can't profitably bid (university class: ceiling
+  $5.8M vs the bot's $25M cost-x2 bid). It bleeds salaries for 2.5
+  years and ends at −$45M. For the rigid bot this is fatal; for a
+  human it's the game telling you to build a bigger or cheaper
+  rocket — a fair pressure, not a bug.
+- The Task 2 "seed 169 block-program volume loss" hypothesis is
+  resolved: block bids are cost × (1 + margin), structurally never
+  below cost. The old pattern was failure-streak + rebuild, same as
+  seed 88.
+
+**3. A debt limit hits the difficulty target with zero knob changes.**
+Min-money distribution across the 200-seed baseline:
+
+| Death rule (debt exceeds) | Deaths per 100 seeds |
+|---|---|
+| $0 | 8.5 (too hot) |
+| $10M | 5.5 |
+| $20M | 5.0 |
+| **$30M** | **3.0 — mid-band of the 2-4/100 goal** |
+| $40M | 1.5 (too cold) |
+
+A bankruptcy rule at debt ≥ ~$30M simultaneously: lands the agreed
+death rate, kills the free-debt degeneracy, and bounds the surviving
+floor by construction (survivors never saw −$30M; 163/200 keep min
+above +$25M). It does execute seed 177 mid-comeback (−$38.7M →
++$156M) — which is what "death is possible" means. No difficulty-knob
+sweep is needed if this lands; the knobs stay where Tasks 2-4 put
+them.
+
+- **Q5a:** Adopt a real bankruptcy at debt ≥ $30M ("creditors call
+  it": game over when money < −$30M)? Alternatives: a $20M line
+  (5/100, hotter), plain $0 insolvency (8.5/100, punishing), an
+  "insolvency freeze" instead of game-over (no hiring/building/
+  launching while negative — kills the same seeds but slowly and
+  less legibly), or no death mechanic (keep the sim-only definition
+  and push difficulty knobs instead). My recommendation is the hard
+  $30M line: cleanest, hits the band, and the freeze variant just
+  drags out the same deaths.
+  USER: No, we're going to be adding bankruptcy and firm death later
+  when we add loans. For our current purposes and for testing we're
+  going to keep the no-death aspect of the main game. Terminating
+  simulations when they hit < -$30M is pretty reasonable though, so
+  add that as a rule in the simulation harness for now.
+- **Q5b:** (moot per Q5a — no game/UI change; harness-only rule.)
+
+### Task 5 — landed values and 200-seed result
+
+- **`sim::SIM_DEBT_LIMIT` = −$30M**: `run_seed` terminates a run and
+  marks it bankrupt when money falls below the line. Harness-only —
+  the game itself keeps no-death until the loans milestone.
+- **200-seed baseline**: **6/200 bankrupt (3.0/100 — mid-band of the
+  agreed 2-4/100)** with no balance-knob changes; the Task 2-4 values
+  stand. Deaths (seeds 69/88/144/165/172/177) come at 9-13 launches
+  with 64-78% success — failure-streak spirals plus one niche
+  starvation — and read as legible roguelike deaths. Survivors:
+  min money bounded above −$29M by the debt line (was −$100M free
+  debt), 163/200 keep min above +$25M, 11 dip below $0 and recover,
+  91/200 end above start, 196/200 reach a profitable year, aggregate
+  success 92.7%.
+- **sim_bands** re-baselined: the agreed guard band lands as
+  bankruptcies ≤ 6% with a ≥ 1% floor on runs of ≥ 100 seeds
+  (baseline 3.0%); truncated (bankrupt) runs are exempt from the
+  per-seed launch/success bands; runaway-debt bound tightened to
+  −$60M (limit + one-day overshoot, baseline low −$40.2M).
+- `tests/task5_probe.rs` kept as the seed-autopsy harness.
+- Remaining for M4: your hand playtest (checklist above). Degenerate
+  patterns recorded for M4 part 2: unlimited free debt (fixed in sim,
+  open in game until loans), and the small-lift late-game trap —
+  markets can price a single-template company out (university-class
+  ceilings sit below a dedicated launch's cost while heavier
+  contracts exceed template capability), which is fair pressure for a
+  human but fatal to the rigid bot.
+
+**Hand-playtest checklist** (the feel half of Task 5): does the ~17-
+month first launch feel purposeful rather than empty; does rushing at
+~12 months feel like a gamble (~9 hidden flaws aboard); does the
+hydrolox upper's price register when choosing engines; do the new
+engine-size trades (big = cheaper unit, slower program) read in the
+designer; and — if Q5a lands — does the $30M debt line feel like
+tension or like a cliff.
+
 ## 2. Real-world benchmarks (web-verified per Q5; corrections applied and marked ✱)
 
 ### Engines — start of full development → first flight

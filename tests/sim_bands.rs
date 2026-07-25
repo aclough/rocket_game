@@ -61,12 +61,12 @@ fn assert_bands(summaries: &[RunSummary]) {
     let mut min_above_25m = 0usize;
 
     for s in summaries {
-        if s.bankrupt {
-            bankrupt += 1;
-        }
+        // The harness stops a run at SIM_DEBT_LIMIT (-$30M); a single
+        // day's spend can overshoot the line, but never by much
+        // (baseline low -$40.2M).
         assert!(
-            s.min_money > -120_000_000.0,
-            "seed {}: runaway debt below -$120M (min ${:.0}, baseline low -$99.9M)",
+            s.min_money > -60_000_000.0,
+            "seed {}: min money ${:.0} far below the -$30M sim debt limit",
             s.seed, s.min_money,
         );
         if s.min_money > 25_000_000.0 {
@@ -74,6 +74,23 @@ fn assert_bands(summaries: &[RunSummary]) {
         }
         if s.final_money > starting_money {
             profitable += 1;
+        }
+        if let Some(fpy) = s.first_profitable_year {
+            with_fpy += 1;
+            assert!(
+                fpy <= s.start_year + 7,
+                "seed {}: first profitable year {} later than start+7 (baseline max start+7)",
+                s.seed, fpy,
+            );
+        }
+        launches += s.launches;
+        successes += s.successes;
+        if s.bankrupt {
+            // A bankrupt run is truncated at the debt line, so the
+            // per-seed activity bands below don't apply to it
+            // (baseline deaths: 9-13 launches, success 64-78%).
+            bankrupt += 1;
+            continue;
         }
         assert!(
             (3..=30).contains(&s.launches),
@@ -88,27 +105,27 @@ fn assert_bands(summaries: &[RunSummary]) {
              low-launch seeds make this floor noisy)",
             s.seed, rate * 100.0,
         );
-        if let Some(fpy) = s.first_profitable_year {
-            with_fpy += 1;
-            assert!(
-                fpy <= s.start_year + 7,
-                "seed {}: first profitable year {} later than start+7 (baseline max start+7)",
-                s.seed, fpy,
-            );
-        }
-        launches += s.launches;
-        successes += s.successes;
     }
 
     // Fleet-level bands (baseline 91/200 end above starting money,
-    // 163/200 keep min money above $25M, 1/200 bankrupt, 200/200 have
+    // 163/200 keep min money above $25M, 6/200 bankrupt, 196/200 have
     // a profitable year).
     let n = summaries.len() as f64;
+    // The agreed roguelike guard band: 1-6 bankruptcies per 100 seeds
+    // (target 2-4/100, baseline 3.0/100). The lower bound only means
+    // anything at scale, so it applies to the 200-seed run and not
+    // the 20-seed smoke check.
     assert!(
-        bankrupt as f64 / n <= 0.035,
-        "{bankrupt}/{n} seeds bankrupt (band <= 3.5%, baseline 0.5%; Task 5 \
-         recalibrates toward the 2-4/100 roguelike goal)",
+        bankrupt as f64 / n <= 0.06,
+        "{bankrupt}/{n} seeds bankrupt (band <= 6%, baseline 3.0%)",
     );
+    if summaries.len() >= 100 {
+        assert!(
+            bankrupt as f64 / n >= 0.01,
+            "only {bankrupt}/{n} seeds bankrupt (band >= 1%, baseline 3.0%; \
+             the game should stay dangerous)",
+        );
+    }
     assert!(
         min_above_25m as f64 / n >= 0.72,
         "only {min_above_25m}/{n} seeds kept min money above $25M (band >= 72%, \
@@ -120,13 +137,13 @@ fn assert_bands(summaries: &[RunSummary]) {
     );
     assert!(
         with_fpy as f64 / n >= 0.95,
-        "only {with_fpy}/{n} seeds ever had a profitable year (band >= 95%, baseline 100%)",
+        "only {with_fpy}/{n} seeds ever had a profitable year (band >= 95%, baseline 98%)",
     );
 
     let aggregate = successes as f64 / launches as f64;
     assert!(
         aggregate >= 0.90,
-        "aggregate launch success rate {:.1}% below 90% (baseline 92.9%)",
+        "aggregate launch success rate {:.1}% below 90% (baseline 92.7%)",
         aggregate * 100.0,
     );
 }
