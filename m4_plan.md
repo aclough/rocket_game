@@ -68,6 +68,44 @@ sim_bands.rs re-baselined in the same edit: per-seed min-money floor
 replaced by a runaway-debt bound (min > −$60M) plus fleet bands
 (bankrupt ≤ 1.5%, ≥85% keep min above $25M, ≥55% end profitable).
 
+### Task 3 dev-time scaling + rush risk — landed values and 200-seed result
+
+Mechanics landed exactly as agreed in Q1:
+
+- **`flaw_discovery_exponent` = 2.0** (FlawsConfig): ground discovery is now
+  `uniform^N × sqrt(activation_chance)`. Mean discovery rate drops from 1/2
+  to 1/3 of the sqrt cap; the low tail is the de-facto "never saw it on the
+  stand" class. Flight activations stay always-discovered.
+- **Stop at first StageLoss**: launch and mid-flight flaw rolling (including
+  the daily endurance and reactor rolls, same rationale) breaks out at the
+  first StageLoss activation — the vehicle is gone, nothing after it can be
+  observed, so a launch discovers at most one rocket-destroying flaw. This
+  alone moved 200-seed bankruptcies 1 → 3.
+- **Work exponents** (WorkConfig, `base × (complexity/5)^p`, anchored so
+  complexity 5 is unchanged): **design p = 2.5** (engine, reactor, rocket),
+  **engine build p = 1.5**. Sweep grid p∈{1.5,2,2.5} × N∈{2,3}: p2.5/N2 and
+  p2/N2 both hit the bankruptcy band; p2.5 chosen for the realism story
+  (staged-combustion effective-9 design work ×4.3 → multi-year program;
+  the bot's GG kerolox c6 only ×1.6) and lower runaway debt. Build stayed
+  gentler after measurement: at p2.5 DinoSoar's complexity-12 booster
+  engine builds 3.7× slower, starving its line (campaign cadence test
+  caught it, and no free stock = no bids = weaker GEO competition); at 1.5
+  it is 1.55×, which its line absorbs.
+
+200-seed re-baseline (8y, final defaults): **4/200 bankrupt** (2.0/100 —
+inside the agreed 2–4/100), first launch month **17.5** avg (was 13.4)
+carrying **~8 undiscovered flaws** (was ~7), dev spend to first flight
+$69M, unit cost $15.6M / payment $31.3M (cost ratio holds at ~50%),
+aggregate success 92.6% (was 95.4%), 77/200 end above the $200M start,
+161/200 keep min money above $25M, 9 survivors dip below $0 and recover
+(worst −$89.7M), 199/200 reach a profitable year (latest start+7).
+sim_bands.rs re-baselined: debt bound −$120M, bankrupt ≤ 3.5%, ≥72% keep
+min above $25M, ≥30% end profitable, per-seed success ≥ 65%, aggregate
+≥ 90%, launches 3..=30.
+
+No BasicPolicy touch was needed — its revise-test-fly rhythm survives the
+slower discovery convergence (it just flies with more residue aboard).
+
 ## 2. Real-world benchmarks (web-verified per Q5; corrections applied and marked ✱)
 
 ### Engines — start of full development → first flight

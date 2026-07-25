@@ -516,6 +516,12 @@ impl GameState {
                     events.push(evt);
 
                     rocket_flaw_discoveries.push((rf.project_id, rf.flaw_index));
+                    // The vehicle is gone — nothing after the loss can
+                    // be observed, so stop rolling remaining flaws (at
+                    // most one rocket-destroying discovery per flight).
+                    if flight_lost.is_some() {
+                        break;
+                    }
                 }
             }
 
@@ -542,10 +548,13 @@ impl GameState {
                         }
                     }
                 }
-                for (gi, si, reactor_id) in reactor_instances {
+                'reactors: for (gi, si, reactor_id) in reactor_instances {
                     for rf in &reactor_flaw_table {
                         if rf.reactor_id != reactor_id {
                             continue;
+                        }
+                        if flight_lost.is_some() {
+                            break 'reactors;
                         }
                         let fires = match rf.trigger {
                             FlawTrigger::PerDay =>
@@ -663,11 +672,18 @@ impl GameState {
                             }
                         }
 
-                        // Roll flaws for each engine used in burned groups
-                        for &(gi, si, engine_id, engine_count) in &burned_stages {
+                        // Roll flaws for each engine used in burned groups.
+                        // Stop at the first StageLoss — the vehicle is
+                        // gone and nothing after it can be observed, so
+                        // a flight discovers at most one
+                        // rocket-destroying flaw.
+                        'burned: for &(gi, si, engine_id, engine_count) in &burned_stages {
                             for flaw_ref in &flaw_table {
                                 if flaw_ref.engine_id != engine_id {
                                     continue;
+                                }
+                                if flight_lost.is_some() {
+                                    break 'burned;
                                 }
                                 let effective_p = 1.0 - (1.0 - flaw_ref.activation_chance)
                                     .powi(engine_count as i32);

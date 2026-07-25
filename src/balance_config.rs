@@ -218,6 +218,25 @@ pub struct WorkConfig {
     pub rocket_design_base_days: f64,
     /// Base days to build an engine at complexity 5.
     pub engine_build_base_days: f64,
+    /// Exponent on (complexity / 5) for engine (and reactor) design
+    /// work. 1.0 is linear; above 1.0 a complexity-5 engine is
+    /// unchanged while high-complexity cycles stretch superlinearly
+    /// (real staged-combustion programs ran 8-9 years). The M4 Task 3
+    /// sweep (2026-07) chose 2.5: the BasicPolicy first launch moves
+    /// from month ~13 to ~18, a GG kerolox booster (complexity 6)
+    /// costs 1.6x its old design work, and a staged-combustion
+    /// hydrolox monster (effective 9) costs 4.3x — a multi-year
+    /// program, which is where the real 8-9-year outliers live.
+    pub engine_design_complexity_exponent: f64,
+    /// Exponent on (complexity / 5) for rocket design work.
+    pub rocket_design_complexity_exponent: f64,
+    /// Exponent on (complexity / 5) for engine build work. Kept
+    /// gentler than the design exponent (1.5 vs 2.5): dev-time realism
+    /// lives in design, while a steep build exponent mostly starves
+    /// DinoSoar's production line (its complexity-12 booster engine
+    /// would build 3.7x slower at 2.5, killing its bid readiness and
+    /// campaign cadence; at 1.5 it is 1.55x, which the line absorbs).
+    pub engine_build_complexity_exponent: f64,
     /// Base days to build a 10-tonne stage.
     pub stage_build_base_days: f64,
     /// Exponent on (stage mass / 10 t) for stage build work.
@@ -244,6 +263,9 @@ impl Default for WorkConfig {
             engine_design_base_days: 120.0,
             rocket_design_base_days: 60.0,
             engine_build_base_days: 90.0,
+            engine_design_complexity_exponent: 2.5,
+            rocket_design_complexity_exponent: 2.5,
+            engine_build_complexity_exponent: 1.5,
             stage_build_base_days: 60.0,
             stage_build_mass_exponent: 0.75,
             rocket_integration_base_days: 20.0,
@@ -258,21 +280,24 @@ impl Default for WorkConfig {
 
 impl WorkConfig {
     /// Work required in days for engine design:
-    /// base_days * (complexity / 5).
+    /// base_days * (complexity / 5)^exponent.
     pub fn design_work_required(&self, complexity: u32) -> f64 {
-        self.engine_design_base_days * (complexity as f64 / 5.0)
+        self.engine_design_base_days
+            * (complexity as f64 / 5.0).powf(self.engine_design_complexity_exponent)
     }
 
     /// Work required in days for rocket design:
-    /// base_days * (complexity / 5), shorter base than engines.
+    /// base_days * (complexity / 5)^exponent, shorter base than engines.
     pub fn rocket_design_work_required(&self, complexity: u32) -> f64 {
-        self.rocket_design_base_days * (complexity as f64 / 5.0)
+        self.rocket_design_base_days
+            * (complexity as f64 / 5.0).powf(self.rocket_design_complexity_exponent)
     }
 
     /// Work required in days for engine manufacturing:
-    /// base_days * (complexity / 5).
+    /// base_days * (complexity / 5)^exponent.
     pub fn engine_build_work(&self, complexity: u32) -> f64 {
-        self.engine_build_base_days * (complexity as f64 / 5.0)
+        self.engine_build_base_days
+            * (complexity as f64 / 5.0).powf(self.engine_build_complexity_exponent)
     }
 
     /// Work required in days for stage manufacturing, based on mass.
@@ -587,6 +612,18 @@ pub struct FlawsConfig {
     /// Flat probability that a rocket modification introduces a new
     /// undiscovered flaw.
     pub modification_flaw_prob: f64,
+    /// Exponent N in the per-flaw ground-discovery roll:
+    /// discovery_probability = uniform^N * sqrt(activation_chance).
+    /// 1.0 is the original uniform draw; higher N skews discovery
+    /// probabilities low (mean scales as 1/(N+1)), so test campaigns
+    /// converge slower and the low tail becomes a de-facto
+    /// "never saw it on the stand" class. Flight activations are
+    /// always discovered regardless. The M4 Task 3 sweep (2026-07)
+    /// chose 2.0: mean discovery drops to 1/3 of the sqrt cap (from
+    /// 1/2), leaving ~8 undiscovered flaws at the BasicPolicy's first
+    /// launch (was ~7) and putting 200-seed bankruptcies in the
+    /// 2-4/100 roguelike band together with the work exponents.
+    pub flaw_discovery_exponent: f64,
 }
 
 impl Default for FlawsConfig {
@@ -602,6 +639,7 @@ impl Default for FlawsConfig {
             improvement_discovery_chance: 0.08,
             reactor_improvement_discovery_chance: 0.08,
             modification_flaw_prob: 0.10,
+            flaw_discovery_exponent: 2.0,
         }
     }
 }
@@ -883,10 +921,13 @@ mod tests {
     #[test]
     fn test_work_formulas_match_defaults() {
         let work = WorkConfig::default();
+        // Complexity 5 is the anchor: the exponent leaves it unchanged.
         assert!((work.design_work_required(5) - 120.0).abs() < 0.01);
-        assert!((work.design_work_required(9) - 216.0).abs() < 0.01);
+        // 120 * (9/5)^2.5 ≈ 521.6 — superlinear stretch at the top end.
+        assert!((work.design_work_required(9) - 521.63).abs() < 0.01);
         assert!((work.rocket_design_work_required(5) - 60.0).abs() < 0.01);
-        assert!((work.engine_build_work(6) - 108.0).abs() < 0.01);
+        // 90 * (6/5)^1.5 ≈ 118.3 — build scales gentler than design.
+        assert!((work.engine_build_work(6) - 118.31).abs() < 0.01);
         assert!((work.stage_build_work(10_000.0) - 60.0).abs() < 0.01);
         assert!((work.rocket_integration_work(2) - 80.0).abs() < 0.01);
         assert!((work.learning_curve_multiplier(1) - 1.0).abs() < 0.01);

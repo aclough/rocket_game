@@ -56,7 +56,8 @@ pub struct Flaw {
     /// Chance per flight (PerFlight) or cumulative over reference duration (PerDay).
     pub activation_chance: f64,
     /// Chance per testing cycle to discover this flaw.
-    /// Computed as uniform(0,1) * sqrt(activation_chance).
+    /// Computed as uniform(0,1)^N * sqrt(activation_chance), N being
+    /// `FlawsConfig::flaw_discovery_exponent`.
     pub discovery_probability: f64,
     pub discovered: bool,
     /// When this flaw can trigger.
@@ -142,7 +143,8 @@ pub fn generate_rocket_flaws(
 ///
 /// Consequence weighting: ~50% performance degradation, ~35% engine/part
 /// loss, ~15% stage loss. Activation chance is random^2 (skewed low);
-/// discovery probability = uniform(0,1) * sqrt(activation_chance).
+/// discovery probability = uniform(0,1)^N * sqrt(activation_chance),
+/// where N is `flaw_discovery_exponent` (see FlawsConfig).
 fn roll_flaw_core(rng: &mut StdRng, cfg: &FlawsConfig) -> (FlawConsequence, f64, f64) {
     let roll: f64 = rng.gen();
     let consequence = if roll < cfg.performance_degradation_weight {
@@ -156,7 +158,8 @@ fn roll_flaw_core(rng: &mut StdRng, cfg: &FlawsConfig) -> (FlawConsequence, f64,
 
     let activation_chance: f64 = rng.gen::<f64>().powi(2);
     let uniform_roll: f64 = rng.gen();
-    let discovery_probability = uniform_roll * activation_chance.sqrt();
+    let discovery_probability =
+        uniform_roll.powf(cfg.flaw_discovery_exponent) * activation_chance.sqrt();
 
     (consequence, activation_chance, discovery_probability)
 }

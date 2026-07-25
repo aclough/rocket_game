@@ -91,8 +91,14 @@ pub fn simulate_launch(
     // Clone the design so we can degrade it
     let mut degraded = design.clone();
 
+    // Once a StageLoss activates on a firing group the vehicle is
+    // gone — stop rolling all remaining flaws and overexpansion risk
+    // (nothing after the loss can be observed), so a launch discovers
+    // at most one rocket-destroying flaw.
+    let mut vehicle_lost = false;
+
     // Roll engine project flaws only for groups that will actually fire
-    for (gi, group) in design.stage_groups.iter().enumerate() {
+    'groups: for (gi, group) in design.stage_groups.iter().enumerate() {
         if gi >= groups_needed {
             break;
         }
@@ -118,10 +124,17 @@ pub fn simulate_launch(
                             &flaw.consequence,
                             gi, si,
                         );
+                        if matches!(flaw.consequence, FlawConsequence::StageLoss) {
+                            vehicle_lost = true;
+                            break;
+                        }
                     }
                 }
                 if !discovered_indices.is_empty() {
                     engine_flaw_discoveries.push((stage.engine.id, discovered_indices));
+                }
+                if vehicle_lost {
+                    break 'groups;
                 }
             }
 
@@ -145,6 +158,10 @@ pub fn simulate_launch(
                             &flaw.consequence,
                             gi, si,
                         );
+                        if matches!(flaw.consequence, FlawConsequence::StageLoss) {
+                            vehicle_lost = true;
+                            break;
+                        }
                     }
                 }
                 if !discovered_indices.is_empty() {
@@ -152,6 +169,9 @@ pub fn simulate_launch(
                         EngineSource::Contracted(ce.id),
                         discovered_indices,
                     ));
+                }
+                if vehicle_lost {
+                    break 'groups;
                 }
             }
 
@@ -163,34 +183,41 @@ pub fn simulate_launch(
     }
 
     // Roll rocket project flaws — only target groups that will fire
-    for (fi, flaw) in rocket_flaws.iter().enumerate() {
-        if rng.gen::<f64>() < flaw.activation_chance {
-            // Pick a random stage group among those that will fire
-            if groups_needed > 0 {
-                let gi = rng.gen_range(0..groups_needed);
-                let engine_name = degraded.stage_groups.get(gi)
-                    .and_then(|g| g.first())
-                    .map(|s| s.engine.name.clone())
-                    .unwrap_or_else(|| "unknown".to_string());
-                activations.push(FlawActivation {
-                    flaw_description: flaw.description.clone(),
-                    consequence: flaw.consequence.clone(),
-                    engine_name,
-                });
-                // Pick a random stage within the group
-                let si = if !degraded.stage_groups[gi].is_empty() {
-                    rng.gen_range(0..degraded.stage_groups[gi].len())
-                } else { 0 };
-                apply_consequence_to_stage(&mut degraded, &flaw.consequence, gi, si);
+    if !vehicle_lost {
+        for (fi, flaw) in rocket_flaws.iter().enumerate() {
+            if rng.gen::<f64>() < flaw.activation_chance {
+                // Pick a random stage group among those that will fire
+                if groups_needed > 0 {
+                    let gi = rng.gen_range(0..groups_needed);
+                    let engine_name = degraded.stage_groups.get(gi)
+                        .and_then(|g| g.first())
+                        .map(|s| s.engine.name.clone())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    activations.push(FlawActivation {
+                        flaw_description: flaw.description.clone(),
+                        consequence: flaw.consequence.clone(),
+                        engine_name,
+                    });
+                    // Pick a random stage within the group
+                    let si = if !degraded.stage_groups[gi].is_empty() {
+                        rng.gen_range(0..degraded.stage_groups[gi].len())
+                    } else { 0 };
+                    apply_consequence_to_stage(&mut degraded, &flaw.consequence, gi, si);
+                    if matches!(flaw.consequence, FlawConsequence::StageLoss) {
+                        rocket_flaw_discoveries.push(fi);
+                        vehicle_lost = true;
+                        break;
+                    }
+                }
+                rocket_flaw_discoveries.push(fi);
             }
-            rocket_flaw_discoveries.push(fi);
         }
     }
 
     // Check overexpansion destruction risk for first stage group
     // (burning at sea level, 101325 Pa)
     let ambient = 101_325.0_f64;
-    if groups_needed > 0 {
+    if groups_needed > 0 && !vehicle_lost {
         for stage in degraded.stage_groups[0].iter_mut() {
             let risk = stage.engine.overexpansion_destruction_risk(ambient);
             if risk > 0.0 {
