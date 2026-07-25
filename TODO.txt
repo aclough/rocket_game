@@ -3,9 +3,6 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 Balance:
 [] Fewer, bigger engines seem too superior?
 [] We want engine improvements to get harder quickly the more there are
-[] Cost realism pass: material/build costs vs contract payments are on different scales
-    (DinoSoar's heavy costs $8.6M vs GEO payments of $80-400M). Use the sim harness
-    to measure ripple effects of retuning.
 
 UI:
 [] Duplicate color for selection / borderline in contracts view

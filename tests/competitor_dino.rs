@@ -158,11 +158,11 @@ fn player_undercuts_dino() {
     let bid_close = gs.date.add_days(5);
     let idx = inject_geo_solicitation(&mut gs, 9002, "InjectedSat2", bid_close, 300_000_000.0);
 
-    // margin_min (8.0) x catalog_cost ($9M) = $72M is the cheapest
+    // margin_min (3.0) x catalog_cost ($36M) = $108M is the cheapest
     // DinoSoar would ever price this at absent jitter; jitter is
-    // +/-5%, so its floor in practice is ~$68.4M. $65M safely
+    // +/-5%, so its floor in practice is ~$102.6M. $65M safely
     // undercuts that while still comfortably above the bid_floor
-    // ($60M) and ceiling.
+    // ($60M) and under the ceiling.
     let placed = gs.place_bid(idx, 65_000_000.0);
     assert!(placed.is_some(), "seed {seed}: player bid should be accepted");
 

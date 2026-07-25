@@ -169,16 +169,21 @@ pub struct ResourcePrices {
 
 impl Default for ResourcePrices {
     fn default() -> Self {
+        // Aerospace-grade prices: raw commodity cost plus the machining,
+        // inspection, and traceability that flight hardware carries.
+        // Retuned ×4 in the M4 cost pass so marginal vehicle cost lands
+        // near 40-60% of a winning bid (payments stay at real-world
+        // launch prices).
         ResourcePrices {
-            aluminium: 5.0,
-            steel: 3.0,
-            superalloys: 80.0,
-            composites: 50.0,
-            wiring: 150.0,
-            electronics: 20_000.0,
-            plumbing: 1_500.0,
-            solid_propellant: 15.0,
-            heu: 100_000.0,
+            aluminium: 20.0,
+            steel: 12.0,
+            superalloys: 320.0,
+            composites: 200.0,
+            wiring: 600.0,
+            electronics: 80_000.0,
+            plumbing: 6_000.0,
+            solid_propellant: 60.0,
+            heu: 400_000.0,
         }
     }
 }
@@ -696,9 +701,11 @@ pub struct CompetitorConfig {
     pub catalog_cost: f64,
     /// Bid = marginal cost × margin. Margin relaxes from margin_max
     /// (one free rocket) toward margin_min as free stock grows.
-    /// These are monopoly-incumbent markups, not thin margins: the
-    /// parody incumbent prices at what the market bears, disciplined
-    /// only by its own stock pressure.
+    /// These are incumbent markups, not thin margins: the parody
+    /// incumbent prices at what the market bears, disciplined only by
+    /// its own stock pressure. Retuned in the M4 cost pass (build
+    /// costs rose ~4×) so its GEO bids stay at the same real-world
+    /// prices while the implied markup fell from 8-20× to 3-8×.
     pub margin_min: f64,
     pub margin_max: f64,
     /// Absolute lowest bid the script will ever place — the safety
@@ -744,9 +751,9 @@ impl Default for CompetitorConfig {
             initial_stock: 3,
             auto_build_target: 4,
             prior_builds: 40,
-            catalog_cost: 9_000_000.0,
-            margin_min: 8.0,
-            margin_max: 20.0,
+            catalog_cost: 36_000_000.0,
+            margin_min: 3.0,
+            margin_max: 8.0,
             bid_floor: 60_000_000.0,
             bid_jitter: 0.05,
             block_discount: 0.10,
@@ -892,6 +899,6 @@ mod tests {
         for r in Resource::ALL {
             assert!(prices.price_per_kg(*r) > 0.0);
         }
-        assert_eq!(prices.price_per_kg(Resource::Electronics), 20_000.0);
+        assert_eq!(prices.price_per_kg(Resource::Electronics), 80_000.0);
     }
 }

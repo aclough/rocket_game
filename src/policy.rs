@@ -118,15 +118,15 @@ const MONEY_FLOOR: f64 = 5_000_000.0;
 /// Fraction of computed max payload the bot is willing to book —
 /// shared with the game's rule engine.
 const PAYLOAD_MARGIN: f64 = crate::game_state::BID_PAYLOAD_MARGIN;
-/// Default markup for the policy's standing bid rules. Looks high as
-/// a "margin", but the game's payment scales sit several multiples
-/// above marginal build cost (see the cost-realism TODO), so cost ×
-/// 5 is simply market-rate pricing — the 2026-07 sweep measured
-/// profitability rising monotonically through this range (0.25 →
-/// 0/200 seeds profitable, 4.0 → 193/200) because the bot's
-/// small-payload market is uncontested and only budget ceilings
-/// push back.
-const DEFAULT_BID_MARGIN: f64 = 4.0;
+/// Default markup for the policy's standing bid rules. After the M4
+/// cost retune (material prices ×4) a vehicle costs ~40-60% of a
+/// winning bid, so cost × 2 is market-rate pricing: the 2026-07 M4
+/// sweep landed payments at the same real-world prices as before the
+/// retune (~$31M avg) with a 50% cost ratio. Higher markups still
+/// win in the uncontested small-payload market until budget ceilings
+/// push back (1.25 → avg payment $35M), so this locks an honest
+/// posture, not an optimum.
+const DEFAULT_BID_MARGIN: f64 = 1.0;
 
 impl BasicPolicy {
     pub fn new() -> Self {

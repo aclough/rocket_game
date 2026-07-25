@@ -276,9 +276,9 @@ mod tests {
     #[test]
     fn test_resource_prices() {
         let prices = ResourcePrices::default();
-        assert_eq!(prices.price_per_kg(Resource::Aluminium), 5.0);
-        assert_eq!(prices.price_per_kg(Resource::Electronics), 20_000.0);
-        assert_eq!(prices.price_per_kg(Resource::SolidPropellant), 15.0);
+        assert_eq!(prices.price_per_kg(Resource::Aluminium), 20.0);
+        assert_eq!(prices.price_per_kg(Resource::Electronics), 80_000.0);
+        assert_eq!(prices.price_per_kg(Resource::SolidPropellant), 60.0);
     }
 
     #[test]
@@ -302,10 +302,10 @@ mod tests {
     #[test]
     fn test_engine_material_cost_kerolox() {
         let cost = engine_material_cost(PropellantPreset::Kerolox, 500.0, &ResourcePrices::default());
-        // 500kg engine: superalloys(200kg*$80) + steel(125*$3) + alu(50*$5) + plumb(50*$1500) + ...
-        // Should be in the tens-to-hundreds of thousands range
-        assert!(cost > 50_000.0, "Kerolox engine cost {} too low", cost);
-        assert!(cost < 500_000.0, "Kerolox engine cost {} too high", cost);
+        // 500kg engine: superalloys(200kg*$320) + steel(125*$12) + alu(50*$20) + plumb(50*$6000) + ...
+        // Should be in the hundreds-of-thousands-to-low-millions range
+        assert!(cost > 200_000.0, "Kerolox engine cost {} too low", cost);
+        assert!(cost < 2_000_000.0, "Kerolox engine cost {} too high", cost);
     }
 
     #[test]
@@ -320,24 +320,24 @@ mod tests {
     #[test]
     fn test_tank_material_cost() {
         let cost = tank_material_cost(2000.0, &ResourcePrices::default());
-        // Includes electronics at $20K/kg: 2000 * 0.002 * 20000 = $80K, plus plumbing, etc.
-        assert!(cost > 50_000.0 && cost < 500_000.0,
+        // Includes electronics at $80K/kg: 2000 * 0.002 * 80000 = $320K, plus plumbing, etc.
+        assert!(cost > 200_000.0 && cost < 2_000_000.0,
             "Tank cost {} out of range for 2000kg structure", cost);
     }
 
     #[test]
     fn test_stage_assembly_cost() {
         let cost = stage_assembly_cost(&ResourcePrices::default());
-        // 500kg: electronics(50kg*$20K=$1M) + wiring(150kg*$150) + plumbing(50kg*$1.5K) + ...
-        assert!(cost > 100_000.0 && cost < 2_000_000.0,
+        // 500kg: electronics(50kg*$80K=$4M) + wiring(150kg*$600) + plumbing(50kg*$6K) + ...
+        assert!(cost > 400_000.0 && cost < 8_000_000.0,
             "Stage assembly cost {} out of range", cost);
     }
 
     #[test]
     fn test_rocket_integration_cost() {
         let cost = rocket_integration_cost(&ResourcePrices::default());
-        // 800kg: electronics(40kg*$20K=$800K) + wiring(120kg*$150) + ...
-        assert!(cost > 100_000.0 && cost < 2_000_000.0,
+        // 800kg: electronics(40kg*$80K=$3.2M) + wiring(120kg*$600) + ...
+        assert!(cost > 400_000.0 && cost < 8_000_000.0,
             "Integration cost {} out of range", cost);
     }
 

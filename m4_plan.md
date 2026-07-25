@@ -34,6 +34,40 @@ electronics $20k/kg, etc.
 | Mean rocket unit cost | $5.2–6.7M (avg $6.0M) |
 | Mean contract payment | $26.0–35.1M (avg $30.2M) — payment ≈ 5× unit cost |
 
+### Task 2 cost retune — landed values and 200-seed result
+
+Sweep (50–100 seeds per point): material prices ×2/×3/×4 crossed with bot
+margins 1.0/1.25/1.5/4.0. Materials are ~half of unit cost, so ×3 → ~2×
+unit cost, ×4 → ~2.6×. At the old margin 4.0 the bot just charged more
+(payment $63M — payments must NOT rise, they're already real prices), so
+the bot margin comes down with the cost rise. Chosen point:
+
+- **Material prices ×4** (aluminium $20/kg … electronics $80k/kg): unit
+  cost $6.0M → **$15.4M**, dev spend to first flight $32M → **$66M**
+  (real: $90–150M; Task 3's time stretch adds the rest).
+- **BasicPolicy `DEFAULT_BID_MARGIN` 4.0 → 1.0** (bid = cost × 2): avg
+  payment **$31.1M** — unchanged from the pre-retune $30.2M, i.e. payments
+  stayed at real prices while cost rose to **50% of a winning bid**
+  (Q2 target: 40–60%).
+- **DinoSoar**: catalog_cost $9M → $36M, margins 8–20× → **3–8×** — its
+  GEO bids stay ~$100–170M (real prices) while its implied markup becomes
+  merely incumbent-fat instead of absurd. bid_floor $60M unchanged.
+
+200-seed re-baseline (8y): **1/200 bankrupt** (seed 169), 5/200 dip below
+$0 mid-run and mostly recover, median final $213M (117/200 end above the
+$200M start — was 195/200 pre-retune), median min-money $102M, launches
+4–31, aggregate success 95.4%, 200/200 reach a profitable year (latest
+start+7). The game is already tighter; Task 3's rush-risk mechanics and
+Task 5's calibration take it the rest of the way to 2–4/100.
+
+Flag for Task 5: seed 169 went bankrupt with 31 launches at 97% success —
+it won a block program and appears to have lost money on volume. Check
+block-bid unit economics when hunting degenerate patterns.
+
+sim_bands.rs re-baselined in the same edit: per-seed min-money floor
+replaced by a runaway-debt bound (min > −$60M) plus fleet bands
+(bankrupt ≤ 1.5%, ≥85% keep min above $25M, ≥55% end profitable).
+
 ## 2. Real-world benchmarks (web-verified per Q5; corrections applied and marked ✱)
 
 ### Engines — start of full development → first flight
