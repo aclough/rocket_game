@@ -569,6 +569,30 @@ package. Ordering rationale after the list.
 7. **Feedback fixes** — scope unknown by definition; the Task 5 dumps
    are what make this tractable. Expect most of it to be onboarding
    wording and papercuts rather than simulation bugs.
+
+   **7a — hint lines ran off the edge of the screen.** Found in a
+   screenshot from the Windows VM pass, but not a Windows bug: it
+   clipped identically everywhere. Task 2 built the in-pane hints out
+   of the same strings as the `?` modal, and those are written to
+   occupy a row each. Assembled onto one line they came to 302
+   characters for Engines, 297 for Rockets. The pane clips rather than
+   wraps, so four of the Engines tab's eight keys were invisible —
+   the exact discoverability problem Task 2 existed to fix.
+
+   `KeyBinding` now carries `hint` (the one-line fragment, or `None`
+   for modal-only keys) alongside `action` (the modal's description).
+   `hint` is the whole fragment rather than a short label so it can
+   merge `+` and `-` into `[+/-] Team`, which no per-key label could.
+
+   Clipping is now fragment-aware — whole keys drop out and `…` marks
+   it, instead of leaving a stranded `[R]…` with its verb chopped off
+   — and `[?] Keys` is appended *after* clipping, so the pointer to
+   the full list is the one thing a narrow terminal can never lose.
+
+   Two hand-written duplicates went with it: the designer footer and
+   the global help bar. The bar had already drifted — it never
+   mentioned F12, so the bug-report key the friends round depends on
+   was reachable only by finding `?` first.
 8. **Packaging** — README with screenshot, MIT LICENSE, release
    workflow producing tagged Linux/Windows binaries.
 

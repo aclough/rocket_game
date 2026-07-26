@@ -526,10 +526,11 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("  {}", crate::ui::keys::hint_line(
+        hint_line_for(
             crate::ui::keys::for_tab(Tab::Engines),
             !company.engine_projects.is_empty(),
-        )),
+            area,
+        ),
         Style::default().fg(Color::Cyan),
     )));
 
@@ -729,9 +730,9 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("  {}", crate::ui::keys::hint_line(
-            crate::ui::keys::for_tab(Tab::Reactors), !visible.is_empty(),
-        )),
+        hint_line_for(
+            crate::ui::keys::for_tab(Tab::Reactors), !visible.is_empty(), area,
+        ),
         Style::default().fg(Color::Cyan),
     )));
 
@@ -932,10 +933,11 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("  {}", crate::ui::keys::hint_line(
+        hint_line_for(
             crate::ui::keys::for_tab(Tab::Rockets),
             !company.rocket_projects.is_empty(),
-        )),
+            area,
+        ),
         Style::default().fg(Color::Cyan),
     )));
 
@@ -1064,8 +1066,9 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("  {}", crate::ui::keys::hint_line(
-            crate::ui::keys::for_tab(Tab::Manufacturing), true)),
+        hint_line_for(
+            crate::ui::keys::for_tab(Tab::Manufacturing), true, area,
+        ),
         Style::default().fg(Color::Cyan),
     )));
 
@@ -1154,6 +1157,60 @@ impl ContractCols {
 }
 
 /// Truncate to `width` display columns, marking elision with `…`.
+/// Control hints, indented and clipped to the width they're drawn in.
+///
+/// Before M5 Task 7 the line was rendered unclipped and the pane cut
+/// it off mid-word — which reads as a rendering bug rather than as a
+/// terminal that's too narrow.
+///
+/// `[?] Keys` is appended *after* clipping rather than being part of
+/// the line, so it is never what falls off the edge. On a terminal
+/// too narrow for the keys, the pointer to the full list is the one
+/// thing that has to survive.
+fn hint_line_for(
+    bindings: &[crate::ui::keys::KeyBinding],
+    has_selection: bool,
+    area: Rect,
+) -> String {
+    use crate::ui::keys::{HELP_HINT, hint_fragments};
+
+    const GAP: usize = 2;
+
+    // Two columns of border, then the two-space indent.
+    let width = (area.width as usize).saturating_sub(4);
+    let budget = width.saturating_sub(HELP_HINT.chars().count() + GAP);
+
+    let fragments = hint_fragments(bindings, has_selection);
+    let full: usize = fragments.iter().map(|f| f.chars().count()).sum::<usize>()
+        + GAP * fragments.len().saturating_sub(1);
+
+    let shown = if full <= budget {
+        fragments
+    } else {
+        // Something has to go, so reserve room for the `…` that says
+        // so, and keep whole fragments only.
+        let budget = budget.saturating_sub(1 + GAP);
+        let mut used = 0;
+        let mut shown: Vec<&str> = Vec::new();
+        for f in fragments {
+            let cost = f.chars().count() + if shown.is_empty() { 0 } else { GAP };
+            if used + cost > budget {
+                break;
+            }
+            used += cost;
+            shown.push(f);
+        }
+        shown.push("…");
+        shown
+    };
+
+    if shown == ["…"] {
+        // Too narrow for even one key; the pointer is all that fits.
+        return format!("  {HELP_HINT}");
+    }
+    format!("  {}  {HELP_HINT}", shown.join("  "))
+}
+
 fn fit(s: &str, width: usize) -> String {
     if s.chars().count() <= width {
         return s.to_string();
@@ -1938,7 +1995,9 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
     } else if !matches!(app.input_mode, InputMode::Normal) {
         " [Enter] Confirm  [Esc] Cancel  [↑↓] Select ".to_string()
     } else {
-        " [Space] Pause/Unpause  [1-3] Speed  [←→] Pane  [↑↓] Select  [S] Save  [?] Help  [Q] Quit ".to_string()
+        // Was hand-written, and had drifted: it never mentioned F12,
+        // so the bug-report key was reachable only through `?`.
+        hint_line_for(crate::ui::keys::GLOBAL, true, area)
     };
     let style = if app.status_message.is_some() {
         Style::default().fg(Color::Green)
@@ -1969,7 +2028,9 @@ fn draw_rocket_designer_full(frame: &mut Frame, app: &App, state: &RocketDesigne
     let help_text = if let Some(ref msg) = app.status_message {
         format!(" {} ", msg)
     } else {
-        " [Enter] Engine  [←→] Count  [+/-] Prop  [V] Nozzle  [A] Add  [W] Power  [X] Rem  [P] Payload  [D] Done  [Esc] Cancel  [?] All keys ".to_string()
+        // Was hand-written here, duplicating ROCKET_DESIGNER and free
+        // to drift from it. Same keys, now from the table.
+        hint_line_for(crate::ui::keys::ROCKET_DESIGNER, true, outer[1])
     };
     let style = if app.status_message.is_some() {
         Style::default().fg(Color::Green)

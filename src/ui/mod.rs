@@ -4507,6 +4507,67 @@ mod help_tests {
         App::new(game)
     }
 
+    /// The bug a Windows screenshot caught in M5 Task 7: hint lines
+    /// were assembled from the help modal's long descriptions, came
+    /// out at 302 characters for Engines, and the pane clipped them
+    /// mid-word — `[R] Revise discovered flaws and pending impro`.
+    /// Four of that tab's eight keys were off-screen at any normal
+    /// width.
+    ///
+    /// Renders for real rather than measuring the table, because the
+    /// table being short enough is only half of it: the pane has to
+    /// actually contain the result.
+    #[test]
+    fn pane_hints_fit_and_always_offer_the_help_modal() {
+        let engines = Tab::ALL.iter()
+            .position(|t| matches!(t, Tab::Engines)).unwrap();
+        let mut a = app();
+        a.active_tab = engines;
+
+        for width in [160u16, 120, 100, 80, 60] {
+            let screen = render(&a, width, 40);
+            let hint = screen.lines()
+                .find(|l| l.contains(keys::HELP_HINT))
+                .unwrap_or_else(|| panic!(
+                    "at {width} cols nothing offers {:?} — the pointer to \
+                     the full key list must survive any width:\n{screen}",
+                    keys::HELP_HINT,
+                ))
+                .trim_end();
+
+            // Nothing may spill past the pane's right border. A hint
+            // that overruns eats the border character, so the border
+            // still being there is the check.
+            assert!(
+                hint.ends_with('│'),
+                "at {width} cols the hint overran the pane's right \
+                 border: {hint:?}",
+            );
+
+            // Clipping is allowed; losing the help pointer is not.
+            // `…` marks where the keys were cut, so everything after
+            // it must be the pointer that was appended afterwards.
+            if let Some((_, tail)) = hint.split_once('…') {
+                assert!(
+                    tail.contains(keys::HELP_HINT),
+                    "at {width} cols the line was clipped and the help \
+                     pointer went with it: {hint:?}",
+                );
+            }
+        }
+
+        // At a width that fits everything, the keys really are all
+        // there — otherwise the assertions above pass on a line that
+        // silently dropped half the table.
+        let wide = render(&a, 160, 40);
+        for fragment in ["[N] New", "[R] Revise", "[O] Order", "[E] Hire"] {
+            assert!(
+                wide.contains(fragment),
+                "{fragment} missing from a 160-column render:\n{wide}",
+            );
+        }
+    }
+
     /// Everything a keypress could plausibly change, flattened to a
     /// string so it can grow past Rust's 12-element tuple limit.
     fn observable(a: &App) -> String {
@@ -4797,3 +4858,4 @@ mod onboarding_tests {
         assert!(reloaded.player_company.engine_projects[0].auto_revise);
     }
 }
+
