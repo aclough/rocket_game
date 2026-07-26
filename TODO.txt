@@ -1,14 +1,7 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
-UI:
-[] Non-vacuum by default for engine design
-   (superseded by M5 Task 1 — per-stage vacuum variants remove the choice)
-
 Power:
 [] Make color coding of contracts take into account spacecraft duration
 [] Check on grandfathered power
     [] Maybe add a default battery instead?
 [] Timing for batteries and launches, related fenceposts.  We want a launch to LEO on the 1st of the month to arrive in LEO, then deliver any payload, then check battery, then for it to progress to the 2nd.
-
-Tech:
-[] Allow vacuum variants of sea level engines very easily

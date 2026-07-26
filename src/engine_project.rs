@@ -369,7 +369,6 @@ impl EngineProject {
         cycle: EngineCycle,
         preset: PropellantPreset,
         scale: f64,
-        use_vacuum_isp: bool,
         balance_cfg: &BalanceConfig,
     ) -> Option<Self> {
         let baseline = engine_baseline(cycle, preset)?;
@@ -380,8 +379,11 @@ impl EngineProject {
 
         let thrust = baseline.thrust_n * scale;
         let mass = baseline.mass_kg * scale;
-        // Expander cycles are always vacuum-optimized
-        let use_vacuum = if baseline.vacuum_only { true } else { use_vacuum_isp };
+        // The project's own `design` holds the canonical (sea-level)
+        // form of the family; `design_variant` derives the nozzle a
+        // given stage actually flies. Baselines that can only exist in
+        // vacuum have no choice to make.
+        let use_vacuum = baseline.vacuum_only;
         let isp = if use_vacuum { baseline.isp_vac_s } else { baseline.isp_sl_s };
         let exit_pressure = if use_vacuum { baseline.exit_pressure_vac_pa } else { baseline.exit_pressure_sl_pa };
 
@@ -432,10 +434,9 @@ impl EngineProject {
         cycle: EngineCycle,
         preset: PropellantPreset,
         scale: f64,
-        use_vacuum_isp: bool,
         balance_cfg: &BalanceConfig,
     ) -> Option<Self> {
-        let mut p = Self::new(project_id, engine_id, name, cycle, preset, scale, use_vacuum_isp, balance_cfg)?;
+        let mut p = Self::new(project_id, engine_id, name, cycle, preset, scale, balance_cfg)?;
         let work_required = match p.status {
             EngineDesignStatus::InDesign { work_required, .. } => work_required,
             _ => unreachable!(),
@@ -455,7 +456,6 @@ impl EngineProject {
         cycle: EngineCycle,
         preset: PropellantPreset,
         scale: f64,
-        use_vacuum_isp: bool,
         balance_cfg: &BalanceConfig,
     ) -> bool {
         let baseline = match engine_baseline(cycle, preset) {
@@ -467,7 +467,7 @@ impl EngineProject {
         let effective = balance::effective_complexity(cycle, &propellants);
         let work_required = balance_cfg.work.design_work_required(effective, scale);
 
-        let use_vacuum = if baseline.vacuum_only { true } else { use_vacuum_isp };
+        let use_vacuum = baseline.vacuum_only;
         let isp = if use_vacuum { baseline.isp_vac_s } else { baseline.isp_sl_s };
         let exit_pressure = if use_vacuum { baseline.exit_pressure_vac_pa } else { baseline.exit_pressure_sl_pa };
 
@@ -652,6 +652,43 @@ impl EngineProject {
             work_completed: 0.0,
         };
         true
+    }
+
+    /// The engine as flown with the given nozzle.
+    ///
+    /// An engine project designs a *family*, not a single unit: the
+    /// chamber, turbopump, and plumbing are shared, and the nozzle is
+    /// fitted per stage. Flaws, NRE, improvements, tech deficiencies,
+    /// and the production learning curve all live on the project and
+    /// so are shared by both variants — a bell extension is not a new
+    /// engine programme.
+    ///
+    /// Baselines that only exist in vacuum (electric, solar sail, NTR)
+    /// ignore `vacuum` and always return the vacuum form.
+    pub fn design_variant(&self, vacuum: bool) -> EngineDesign {
+        let Some(baseline) = engine_baseline(self.design.cycle, self.preset) else {
+            // No baseline (shouldn't happen for a live project) — the
+            // stored design is the best answer available.
+            return self.design.clone();
+        };
+        let use_vacuum = baseline.vacuum_only || vacuum;
+        EngineDesign {
+            isp_s: if use_vacuum { baseline.isp_vac_s } else { baseline.isp_sl_s },
+            exit_pressure_pa: if use_vacuum {
+                baseline.exit_pressure_vac_pa
+            } else {
+                baseline.exit_pressure_sl_pa
+            },
+            needs_atmosphere: !use_vacuum,
+            ..self.design.clone()
+        }
+    }
+
+    /// Whether this engine offers a nozzle choice at all. False for
+    /// vacuum-only baselines, which have nothing to toggle.
+    pub fn has_nozzle_choice(&self) -> bool {
+        engine_baseline(self.design.cycle, self.preset)
+            .is_some_and(|b| !b.vacuum_only)
     }
 
     /// Number of discovered flaws.
@@ -848,7 +885,6 @@ mod tests {
             EngineCycle::GasGenerator,
             PropellantPreset::Kerolox,
             1.0,
-            true,
             &bal(),
         ).unwrap()
     }
@@ -897,11 +933,11 @@ mod tests {
     fn test_scale_affects_thrust_and_mass() {
         let p1 = EngineProject::new(
             EngineProjectId(1), EngineId(1), "Small".into(),
-            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 0.5, true, &bal(),
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 0.5, &bal(),
         ).unwrap();
         let p2 = EngineProject::new(
             EngineProjectId(2), EngineId(2), "Big".into(),
-            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 2.0, true, &bal(),
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 2.0, &bal(),
         ).unwrap();
         // Thrust and mass scale linearly
         assert!((p2.design.thrust_n / p1.design.thrust_n - 4.0).abs() < 0.01);
@@ -912,15 +948,39 @@ mod tests {
 
     #[test]
     fn test_vacuum_vs_sea_level_isp() {
-        let vac = EngineProject::new(
-            EngineProjectId(1), EngineId(1), "Vac".into(),
-            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, true, &bal(),
+        // M5 Task 1: one project, two nozzles. The vacuum bell trades a
+        // lower exit pressure for more Isp; both come from the same
+        // engine programme, so everything else is identical.
+        let p = EngineProject::new(
+            EngineProjectId(1), EngineId(1), "Family".into(),
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, &bal(),
         ).unwrap();
-        let sl = EngineProject::new(
-            EngineProjectId(2), EngineId(2), "SL".into(),
-            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, false, &bal(),
+        assert!(p.has_nozzle_choice(), "a kerolox gas generator has a choice");
+
+        let vac = p.design_variant(true);
+        let sl = p.design_variant(false);
+        assert!(vac.isp_s > sl.isp_s, "vacuum bell should have higher Isp");
+        assert!(vac.exit_pressure_pa < sl.exit_pressure_pa,
+            "vacuum bell expands further");
+        assert!(vac.is_vacuum_variant() && !sl.is_vacuum_variant());
+        // Shared hardware: same chamber, same turbopump, same mass.
+        assert_eq!(vac.thrust_n, sl.thrust_n);
+        assert_eq!(vac.mass_kg, sl.mass_kg);
+        assert_eq!(vac.id, sl.id);
+        // The project's canonical design is the sea-level form.
+        assert!(!p.design.is_vacuum_variant());
+    }
+
+    #[test]
+    fn test_vacuum_only_engines_offer_no_nozzle_choice() {
+        let p = EngineProject::new(
+            EngineProjectId(1), EngineId(1), "Ion".into(),
+            EngineCycle::ElectricPropulsion, PropellantPreset::Xenon, 1.0, &bal(),
         ).unwrap();
-        assert!(vac.design.isp_s > sl.design.isp_s);
+        assert!(!p.has_nozzle_choice());
+        // Asking for the sea-level form still yields the vacuum one.
+        assert_eq!(p.design_variant(false).isp_s, p.design_variant(true).isp_s);
+        assert!(p.design_variant(false).is_vacuum_variant());
     }
 
     #[test]

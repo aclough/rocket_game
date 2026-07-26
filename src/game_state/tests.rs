@@ -479,7 +479,7 @@ fn test_start_engine_project() {
         crate::engine::EngineCycle::GasGenerator,
         crate::engine_project::PropellantPreset::Kerolox,
         1.0,
-        true, None, &gs.balance,
+        None, &gs.balance,
     );
     assert!(evt.is_some());
     assert_eq!(gs.player_company.engine_projects.len(), 1);
@@ -495,7 +495,7 @@ fn test_team_assignment() {
         crate::engine::EngineCycle::GasGenerator,
         crate::engine_project::PropellantPreset::Kerolox,
         1.0,
-        true, None, &gs.balance,
+        None, &gs.balance,
     );
 
     assert_eq!(gs.player_company.unassigned_team_count(), 2);
@@ -543,7 +543,7 @@ fn test_design_work_progresses() {
         crate::engine::EngineCycle::GasGenerator,
         crate::engine_project::PropellantPreset::Kerolox,
         1.0,
-        true, None, &gs.balance,
+        None, &gs.balance,
     );
     gs.player_company.add_team_to_project(0);
 
@@ -1275,7 +1275,7 @@ fn test_cross_pool_engineering_team_steal() {
         "E1".into(),
         crate::engine::EngineCycle::GasGenerator,
         crate::engine_project::PropellantPreset::Kerolox,
-        1.0, false, None, &gs.balance,
+        1.0, None, &gs.balance,
     ).expect("create engine project");
     gs.player_company.promote_proposed_engine(pid);
     for _ in 0..3 {

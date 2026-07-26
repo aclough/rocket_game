@@ -322,7 +322,10 @@ fn sync_stages_to_projects(state: &mut RocketDesignerState, company: &crate::gam
                 if let Some(ep) = company.engine_projects.iter()
                     .find(|ep| ep.project_id == *pid)
                 {
-                    stage.engine = ep.design.clone();
+                    // Keep the nozzle this stage was built around —
+                    // editing the engine family must not silently swap
+                    // an upper stage back to a sea-level bell.
+                    stage.engine = ep.design_variant(stage.engine.is_vacuum_variant());
                     // Re-derive propellant mass the same way the engine
                     // picker does for a fresh stage, so swapping cycle
                     // (e.g. Kerolox → Ion) doesn't strand a kerolox-
@@ -1057,7 +1060,7 @@ impl App {
                 let preset = PropellantPreset::Kerolox;
                 let tech_id = crate::technology::technology_for_preset(preset);
                 match self.game.player_company.start_proposed_engine_project(
-                    name, EngineCycle::GasGenerator, preset, DEFAULT_SCALE, false, tech_id,
+                    name, EngineCycle::GasGenerator, preset, DEFAULT_SCALE, tech_id,
                     &self.game.balance,
                 ) {
                     Some(pid) => {
@@ -2399,6 +2402,48 @@ impl App {
                     self.input_mode = InputMode::RocketDesigner { state };
                 }
             }
+            KeyCode::Char('v') | KeyCode::Char('V') => {
+                // Toggle the selected stage between the sea-level and
+                // vacuum bell of its engine family. Both come from one
+                // engine project — the nozzle is fitted at stage
+                // integration, so there is nothing extra to develop.
+                if state.on_add_slot() || state.stage_groups.is_empty() {
+                    self.input_mode = InputMode::RocketDesigner { state };
+                    return;
+                }
+                let gi = state.selected_group;
+                let si = state.selected_inner;
+                let source = state.engine_sources[gi][si];
+                match source {
+                    EngineSource::PlayerDesign(pid) => {
+                        let want_vacuum = !state.stage_groups[gi][si]
+                            .engine.is_vacuum_variant();
+                        let swapped = self.game.player_company
+                            .find_engine_project(pid)
+                            .filter(|ep| ep.has_nozzle_choice())
+                            .map(|ep| ep.design_variant(want_vacuum));
+                        match swapped {
+                            Some(engine) => {
+                                state.stage_groups[gi][si].engine = engine;
+                                recompute_structural_masses(&mut state.stage_groups);
+                                self.status_message = Some(format!(
+                                    "{} nozzle fitted",
+                                    if want_vacuum { "Vacuum" } else { "Sea-level" },
+                                ));
+                            }
+                            None => {
+                                self.status_message = Some(
+                                    "This engine only works in vacuum".into());
+                            }
+                        }
+                    }
+                    EngineSource::Contracted(_) => {
+                        self.status_message = Some(
+                            "Third-party engines come with a fixed nozzle".into());
+                    }
+                }
+                self.input_mode = InputMode::RocketDesigner { state };
+            }
             KeyCode::Char('x') | KeyCode::Char('X') => {
                 // Remove selected inner stage
                 if state.is_modify() {
@@ -2610,11 +2655,10 @@ impl App {
                     let cycle = EngineCycle::GasGenerator;
                     let preset = PropellantPreset::Kerolox;
                     let scale = crate::engine_project::DEFAULT_SCALE;
-                    let use_vacuum = false;
                     let tech_id = crate::technology::technology_for_preset(preset);
                     let project_id = match self.game.player_company
                         .start_proposed_engine_project(
-                            default_name, cycle, preset, scale, use_vacuum, tech_id,
+                            default_name, cycle, preset, scale, tech_id,
                             &self.game.balance,
                         )
                     {
@@ -2632,9 +2676,11 @@ impl App {
                     // player sees its effect as they edit. Re-use the
                     // same plumbing as the engine-pick branch by
                     // looking the engine back up.
+                    let group_index = target_index
+                        .unwrap_or(state.stage_groups.len());
                     let engine = self.game.player_company
                         .find_engine_project(project_id)
-                        .map(|ep| ep.design.clone());
+                        .map(|ep| ep.design_variant(group_index > 0));
                     if let Some(engine) = engine {
                         apply_picked_engine_to_designer(
                             &mut state, EngineSource::PlayerDesign(project_id),
@@ -2664,6 +2710,12 @@ impl App {
                         self.input_mode = InputMode::RocketDesigner { state };
                         return;
                     }
+                    // Bottom group flies the sea-level bell, upper
+                    // stages the vacuum one; [V] overrides per stage.
+                    let group_index = target_index
+                        .unwrap_or(state.stage_groups.len());
+                    let engine = self.engine_for_placement(
+                        source, engine, group_index);
                     apply_picked_engine_to_designer(
                         &mut state, source, engine,
                         target_index, inner_index, editing, booster,
@@ -2752,18 +2804,17 @@ impl App {
     }
 
     /// Snapshot of an engine project for editor display + mutation.
+    /// The nozzle variant is deliberately absent — it is chosen per
+    /// stage in the rocket designer, not on the engine project.
     fn editor_snapshot(&self, project_id: crate::engine_project::EngineProjectId)
-        -> Option<(String, EngineCycle, PropellantPreset, f64, bool, bool)>
+        -> Option<(String, EngineCycle, PropellantPreset, f64)>
     {
         let ep = self.game.player_company.find_engine_project(project_id)?;
-        let baseline = crate::engine_project::engine_baseline(ep.design.cycle, ep.preset)?;
         Some((
             ep.design.name.clone(),
             ep.design.cycle,
             ep.preset,
             ep.scale,
-            !ep.design.needs_atmosphere,
-            baseline.vacuum_only,
         ))
     }
 
@@ -2773,9 +2824,9 @@ impl App {
         let snap = match self.editor_snapshot(project_id) {
             Some(s) => s, None => return,
         };
-        let (name, cycle, preset, _, use_vacuum, _) = snap;
+        let (name, cycle, preset, _) = snap;
         if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
-            ep.apply_edit(name, cycle, preset, scale, use_vacuum, &self.game.balance);
+            ep.apply_edit(name, cycle, preset, scale, &self.game.balance);
         }
     }
 
@@ -2921,10 +2972,12 @@ impl App {
     }
 
     /// Engine editor key handler. Cursor walks: 0=Name, 1=Cycle,
-    /// 2=Preset, 3=Scale, 4=Vacuum (when not vacuum-only).
-    /// Left/Right cycles values on Cycle/Preset; +/- adjusts Scale by
-    /// ×√2 (and clamps to [MIN_SCALE, MAX_SCALE]); Space toggles Vacuum;
+    /// 2=Preset, 3=Scale. Left/Right cycles values on Cycle/Preset;
+    /// +/- adjusts Scale by ×√2 (and clamps to [MIN_SCALE, MAX_SCALE]);
     /// Enter on Name/Scale opens a text/number sub-modal.
+    ///
+    /// There is no nozzle row: a project designs an engine *family*
+    /// and each stage picks its own bell in the rocket designer.
     fn handle_engine_editor_key(
         &mut self,
         key: KeyCode,
@@ -2944,9 +2997,8 @@ impl App {
                 return;
             }
         };
-        let (name, cycle, preset, scale, use_vacuum, vacuum_only) = snap;
-        // Number of editable rows: hide the vacuum toggle when fixed.
-        let row_count = if vacuum_only { 4 } else { 5 };
+        let (name, cycle, preset, scale) = snap;
+        let row_count = 4; // Name, Cycle, Preset, Scale
         if cursor >= row_count { cursor = row_count - 1; }
 
         match key {
@@ -3002,13 +3054,8 @@ impl App {
                         .find(|p| p.compatible_cycles().contains(&next))
                         .unwrap_or(preset)
                 };
-                let new_vacuum = if matches!(next,
-                    EngineCycle::Expander | EngineCycle::NuclearThermal
-                    | EngineCycle::ElectricPropulsion | EngineCycle::SolarSail) {
-                    true
-                } else { use_vacuum };
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
-                    ep.apply_edit(name, next, new_preset, scale, new_vacuum, &self.game.balance);
+                    ep.apply_edit(name, next, new_preset, scale, &self.game.balance);
                 }
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company);
@@ -3023,7 +3070,7 @@ impl App {
                 let next = wrap_cycle(&presets, preset, matches!(key, KeyCode::Right))
                     .unwrap_or(preset);
                 if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
-                    ep.apply_edit(name, cycle, next, scale, use_vacuum, &self.game.balance);
+                    ep.apply_edit(name, cycle, next, scale, &self.game.balance);
                 }
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company);
@@ -3043,15 +3090,6 @@ impl App {
                 let new_scale = (scale / std::f64::consts::SQRT_2)
                     .max(crate::engine_project::MIN_SCALE);
                 self.apply_engine_scale(project_id, new_scale);
-                if let Some(s) = state.as_mut() {
-                    sync_stages_to_projects(s, &self.game.player_company);
-                }
-                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
-            }
-            KeyCode::Left | KeyCode::Right if cursor == 4 && !vacuum_only => {
-                if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
-                    ep.apply_edit(name, cycle, preset, scale, !use_vacuum, &self.game.balance);
-                }
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company);
                 }
@@ -3180,6 +3218,26 @@ impl App {
         self.input_mode = InputMode::PowerEditor {
             state, group_index, stage_index, cursor,
         };
+    }
+
+    /// The nozzle a newly placed stage should fly. The bottom group
+    /// lights on the pad and gets the sea-level bell; anything stacked
+    /// above it ignites in near-vacuum and gets the vacuum bell. The
+    /// player can override per stage with [V]. Third-party engines are
+    /// taken as delivered.
+    fn engine_for_placement(
+        &self,
+        source: EngineSource,
+        picked: EngineDesign,
+        group_index: usize,
+    ) -> EngineDesign {
+        match source {
+            EngineSource::PlayerDesign(pid) => self.game.player_company
+                .find_engine_project(pid)
+                .map(|ep| ep.design_variant(group_index > 0))
+                .unwrap_or(picked),
+            EngineSource::Contracted(_) => picked,
+        }
     }
 
     /// Build the list of engines pickable in the rocket designer.
@@ -3337,7 +3395,7 @@ mod sync_tests {
         let ep = EngineProject::new(
             EngineProjectId(1), EngineId(1), "E1".into(),
             EngineCycle::GasGenerator, PropellantPreset::Kerolox,
-            1.0, false,
+            1.0,
             &crate::balance_config::BalanceConfig::default(),
         ).unwrap();
         company.engine_projects.push(ep);
@@ -3374,7 +3432,6 @@ mod sync_tests {
             EngineCycle::ElectricPropulsion,
             PropellantPreset::Xenon,
             1.0,
-            true,
             &crate::balance_config::BalanceConfig::default(),
         );
 
@@ -3998,5 +4055,168 @@ mod contract_table_render_tests {
             assert!(l.ends_with('│') || l.trim_end().chars().count() <= 79,
                 "row overflows the 80-column pane: {l:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod nozzle_variant_tests {
+    use super::*;
+    use crate::engine_project::EngineProject;
+    use crate::engine::EngineId;
+    use crate::engine_project::EngineProjectId;
+
+    fn app_with_engine() -> (App, EngineProjectId) {
+        let mut game = crate::game_state::GameState::new(
+            "Nozzle Test".into(), 200_000_000.0, 5,
+        );
+        let ep = EngineProject::new(
+            EngineProjectId(1), EngineId(1), "Family".into(),
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0,
+            &game.balance,
+        ).unwrap();
+        let pid = ep.project_id;
+        game.player_company.engine_projects.push(ep);
+        (App::new(game), pid)
+    }
+
+    /// Place two stages from the *same* engine project and confirm the
+    /// bottom one gets the sea-level bell and the upper one the vacuum
+    /// bell — the default that makes the common two-stage design right
+    /// without the player knowing the rule.
+    #[test]
+    fn placement_defaults_sea_level_below_vacuum_above() {
+        let (app, pid) = app_with_engine();
+        let ep = app.game.player_company.find_engine_project(pid).unwrap();
+        let picked = ep.design.clone();
+        let source = EngineSource::PlayerDesign(pid);
+
+        let first = app.engine_for_placement(source, picked.clone(), 0);
+        let second = app.engine_for_placement(source, picked, 1);
+
+        assert!(!first.is_vacuum_variant(), "bottom group lights at sea level");
+        assert!(second.is_vacuum_variant(), "stages above it fly vacuum bells");
+        assert!(second.isp_s > first.isp_s);
+    }
+
+    /// [V] swaps the selected stage's bell, and only that stage's.
+    #[test]
+    fn v_toggles_only_the_selected_stage() {
+        let (mut app, pid) = app_with_engine();
+        let ep = app.game.player_company.find_engine_project(pid).unwrap();
+        let mut state = Box::new(RocketDesignerState::new("Two Stage".into()));
+        for gi in 0..2 {
+            let engine = ep.design_variant(gi > 0);
+            let stage = Stage {
+                id: StageId(gi as u64 + 1),
+                name: format!("S{}", gi + 1),
+                engine,
+                engine_count: 1,
+                propellant_mass_kg: 10_000.0,
+                structural_mass_kg: 1_000.0,
+                fairing: None,
+                power_sources: Vec::new(),
+            };
+            state.push_new_group(stage, EngineSource::PlayerDesign(pid));
+        }
+        state.selected_group = 0;
+        state.selected_inner = 0;
+        app.input_mode = InputMode::RocketDesigner { state };
+
+        app.handle_key(KeyCode::Char('v'));
+
+        let state = match &app.input_mode {
+            InputMode::RocketDesigner { state } => state,
+            other => panic!("should stay in the designer, got {other:?}"),
+        };
+        assert!(state.stage_groups[0][0].engine.is_vacuum_variant(),
+            "the selected stage should have swapped to the vacuum bell");
+        assert!(state.stage_groups[1][0].engine.is_vacuum_variant(),
+            "the untouched upper stage keeps its vacuum bell");
+
+        // And back again.
+        app.handle_key(KeyCode::Char('v'));
+        let state = match &app.input_mode {
+            InputMode::RocketDesigner { state } => state,
+            other => panic!("should stay in the designer, got {other:?}"),
+        };
+        assert!(!state.stage_groups[0][0].engine.is_vacuum_variant(),
+            "[V] should toggle back");
+    }
+
+    /// Editing the engine family (here: rescaling it) must not silently
+    /// revert an upper stage to the sea-level bell.
+    #[test]
+    fn editing_the_engine_preserves_each_stage_nozzle() {
+        let (mut app, pid) = app_with_engine();
+        let ep = app.game.player_company.find_engine_project(pid).unwrap();
+        let mut state = RocketDesignerState::new("Keeps Nozzles".into());
+        for gi in 0..2 {
+            let stage = Stage {
+                id: StageId(gi as u64 + 1),
+                name: format!("S{}", gi + 1),
+                engine: ep.design_variant(gi > 0),
+                engine_count: 1,
+                propellant_mass_kg: 10_000.0,
+                structural_mass_kg: 1_000.0,
+                fairing: None,
+                power_sources: Vec::new(),
+            };
+            state.push_new_group(stage, EngineSource::PlayerDesign(pid));
+        }
+
+        app.apply_engine_scale(pid, 2.0);
+        sync_stages_to_projects(&mut state, &app.game.player_company);
+
+        assert!(!state.stage_groups[0][0].engine.is_vacuum_variant(),
+            "booster keeps its sea-level bell across an engine edit");
+        assert!(state.stage_groups[1][0].engine.is_vacuum_variant(),
+            "upper stage keeps its vacuum bell across an engine edit");
+        // The edit did land: both stages now carry the rescaled engine.
+        let scaled = app.game.player_company.find_engine_project(pid)
+            .unwrap().design.thrust_n;
+        for gi in 0..2 {
+            assert_eq!(state.stage_groups[gi][0].engine.thrust_n, scaled,
+                "stage {gi} should pick up the rescaled thrust");
+        }
+    }
+
+    /// Third-party engines arrive with a fixed bell — [V] declines
+    /// rather than silently doing nothing.
+    #[test]
+    fn v_refuses_on_third_party_engines() {
+        let (mut app, _pid) = app_with_engine();
+        let engine = crate::engine::EngineDesign {
+            id: EngineId(99), name: "NK-33".into(),
+            cycle: EngineCycle::StagedCombustion,
+            thrust_n: 1_500_000.0, mass_kg: 1_200.0, isp_s: 297.0,
+            exit_pressure_pa: 70_000.0, needs_atmosphere: true,
+            propellant_mix: PropellantPreset::Kerolox.propellant_mix(),
+            power_draw_w: 0.0,
+        };
+        let mut state = Box::new(RocketDesignerState::new("Bought".into()));
+        state.push_new_group(
+            Stage {
+                id: StageId(1), name: "S1".into(), engine,
+                engine_count: 1, propellant_mass_kg: 10_000.0,
+                structural_mass_kg: 1_000.0, fairing: None,
+                power_sources: Vec::new(),
+            },
+            EngineSource::Contracted(crate::third_party::ContractedEngineId(1)),
+        );
+        app.input_mode = InputMode::RocketDesigner { state };
+
+        app.handle_key(KeyCode::Char('v'));
+
+        let state = match &app.input_mode {
+            InputMode::RocketDesigner { state } => state,
+            other => panic!("should stay in the designer, got {other:?}"),
+        };
+        assert!(!state.stage_groups[0][0].engine.is_vacuum_variant(),
+            "a third-party engine keeps the bell it was sold with");
+        assert!(
+            app.status_message.as_deref().is_some_and(|m| m.contains("fixed nozzle")),
+            "the player should be told why nothing happened, got {:?}",
+            app.status_message,
+        );
     }
 }

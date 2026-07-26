@@ -341,7 +341,6 @@ impl Company {
         cycle: EngineCycle,
         preset: PropellantPreset,
         scale: f64,
-        use_vacuum_isp: bool,
         technology_id: Option<crate::technology::TechnologyId>,
         balance_cfg: &BalanceConfig,
     ) -> Option<GameEvent> {
@@ -352,7 +351,7 @@ impl Company {
 
         let mut project = EngineProject::new(
             project_id, engine_id, name.clone(),
-            cycle, preset, scale, use_vacuum_isp, balance_cfg,
+            cycle, preset, scale, balance_cfg,
         )?;
         project.technology_id = technology_id;
         self.engine_projects.push(project);
@@ -370,7 +369,6 @@ impl Company {
         cycle: EngineCycle,
         preset: PropellantPreset,
         scale: f64,
-        use_vacuum_isp: bool,
         technology_id: Option<crate::technology::TechnologyId>,
         balance_cfg: &BalanceConfig,
     ) -> Option<EngineProjectId> {
@@ -381,7 +379,7 @@ impl Company {
 
         let mut project = EngineProject::new_proposed(
             project_id, engine_id, name,
-            cycle, preset, scale, use_vacuum_isp, balance_cfg,
+            cycle, preset, scale, balance_cfg,
         )?;
         project.technology_id = technology_id;
         self.engine_projects.push(project);

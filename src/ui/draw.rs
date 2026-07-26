@@ -353,12 +353,21 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 .map(|f| format!("{} {:.0}%", f.propellant.display_name(), f.mass_fraction * 100.0))
                 .collect();
 
+            // One project, two bells: show both so the player can see
+            // what an upper stage would gain before committing a design.
+            let isp_str = if project.has_nozzle_choice() {
+                format!("{:.0}s SL / {:.0}s vac",
+                    project.design_variant(false).isp_s,
+                    project.design_variant(true).isp_s)
+            } else {
+                format!("{:.0}s vac", project.design.isp_s)
+            };
             lines.push(Line::from(format!(
-                "      {}  {}  {}  {:.0}s",
+                "      {}  {}  {}  {}",
                 cycle_name,
                 prop_str.join(" / "),
                 format_thrust_n(project.design.thrust_n),
-                project.design.isp_s,
+                isp_str,
             )));
             let power_str = if project.design.power_draw_w > 0.0 {
                 format!("    Power: {}",
@@ -1937,7 +1946,7 @@ fn draw_rocket_designer_full(frame: &mut Frame, app: &App, state: &RocketDesigne
     let help_text = if let Some(ref msg) = app.status_message {
         format!(" {} ", msg)
     } else {
-        " [Enter] Edit  [←→] Engines  [+/-] Prop  [A] Add  [I] Ins  [B] Booster  [W] Power  [X] Rem  [P] Payload  [L] Site  [M] Mission  [D] Done  [Esc] Cancel ".to_string()
+        " [Enter] Edit  [←→] Engines  [+/-] Prop  [V] Nozzle  [A] Add  [I] Ins  [B] Booster  [W] Power  [X] Rem  [P] Payload  [L] Site  [M] Mission  [D] Done  [Esc] Cancel ".to_string()
     };
     let style = if app.status_message.is_some() {
         Style::default().fg(Color::Green)
@@ -2071,7 +2080,20 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                 }
                 _ => "",
             };
-            let engine_label = format!("{}{}", stage.engine.name, tag);
+            // Which bell this stage flies. Vacuum-only engines say
+            // nothing — there's no choice to communicate.
+            let nozzle = match state.engine_sources.get(gi).and_then(|g| g.get(si)) {
+                Some(EngineSource::PlayerDesign(pid)) => {
+                    let has_choice = app.game.player_company
+                        .find_engine_project(*pid)
+                        .is_some_and(|ep| ep.has_nozzle_choice());
+                    if !has_choice { "" }
+                    else if stage.engine.is_vacuum_variant() { " vac" }
+                    else { " SL" }
+                }
+                _ => "",
+            };
+            let engine_label = format!("{}{}{}", stage.engine.name, tag, nozzle);
 
             // Compute burn time: propellant_mass / (mass_flow_rate * engine_count)
             let burn_str = if stage.engine.is_solar_sail() {
@@ -3199,9 +3221,12 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// Non-linear engine editor. The cursor walks five rows:
-/// 0=Name, 1=Cycle, 2=Preset, 3=Scale, 4=Vacuum. When `text_input` is
-/// Some, a sub-modal text/number entry is overlaid (for Name or Scale).
+/// Non-linear engine editor. The cursor walks four rows:
+/// 0=Name, 1=Cycle, 2=Preset, 3=Scale. When `text_input` is Some, a
+/// sub-modal text/number entry is overlaid (for Name or Scale).
+///
+/// There is no nozzle row — a project designs an engine *family* and
+/// each stage picks its own bell in the rocket designer ([V] there).
 fn draw_engine_editor_modal(
     frame: &mut Frame,
     app: &App,
@@ -3217,8 +3242,7 @@ fn draw_engine_editor_modal(
     };
     let baseline = crate::engine_project::engine_baseline(ep.design.cycle, ep.preset);
     let vacuum_only = baseline.is_some_and(|b| b.vacuum_only);
-    let use_vacuum = !ep.design.needs_atmosphere;
-    let row_count = if vacuum_only { 4 } else { 5 };
+    let row_count = 4; // Name, Cycle, Preset, Scale
     let cursor = cursor.min(row_count - 1);
 
     let row_label = |row: usize, sel: bool| -> &'static str {
@@ -3259,36 +3283,41 @@ fn draw_engine_editor_modal(
         format!(" {} Scale:  {:.3}×", row_label(3, true), ep.scale),
         row_style(3),
     )));
-    if !vacuum_only {
-        lines.push(Line::from(Span::styled(
-            format!(" {} Vacuum: {}",
-                row_label(4, true),
-                if use_vacuum { "yes" } else { "no" }),
-            row_style(4),
-        )));
-    } else {
-        lines.push(Line::from(Span::styled(
-            "   Vacuum: yes  (fixed)".to_string(),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
+    lines.push(Line::from(Span::styled(
+        if vacuum_only {
+            "   Nozzle: vacuum only".to_string()
+        } else {
+            "   Nozzle: chosen per stage in the rocket designer".to_string()
+        },
+        Style::default().fg(Color::DarkGray),
+    )));
 
     // Live + baseline derived stats.
     lines.push(Line::from(""));
     if let Some(b) = baseline {
         lines.push(Line::from(Span::styled(
-            format!(" Baseline ({:?} / {}):  thrust {}  mass {}  Isp {:.0} s",
+            format!(" Baseline ({:?} / {}):  thrust {}  mass {}  Isp {}",
                 ep.design.cycle, ep.preset.name(),
                 format_thrust_n(b.thrust_n), format_kg(b.mass_kg),
-                if use_vacuum { b.isp_vac_s } else { b.isp_sl_s }),
+                if b.vacuum_only {
+                    format!("{:.0} s", b.isp_vac_s)
+                } else {
+                    format!("{:.0} s SL / {:.0} s vac", b.isp_sl_s, b.isp_vac_s)
+                }),
             Style::default().fg(Color::DarkGray),
         )));
     }
     lines.push(Line::from(format!(
-        " Scaled:    thrust {}  mass {}  Isp {:.0} s  power {}",
+        " Scaled:    thrust {}  mass {}  Isp {}  power {}",
         format_thrust_n(ep.design.thrust_n),
         format_kg(ep.design.mass_kg),
-        ep.design.isp_s,
+        if vacuum_only {
+            format!("{:.0} s", ep.design_variant(true).isp_s)
+        } else {
+            format!("{:.0} s SL / {:.0} s vac",
+                ep.design_variant(false).isp_s,
+                ep.design_variant(true).isp_s)
+        },
         format_power_w(ep.design.power_draw_w),
     )));
     let (work_completed, work_required) = match &ep.status {

@@ -469,7 +469,6 @@ mod tests {
             EngineCycle::GasGenerator,
             PropellantPreset::Kerolox,
             1.0,
-            true,
             &crate::balance_config::BalanceConfig::default(),
         ).unwrap();
         ep.flaws = flaws;

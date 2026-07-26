@@ -217,10 +217,13 @@ is. That's a real asymmetry in favour of your own engine programs, and
 it fits the existing "flaws in third-party parts can't necessarily be
 fixed" flavour.
 
-**Manufacturing.** `ManufacturingOrderType::Engine` will need to carry
-the variant alongside `engine_id`/`revision` so the right nozzle is
-built. Open sub-question: do the two variants share a learning curve?
-Sharing is realistic (common core) and simpler; I lean share.
+**Manufacturing.** *(Corrected during implementation — no change was
+needed.)* Engines are tracked in inventory by `EngineSource` alone, and
+a stage consumes generic engines of its source at stage integration
+(`company.rs:858`); the flown performance comes from `stage.engine`, the
+design snapshot. So the nozzle is effectively fitted during stage
+integration, manufacturing needs no variant field, and the two variants
+share one learning curve for free — which is the answer I wanted anyway.
 
 **Balance risk and the mitigation.** M4 landed dev spend to first
 flight at $66M, a large part of which is *two* engine programs. Making
@@ -431,9 +434,10 @@ the second variant free would quietly undo a chunk of that. Hence:
     already puts it. Old saves keep their baked values and load unchanged.
   - **The real cost is balance, not code.** A free second variant halves
     the two-engine-program cost that M4 just spent five commits tuning
-    (dev spend to first flight landed at $66M). I want a small one-time
-    *variant qualification* work item rather than making it free — see
-    §2.7 **Q10**.
+    (dev spend to first flight landed at $66M mid-M4; the shipped M4
+    figure measured on the parent commit is $67.9M at month 16.7). I
+    want a small one-time *variant qualification* work item rather than
+    making it free — see §2.7 **Q10**.
   - **One reassuring finding:** BasicPolicy's two engines differ by
     *propellant* (kerolox booster, hydrolox upper), not just nozzle, so
     the bot wouldn't use variants and the M4 sim bands shouldn't move.
@@ -582,7 +586,7 @@ bite before Task 3, so there's time to reverse any of them:
 ### Progress
 
 - [x] Task 0 — TODO.txt UI polish
-- [ ] Task 1 — vacuum variants per stage
+- [x] Task 1 — vacuum variants per stage
 - [ ] Task 2 — help pane
 - [ ] Task 3 — onboarding & automation
 - [ ] Task 4 — save robustness

@@ -228,7 +228,6 @@ impl BasicPolicy {
                 EngineCycle::GasGenerator,
                 PropellantPreset::Kerolox,
                 1.0,
-                false, // sea-level optimized
                 None,
                 &game.balance,
             ) {
@@ -243,7 +242,6 @@ impl BasicPolicy {
                 EngineCycle::GasGenerator,
                 PropellantPreset::Hydrolox,
                 1.0,
-                true, // vacuum optimized
                 None,
                 &game.balance,
             ) {
@@ -306,7 +304,9 @@ impl BasicPolicy {
         let mut s1 = Stage {
             id: StageId(1),
             name: "BLV S1".into(),
-            engine: booster.design.clone(),
+            // First stage lights at sea level; upper stage flies the
+            // vacuum bell of its own engine family.
+            engine: booster.design_variant(false),
             engine_count: 1,
             propellant_mass_kg: 42_000.0,
             structural_mass_kg: 3_000.0,
@@ -316,7 +316,7 @@ impl BasicPolicy {
         let mut s2 = Stage {
             id: StageId(2),
             name: "BLV S2".into(),
-            engine: upper.design.clone(),
+            engine: upper.design_variant(true),
             engine_count: 1,
             propellant_mass_kg: 8_000.0,
             structural_mass_kg: 800.0,

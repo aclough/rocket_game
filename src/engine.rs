@@ -41,6 +41,12 @@ pub struct EngineDesign {
     pub mass_kg: f64,
     pub isp_s: f64,
     pub exit_pressure_pa: f64,
+    /// True when this unit carries the sea-level nozzle. The stored
+    /// inverse of "vacuum variant" — see `is_vacuum_variant`. Nothing
+    /// in the simulation reads this directly; the physics goes through
+    /// `exit_pressure_pa` (see `isp_fraction_at_pressure` and
+    /// `overexpansion_risk`). It exists so the UI can tell which bell
+    /// a stage is flying without re-deriving it from pressures.
     pub needs_atmosphere: bool,
     pub propellant_mix: Vec<PropellantFraction>,
     /// Electrical power required (watts) to operate at full rated thrust.
@@ -53,6 +59,13 @@ pub struct EngineDesign {
 }
 
 impl EngineDesign {
+    /// Whether this unit carries the vacuum nozzle. The choice is made
+    /// per stage in the rocket designer; both variants come from one
+    /// engine project.
+    pub fn is_vacuum_variant(&self) -> bool {
+        !self.needs_atmosphere
+    }
+
     /// Effective exhaust velocity in m/s (Isp * g0).
     pub fn exhaust_velocity(&self) -> f64 {
         self.isp_s * G0
