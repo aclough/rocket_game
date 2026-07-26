@@ -95,6 +95,13 @@ My lean: **(a)**, plus a hand-written note in `keys.rs` pointing at the
 handlers. (b) is the "right" architecture but it's a big, risky diff to
 land in the milestone whose whole point is release stability. See **Q3**.
 
+*(Built as (a). Two things came out better than planned: the in-pane
+control hints in `draw.rs` were already a second hand-written copy of
+the key meanings, so pointing them at `keys.rs` **removed** an existing
+duplication rather than adding a new one. And the completeness test
+turned out to be worth more than expected — see the Task 2 notes in
+§5.)*
+
 ### 2.2 Onboarding & automation (Task 3)
 
 Proposal: a **"Next Steps" box on the Overview tab**, driven by a
@@ -587,7 +594,7 @@ bite before Task 3, so there's time to reverse any of them:
 
 - [x] Task 0 — TODO.txt UI polish
 - [x] Task 1 — vacuum variants per stage
-- [ ] Task 2 — help pane
+- [x] Task 2 — help pane
 - [ ] Task 3 — onboarding & automation
 - [ ] Task 4 — save robustness
 - [ ] Task 5 — session/bug report dump

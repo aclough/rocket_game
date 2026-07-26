@@ -1,4 +1,5 @@
 pub mod draw;
+pub mod keys;
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -19,6 +20,16 @@ use crate::rocket_project::RocketDesignStatus;
 use crate::save;
 use crate::stage::{Stage, StageId};
 use crate::structure;
+
+/// What the help modal is describing, and what to return to on Esc.
+#[derive(Debug, Clone)]
+pub enum HelpScope {
+    /// Opened from a normal tab view.
+    Tab(usize),
+    /// Opened from inside the rocket designer — its state rides along
+    /// so Esc puts the player back where they were.
+    RocketDesigner(Box<RocketDesignerState>),
+}
 
 /// Which pane has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,6 +378,12 @@ fn recompute_structural_masses(stage_groups: &mut [Vec<Stage>]) {
 #[derive(Debug, Clone)]
 pub enum InputMode {
     Normal,
+    /// Keybinding reference. `scope` remembers what to describe: the
+    /// tab that was open, or the rocket designer, whose state travels
+    /// with the modal so Esc returns to it.
+    Help {
+        scope: HelpScope,
+    },
     /// Non-linear engine editor — edits an existing EngineProject in
     /// place. The cursor walks a fixed field list; each field has its
     /// own interaction (Left/Right cycles, +/- adjusts scale, Enter
@@ -924,6 +941,11 @@ impl App {
 
         match key {
             KeyCode::Char('q') => self.running = false,
+            KeyCode::Char('?') => {
+                self.enter_modal(InputMode::Help {
+                    scope: HelpScope::Tab(self.active_tab),
+                });
+            }
             KeyCode::Char(' ') => self.game.toggle_pause(),
             KeyCode::Char('1') => self.game.set_speed(GameSpeed::Normal),
             KeyCode::Char('2') => self.game.set_speed(GameSpeed::Fast),
@@ -1073,9 +1095,12 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('b') => {
+            KeyCode::Char('b') | KeyCode::Char('B') => {
                 // Buy third-party engine
-                if !self.game.player_company.third_party_catalog.is_empty() {
+                if self.game.player_company.third_party_catalog.is_empty() {
+                    self.status_message = Some(
+                        "No third-party engines on the market".into());
+                } else {
                     self.enter_modal(InputMode::SelectThirdParty { selected: 0 });
                 }
             }
@@ -1097,7 +1122,7 @@ impl App {
                     self.status_message = Some("Team removed".into());
                 }
             }
-            KeyCode::Char('o') => {
+            KeyCode::Char('o') | KeyCode::Char('O') => {
                 // Order standalone engine build
                 let idx = real_idx.unwrap_or(usize::MAX);
                 if let Some((cost, evt)) = self.game.player_company.order_engine_build(idx, &self.game.balance) {
@@ -1107,19 +1132,26 @@ impl App {
                     self.status_message = Some("Must be in Testing to order build".into());
                 }
             }
-            KeyCode::Char('r') => {
+            KeyCode::Char('r') | KeyCode::Char('R') => {
                 // Revise all discovered flaws and actualize pending improvements
-                if let Some(idx) = real_idx {
-                    if let Some((fc, ic)) = self.game.player_company.start_engine_revision(idx) {
-                        if ic > 0 {
-                            self.status_message = Some(format!("Revising {} flaw(s), {} improvement(s)", fc, ic));
-                        } else {
-                            self.status_message = Some(format!("Revising {} flaw(s)", fc));
-                        }
+                match real_idx.and_then(|idx|
+                    self.game.player_company.start_engine_revision(idx))
+                {
+                    Some((fc, ic)) if ic > 0 => {
+                        self.status_message = Some(format!(
+                            "Revising {} flaw(s), {} improvement(s)", fc, ic));
+                    }
+                    Some((fc, _)) => {
+                        self.status_message = Some(format!("Revising {} flaw(s)", fc));
+                    }
+                    None => {
+                        self.status_message = Some(
+                            "Nothing to revise (needs a Testing engine with \
+                             discovered flaws, improvements, or deficiencies)".into());
                     }
                 }
             }
-            KeyCode::Char('e') => {
+            KeyCode::Char('e') | KeyCode::Char('E') => {
                 let team_num = self.game.player_company.team_count() + 1;
                 let name = format!("Team {}", team_num);
                 if let Some(evt) = self.game.player_company.hire_team(name.clone(), &self.game.balance) {
@@ -1133,7 +1165,7 @@ impl App {
 
     fn handle_rockets_key(&mut self, key: KeyCode) {
         match key {
-            KeyCode::Char('n') => {
+            KeyCode::Char('n') | KeyCode::Char('N') => {
                 // Start new rocket design flow
                 self.enter_modal(InputMode::RocketName { buffer: String::new() });
             }
@@ -1151,12 +1183,21 @@ impl App {
                     self.status_message = Some("Team removed".into());
                 }
             }
-            KeyCode::Char('r') => {
-                if let Some(count) = self.game.player_company.start_rocket_revision(self.selected_item) {
-                    self.status_message = Some(format!("Revising {} flaw(s)", count));
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                match self.game.player_company
+                    .start_rocket_revision(self.selected_item)
+                {
+                    Some(count) => {
+                        self.status_message = Some(format!("Revising {} flaw(s)", count));
+                    }
+                    None => {
+                        self.status_message = Some(
+                            "Nothing to revise (needs a Testing rocket with \
+                             discovered flaws)".into());
+                    }
                 }
             }
-            KeyCode::Char('e') => {
+            KeyCode::Char('e') | KeyCode::Char('E') => {
                 let team_num = self.game.player_company.team_count() + 1;
                 let name = format!("Team {}", team_num);
                 if let Some(evt) = self.game.player_company.hire_team(name.clone(), &self.game.balance) {
@@ -1164,7 +1205,7 @@ impl App {
                     self.status_message = Some(format!("Hired {}", name));
                 }
             }
-            KeyCode::Char('o') => {
+            KeyCode::Char('o') | KeyCode::Char('O') => {
                 // Order rocket build
                 if let Some((cost, evt)) = self.game.player_company.order_rocket_build(self.selected_item, &self.game.balance) {
                     self.game.event_log.push(self.game.date, evt);
@@ -1207,7 +1248,7 @@ impl App {
 
     fn handle_manufacturing_key(&mut self, key: KeyCode) {
         match key {
-            KeyCode::Char('b') => {
+            KeyCode::Char('b') | KeyCode::Char('B') => {
                 // Buy floor space
                 let cost = self.game.player_company.buy_floor_space(1, &self.game.balance);
                 self.status_message = Some(format!("Ordered 1 floor space unit ({})", crate::ui::draw::format_money(cost)));
@@ -1222,11 +1263,16 @@ impl App {
                 }
             }
             KeyCode::Char('-') => {
-                if self.game.player_company.remove_team_from_manufacturing_order(self.selected_item) {
+                if self.game.player_company
+                    .remove_team_from_manufacturing_order(self.selected_item)
+                {
                     self.status_message = Some("Mfg team removed".into());
+                } else {
+                    self.status_message = Some(
+                        "No team assigned to that build order".into());
                 }
             }
-            KeyCode::Char('m') => {
+            KeyCode::Char('m') | KeyCode::Char('M') => {
                 let team_num = self.game.player_company.manufacturing_teams.len() + 1;
                 let name = format!("Mfg Team {}", team_num);
                 if let Some(evt) = self.game.player_company.hire_manufacturing_team(name.clone(), &self.game.balance) {
@@ -1240,7 +1286,9 @@ impl App {
 
     fn handle_contracts_key(&mut self, key: KeyCode) {
         match key {
-            KeyCode::Char('a') | KeyCode::Char('b') | KeyCode::Enter => {
+            KeyCode::Char('a') | KeyCode::Char('A')
+            | KeyCode::Char('b') | KeyCode::Char('B')
+            | KeyCode::Enter => {
                 let avail_len = self.game.available_contracts.len();
                 if self.selected_item >= avail_len {
                     self.status_message = Some("Already accepted".into());
@@ -1313,7 +1361,7 @@ impl App {
                     candidates, selected: 0,
                 });
             }
-            KeyCode::Char('p') => {
+            KeyCode::Char('p') | KeyCode::Char('P') => {
                 // Open delta-v planner setup
                 let eligible: Vec<usize> = self.game.player_company.rocket_projects.iter()
                     .enumerate()
@@ -1340,7 +1388,7 @@ impl App {
                     }),
                 });
             }
-            KeyCode::Char('l') | KeyCode::Enter
+            KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Enter
             | KeyCode::Char('k') | KeyCode::Char('K') => {
                 // 'k'/'K' = keep: the carrier becomes a Spacecraft at the
                 // destination instead of being discarded on arrival.
@@ -1387,6 +1435,18 @@ impl App {
     fn handle_input_mode_key(&mut self, key: KeyCode) {
         match &mut self.input_mode {
             InputMode::Normal => unreachable!(),
+            InputMode::Help { .. } => {
+                // Any key dismisses. Returning to the designer restores
+                // its in-progress state rather than discarding the
+                // design the player was in the middle of.
+                let old_mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
+                match old_mode {
+                    InputMode::Help { scope: HelpScope::RocketDesigner(state) } => {
+                        self.input_mode = InputMode::RocketDesigner { state };
+                    }
+                    _ => self.exit_modal(),
+                }
+            }
             InputMode::ReactorEditor { .. }
             | InputMode::ReactorEditorNameInput { .. }
             | InputMode::ReactorEditorScaleInput { .. } => {
@@ -2401,6 +2461,11 @@ impl App {
                 } else {
                     self.input_mode = InputMode::RocketDesigner { state };
                 }
+            }
+            KeyCode::Char('?') => {
+                self.input_mode = InputMode::Help {
+                    scope: HelpScope::RocketDesigner(state),
+                };
             }
             KeyCode::Char('v') | KeyCode::Char('V') => {
                 // Toggle the selected stage between the sea-level and
@@ -4218,5 +4283,238 @@ mod nozzle_variant_tests {
             "the player should be told why nothing happened, got {:?}",
             app.status_message,
         );
+    }
+}
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    fn render(app: &App, w: u16, h: u16) -> String {
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw::draw(frame, app)).unwrap();
+        let buf = terminal.backend().buffer();
+        (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A game with one of everything the panes act on, so that
+    /// selection-dependent keys have something to select. Without this
+    /// the completeness test below would pass vacuously on an empty
+    /// company.
+    fn app() -> App {
+        let mut game = crate::game_state::GameState::new(
+            "Help Test".into(), 200_000_000.0, 7,
+        );
+        let bal = game.balance.clone();
+        let company = &mut game.player_company;
+
+        for i in 0..4 {
+            company.hire_team(format!("Team {i}"), &bal);
+        }
+        for i in 0..2 {
+            company.hire_manufacturing_team(format!("Mfg {i}"), &bal);
+        }
+        company.start_engine_project(
+            "E1".into(), EngineCycle::GasGenerator,
+            PropellantPreset::Kerolox, 1.0, None, &bal,
+        );
+        company.start_proposed_reactor(
+            "R1".into(), 1.0, crate::reactor::EnrichmentLevel::Leu, &bal,
+        );
+        company.promote_proposed_reactor(
+            company.reactor_projects[0].project_id,
+        );
+
+        // A rocket project built from the engine above, plus one
+        // finished rocket sitting in inventory for the Launches tab.
+        let engine = company.engine_projects[0].design_variant(false);
+        let design = crate::rocket::RocketDesign {
+            id: crate::rocket::RocketDesignId(1),
+            name: "Fixture-1".into(),
+            stage_groups: vec![vec![Stage {
+                id: StageId(1), name: "S1".into(), engine,
+                engine_count: 1,
+                propellant_mass_kg: 40_000.0,
+                structural_mass_kg: 3_000.0,
+                fairing: None,
+                power_sources: Vec::new(),
+            }]],
+        };
+        company.start_rocket_project(design.clone(), &bal);
+        let rpid = company.rocket_projects[0].project_id;
+        company.manufacturing.inventory.rockets.push(
+            crate::manufacturing::InventoryRocket {
+                item_id: crate::manufacturing::InventoryItemId(1),
+                rocket_project_id: rpid,
+                design_id: design.id,
+                rocket_name: "Fixture-1".into(),
+                build_cost: 1_000_000.0,
+                revision: 0,
+                rocket_flaws: Vec::new(),
+            },
+        );
+
+        // Staff each project so the "release a team" keys have a team
+        // to release.
+        company.add_team_to_project(0);
+        company.add_team_to_reactor_project(0);
+        company.add_team_to_rocket_project(0);
+
+        // One contract to bid on.
+        game.available_contracts.push(crate::contract::Contract {
+            id: crate::contract::ContractId(9001),
+            name: "Fixture Sat".into(),
+            destination: "leo".into(),
+            payload_kg: 400.0,
+            payment: 12_000_000.0,
+            deadline: crate::calendar::GameDate::new(2001, 12, 1),
+            status: crate::contract::ContractStatus::Available,
+            market_id: crate::contract::MARKET_RIDESHARE,
+            campaign_id: None,
+            bid_deadline: Some(crate::calendar::GameDate::new(2001, 6, 1)),
+            budget_ceiling: 20_000_000.0,
+            player_bid: None,
+        });
+
+        // A spacecraft in orbit for the fly/dock/undock keys.
+        let rocket = design.instantiate(crate::rocket::RocketId(1), "leo", 0.0);
+        game.spacecraft.push(crate::game_state::Spacecraft {
+            id: crate::game_state::SpacecraftId(1),
+            name: "Fixture Craft".into(),
+            rocket,
+            design,
+            location: "leo".into(),
+            rocket_project_id: rpid,
+            payloads: Vec::new(),
+        });
+
+        App::new(game)
+    }
+
+    /// Everything a keypress could plausibly change, flattened to a
+    /// string so it can grow past Rust's 12-element tuple limit.
+    fn observable(a: &App) -> String {
+        let c = &a.game.player_company;
+        format!(
+            "{:?}|{:?}|eng{} rkt{} rct{} team{} mfg{} ord{} inv{} \
+             asg{}/{}/{} auto{} money{:.0} contracts{}/{}",
+            a.input_mode, a.status_message,
+            c.engine_projects.len(), c.rocket_projects.len(),
+            c.reactor_projects.len(), c.teams.len(),
+            c.manufacturing_teams.len(), c.manufacturing.orders.len(),
+            c.manufacturing.inventory.rockets.len(),
+            c.engine_projects.iter().map(|p| p.teams_assigned).sum::<u32>(),
+            c.rocket_projects.iter().map(|p| p.teams_assigned).sum::<u32>(),
+            c.reactor_projects.iter().map(|p| p.teams_assigned).sum::<u32>(),
+            c.auto_build_targets.len(), c.money,
+            a.game.available_contracts.len(), c.active_contracts.len(),
+        )
+    }
+
+    /// The documented keys must actually do something. This is the
+    /// direction that rots in practice: a key gets renamed or dropped
+    /// in `handle_*_key` and the help text quietly lies. Feeding each
+    /// documented key to its tab's handler and requiring *some*
+    /// observable change catches that.
+    ///
+    /// It cannot catch the opposite (an undocumented key), which is
+    /// why `keys.rs` asks you to add both in one edit.
+    #[test]
+    fn documented_keys_still_do_something() {
+        for (ti, tab) in Tab::ALL.iter().enumerate() {
+            for binding in keys::for_tab(*tab) {
+                // Take the first key of a "B / A / Enter" style label.
+                let label = binding.keys.split(" / ").next().unwrap();
+                let key = match label {
+                    "Shift+M" => KeyCode::Char('M'),
+                    "+" => KeyCode::Char('+'),
+                    "-" => KeyCode::Char('-'),
+                    l if l.chars().count() == 1 => {
+                        KeyCode::Char(l.chars().next().unwrap())
+                    }
+                    "Enter" => KeyCode::Enter,
+                    other => panic!("unhandled key label {other:?} on {}", tab.name()),
+                };
+
+                let mut a = app();
+                a.active_tab = ti;
+                a.focused_pane = FocusedPane::Content;
+                let before = observable(&a);
+                a.handle_key(key);
+                let after = observable(&a);
+                assert_ne!(
+                    before, after,
+                    "{} tab documents [{}] {} but pressing it changed nothing — \
+                     either the handler dropped the key or keys.rs is stale",
+                    tab.name(), binding.keys, binding.action,
+                );
+            }
+        }
+    }
+
+    /// `?` opens the reference, and it describes the tab you were on.
+    #[test]
+    fn question_mark_opens_help_for_the_current_tab() {
+        let mut a = app();
+        a.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Launches).unwrap();
+        a.handle_key(KeyCode::Char('?'));
+
+        assert!(matches!(a.input_mode, InputMode::Help { .. }), "? should open help");
+        let text = render(&a, 120, 44);
+        assert!(text.contains("Launches tab"), "help should name the current tab");
+        assert!(text.contains("Delta-v planner"), "help should list that tab's keys");
+        assert!(text.contains("Everywhere"), "help should list the global keys");
+        assert!(text.contains("Quit"), "global keys should include Quit");
+
+        // Any key dismisses.
+        a.handle_key(KeyCode::Char('z'));
+        assert!(matches!(a.input_mode, InputMode::Normal), "any key should close help");
+    }
+
+    /// Help inside the designer describes the designer — and closing it
+    /// puts the player back in their half-finished design, not on a tab.
+    #[test]
+    fn help_in_the_designer_returns_to_the_designer() {
+        let mut a = app();
+        let state = Box::new(RocketDesignerState::new("Half Built".into()));
+        a.input_mode = InputMode::RocketDesigner { state };
+
+        a.handle_key(KeyCode::Char('?'));
+        let text = render(&a, 120, 44);
+        assert!(text.contains("Rocket designer"), "should describe the designer");
+        assert!(text.contains("Swap the sea-level and vacuum nozzle"),
+            "designer help should cover [V]");
+
+        a.handle_key(KeyCode::Esc);
+        match &a.input_mode {
+            InputMode::RocketDesigner { state } => {
+                assert_eq!(state.rocket_name, "Half Built",
+                    "the in-progress design must survive a help detour");
+            }
+            other => panic!("should be back in the designer, got {other:?}"),
+        }
+    }
+
+    /// Every tab's help renders without overflowing an 80-column
+    /// terminal — the reference is useless if it's cut off.
+    #[test]
+    fn help_fits_an_80_column_terminal() {
+        for (ti, tab) in Tab::ALL.iter().enumerate() {
+            let mut a = app();
+            a.active_tab = ti;
+            a.handle_key(KeyCode::Char('?'));
+            let text = render(&a, 80, 40);
+            for line in text.lines() {
+                assert!(line.chars().count() <= 80,
+                    "{} help overflows 80 columns", tab.name());
+            }
+            // The modal actually drew something.
+            assert!(text.contains("Keys"), "{} help should render", tab.name());
+        }
     }
 }

@@ -499,12 +499,11 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     }
 
     lines.push(Line::from(""));
-    let mut controls = vec!["[N] New design", "[B] Contract 3rd-party"];
-    if !company.engine_projects.is_empty() {
-        controls.extend_from_slice(&["[+] Add team", "[-] Remove team", "[R] Revise", "[O] Order build", "[E] Hire eng team"]);
-    }
     lines.push(Line::from(Span::styled(
-        format!("  {}", controls.join("  ")),
+        format!("  {}", crate::ui::keys::hint_line(
+            crate::ui::keys::for_tab(Tab::Engines),
+            !company.engine_projects.is_empty(),
+        )),
         Style::default().fg(Color::Cyan),
     )));
 
@@ -703,13 +702,10 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
     }
 
     lines.push(Line::from(""));
-    let controls: Vec<&str> = if visible.is_empty() {
-        vec!["[N] New design"]
-    } else {
-        vec!["[N] New design", "[+] Add team", "[-] Remove team", "[R] Revise", "[E] Edit"]
-    };
     lines.push(Line::from(Span::styled(
-        format!("  {}", controls.join("  ")),
+        format!("  {}", crate::ui::keys::hint_line(
+            crate::ui::keys::for_tab(Tab::Reactors), !visible.is_empty(),
+        )),
         Style::default().fg(Color::Cyan),
     )));
 
@@ -906,16 +902,11 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     }
 
     lines.push(Line::from(""));
-    let mut controls = vec!["[N] New design"];
-    if !company.rocket_projects.is_empty() {
-        controls.extend_from_slice(&[
-            "[+] Add team", "[-] Remove team",
-            "[R] Revise", "[O] Order build", "[m] Auto-build",
-            "[Shift+M] Modify", "[E] Hire eng team",
-        ]);
-    }
     lines.push(Line::from(Span::styled(
-        format!("  {}", controls.join("  ")),
+        format!("  {}", crate::ui::keys::hint_line(
+            crate::ui::keys::for_tab(Tab::Rockets),
+            !company.rocket_projects.is_empty(),
+        )),
         Style::default().fg(Color::Cyan),
     )));
 
@@ -1044,7 +1035,8 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  [B] Buy floor space ($5M)  [+] Add mfg team  [-] Remove mfg team  [M] Hire mfg team",
+        format!("  {}", crate::ui::keys::hint_line(
+            crate::ui::keys::for_tab(Tab::Manufacturing), true)),
         Style::default().fg(Color::Cyan),
     )));
 
@@ -1912,10 +1904,12 @@ fn draw_event_feed(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
     let text = if let Some(ref msg) = app.status_message {
         format!(" {} ", msg)
+    } else if matches!(app.input_mode, InputMode::Help { .. }) {
+        " Any key closes this ".to_string()
     } else if !matches!(app.input_mode, InputMode::Normal) {
         " [Enter] Confirm  [Esc] Cancel  [↑↓] Select ".to_string()
     } else {
-        " [Space] Pause/Unpause  [1-3] Speed  [←→] Pane  [↑↓] Select  [S] Save  [Q] Quit ".to_string()
+        " [Space] Pause/Unpause  [1-3] Speed  [←→] Pane  [↑↓] Select  [S] Save  [?] Help  [Q] Quit ".to_string()
     };
     let style = if app.status_message.is_some() {
         Style::default().fg(Color::Green)
@@ -1946,7 +1940,7 @@ fn draw_rocket_designer_full(frame: &mut Frame, app: &App, state: &RocketDesigne
     let help_text = if let Some(ref msg) = app.status_message {
         format!(" {} ", msg)
     } else {
-        " [Enter] Edit  [←→] Engines  [+/-] Prop  [V] Nozzle  [A] Add  [I] Ins  [B] Booster  [W] Power  [X] Rem  [P] Payload  [L] Site  [M] Mission  [D] Done  [Esc] Cancel ".to_string()
+        " [Enter] Engine  [←→] Count  [+/-] Prop  [V] Nozzle  [A] Add  [W] Power  [X] Rem  [P] Payload  [D] Done  [Esc] Cancel  [?] All keys ".to_string()
     };
     let style = if app.status_message.is_some() {
         Style::default().fg(Color::Green)
@@ -2352,12 +2346,101 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
 // Modal overlays (engine design flow + rocket sub-modals)
 // ==========================================
 
+
+/// The `?` reference. Shows the keys for wherever the player pressed
+/// it — the current tab, or the rocket designer — followed by the
+/// global keys that work everywhere.
+fn draw_help_modal(
+    frame: &mut Frame,
+    scope: &crate::ui::HelpScope,
+    screen: Rect,
+) {
+    use crate::ui::keys;
+
+    let (context_name, bindings): (String, &[keys::KeyBinding]) = match scope {
+        crate::ui::HelpScope::Tab(idx) => {
+            let tab = Tab::ALL.get(*idx).copied().unwrap_or(Tab::Overview);
+            (format!("{} tab", tab.name()), keys::for_tab(tab))
+        }
+        crate::ui::HelpScope::RocketDesigner(_) => (
+            "Rocket designer".to_string(), keys::ROCKET_DESIGNER,
+        ),
+    };
+
+    // Widest key label across both sections, so the two columns line
+    // up with each other rather than only within a section.
+    let key_width = bindings.iter().chain(keys::GLOBAL)
+        .map(|b| b.keys.chars().count())
+        .max()
+        .unwrap_or(6)
+        .max(6);
+
+    let mut lines: Vec<Line> = Vec::new();
+    let section = |lines: &mut Vec<Line>, title: &str, bs: &[keys::KeyBinding]| {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", title),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        if bs.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "    (nothing beyond the keys below)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        for b in bs {
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(
+                    format!("{:<w$}", b.keys, w = key_width),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::raw("  "),
+                Span::raw(b.action),
+            ]));
+        }
+        lines.push(Line::from(""));
+    };
+
+    lines.push(Line::from(""));
+    section(&mut lines, &context_name, bindings);
+    section(&mut lines, "Everywhere", keys::GLOBAL);
+    // No "press any key" line here — the status bar already says it.
+
+    // Size to the content rather than a fixed percentage — a short
+    // tab's reference shouldn't render as a mostly-empty box.
+    let wanted_h = (lines.len() as u16).saturating_add(2);
+    let wanted_w = lines.iter()
+        .map(|l| l.spans.iter().map(|sp| sp.content.chars().count()).sum::<usize>())
+        .max()
+        .unwrap_or(40) as u16
+        + 4;
+    let h = wanted_h.min(screen.height.saturating_sub(2)).max(3);
+    let w = wanted_w.min(screen.width.saturating_sub(2)).max(20);
+    let area = Rect {
+        x: screen.x + (screen.width.saturating_sub(w)) / 2,
+        y: screen.y + (screen.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Keys ")
+        .style(Style::default().fg(Color::Yellow));
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
 fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
     let modal_area = centered_rect(60, 50, area);
     frame.render_widget(Clear, modal_area);
 
     match &app.input_mode {
         InputMode::Normal | InputMode::RocketDesigner { .. } => {}
+        InputMode::Help { scope } => {
+            draw_help_modal(frame, scope, area);
+        }
         InputMode::EngineEditor { project_id, cursor, state } => {
             draw_engine_editor_modal(frame, app, *project_id, *cursor, None, state.is_none(), modal_area);
         }
