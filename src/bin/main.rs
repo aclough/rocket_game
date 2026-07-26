@@ -18,22 +18,30 @@ enum StartupState {
 }
 
 fn main() -> io::Result<()> {
-    let game = if std::env::args().len() >= 2 {
+    // `fresh` distinguishes a brand-new company (which gets the
+    // one-screen orientation) from a loaded save (which doesn't).
+    let (game, fresh) = if std::env::args().len() >= 2 {
         let args: Vec<String> = std::env::args().collect();
         let name = args[1].clone();
         let seed = args
             .get(2)
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or_else(rand::random);
-        GameState::with_balance(name, seed, rocket_tycoon::balance_config::BalanceConfig::default())
+        (
+            GameState::with_balance(
+                name, seed,
+                rocket_tycoon::balance_config::BalanceConfig::default(),
+            ),
+            true,
+        )
     } else {
         run_startup_screen()?
     };
-    let mut app = App::new(game);
+    let mut app = if fresh { App::new_game(game) } else { App::new(game) };
     app.run()
 }
 
-fn run_startup_screen() -> io::Result<GameState> {
+fn run_startup_screen() -> io::Result<(GameState, bool)> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -49,7 +57,9 @@ fn run_startup_screen() -> io::Result<GameState> {
     result
 }
 
-fn startup_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<GameState> {
+fn startup_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) -> io::Result<(GameState, bool)> {
     let mut state = StartupState::Menu;
     let mut selected: usize = 0;
     let mut saves = save::list_saves();
@@ -90,7 +100,7 @@ fn startup_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Re
                             let idx = selected - 1;
                             if idx < saves.len() {
                                 let path = &saves[idx].1;
-                                return save::load_game(path);
+                                return save::load_game(path).map(|g| (g, false));
                             }
                         }
                     }
@@ -104,7 +114,13 @@ fn startup_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Re
                             company_name.trim().to_string()
                         };
                         let seed: u64 = rand::random();
-                        return Ok(GameState::with_balance(name, seed, rocket_tycoon::balance_config::BalanceConfig::default()));
+                        return Ok((
+                            GameState::with_balance(
+                                name, seed,
+                                rocket_tycoon::balance_config::BalanceConfig::default(),
+                            ),
+                            true,
+                        ));
                     }
                     KeyCode::Esc => {
                         state = StartupState::Menu;

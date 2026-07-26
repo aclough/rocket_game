@@ -210,6 +210,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
         let project_id = EngineProjectId(company.next_project_id);
         company.next_project_id += 1;
         company.engine_projects.push(EngineProject {
+            auto_revise: crate::flaw::auto_revise_default(),
             project_id,
             design,
             preset: PropellantPreset::Hydrolox,

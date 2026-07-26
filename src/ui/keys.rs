@@ -60,6 +60,7 @@ const ENGINES: &[KeyBinding] = &[
     on_item("-", "Release a team"),
     on_item("R", "Revise discovered flaws and pending improvements"),
     on_item("O", "Order a standalone engine build"),
+    on_item("A", "Toggle auto-revise (on by default)"),
     on_item("E", "Hire a new engineering team"),
 ];
 
@@ -69,6 +70,7 @@ const REACTORS: &[KeyBinding] = &[
     on_item("-", "Release a team"),
     on_item("R", "Revise discovered flaws and pending improvements"),
     on_item("E", "Edit the design (In Design only)"),
+    on_item("A", "Toggle auto-revise (on by default)"),
 ];
 
 const ROCKETS: &[KeyBinding] = &[
@@ -77,6 +79,7 @@ const ROCKETS: &[KeyBinding] = &[
     on_item("-", "Release a team"),
     on_item("R", "Revise discovered flaws"),
     on_item("O", "Order a rocket build"),
+    on_item("A", "Toggle auto-revise (on by default)"),
     on_item("m", "Set the auto-build target"),
     on_item("Shift+M", "Modify the design (propellant and power only)"),
     on_item("E", "Hire a new engineering team"),

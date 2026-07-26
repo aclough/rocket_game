@@ -217,7 +217,32 @@ fn draw_content(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
     let game = &app.game;
-    let lines = vec![
+
+    // Next steps go first: on a short terminal the stats block below is
+    // tall enough to push them off the bottom, and they matter most to
+    // exactly the player who can't scroll past them yet. The panel
+    // disappears on its own once the company is running.
+    let mut lines: Vec<Line> = Vec::new();
+    let steps = crate::ui::next_steps::next_steps(game);
+    if !steps.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Next steps",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        for s in &steps {
+            lines.push(Line::from(vec![
+                Span::styled("    → ", Style::default().fg(Color::Cyan)),
+                Span::raw(s.text.clone()),
+                Span::styled(
+                    format!("  ({} tab, [{}])", s.tab, s.key),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    lines.extend(vec![
         Line::from(format!("  Company:  {}", game.player_company.name)),
         Line::from(format!("  Founded:  {}", game.start_date)),
         Line::from(format!("  Today:    {}", game.date)),
@@ -252,7 +277,7 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) 
         },
         Line::from(""),
         Line::from(format!("  Seed:  {}", game.seed.seed())),
-    ];
+    ]);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -376,10 +401,11 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 String::new()
             };
             lines.push(Line::from(format!(
-                "      Mass: {}    Teams: {}    Scale: {:.2}x{}",
+                "      Mass: {}    Teams: {}    Scale: {:.2}x    Auto-revise: {}{}",
                 format_kg(project.design.mass_kg),
                 project.teams_assigned,
                 project.scale,
+                if project.auto_revise { "on" } else { "off" },
                 power_str,
             )));
 
@@ -893,10 +919,13 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
 
             // Auto-build target
             let auto_target = company.auto_build_targets.get(&project.project_id).copied().unwrap_or(0);
+            let auto_revise = if project.auto_revise { "on" } else { "off" };
             if auto_target > 0 {
-                lines.push(Line::from(format!("      Auto-build: {}", auto_target)));
+                lines.push(Line::from(format!(
+                    "      Auto-build: {}    Auto-revise: {}", auto_target, auto_revise)));
             } else {
-                lines.push(Line::from("      Auto-build: off"));
+                lines.push(Line::from(format!(
+                    "      Auto-build: off    Auto-revise: {}", auto_revise)));
             }
         }
     }
@@ -1904,7 +1933,7 @@ fn draw_event_feed(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
     let text = if let Some(ref msg) = app.status_message {
         format!(" {} ", msg)
-    } else if matches!(app.input_mode, InputMode::Help { .. }) {
+    } else if matches!(app.input_mode, InputMode::Help { .. } | InputMode::Intro) {
         " Any key closes this ".to_string()
     } else if !matches!(app.input_mode, InputMode::Normal) {
         " [Enter] Confirm  [Esc] Cancel  [↑↓] Select ".to_string()
@@ -2432,6 +2461,64 @@ fn draw_help_modal(
     frame.render_widget(paragraph, area);
 }
 
+/// One-screen orientation on a new game. Deliberately short: it says
+/// what the company is, what the first move is, and where the keys
+/// live. Everything else the player discovers, which is the point of
+/// the game.
+fn draw_intro_modal(frame: &mut Frame, app: &App, screen: Rect) {
+    let name = &app.game.player_company.name;
+    let money = format_money(app.game.player_company.money);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  You are running "),
+            Span::styled(name.clone(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(format!(", a new rocket company with {money}.")),
+        ]),
+        Line::from(""),
+        Line::from("  Rockets are built from engines you design yourself. Engines"),
+        Line::from("  take months to develop and arrive with hidden flaws, which"),
+        Line::from("  testing reveals and revisions fix. Flying an unrevised design"),
+        Line::from("  usually ends in a fireball — that is normal, and survivable."),
+        Line::from(""),
+        Line::from("  Income comes from launch contracts you bid for against a"),
+        Line::from("  competitor. Bid too high and you lose the work; too low and"),
+        Line::from("  you fly at a loss. Nobody tells you the customer's budget."),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  The "),
+            Span::styled("Next steps", Style::default().fg(Color::Cyan)),
+            Span::raw(" box on the Overview tab suggests what to do"),
+        ]),
+        Line::from("  first. It is only a suggestion."),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Press ? at any time for the keys. ",
+                Style::default().fg(Color::Cyan)),
+            Span::styled("Any key to begin.",
+                Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+    ];
+
+    let h = (lines.len() as u16 + 2).min(screen.height);
+    let w = 68u16.min(screen.width);
+    let area = Rect {
+        x: screen.x + (screen.width.saturating_sub(w)) / 2,
+        y: screen.y + (screen.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Welcome ")
+        .style(Style::default().fg(Color::Yellow));
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
     let modal_area = centered_rect(60, 50, area);
     frame.render_widget(Clear, modal_area);
@@ -2441,6 +2528,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
         InputMode::Help { scope } => {
             draw_help_modal(frame, scope, area);
         }
+        InputMode::Intro => draw_intro_modal(frame, app, area),
         InputMode::EngineEditor { project_id, cursor, state } => {
             draw_engine_editor_modal(frame, app, *project_id, *cursor, None, state.is_none(), modal_area);
         }

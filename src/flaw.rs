@@ -48,6 +48,12 @@ impl std::fmt::Display for FlawConsequence {
 }
 
 /// A flaw in an engine design that may activate during flight.
+/// Serde default for the per-project `auto_revise` flag. New projects
+/// and projects loaded from pre-M5 saves both get it on.
+pub fn auto_revise_default() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flaw {
     pub id: FlawId,

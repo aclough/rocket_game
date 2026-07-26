@@ -1,5 +1,6 @@
 pub mod draw;
 pub mod keys;
+pub mod next_steps;
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -384,6 +385,10 @@ pub enum InputMode {
     Help {
         scope: HelpScope,
     },
+    /// One-screen orientation, shown once at the start of a new game.
+    /// Dismissed by any key and never shown again — it is not stored in
+    /// the save, so it cannot reappear on load.
+    Intro,
     /// Non-linear engine editor — edits an existing EngineProject in
     /// place. The cursor walks a fixed field list; each field has its
     /// own interaction (Left/Right cycles, +/- adjusts scale, Enter
@@ -778,6 +783,15 @@ impl App {
         }
     }
 
+    /// Same, but opens on the one-screen orientation. Used for a fresh
+    /// company; loading a save skips it.
+    pub fn new_game(game: GameState) -> Self {
+        let mut app = App::new(game);
+        app.input_mode = InputMode::Intro;
+        app.game.speed = GameSpeed::Paused;
+        app
+    }
+
     /// Save current speed and pause the game when entering a modal.
     fn enter_modal(&mut self, mode: InputMode) {
         self.pre_modal_speed = Some(self.game.speed);
@@ -991,6 +1005,20 @@ impl App {
 
         let real_idx = self.reactor_pane_real_index();
         match key {
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                match real_idx.and_then(|i| self.game.player_company.reactor_projects.get_mut(i)) {
+                    Some(p) => {
+                        p.auto_revise = !p.auto_revise;
+                        self.status_message = Some(format!(
+                            "{}: auto-revise {}", p.design.name,
+                            if p.auto_revise { "on" } else { "off" },
+                        ));
+                    }
+                    None => {
+                        self.status_message = Some("No reactor selected".into());
+                    }
+                }
+            }
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 // Pick a fresh default name based on how many projects
                 // exist; the player can rename inside the editor.
@@ -1095,6 +1123,20 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                match real_idx.and_then(|i| self.game.player_company.engine_projects.get_mut(i)) {
+                    Some(p) => {
+                        p.auto_revise = !p.auto_revise;
+                        self.status_message = Some(format!(
+                            "{}: auto-revise {}", p.design.name,
+                            if p.auto_revise { "on" } else { "off" },
+                        ));
+                    }
+                    None => {
+                        self.status_message = Some("No engine selected".into());
+                    }
+                }
+            }
             KeyCode::Char('b') | KeyCode::Char('B') => {
                 // Buy third-party engine
                 if self.game.player_company.third_party_catalog.is_empty() {
@@ -1165,6 +1207,20 @@ impl App {
 
     fn handle_rockets_key(&mut self, key: KeyCode) {
         match key {
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                match self.game.player_company.rocket_projects.get_mut(self.selected_item) {
+                    Some(p) => {
+                        p.auto_revise = !p.auto_revise;
+                        self.status_message = Some(format!(
+                            "{}: auto-revise {}", p.design.name,
+                            if p.auto_revise { "on" } else { "off" },
+                        ));
+                    }
+                    None => {
+                        self.status_message = Some("No rocket selected".into());
+                    }
+                }
+            }
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 // Start new rocket design flow
                 self.enter_modal(InputMode::RocketName { buffer: String::new() });
@@ -1435,6 +1491,10 @@ impl App {
     fn handle_input_mode_key(&mut self, key: KeyCode) {
         match &mut self.input_mode {
             InputMode::Normal => unreachable!(),
+            InputMode::Intro => {
+                // Any key dismisses.
+                self.exit_modal();
+            }
             InputMode::Help { .. } => {
                 // Any key dismisses. Returning to the designer restores
                 // its in-progress state rather than discarding the
@@ -4516,5 +4576,173 @@ mod help_tests {
             // The modal actually drew something.
             assert!(text.contains("Keys"), "{} help should render", tab.name());
         }
+    }
+}
+
+#[cfg(test)]
+mod onboarding_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    fn render(app: &App, w: u16, h: u16) -> String {
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw::draw(frame, app)).unwrap();
+        let buf = terminal.backend().buffer();
+        (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn fresh() -> crate::game_state::GameState {
+        crate::game_state::GameState::new("Onboard Co".into(), 200_000_000.0, 7)
+    }
+
+    /// A new company opens on the orientation screen; any key dismisses
+    /// it and it does not come back.
+    #[test]
+    fn a_new_game_opens_on_the_intro_and_dismisses_for_good() {
+        let mut app = App::new_game(fresh());
+        assert!(matches!(app.input_mode, InputMode::Intro));
+
+        let text = render(&app, 100, 40);
+        assert!(text.contains("Welcome"), "the intro should render");
+        assert!(text.contains("Onboard Co"), "it should name the company");
+        assert!(text.contains("fireball"),
+            "it should warn that early failures are normal");
+
+        app.handle_key(KeyCode::Char('x'));
+        assert!(matches!(app.input_mode, InputMode::Normal));
+
+        // Ticking the game must not bring it back.
+        for _ in 0..40 {
+            app.game.advance_day();
+        }
+        assert!(matches!(app.input_mode, InputMode::Normal),
+            "the intro is a one-time screen");
+    }
+
+    /// Loading a save skips the intro — it's for first-time players,
+    /// not every session.
+    #[test]
+    fn loading_a_game_skips_the_intro() {
+        let app = App::new(fresh());
+        assert!(matches!(app.input_mode, InputMode::Normal));
+        let text = render(&app, 100, 40);
+        assert!(!text.contains("Welcome"), "a loaded game shouldn't be lectured");
+    }
+
+    /// The Next steps panel appears on Overview for a new company and
+    /// names both the tab and the key to press.
+    #[test]
+    fn overview_shows_next_steps_with_a_tab_and_key() {
+        // Deliberately a short terminal: the panel must survive above
+        // the fold, which is why it renders before the stats block.
+        let app = App::new(fresh());
+        let text = render(&app, 100, 30);
+        assert!(text.contains("Next steps"), "the panel should render:\n{text}");
+        assert!(text.contains("first engine"), "it should suggest the first action");
+        assert!(text.contains("Engines tab"), "it should name the tab");
+        assert!(text.contains("[N]"), "it should name the key");
+    }
+
+    /// Idle engineering teams get put to work by themselves. Before M5
+    /// only manufacturing teams did, so the bot had an advantage the
+    /// player didn't.
+    #[test]
+    fn idle_engineering_teams_are_auto_assigned() {
+        let mut game = fresh();
+        game.player_company.start_engine_project(
+            "Booster".into(),
+            EngineCycle::GasGenerator,
+            PropellantPreset::Kerolox,
+            1.0, None, &game.balance,
+        );
+        assert_eq!(game.player_company.engine_projects[0].teams_assigned, 0);
+        assert!(game.player_company.unassigned_team_count() > 0);
+
+        game.advance_day();
+
+        assert_eq!(game.player_company.unassigned_team_count(), 0,
+            "an idle engineering team is pure salary burn");
+        assert!(game.player_company.engine_projects[0].teams_assigned > 0);
+    }
+
+    /// Auto-revise starts a revision on its own, logs it, and can be
+    /// turned off per project.
+    #[test]
+    fn auto_revise_fires_and_can_be_switched_off() {
+        use crate::engine_project::EngineDesignStatus;
+
+        // Run until an engine reaches Testing with a discovered flaw.
+        let mut game = fresh();
+        game.player_company.start_engine_project(
+            "Booster".into(),
+            EngineCycle::GasGenerator,
+            PropellantPreset::Kerolox,
+            1.0, None, &game.balance,
+        );
+        let mut saw_auto_revision = false;
+        for _ in 0..900 {
+            let events = game.advance_day();
+            if events.iter().any(|e| matches!(
+                e, crate::event::GameEvent::AutoRevisionStarted { .. },
+            )) {
+                saw_auto_revision = true;
+                break;
+            }
+        }
+        assert!(saw_auto_revision,
+            "auto-revise should kick in once testing finds a flaw");
+        assert!(matches!(
+            game.player_company.engine_projects[0].status,
+            EngineDesignStatus::Revising { .. },
+        ));
+
+        // With the flag off, a discovered flaw is left alone.
+        let mut game = fresh();
+        game.player_company.start_engine_project(
+            "Booster".into(),
+            EngineCycle::GasGenerator,
+            PropellantPreset::Kerolox,
+            1.0, None, &game.balance,
+        );
+        game.player_company.engine_projects[0].auto_revise = false;
+        let mut ever_revised = false;
+        for _ in 0..900 {
+            game.advance_day();
+            if matches!(
+                game.player_company.engine_projects[0].status,
+                EngineDesignStatus::Revising { .. },
+            ) {
+                ever_revised = true;
+                break;
+            }
+        }
+        assert!(!ever_revised,
+            "auto-revise off means the player decides when to revise");
+        assert!(game.player_company.engine_projects[0].discovered_flaw_count() > 0,
+            "precondition: a flaw was found and left unrevised");
+    }
+
+    /// Pre-M5 saves have no `auto_revise` field; they should load with
+    /// it on, matching the default for new projects.
+    #[test]
+    fn old_saves_default_auto_revise_on() {
+        let mut game = fresh();
+        game.player_company.start_engine_project(
+            "Booster".into(),
+            EngineCycle::GasGenerator,
+            PropellantPreset::Kerolox,
+            1.0, None, &game.balance,
+        );
+        let mut json = serde_json::to_value(&game).unwrap();
+        // Strip the field the way a pre-M5 save would lack it.
+        json["player_company"]["engine_projects"][0]
+            .as_object_mut().unwrap().remove("auto_revise");
+        let reloaded: crate::game_state::GameState =
+            serde_json::from_value(json).expect("pre-M5 save should load");
+        assert!(reloaded.player_company.engine_projects[0].auto_revise);
     }
 }

@@ -217,6 +217,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
     };
 
     let ep1 = EngineProject {
+        auto_revise: crate::flaw::auto_revise_default(),
         project_id: EngineProjectId(1),
         design: engine1,
         preset: PropellantPreset::Kerolox,
@@ -232,6 +233,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         tech_deficiency_ids: Vec::new(), technology_id: None,
     };
     let ep2 = EngineProject {
+        auto_revise: crate::flaw::auto_revise_default(),
         project_id: EngineProjectId(2),
         design: engine2,
         preset: PropellantPreset::Kerolox,

@@ -134,6 +134,14 @@ pub struct ReactorProject {
     /// `Some(TECH_FISSION_REACTOR)` for now.
     #[serde(default)]
     pub technology_id: Option<crate::technology::TechnologyId>,
+    /// Automatically start a revision as soon as testing discovers a
+    /// flaw. Default on: for a project you aren't yet mass-producing,
+    /// revising promptly is what you'd do anyway. Turn it off on a
+    /// design with a production run going — a revision bumps
+    /// `revision`, which flows onto build orders and inventory and so
+    /// partially resets the learning curve.
+    #[serde(default = "crate::flaw::auto_revise_default")]
+    pub auto_revise: bool,
 }
 
 impl ReactorProject {
@@ -150,6 +158,7 @@ impl ReactorProject {
         let complexity = REACTOR_BASE_COMPLEXITY;
         let work_required = reactor_design_work_required(complexity, balance_cfg);
         ReactorProject {
+            auto_revise: crate::flaw::auto_revise_default(),
             project_id,
             design,
             status: ReactorDesignStatus::InDesign {

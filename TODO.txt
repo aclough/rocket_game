@@ -1,5 +1,8 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
+Contracts:
+[] Campaigns of a type, e.g., resupply to ISS shouldn't be re-bid until the previous contract has finished.
+
 Power:
 [] Make color coding of contracts take into account spacecraft duration
 [] Check on grandfathered power

@@ -311,6 +311,10 @@ the second variant free would quietly undo a chunk of that. Hence:
     `notified_*_idle` one-shot pause for when there's nothing to assign
     to. An idle engineering team is pure salary burn — the strategic
     decision is *re*assignment, never idleness.
+    *(Built without the idle pause: with no projects at all it would
+    fire on day 1 of every new game, before the player has done
+    anything. The Next Steps panel raises idle teams instead, which is
+    the gentler instrument and was being built anyway.)*
   - **Auto Testing→Revising.** Worth doing but it needs to be a toggle,
     not unconditional. A revision bumps `EngineProject.revision`, and that
     number is carried onto manufacturing orders and inventory items
@@ -595,7 +599,7 @@ bite before Task 3, so there's time to reverse any of them:
 - [x] Task 0 — TODO.txt UI polish
 - [x] Task 1 — vacuum variants per stage
 - [x] Task 2 — help pane
-- [ ] Task 3 — onboarding & automation
+- [x] Task 3 — onboarding & automation
 - [ ] Task 4 — save robustness
 - [ ] Task 5 — session/bug report dump
 - [ ] Task 6 — Windows support + CI

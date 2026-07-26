@@ -17,6 +17,10 @@ pub enum GameEvent {
     EngineDesignComplete { engine_name: String },
     FlawDiscovered { engine_name: String, flaw_description: String },
     RevisionComplete { engine_name: String },
+    /// A project started revising on its own because its auto-revise
+    /// flag is on. `flaw_count` is *discovered* flaws only — the
+    /// number the player can already see in the pane.
+    AutoRevisionStarted { project_name: String, flaw_count: usize },
     SalariesPaid { amount: f64 },
     InsufficientFunds { shortfall: f64 },
     EngineContracted { engine_name: String },
@@ -168,6 +172,9 @@ impl fmt::Display for GameEvent {
                 write!(f, "Design complete: {}", engine_name),
             GameEvent::FlawDiscovered { engine_name, flaw_description } =>
                 write!(f, "Flaw found in {}: {}", engine_name, flaw_description),
+            GameEvent::AutoRevisionStarted { project_name, flaw_count } =>
+                write!(f, "Auto-revising {}: {} discovered flaw(s)",
+                    project_name, flaw_count),
             GameEvent::RevisionComplete { engine_name } =>
                 write!(f, "Revision complete: {}", engine_name),
             GameEvent::SalariesPaid { amount } =>
@@ -353,6 +360,7 @@ impl GameEvent {
             | GameEvent::EngineDesignStarted { .. }
             | GameEvent::EngineDesignComplete { .. }
             | GameEvent::FlawDiscovered { .. }
+            | GameEvent::AutoRevisionStarted { .. }
             | GameEvent::RevisionComplete { .. }
             | GameEvent::InsufficientFunds { .. }
             | GameEvent::EngineContracted { .. }

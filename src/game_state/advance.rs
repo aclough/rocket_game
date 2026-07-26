@@ -492,6 +492,15 @@ impl GameState {
 
         // Auto-assign idle manufacturing teams to least-staffed orders
         self.player_company.auto_assign_idle_manufacturing_teams();
+        // Same for engineering teams — an idle engineer is pure burn.
+        self.player_company.auto_assign_idle_engineering_teams();
+
+        // Auto-revise projects whose testing turned up a flaw. Runs
+        // after the day's research tick, so a flaw discovered today
+        // starts its revision today. Opt-out per project: a revision
+        // partially resets the production learning curve, which a
+        // player mid-run may not want.
+        self.auto_revise_projects(&mut events);
 
         // Competitors run the same manufacturing machinery daily.
         self.tick_competitors(&mut events);
@@ -625,5 +634,51 @@ impl GameState {
         }
 
         events
+    }
+
+    /// Start revisions on projects that have discovered flaws and are
+    /// set to auto-revise. Only acts on projects in `Testing` — the
+    /// `start_*_revision` calls enforce that themselves and return
+    /// `None` otherwise, so this is a filter for clarity, not
+    /// correctness.
+    ///
+    /// Deliberately opt-out rather than unconditional: a revision bumps
+    /// the project's `revision`, which is stamped onto build orders and
+    /// inventory items, so it partially resets the production learning
+    /// curve. A player mid-production run may prefer to keep flying a
+    /// known-flawed design.
+    fn auto_revise_projects(&mut self, events: &mut Vec<GameEvent>) {
+        let mut started: Vec<(String, usize)> = Vec::new();
+
+        for i in 0..self.player_company.engine_projects.len() {
+            let p = &self.player_company.engine_projects[i];
+            if !p.auto_revise || p.discovered_flaw_count() == 0 { continue; }
+            let name = p.design.name.clone();
+            if let Some((fc, _)) = self.player_company.start_engine_revision(i) {
+                started.push((name, fc));
+            }
+        }
+        for i in 0..self.player_company.rocket_projects.len() {
+            let p = &self.player_company.rocket_projects[i];
+            if !p.auto_revise || p.discovered_flaw_count() == 0 { continue; }
+            let name = p.design.name.clone();
+            if let Some(fc) = self.player_company.start_rocket_revision(i) {
+                started.push((name, fc));
+            }
+        }
+        for i in 0..self.player_company.reactor_projects.len() {
+            let p = &self.player_company.reactor_projects[i];
+            if !p.auto_revise || p.discovered_flaw_count() == 0 { continue; }
+            let name = p.design.name.clone();
+            if let Some((fc, _, _)) = self.player_company.start_reactor_revision(i) {
+                started.push((name, fc));
+            }
+        }
+
+        for (project_name, flaw_count) in started {
+            let evt = GameEvent::AutoRevisionStarted { project_name, flaw_count };
+            self.event_log.push(self.date, evt.clone());
+            events.push(evt);
+        }
     }
 }

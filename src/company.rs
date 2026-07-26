@@ -961,6 +961,59 @@ impl Company {
         }
     }
 
+    /// Auto-assign idle engineering teams to the least-staffed project
+    /// that can absorb work, mirroring
+    /// `auto_assign_idle_manufacturing_teams`.
+    ///
+    /// An idle engineering team is pure salary burn: there is no state
+    /// in which paying a team to do nothing beats putting it on a
+    /// project, because testing and revising consume work just as
+    /// designing does. The real strategic decision is which project to
+    /// *move* a team to, and that stays manual ([+] steals from the
+    /// busiest project).
+    ///
+    /// `Proposed` projects are skipped — they're unfinished rocket-
+    /// designer drafts, not committed work.
+    pub fn auto_assign_idle_engineering_teams(&mut self) {
+        while self.unassigned_team_count() > 0 {
+            // Least-staffed committed project across the three pools.
+            // `min_by_key` keeps the first of equal minima, so ties
+            // resolve in a stable pool-then-index order.
+            let mut best: Option<(ProjectKind, u32)> = None;
+            let mut consider = |kind: ProjectKind, staffed: u32| {
+                if best.as_ref().is_none_or(|b| staffed < b.1) {
+                    best = Some((kind, staffed));
+                }
+            };
+            for (i, p) in self.engine_projects.iter().enumerate() {
+                if matches!(p.status, EngineDesignStatus::Proposed { .. }) { continue; }
+                consider(ProjectKind::Engine(i), p.teams_assigned);
+            }
+            for (i, p) in self.rocket_projects.iter().enumerate() {
+                consider(ProjectKind::Rocket(i), p.teams_assigned);
+            }
+            for (i, p) in self.reactor_projects.iter().enumerate() {
+                if matches!(
+                    p.status,
+                    crate::reactor_project::ReactorDesignStatus::Proposed { .. },
+                ) { continue; }
+                consider(ProjectKind::Reactor(i), p.teams_assigned);
+            }
+
+            let assigned = match best {
+                Some((ProjectKind::Engine(i), _)) => self.add_team_to_project(i),
+                Some((ProjectKind::Rocket(i), _)) => self.add_team_to_rocket_project(i),
+                Some((ProjectKind::Reactor(i), _)) => self.add_team_to_reactor_project(i),
+                // Nothing to work on — the teams stay idle and the
+                // Overview's next-steps panel prompts for a project.
+                None => break,
+            };
+            if !assigned {
+                break;
+            }
+        }
+    }
+
     /// Find the busiest engineering project across the three pools
     /// (engines / rockets / reactors), excluding `exclude`. Returns the
     /// donor's kind, index, and name; caller decrements teams_assigned
