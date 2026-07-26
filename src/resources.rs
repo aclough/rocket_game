@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_bom_fractions_sum_to_one() {
-        let boms = vec![
+        let boms = [
             engine_bom(PropellantPreset::Kerolox),
             engine_bom(PropellantPreset::Hydrolox),
             engine_bom(PropellantPreset::Hypergolic),

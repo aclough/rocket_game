@@ -1,0 +1,87 @@
+# Build and test on the three platforms the game claims to run on.
+#
+# Windows is here because the friends round includes Windows players and
+# nobody on the project develops there — an untested platform is a
+# platform that doesn't work. macOS is build-and-test only for the same
+# reason, one step weaker: nobody has run the TUI on it yet.
+#
+# Not gated: `cargo fmt`. This codebase is hand-formatted (aligned
+# struct literals, deliberate line breaks) and rustfmt would rewrite
+# most files. Adding the gate would mean reformatting everything, which
+# is a decision to make on purpose, not as a side effect of adding CI.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail loudly on a panic in a test thread rather than reporting a
+  # bare "test failed" with no location.
+  RUST_BACKTRACE: 1
+  # Point every save, autosave, and report the tests write at a scratch
+  # directory. The suite is supposed to be independent of the user's
+  # home directory — this proves it, and stops a regression from
+  # silently writing into the runner's profile the way one did locally.
+  ROCKET_TYCOON_DATA_DIR: ${{ github.workspace }}/ci-data
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't cancel the other platforms when one fails: a
+      # Windows-only break is exactly the thing this matrix exists to
+      # show, and it's more useful alongside a green Linux run.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The compat corpus in tests/saves was generated from real
+          # historical commits, and build.rs stamps the build with the
+          # commit hash. Neither needs full history, but the hash does
+          # need a git dir, which checkout provides.
+          fetch-depth: 1
+
+      - name: Rust version
+        run: rustc --version && cargo --version
+
+      - name: Build
+        run: cargo build --all-targets
+
+      - name: Test
+        run: cargo test --all-targets
+
+      # `--all-targets` skips doctests. There are few, but a broken
+      # example in a doc comment should still fail the build.
+      - name: Doc tests
+        run: cargo test --doc
+
+  lint:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  balance:
+    name: balance smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The unit tests all run in debug. This is the only thing that
+      # exercises the release profile, and it drives the full game loop
+      # through the scripted bot — a panic reachable only from a long
+      # game shows up here and nowhere else.
+      #
+      # Deliberately short: the real balance bands live in
+      # tests/sim_bands.rs. This asks "does a decade of play run at
+      # all", not "is it balanced".
+      - name: Ten years, five seeds
+        run: cargo run --release --bin simulate -- --seeds 1..6 --years 10 --policy basic --summary-only

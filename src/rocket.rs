@@ -1557,7 +1557,7 @@ mod tests {
         let engine = kerolox_engine(1, 500_000.0, 200.0, 300.0);
         let s1 = Stage {
             id: StageId(1), name: "S1".into(),
-            engine: engine, engine_count: 1,
+            engine, engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
             power_sources: Vec::new(),

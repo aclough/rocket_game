@@ -195,6 +195,44 @@ reproduce. See **Q5** on whether reports should be self-contained.
   box-drawing and colors survive, do `+`/`=` and function keys arrive
   as expected through crossterm. See **Q6** — I can't do this part.
 
+**Done — what actually landed.** Hand-rolled, as leaned. Two things
+the plan expected turned out not to exist:
+
+- **No migration was needed.** The plan said "migration of existing
+  `~/.rocket_tycoon` saves", but that only follows if the Unix path
+  changes, and there is no reason to move it: it has been the path
+  since M1 and every existing save is there. Only Windows gets a new
+  rule, and Windows has no prior installs. Writing migration code for
+  a case that cannot occur would have been code that never runs and
+  therefore is never known to work.
+- **No Windows input bug.** The double-keypress trap — crossterm
+  emits both `Press` and `Release` on Windows but only `Press` on
+  Unix — was already handled: both event loops filter on
+  `KeyEventKind::Press`.
+
+Beyond the plan: `ROCKET_TYCOON_DATA_DIR` overrides the location on
+every platform. It exists so the game can be pointed at a scratch
+directory without touching `HOME` — which broke `cargo` itself when
+the Task 4 tests first tried that, since rustup lives there — and CI
+sets it for the whole suite.
+
+The path choice is a pure function (`resolve_data_dir`) taking
+`cfg!(windows)` as an argument rather than a `#[cfg]`-gated body, so
+the Windows rule is tested on Linux and vice versa. A `#[cfg]` body is
+only ever checked by the platform it was written for; the mistake
+would surface in CI instead of in the tests.
+
+CI is three jobs: `test` (build + test + doctests on all three
+platforms, `fail-fast: false` so a Windows-only break is visible next
+to a green Linux run), `lint` (clippy `-D warnings`), and `balance`
+(ten years × six seeds through the scripted bot — the only thing that
+exercises the release profile, since every unit test runs in debug).
+
+**Not gated: `cargo fmt`.** The codebase is hand-formatted and rustfmt
+would rewrite most files. Adding the gate means reformatting
+everything, which is a decision to make deliberately, not as a side
+effect of adding CI.
+
 ### 2.6 Vacuum variants per stage (Task 1 — new, from Q8)
 
 **Today.** An engine project bakes its nozzle choice in at creation:
@@ -561,7 +599,8 @@ bite before Task 3, so there's time to reverse any of them:
 - **Q1 footnote** — keeping the one-screen first-run intro modal
   (Task 3).
 - **Q6 footnote** — `macos-latest` included in the CI matrix as
-  build+test only, no usability claim (Task 6).
+  build+test only, no usability claim (Task 6). *Landed on that
+  default; reversible by deleting one line of the matrix.*
 - **Q7 footnote** — LICENSE reading "Copyright (c) 2026 Andrew Clough"
   (Task 8).
 
@@ -611,7 +650,7 @@ bite before Task 3, so there's time to reverse any of them:
 - [x] Task 3 — onboarding & automation
 - [x] Task 4 — save robustness
 - [x] Task 5 — session/bug report dump
-- [ ] Task 6 — Windows support + CI
+- [x] Task 6 — Windows support + CI
 - [ ] → friends round on Discord
 - [ ] Task 7 — feedback fixes
 - [ ] Task 8 — packaging

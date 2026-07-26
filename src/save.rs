@@ -174,12 +174,58 @@ fn sanitize_name(company_name: &str) -> String {
         .collect()
 }
 
-/// Root data directory — everything the game writes lives under here.
+/// Root data directory — saves, autosaves, and reports all live under
+/// here, and this is the only function that decides where "here" is.
 ///
-/// One place to change when Task 6 makes this platform-aware.
+/// - Windows: `%APPDATA%\RocketTycoon` (no leading dot — a dotdir is a
+///   Unix convention and just looks like a broken folder in Explorer).
+/// - Everywhere else: `$HOME/.rocket_tycoon`, unchanged from M1, so
+///   nobody's existing saves move. There is no migration to write:
+///   the Unix path never changed and Windows has no prior installs to
+///   migrate from.
+///
+/// `ROCKET_TYCOON_DATA_DIR` overrides both. That exists for players who
+/// keep their home directory tidy, and it means the game can be pointed
+/// at a scratch directory without touching `HOME` — which broke `cargo`
+/// itself the first time the tests tried it, since rustup lives there.
 pub fn data_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    Path::new(&home).join(".rocket_tycoon")
+    resolve_data_dir(
+        std::env::var_os("ROCKET_TYCOON_DATA_DIR").as_deref(),
+        std::env::var_os("APPDATA").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+        cfg!(windows),
+    )
+}
+
+/// The path choice as a pure function of the environment, so the
+/// Windows rule is testable from Linux and vice versa. `cfg!(windows)`
+/// is passed in rather than read here for exactly that reason: a
+/// `#[cfg]`-gated body would only ever be checked by the platform it
+/// was written for, and CI would find the mistake instead of the tests.
+fn resolve_data_dir(
+    over: Option<&std::ffi::OsStr>,
+    appdata: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+    windows: bool,
+) -> PathBuf {
+    // An override set to the empty string is a misconfiguration, not a
+    // request to write into the filesystem root.
+    if let Some(dir) = over.filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    let (base, name) = if windows {
+        (appdata, "RocketTycoon")
+    } else {
+        (home, ".rocket_tycoon")
+    };
+    match base.filter(|b| !b.is_empty()) {
+        Some(base) => Path::new(base).join(name),
+        // Both vars are set by every normal login on their platform.
+        // Falling back to the working directory keeps a save possible
+        // in a stripped environment (a bare `cron`, a Docker `RUN`)
+        // rather than losing the player's game to a panic.
+        None => PathBuf::from(".").join(name),
+    }
 }
 
 /// Default save directory.
@@ -237,6 +283,75 @@ mod tests {
     fn test_save_path_sanitization() {
         let path = save_path("My Cool Company!");
         assert!(path.to_string_lossy().contains("My_Cool_Company_"));
+    }
+
+    /// `resolve_data_dir` is pure, so both platforms' rules are checked
+    /// on every platform. Reads nothing from the real environment.
+    mod data_dir {
+        use super::super::resolve_data_dir;
+        use std::ffi::OsStr;
+        use std::path::PathBuf;
+
+        fn os(s: &str) -> &OsStr {
+            OsStr::new(s)
+        }
+
+        fn resolve(over: Option<&str>, appdata: &str, home: &str, windows: bool) -> PathBuf {
+            resolve_data_dir(
+                over.map(os), Some(os(appdata)), Some(os(home)), windows,
+            )
+        }
+
+        #[test]
+        fn each_platform_uses_its_own_convention() {
+            assert_eq!(
+                resolve(None, r"C:\Users\a\AppData\Roaming", r"C:\Users\a", true),
+                PathBuf::from(r"C:\Users\a\AppData\Roaming").join("RocketTycoon"),
+                "Windows should use %APPDATA%, with no leading dot",
+            );
+            assert_eq!(
+                resolve(None, "", "/home/a", false),
+                PathBuf::from("/home/a/.rocket_tycoon"),
+                "Unix must keep the M1 path — existing saves live there",
+            );
+        }
+
+        #[test]
+        fn the_override_wins_on_both_platforms() {
+            for windows in [true, false] {
+                assert_eq!(
+                    resolve(Some("/scratch/rt"), r"C:\AppData", "/home/a", windows),
+                    PathBuf::from("/scratch/rt"),
+                );
+            }
+        }
+
+        #[test]
+        fn an_empty_variable_is_ignored_rather_than_used_as_a_root() {
+            // `VAR=` is a misconfiguration; joining onto it would put
+            // saves in the filesystem root.
+            assert_eq!(
+                resolve(Some(""), "", "/home/a", false),
+                PathBuf::from("/home/a/.rocket_tycoon"),
+            );
+            assert_eq!(
+                resolve(None, "", "", true),
+                PathBuf::from("./RocketTycoon"),
+            );
+        }
+
+        #[test]
+        fn a_missing_home_falls_back_to_the_working_directory() {
+            // Saving somewhere odd beats panicking and losing the game.
+            assert_eq!(
+                resolve_data_dir(None, None, None, false),
+                PathBuf::from("./.rocket_tycoon"),
+            );
+            assert_eq!(
+                resolve_data_dir(None, None, None, true),
+                PathBuf::from("./RocketTycoon"),
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,6 @@
+# The compat corpus is archaeology: each file is the literal bytes a
+# past release wrote, generated from that commit via `git worktree`.
+# Line-ending normalization on a Windows checkout would rewrite them,
+# and a rewritten fixture no longer proves what it was collected to
+# prove. Freeze them.
+tests/saves/*.json -text

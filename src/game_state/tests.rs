@@ -554,12 +554,13 @@ fn test_design_work_progresses() {
         gs.advance_day();
     }
 
-    // Check work progressed
-    match &gs.player_company.engine_projects[0].status {
-        crate::engine_project::EngineDesignStatus::InDesign { work_completed, .. } => {
-            assert!(*work_completed > 9.0, "Should have ~10 work units after 10 days with 1 team");
-        }
-        _ => {} // might have completed if work_required was low enough (unlikely for complexity 6)
+    // Check work progressed. Not an exhaustive match on purpose: the
+    // project might have completed if work_required was low enough
+    // (unlikely for complexity 6), and that isn't a failure.
+    if let crate::engine_project::EngineDesignStatus::InDesign { work_completed, .. } =
+        &gs.player_company.engine_projects[0].status
+    {
+        assert!(*work_completed > 9.0, "Should have ~10 work units after 10 days with 1 team");
     }
 }
 
@@ -874,8 +875,8 @@ fn test_contracted_engine_build_count_increments_at_order_time() {
     assert_eq!(count, stage1_count);
     // Player-designed engine history is populated only after the build
     // pipeline runs — at this point it's still empty.
-    assert!(gs.player_company.engine_cost_history
-        .get(&EngineProjectId(2)).is_none());
+    assert!(!gs.player_company.engine_cost_history
+        .contains_key(&EngineProjectId(2)));
 }
 
 /// Build a tiny single-stage RocketDesign suitable for use as a
@@ -1214,8 +1215,8 @@ fn test_save_and_load_with_docked_spacecraft() {
     }
 }
 
-/// Phase 2a — start_proposed_reactor + promote_proposed_reactor
-/// + delete_proposed_reactor round-trip. Mirrors the assertions for
+/// Phase 2a — start_proposed_reactor + promote_proposed_reactor +
+/// delete_proposed_reactor round-trip. Mirrors the assertions for
 /// engine projects in the engine-pipeline tests.
 #[test]
 fn test_reactor_proposed_lifecycle() {
@@ -1918,5 +1919,5 @@ fn test_cycle_auto_build_target_requires_testing_and_wraps() {
     assert_eq!(gs.player_company.cycle_auto_build_target(0), Some(2));
     assert_eq!(gs.player_company.cycle_auto_build_target(0), Some(3));
     assert_eq!(gs.player_company.cycle_auto_build_target(0), Some(0));
-    assert!(gs.player_company.auto_build_targets.get(&pid).is_none());
+    assert!(!gs.player_company.auto_build_targets.contains_key(&pid));
 }
