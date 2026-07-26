@@ -3862,3 +3862,141 @@ mod engine_pane_tests {
             "cancelling should delete the Proposed draft");
     }
 }
+
+#[cfg(test)]
+mod contract_table_render_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    /// Character (not byte) column at which `needle` starts. `▶` and
+    /// `…` are multi-byte, so `str::find` offsets don't line up with
+    /// screen columns.
+    fn col_of(line: &str, needle: &str) -> Option<usize> {
+        line.find(needle).map(|b| line[..b].chars().count())
+    }
+
+    /// Render the app and return the buffer as one string per row.
+    fn render_lines(app: &App, w: u16, h: u16) -> (Vec<String>, ratatui::buffer::Buffer) {
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw::draw(frame, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let lines = (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect();
+        (lines, buf)
+    }
+
+    /// Contracts whose names differ wildly in length — the case that
+    /// used to shear every column to the right of the name.
+    fn contracts_with_varied_names() -> Vec<crate::contract::Contract> {
+        let names = ["Sat-1", "Meridian Heavy Communications Platform", "Orbcomm 7"];
+        names.iter().enumerate().map(|(i, name)| crate::contract::Contract {
+            id: crate::contract::ContractId(100 + i as u64),
+            name: (*name).into(),
+            destination: "leo".into(),
+            payload_kg: 450.0 + i as f64 * 1200.0,
+            payment: 12_500_000.0 + i as f64 * 3_000_000.0,
+            deadline: crate::calendar::GameDate::new(2001, 9, 1),
+            status: crate::contract::ContractStatus::Available,
+            market_id: crate::contract::MARKET_RIDESHARE,
+            campaign_id: None,
+            bid_deadline: None,
+            budget_ceiling: 0.0,
+            player_bid: None,
+        }).collect()
+    }
+
+    fn app_with_contracts() -> App {
+        let mut game = crate::game_state::GameState::new(
+            "Column Test".into(), 100_000_000.0, 7,
+        );
+        game.available_contracts = contracts_with_varied_names();
+        let mut app = App::new(game);
+        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.selected_item = 0;
+        app
+    }
+
+    /// M5 Task 0: every contract row puts its columns at the same
+    /// offsets regardless of how long the contract name is.
+    #[test]
+    fn contract_columns_align_across_rows() {
+        let app = app_with_contracts();
+        let (lines, _) = render_lines(&app, 120, 50);
+
+        let rows: Vec<&String> = lines.iter()
+            .filter(|l| l.contains(" kg ") && l.contains("Sep 1, 2001"))
+            .collect();
+        assert_eq!(rows.len(), 3, "all three contracts should render as rows");
+
+        let kg_at: Vec<Option<usize>> = rows.iter().map(|l| col_of(l, " kg")).collect();
+        assert!(
+            kg_at.windows(2).all(|w| w[0] == w[1]),
+            "payload column must start at one offset, got {kg_at:?}\n{rows:#?}",
+        );
+        let date_at: Vec<Option<usize>> = rows.iter()
+            .map(|l| col_of(l, "Sep 1, 2001")).collect();
+        assert!(
+            date_at.windows(2).all(|w| w[0] == w[1]),
+            "deadline column must start at one offset, got {date_at:?}",
+        );
+
+        // The long name is elided rather than allowed to push the row.
+        let (narrow, _) = render_lines(&app, 90, 50);
+        assert!(
+            narrow.iter().any(|l| l.contains('…')),
+            "an over-long contract name should be truncated with an ellipsis",
+        );
+    }
+
+    /// M5 Task 0: selection is marked with a background, so it can't
+    /// collide with the yellow that means "borderline / needs build".
+    /// Before this change both used `fg(Yellow)` and were identical.
+    #[test]
+    fn selection_uses_background_not_a_foreground_colour() {
+        let app = app_with_contracts();
+        let (lines, buf) = render_lines(&app, 120, 50);
+
+        let y = lines.iter().position(|l| l.contains("▶ ")).expect("a selected row renders");
+        let x = col_of(&lines[y], "▶").expect("marker present") as u16;
+        let cell = &buf[(x, y as u16)];
+        assert_eq!(
+            cell.bg, draw::SELECTION_BG,
+            "the selected row should carry the selection background",
+        );
+
+        // An unselected row must not, or the signal means nothing.
+        let other = lines.iter().enumerate()
+            .find(|(i, l)| *i != y && l.contains(" kg ") && l.contains("Sep 1, 2001"))
+            .map(|(i, _)| i)
+            .expect("a second contract row renders");
+        assert_ne!(
+            buf[(x, other as u16)].bg, draw::SELECTION_BG,
+            "unselected rows must not carry the selection background",
+        );
+    }
+
+    /// The table degrades to fewer columns rather than overflowing when
+    /// the pane is narrow (80-column terminals are still a thing).
+    #[test]
+    fn narrow_pane_drops_the_bid_close_column_instead_of_overflowing() {
+        let app = app_with_contracts();
+        let (wide, _) = render_lines(&app, 140, 50);
+        let (narrow, _) = render_lines(&app, 80, 50);
+
+        assert!(
+            wide.iter().any(|l| l.contains("Bids close")),
+            "a wide pane shows the bid-close column",
+        );
+        assert!(
+            !narrow.iter().any(|l| l.contains("Bids close")),
+            "a narrow pane drops it rather than running past the border",
+        );
+        // Nothing spills past the right border on either width.
+        for l in narrow.iter().filter(|l| l.contains("Sep 1, 2001")) {
+            assert!(l.ends_with('│') || l.trim_end().chars().count() <= 79,
+                "row overflows the 80-column pane: {l:?}");
+        }
+    }
+}

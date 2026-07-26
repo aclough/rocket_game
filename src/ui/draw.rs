@@ -1058,6 +1058,157 @@ enum ContractReadiness {
     Impossible,
 }
 
+/// Column widths for the contracts table, sized to the pane.
+///
+/// The name column absorbs whatever space is left over; the
+/// bid-close column is the first thing dropped when the pane is
+/// narrow (only solicitations use it, and their bid date is repeated
+/// in the detail modal). Everything else is fixed so that rows line
+/// up regardless of contract-name length — the whole point of the
+/// table.
+#[derive(Debug, Clone, Copy)]
+struct ContractCols {
+    name: usize,
+    show_bid_close: bool,
+}
+
+impl ContractCols {
+    /// Marker + the fixed columns, including the single space that
+    /// separates each one. Name and the trailing flag column are the
+    /// only variable parts.
+    const MARKER: usize = 2;
+    const DEST: usize = 6;
+    const PAYLOAD: usize = 9;   // "123456 kg"
+    const VALUE: usize = 10;    // "bid $12.5M"
+    const DATE: usize = 12;     // "Dec 31, 2001" — the longest GameDate
+    const FLAGS: usize = 5;     // " ▲rep"
+    const MIN_NAME: usize = 10;
+    /// Past this the name column is just whitespace; leave the rest of
+    /// a wide terminal empty rather than letting the table sprawl.
+    const MAX_NAME: usize = 30;
+
+    fn for_width(pane_width: u16) -> Self {
+        let inner = (pane_width as usize).saturating_sub(2); // block borders
+        // marker + name + (sep+dest) + (sep+payload) + (sep+value)
+        // + (sep+bid_close) + (sep+deadline) + flags
+        let fixed_narrow = Self::MARKER + (1 + Self::DEST) + (1 + Self::PAYLOAD)
+            + (1 + Self::VALUE) + (1 + Self::DATE) + Self::FLAGS;
+        let fixed_wide = fixed_narrow + 1 + Self::DATE;
+
+        let wide_name = inner.saturating_sub(fixed_wide);
+        if wide_name >= 16 {
+            Self { name: wide_name.min(Self::MAX_NAME), show_bid_close: true }
+        } else {
+            Self {
+                name: inner.saturating_sub(fixed_narrow)
+                    .clamp(Self::MIN_NAME, Self::MAX_NAME),
+                show_bid_close: false,
+            }
+        }
+    }
+
+    /// Header row matching `contract_row`'s layout.
+    fn header(&self) -> String {
+        let mut s = format!(
+            "  {:<name$} {:<dest$} {:>payload$} {:>value$}",
+            "Contract", "Dest", "Payload", "Value",
+            name = self.name, dest = Self::DEST,
+            payload = Self::PAYLOAD, value = Self::VALUE,
+        );
+        if self.show_bid_close {
+            s.push_str(&format!(" {:<w$}", "Bids close", w = Self::DATE));
+        }
+        s.push_str(&format!(" {:<w$}", "Deadline", w = Self::DATE));
+        s
+    }
+}
+
+/// Truncate to `width` display columns, marking elision with `…`.
+fn fit(s: &str, width: usize) -> String {
+    if s.chars().count() <= width {
+        return s.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut out: String = s.chars().take(width - 1).collect();
+    out.push('…');
+    out
+}
+
+/// One row of the contracts table. `selected` only controls the
+/// marker — the *style* carries selection (see `contract_style`), so
+/// the two signals never contend for the same channel.
+fn contract_row(
+    c: &Contract,
+    cols: &ContractCols,
+    selected: bool,
+    rep_flag: bool,
+) -> String {
+    let mut s = format!(
+        "{}{:<name$} {:<dest$} {:>payload$} {:>value$}",
+        if selected { "▶ " } else { "  " },
+        fit(&c.name, cols.name),
+        fit(contract::destination_short_name(&c.destination), ContractCols::DEST),
+        format!("{:.0} kg", c.payload_kg),
+        // Solicitation: the price is the player's to name, so the
+        // reference payment and budget ceiling stay hidden.
+        if c.bid_deadline.is_some() {
+            match c.player_bid {
+                Some(b) => format!("bid {}", format_money(b)),
+                None => "no bid".to_string(),
+            }
+        } else {
+            format_money(c.payment)
+        },
+        name = cols.name, dest = ContractCols::DEST,
+        payload = ContractCols::PAYLOAD, value = ContractCols::VALUE,
+    );
+    if cols.show_bid_close {
+        s.push_str(&format!(
+            " {:<w$}",
+            c.bid_deadline.map(|d| d.to_string()).unwrap_or_default(),
+            w = ContractCols::DATE,
+        ));
+    }
+    s.push_str(&format!(" {:<w$}", c.deadline.to_string(), w = ContractCols::DATE));
+    if rep_flag {
+        s.push_str(" ▲rep");
+    }
+    s
+}
+
+/// Style for a contract row. Readiness owns the **foreground** colour;
+/// selection owns the **background** plus bold. Before M5 both used
+/// `Color::Yellow`, so a selected row was indistinguishable from a
+/// borderline (NeedsBuild) one — the two signals are orthogonal and
+/// now use orthogonal channels.
+fn contract_style(
+    readiness: Option<ContractReadiness>,
+    selected: bool,
+    accepted: bool,
+) -> Style {
+    let base = match readiness {
+        // An available contract we can already fly gets no colour;
+        // an accepted one goes green (it's committed work that's ready).
+        Some(ContractReadiness::Ready) if accepted => Style::default().fg(Color::Green),
+        Some(ContractReadiness::Ready) => Style::default(),
+        Some(ContractReadiness::NeedsBuild) => Style::default().fg(Color::Yellow),
+        Some(ContractReadiness::Impossible) => Style::default().fg(Color::Red),
+        None => Style::default(),
+    };
+    if selected {
+        base.bg(SELECTION_BG).add_modifier(Modifier::BOLD)
+    } else {
+        base
+    }
+}
+
+/// Background used to mark the selected row in list views. Selection
+/// deliberately owns a channel no semantic colour uses, so it can never
+/// be confused with a readiness or status colour.
+pub const SELECTION_BG: Color = Color::Rgb(48, 48, 72);
+
 fn check_contract_readiness(contract: &Contract, company: &Company) -> ContractReadiness {
     for project in &company.rocket_projects {
         // Only consider designs that are past InDesign (Testing, Revising, or Complete equivalent)
@@ -1083,6 +1234,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
     let available = &game.available_contracts;
     let accepted = &game.player_company.active_contracts;
     let rep = game.player_company.reputation.total();
+    let cols = ContractCols::for_width(area.width);
 
     let mut lines = vec![
         Line::from(Span::styled(
@@ -1105,6 +1257,10 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
         )));
         lines.push(Line::from("  (none available — wait for next month)"));
     } else {
+        lines.push(Line::from(Span::styled(
+            cols.header(),
+            Style::default().fg(Color::DarkGray),
+        )));
         // Show contracts grouped by market
         for market in &active_markets {
             let market_contracts: Vec<(usize, &Contract)> = available.iter()
@@ -1124,39 +1280,17 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
             )));
 
             for (i, c) in market_contracts {
-                let marker = if i == app.selected_item { "▶ " } else { "  " };
-                let dest_name = contract::destination_display_name(&c.destination);
-                let style = if i == app.selected_item {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    match check_contract_readiness(c, &game.player_company) {
-                        ContractReadiness::Ready => Style::default(),
-                        ContractReadiness::NeedsBuild => Style::default().fg(Color::Yellow),
-                        ContractReadiness::Impossible => Style::default().fg(Color::Red),
-                    }
-                };
-                let text = if let Some(bid_by) = c.bid_deadline {
-                    // Solicitation: the price is the player's to name.
-                    // The reference payment and budget ceiling stay
-                    // hidden (discovery rule).
-                    let bid_status = match c.player_bid {
-                        Some(b) => format!("bid {}", format_money(b)),
-                        None => "no bid".to_string(),
-                    };
-                    let rep_tag = if rep < 0.8 * market.rep_target {
-                        "  ▲rep"
-                    } else {
-                        ""
-                    };
-                    format!("{}{}  →{}  {:.0} kg  {}  bids close {}  by {}{}",
-                        marker, c.name, dest_name,
-                        c.payload_kg, bid_status, bid_by, c.deadline, rep_tag)
-                } else {
-                    format!("{}{}  →{}  {:.0} kg  {}  by {}",
-                        marker, c.name, dest_name,
-                        c.payload_kg, format_money(c.payment), c.deadline)
-                };
-                lines.push(Line::from(Span::styled(text, style)));
+                let selected = i == app.selected_item;
+                let rep_flag = c.bid_deadline.is_some()
+                    && rep < 0.8 * market.rep_target;
+                lines.push(Line::from(Span::styled(
+                    contract_row(c, &cols, selected, rep_flag),
+                    contract_style(
+                        Some(check_contract_readiness(c, &game.player_company)),
+                        selected,
+                        false,
+                    ),
+                )));
             }
         }
 
@@ -1171,18 +1305,10 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
                 Style::default().fg(Color::DarkGray),
             )));
             for (i, c) in orphan_contracts {
-                let marker = if i == app.selected_item { "▶ " } else { "  " };
-                let dest_name = contract::destination_display_name(&c.destination);
-                let style = if i == app.selected_item {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                };
+                let selected = i == app.selected_item;
                 lines.push(Line::from(Span::styled(
-                    format!("{}{}  →{}  {:.0} kg  {}  by {}",
-                        marker, c.name, dest_name,
-                        c.payload_kg, format_money(c.payment), c.deadline),
-                    style,
+                    contract_row(c, &cols, selected, false),
+                    contract_style(None, selected, false),
                 )));
             }
         }
@@ -1199,25 +1325,21 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
     if accepted.is_empty() {
         lines.push(Line::from("  (none accepted)"));
     } else {
+        lines.push(Line::from(Span::styled(
+            cols.header(),
+            Style::default().fg(Color::DarkGray),
+        )));
         let offset = available.len();
         for (i, c) in accepted.iter().enumerate() {
             let idx = offset + i;
-            let marker = if idx == app.selected_item { "▶ " } else { "  " };
-            let dest_name = contract::destination_display_name(&c.destination);
-            let style = if idx == app.selected_item {
-                Style::default().fg(Color::Yellow)
-            } else {
-                match check_contract_readiness(c, &game.player_company) {
-                    ContractReadiness::Ready => Style::default().fg(Color::Green),
-                    ContractReadiness::NeedsBuild => Style::default().fg(Color::Yellow),
-                    ContractReadiness::Impossible => Style::default().fg(Color::Red),
-                }
-            };
+            let selected = idx == app.selected_item;
             lines.push(Line::from(Span::styled(
-                format!("{}{}  →{}  {:.0} kg  {}  by {}",
-                    marker, c.name, dest_name,
-                    c.payload_kg, format_money(c.payment), c.deadline),
-                style,
+                contract_row(c, &cols, selected, false),
+                contract_style(
+                    Some(check_contract_readiness(c, &game.player_company)),
+                    selected,
+                    true,
+                ),
             )));
         }
     }

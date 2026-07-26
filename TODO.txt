@@ -1,10 +1,8 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
 UI:
-[] Duplicate color for selection / borderline in contracts view
-[] Fix columns in contract view
 [] Non-vacuum by default for engine design
-[] Don't list flaw count when a design is completed.
+   (superseded by M5 Task 1 — per-stage vacuum variants remove the choice)
 
 Power:
 [] Make color coding of contracts take into account spacecraft duration

@@ -1109,9 +1109,9 @@ impl Company {
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
             for we in work_events {
                 let evt = match we {
-                    WorkEvent::DesignComplete { flaw_count } => {
+                    WorkEvent::DesignComplete => {
                         newly_designed_engines.push(pi);
-                        GameEvent::EngineDesignComplete { engine_name: engine_name.clone(), flaw_count }
+                        GameEvent::EngineDesignComplete { engine_name: engine_name.clone() }
                     }
                     WorkEvent::TestingCycleComplete => continue,
                     WorkEvent::FlawDiscovered { flaw_description } =>
@@ -1136,8 +1136,8 @@ impl Company {
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
             for we in work_events {
                 let evt = match we {
-                    RocketWorkEvent::DesignComplete { flaw_count } =>
-                        GameEvent::RocketDesignComplete { rocket_name: rocket_name.clone(), flaw_count },
+                    RocketWorkEvent::DesignComplete =>
+                        GameEvent::RocketDesignComplete { rocket_name: rocket_name.clone() },
                     RocketWorkEvent::TestingCycleComplete => continue,
                     RocketWorkEvent::FlawDiscovered { flaw_description } =>
                         GameEvent::RocketFlawDiscovered { rocket_name: rocket_name.clone(), flaw_description },
@@ -1156,9 +1156,9 @@ impl Company {
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
             for we in work_events {
                 let evt = match we {
-                    crate::reactor_project::ReactorWorkEvent::DesignComplete { flaw_count } => {
+                    crate::reactor_project::ReactorWorkEvent::DesignComplete => {
                         newly_designed_reactors.push(pi);
-                        GameEvent::ReactorDesignComplete { reactor_name: reactor_name.clone(), flaw_count }
+                        GameEvent::ReactorDesignComplete { reactor_name: reactor_name.clone() }
                     }
                     crate::reactor_project::ReactorWorkEvent::TestingCycleComplete => continue,
                     crate::reactor_project::ReactorWorkEvent::FlawDiscovered { flaw_description } =>

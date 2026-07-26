@@ -251,9 +251,8 @@ impl ReactorProject {
                     // complexity (tech-deficiency complexity penalties are
                     // applied afterwards by game_state, matching engines).
                     self.flaws = flaw::generate_reactor_flaws(self.complexity, rng, next_flaw_id, &balance_cfg.flaws);
-                    let flaw_count = self.flaws.len() as u32;
                     self.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
-                    events.push(ReactorWorkEvent::DesignComplete { flaw_count });
+                    events.push(ReactorWorkEvent::DesignComplete);
                 }
             }
             ReactorDesignStatus::Testing { work_completed } => {
@@ -401,7 +400,7 @@ impl ReactorProject {
 /// Events bubbled up from `apply_daily_work` to the game-state loop.
 #[derive(Debug, Clone)]
 pub enum ReactorWorkEvent {
-    DesignComplete { flaw_count: u32 },
+    DesignComplete,
     TestingCycleComplete,
     FlawDiscovered { flaw_description: String },
     ImprovementDiscovered { description: String },
@@ -492,7 +491,7 @@ mod tests {
         // than the process.
         for _ in 0..10_000 {
             let events = p.apply_daily_work(&mut rng(), &mut next_flaw, &bal());
-            if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete { .. })) {
+            if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete)) {
                 saw_complete = true;
                 break;
             }
@@ -516,7 +515,7 @@ mod tests {
             let mut next_flaw = 1u64;
             for _ in 0..10_000 {
                 let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
-                if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete { .. })) {
+                if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete)) {
                     break;
                 }
             }
@@ -540,7 +539,7 @@ mod tests {
         // Advance to Testing.
         for _ in 0..10_000 {
             let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
-            if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete { .. })) {
+            if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete)) {
                 break;
             }
         }

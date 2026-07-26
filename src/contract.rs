@@ -661,6 +661,15 @@ pub fn destination_display_name(location_id: &str) -> &str {
         .unwrap_or(location_id)
 }
 
+/// Get the short name for a location ID ("LEO", "GEO", …). Used by
+/// tabular views where the full display name ("Low Earth Orbit") is
+/// too wide to keep columns aligned.
+pub fn destination_short_name(location_id: &str) -> &str {
+    crate::location::DELTA_V_MAP.location(location_id)
+        .map(|l| l.short_name)
+        .unwrap_or(location_id)
+}
+
 // ==========================================
 // Market templates
 // ==========================================

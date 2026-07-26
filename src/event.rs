@@ -14,7 +14,7 @@ pub enum GameEvent {
     MoneyChanged { amount: f64, reason: String },
     TeamHired { name: String },
     EngineDesignStarted { engine_name: String },
-    EngineDesignComplete { engine_name: String, flaw_count: u32 },
+    EngineDesignComplete { engine_name: String },
     FlawDiscovered { engine_name: String, flaw_description: String },
     RevisionComplete { engine_name: String },
     SalariesPaid { amount: f64 },
@@ -22,7 +22,7 @@ pub enum GameEvent {
     EngineContracted { engine_name: String },
     // Phase 3: Rocket design events
     RocketDesignStarted { rocket_name: String },
-    RocketDesignComplete { rocket_name: String, flaw_count: u32 },
+    RocketDesignComplete { rocket_name: String },
     RocketFlawDiscovered { rocket_name: String, flaw_description: String },
     RocketRevisionComplete { rocket_name: String },
     /// Player modified an existing rocket project's tankage / power
@@ -31,7 +31,7 @@ pub enum GameEvent {
     RocketDesignModified { rocket_name: String, new_flaw: bool },
     // Reactor research events (mirrors the engine ones).
     ReactorDesignStarted { reactor_name: String },
-    ReactorDesignComplete { reactor_name: String, flaw_count: u32 },
+    ReactorDesignComplete { reactor_name: String },
     ReactorFlawDiscovered { reactor_name: String, flaw_description: String },
     ReactorRevisionComplete { reactor_name: String },
     /// Reactor improvement discovered during testing.
@@ -164,8 +164,8 @@ impl fmt::Display for GameEvent {
             GameEvent::TeamHired { name } => write!(f, "Hired team: {}", name),
             GameEvent::EngineDesignStarted { engine_name } =>
                 write!(f, "Started design: {}", engine_name),
-            GameEvent::EngineDesignComplete { engine_name, flaw_count } =>
-                write!(f, "Design complete: {} ({} flaws)", engine_name, flaw_count),
+            GameEvent::EngineDesignComplete { engine_name } =>
+                write!(f, "Design complete: {}", engine_name),
             GameEvent::FlawDiscovered { engine_name, flaw_description } =>
                 write!(f, "Flaw found in {}: {}", engine_name, flaw_description),
             GameEvent::RevisionComplete { engine_name } =>
@@ -178,8 +178,8 @@ impl fmt::Display for GameEvent {
                 write!(f, "Contracted engine: {}", engine_name),
             GameEvent::RocketDesignStarted { rocket_name } =>
                 write!(f, "Started rocket design: {}", rocket_name),
-            GameEvent::RocketDesignComplete { rocket_name, flaw_count } =>
-                write!(f, "Rocket design complete: {} ({} flaws)", rocket_name, flaw_count),
+            GameEvent::RocketDesignComplete { rocket_name } =>
+                write!(f, "Rocket design complete: {}", rocket_name),
             GameEvent::RocketFlawDiscovered { rocket_name, flaw_description } =>
                 write!(f, "Rocket flaw in {}: {}", rocket_name, flaw_description),
             GameEvent::RocketRevisionComplete { rocket_name } =>
@@ -193,8 +193,8 @@ impl fmt::Display for GameEvent {
             }
             GameEvent::ReactorDesignStarted { reactor_name } =>
                 write!(f, "Started reactor design: {}", reactor_name),
-            GameEvent::ReactorDesignComplete { reactor_name, flaw_count } =>
-                write!(f, "Reactor design complete: {} ({} flaws)", reactor_name, flaw_count),
+            GameEvent::ReactorDesignComplete { reactor_name } =>
+                write!(f, "Reactor design complete: {}", reactor_name),
             GameEvent::ReactorFlawDiscovered { reactor_name, flaw_description } =>
                 write!(f, "Reactor flaw in {}: {}", reactor_name, flaw_description),
             GameEvent::ReactorRevisionComplete { reactor_name } =>
@@ -551,5 +551,45 @@ mod tests {
         assert!(log.is_empty());
         assert_eq!(log.len(), 0);
         assert!(log.recent(5).is_empty());
+    }
+
+    /// M5 Task 0: a design-complete event must not disclose how many
+    /// flaws the new design has. It used to print the *total* flaw
+    /// count — every one of them undiscovered at that moment — which
+    /// handed the player the number the whole test/discover loop
+    /// exists to hide, and let them compute exactly how long to keep
+    /// testing. The count is no longer a field on these events at all,
+    /// so it can't come back by accident.
+    #[test]
+    fn design_complete_events_do_not_disclose_flaw_counts() {
+        // Exact strings, not a "contains no digits" heuristic — design
+        // names legitimately carry digits ("Mk1", "BLV-1").
+        let cases = [
+            (GameEvent::EngineDesignComplete { engine_name: "Mk1".into() },
+             "Design complete: Mk1"),
+            (GameEvent::RocketDesignComplete { rocket_name: "Smol".into() },
+             "Rocket design complete: Smol"),
+            (GameEvent::ReactorDesignComplete { reactor_name: "Mk1".into() },
+             "Reactor design complete: Mk1"),
+        ];
+        for (e, want) in &cases {
+            let text = e.to_string();
+            assert!(
+                !text.to_lowercase().contains("flaw"),
+                "design-complete event leaks flaw information: {text:?}",
+            );
+            assert_eq!(&text, want, "nothing may be appended to the name");
+        }
+    }
+
+    /// Saves written before the flaw count was removed still load: the
+    /// event log is serialized into the save file, and serde ignores
+    /// the now-unknown `flaw_count` field rather than erroring.
+    #[test]
+    fn old_saves_with_flaw_count_still_deserialize() {
+        let old = r#"{"RocketDesignComplete":{"rocket_name":"Smol","flaw_count":5}}"#;
+        let e: GameEvent = serde_json::from_str(old)
+            .expect("pre-M5 event should still deserialize");
+        assert_eq!(e.to_string(), "Rocket design complete: Smol");
     }
 }
