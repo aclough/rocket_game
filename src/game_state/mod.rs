@@ -108,6 +108,11 @@ pub enum ManifestError {
 /// Top-level game state.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GameState {
+    /// Save format version this state was last loaded/written at. 0
+    /// means a save written before the field existed; `save::load_game`
+    /// migrates and re-stamps it. See `save::SAVE_VERSION`.
+    #[serde(default)]
+    pub save_version: u32,
     pub date: GameDate,
     pub start_date: GameDate,
     pub player_company: Company,
@@ -234,6 +239,7 @@ impl GameState {
         };
 
         GameState {
+            save_version: crate::save::SAVE_VERSION,
             date: start,
             start_date: start,
             player_company: Company::new(company_name, starting_money, &seed, &balance),

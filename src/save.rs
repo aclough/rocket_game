@@ -34,36 +34,144 @@ pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
     fs::write(path, json)
 }
 
-/// Load game state from a JSON file.
+/// Current save format version.
+///
+/// Bump this **in the same edit** as adding a `migrate` arm below.
+/// Version 0 means "written before the field existed" — every save
+/// from M1 through M4 deserializes as 0 via `#[serde(default)]`.
+///
+/// v1 (M5) introduced versioning itself and contains no format
+/// changes: everything the old loader repaired turned out to be
+/// state repair rather than format migration, and lives in
+/// `sanitize`. The mechanism is here so the *next* change has a floor
+/// to migrate from instead of guessing what a file contains.
+pub const SAVE_VERSION: u32 = 1;
+
+/// Load game state from a JSON file, running any migrations the file
+/// needs, then stamping it with the current version.
 pub fn load_game(path: &Path) -> io::Result<GameState> {
     let json = fs::read_to_string(path)?;
     let mut state: GameState = serde_json::from_str(&json)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    // Re-initialize the contingent RNG (not serialized)
+
+    // Not serialized — rebuilt on every load regardless of version.
     state.seed.fix_after_load();
-    // Sweep stale `Proposed` engine projects — these belong to an
-    // unfinished rocket designer session that was running when the game
-    // was last saved (or quit/crashed before completion). They're
-    // hidden from the engine pane anyway, and there's no way to revive
-    // a sketch session, so drop them.
+
+    sanitize(&mut state);
+    migrate(&mut state);
+    state.save_version = SAVE_VERSION;
+    Ok(state)
+}
+
+/// Repairs that apply to *every* save, new or old, because they fix
+/// states the game can legitimately be saved in — not format changes.
+fn sanitize(state: &mut GameState) {
+    // Sweep stale `Proposed` projects. These belong to a rocket-designer
+    // session that was open when the game was saved (or that crashed
+    // before finishing). They're hidden from the panes anyway and there
+    // is no way to revive a sketch session, so drop them. This is not a
+    // migration: a save written today can contain them.
     state.player_company.engine_projects.retain(|ep|
         !matches!(ep.status, crate::engine_project::EngineDesignStatus::Proposed { .. })
     );
-    // Same sweep for reactor projects — Phase 2 will surface a
-    // designer that can create Proposed reactors, but any survivor
-    // here is a draft from an aborted session.
     state.player_company.reactor_projects.retain(|rp|
         !matches!(rp.status, crate::reactor_project::ReactorDesignStatus::Proposed { .. })
     );
-    // Backfill competitors for pre-M3 saves: DinoSoar joins an old
-    // world mid-game (fresh company, same seeded realization it would
-    // have had at that world's creation).
+
+    // A world with competitors enabled but none present is incoherent
+    // however it arose — a pre-M3 save that predates DinoSoar, or a
+    // later one whose competitor list was emptied. DinoSoar joins as a
+    // fresh company with the seeded realization it would have had at
+    // that world's creation.
+    //
+    // This is deliberately *not* version-gated. Gating it on v0 broke
+    // `competitor_survives_save_load`, which clears the list on a
+    // current-version save — and that test is right: the repair is
+    // about the state being inconsistent, not about the file being old.
     if state.competitors.is_empty() && state.balance.competitor.enabled {
         state.competitors.push(
             crate::competitor::realize_dinosoar(&state.seed, &state.balance),
         );
     }
-    Ok(state)
+}
+
+/// Version-gated format migrations, applied in order. Each arm must be
+/// idempotent and must leave the state loadable by the next arm.
+///
+/// Empty today — see `SAVE_VERSION`. A future arm looks like:
+///
+/// ```ignore
+/// if state.save_version < 2 {
+///     // v1 -> v2: <what changed and why the old shape can't be read>
+/// }
+/// ```
+fn migrate(_state: &mut GameState) {}
+
+/// How many rotating autosave slots each company keeps.
+pub const AUTOSAVE_SLOTS: u32 = 3;
+
+/// Path for autosave slot `n` (1-based) of a company, inside `dir`.
+pub fn autosave_slot_path_in(dir: &Path, company_name: &str, slot: u32) -> PathBuf {
+    dir.join(format!("{}.auto{}.json", sanitize_name(company_name), slot))
+}
+
+/// Path for autosave slot `n` (1-based) in the default save directory.
+pub fn autosave_slot_path(company_name: &str, slot: u32) -> PathBuf {
+    autosave_slot_path_in(&save_dir(), company_name, slot)
+}
+
+/// The slot to write next: the first one that doesn't exist yet,
+/// otherwise the oldest. Derived from the filesystem rather than
+/// tracked in the save, so rotation survives restarts and crashes
+/// without a counter to keep in sync.
+pub fn next_autosave_slot_in(dir: &Path, company_name: &str) -> u32 {
+    let mut oldest = (1, None::<std::time::SystemTime>);
+    for slot in 1..=AUTOSAVE_SLOTS {
+        let path = autosave_slot_path_in(dir, company_name, slot);
+        let mtime = fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+        match mtime {
+            // An empty slot always wins — fill all three before reusing.
+            None => return slot,
+            Some(t) => {
+                if oldest.1.is_none_or(|best| t < best) {
+                    oldest = (slot, Some(t));
+                }
+            }
+        }
+    }
+    oldest.0
+}
+
+/// The slot to write next in the default save directory.
+pub fn next_autosave_slot(company_name: &str) -> u32 {
+    next_autosave_slot_in(&save_dir(), company_name)
+}
+
+/// Write a rotating autosave into `dir`. Returns the path written.
+pub fn autosave_in(dir: &Path, state: &GameState) -> io::Result<PathBuf> {
+    let name = &state.player_company.name;
+    let path = autosave_slot_path_in(dir, name, next_autosave_slot_in(dir, name));
+    save_game(state, &path)?;
+    Ok(path)
+}
+
+/// Write a rotating autosave to the default save directory.
+pub fn autosave(state: &GameState) -> io::Result<PathBuf> {
+    autosave_in(&save_dir(), state)
+}
+
+/// Where a crash dump puts the state it rescued. Kept out of the
+/// autosave rotation so a later autosave can't overwrite the one save
+/// that captures the bug.
+pub fn emergency_save_path(company_name: &str) -> PathBuf {
+    save_dir().join(format!("{}.crash.json", sanitize_name(company_name)))
+}
+
+/// Filesystem-safe form of a company name.
+fn sanitize_name(company_name: &str) -> String {
+    company_name.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect()
 }
 
 /// Default save directory.
@@ -74,10 +182,7 @@ pub fn save_dir() -> std::path::PathBuf {
 
 /// Build a save file path for a company name.
 pub fn save_path(company_name: &str) -> std::path::PathBuf {
-    let sanitized: String = company_name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect();
-    save_dir().join(format!("{}.json", sanitized))
+    save_dir().join(format!("{}.json", sanitize_name(company_name)))
 }
 
 #[cfg(test)]
@@ -202,5 +307,94 @@ mod tests {
         }
 
         let _ = fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod autosave_tests {
+    use super::*;
+    use crate::game_state::GameState;
+
+    /// A private temp directory per test. Deliberately does *not*
+    /// touch `HOME`: `save_dir()` reads it at call time, so mutating it
+    /// would be a process-wide change that could race
+    /// `test_save_path_sanitization` under the default parallel
+    /// runner. The `*_in` variants take the directory instead.
+    fn temp_dir(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "rt_autosave_{}_{}_{}",
+            tag, std::process::id(), N.fetch_add(1, Ordering::Relaxed),
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Slots fill 1, 2, 3 before anything is reused — so three
+    /// autosaves back is always available, not just the latest.
+    #[test]
+    fn autosave_fills_every_slot_before_reusing_one() {
+        let dir = temp_dir("fill");
+        let game = GameState::new("Rotate Co".into(), 100.0, 1);
+        for expected in 1..=AUTOSAVE_SLOTS {
+            assert_eq!(next_autosave_slot_in(&dir, "Rotate Co"), expected);
+            autosave_in(&dir, &game).expect("autosave should succeed");
+        }
+        for slot in 1..=AUTOSAVE_SLOTS {
+            assert!(
+                autosave_slot_path_in(&dir, "Rotate Co", slot).exists(),
+                "slot {slot} should have been written",
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Once full, the oldest slot is the one overwritten.
+    #[test]
+    fn a_full_rotation_replaces_the_oldest() {
+        let dir = temp_dir("oldest");
+        let game = GameState::new("Rotate Co".into(), 100.0, 1);
+        for _ in 1..=AUTOSAVE_SLOTS {
+            autosave_in(&dir, &game).unwrap();
+        }
+        // Make slot 2 the oldest by pushing the others forward.
+        let now = std::time::SystemTime::now();
+        for slot in [1, 3] {
+            let f = fs::File::options().write(true)
+                .open(autosave_slot_path_in(&dir, "Rotate Co", slot)).unwrap();
+            f.set_modified(now + std::time::Duration::from_secs(60)).unwrap();
+        }
+        assert_eq!(next_autosave_slot_in(&dir, "Rotate Co"), 2,
+            "the oldest slot should be reused first");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The crash save is outside the rotation, so a later autosave
+    /// can't overwrite the one file that reproduces the bug.
+    #[test]
+    fn the_crash_save_is_not_an_autosave_slot() {
+        let crash = emergency_save_path("Rotate Co");
+        for slot in 1..=AUTOSAVE_SLOTS {
+            assert_ne!(crash, autosave_slot_path("Rotate Co", slot));
+        }
+        assert!(crash.to_string_lossy().contains("crash"));
+    }
+
+    /// An autosave is a real save: it round-trips through the same
+    /// loader, migrations and all.
+    #[test]
+    fn autosaves_load_back() {
+        let dir = temp_dir("roundtrip");
+        let mut game = GameState::new("Rotate Co".into(), 100.0, 5);
+        for _ in 0..70 {
+            game.advance_day();
+        }
+        let path = autosave_in(&dir, &game).unwrap();
+        let loaded = load_game(&path).expect("an autosave must be loadable");
+        assert_eq!(loaded.date, game.date);
+        assert_eq!(loaded.save_version, SAVE_VERSION);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

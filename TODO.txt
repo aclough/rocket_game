@@ -1,5 +1,12 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
+Launch:
+[] "Launch partial failure: Pusher (degraded performance)" Should always mention and reveal the triggering flaw
+[] Double check what happens with rockets with TWRs less than 1 at launch.  Adding more fuel seems to increase payload
+
+Design
+[] Auto-size fueltanks to reasonable values
+
 Contracts:
 [] Campaigns of a type, e.g., resupply to ISS shouldn't be re-bid until the previous contract has finished.
 

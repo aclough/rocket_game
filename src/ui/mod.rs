@@ -874,19 +874,35 @@ impl App {
 
     /// Run the main application loop.
     pub fn run(&mut self) -> io::Result<()> {
+        crate::crash::install_hook();
+
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        let result = self.main_loop(&mut terminal);
+        // Catch a panic so the terminal can be restored before anything
+        // is reported — a message printed inside the alternate screen
+        // is a message the player never sees. See `crash.rs`.
+        let caught = std::panic::catch_unwind(
+            std::panic::AssertUnwindSafe(|| self.main_loop(&mut terminal)),
+        );
 
-        disable_raw_mode()?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-        terminal.show_cursor()?;
+        // Always give the terminal back, panic or not.
+        let _ = disable_raw_mode();
+        let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = terminal.show_cursor();
 
-        result
+        match caught {
+            Ok(result) => result,
+            Err(_) => {
+                let panic_text = crate::crash::take_panic_text()
+                    .unwrap_or_else(|| "panic with no captured message".into());
+                eprint!("{}", crate::crash::handle_panic(&self.game, &panic_text));
+                Err(io::Error::other("the game hit a bug and stopped"))
+            }
+        }
     }
 
     fn main_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
@@ -914,6 +930,16 @@ impl App {
             // Auto-advance when not paused
             if self.game.speed != GameSpeed::Paused && last_tick.elapsed() >= tick_rate {
                 let day_events = self.game.advance_day();
+
+                // Autosave at the top of each month. Saves are ~0.2 MB
+                // at eight game-years and the log is ring-buffered, so
+                // a monthly write costs nothing worth counting.
+                if day_events.iter().any(|e| matches!(
+                    e, crate::event::GameEvent::MonthStart,
+                )) {
+                    self.autosave();
+                }
+
                 // Switch to Events tab on critical events
                 if day_events.iter().any(|e| e.importance() == crate::event::EventImportance::Critical) {
                     if let Some(idx) = Tab::ALL.iter().position(|t| matches!(t, Tab::Events)) {
@@ -954,7 +980,12 @@ impl App {
         self.status_message = None;
 
         match key {
-            KeyCode::Char('q') => self.running = false,
+            KeyCode::Char('q') => {
+                // Autosave on the way out, so quitting is never the
+                // thing that loses an hour of play.
+                self.autosave();
+                self.running = false;
+            }
             KeyCode::Char('?') => {
                 self.enter_modal(InputMode::Help {
                     scope: HelpScope::Tab(self.active_tab),
@@ -3480,6 +3511,15 @@ impl App {
         if let Some(evt) = self.game.player_company.start_rocket_project(design, &self.game.balance) {
             self.game.event_log.push(self.game.date, evt);
             self.status_message = Some(format!("Started rocket design: {}", name));
+        }
+    }
+
+    /// Write a rotating autosave, reporting failure rather than
+    /// swallowing it — a player who thinks they're protected and isn't
+    /// is worse off than one who knows.
+    fn autosave(&mut self) {
+        if let Err(e) = save::autosave(&self.game) {
+            self.status_message = Some(format!("Autosave failed: {e}"));
         }
     }
 

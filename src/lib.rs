@@ -32,4 +32,5 @@ pub mod game_state;
 pub mod policy;
 pub mod sim;
 pub mod save;
+pub mod crash;
 pub mod ui;

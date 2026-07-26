@@ -1,0 +1,6702 @@
+{
+  "date": {
+    "year": 2004,
+    "month": 1,
+    "day": 1
+  },
+  "start_date": {
+    "year": 2001,
+    "month": 1,
+    "day": 1
+  },
+  "player_company": {
+    "name": "Corpus Co",
+    "money": 82014480.05400214,
+    "next_team_id": 7,
+    "next_engine_id": 3,
+    "next_project_id": 3,
+    "next_flaw_id": 19,
+    "next_rocket_project_id": 2,
+    "next_contracted_engine_id": 1,
+    "next_reactor_project_id": 1,
+    "next_reactor_id": 1,
+    "teams": [
+      {
+        "id": 1,
+        "name": "Team 1",
+        "monthly_salary": 150000.0
+      },
+      {
+        "id": 2,
+        "name": "Team 2",
+        "monthly_salary": 150000.0
+      },
+      {
+        "id": 4,
+        "name": "Team 3",
+        "monthly_salary": 150000.0
+      }
+    ],
+    "manufacturing_teams": [
+      {
+        "id": 3,
+        "name": "Mfg Team 1",
+        "monthly_salary": 300000.0
+      },
+      {
+        "id": 5,
+        "name": "Mfg Team 2",
+        "monthly_salary": 300000.0
+      },
+      {
+        "id": 6,
+        "name": "Mfg Team 3",
+        "monthly_salary": 300000.0
+      }
+    ],
+    "engine_projects": [
+      {
+        "project_id": 1,
+        "design": {
+          "id": 1,
+          "name": "BLV Booster",
+          "cycle": "GasGenerator",
+          "thrust_n": 900000.0,
+          "mass_kg": 1147.1807396001693,
+          "isp_s": 276.5937622083655,
+          "exit_pressure_pa": 80000.0,
+          "needs_atmosphere": true,
+          "propellant_mix": [
+            {
+              "propellant": "LOX",
+              "mass_fraction": 0.73
+            },
+            {
+              "propellant": "RP1",
+              "mass_fraction": 0.27
+            }
+          ],
+          "power_draw_w": 0.0
+        },
+        "preset": "Kerolox",
+        "scale": 1.0,
+        "status": {
+          "Testing": {
+            "work_completed": 19.0
+          }
+        },
+        "flaws": [
+          {
+            "id": 2,
+            "description": "Propellant feed pressure oscillation",
+            "consequence": {
+              "PerformanceDegradation": 0.08632895532758189
+            },
+            "activation_chance": 0.0005005820221575148,
+            "discovery_probability": 0.002084102690135385,
+            "discovered": false,
+            "trigger": "PerFlight"
+          },
+          {
+            "id": 4,
+            "description": "Stage separation bolt stress fracture",
+            "consequence": "StageLoss",
+            "activation_chance": 0.0002432192664630752,
+            "discovery_probability": 0.015471786470513825,
+            "discovered": false,
+            "trigger": "PerFlight"
+          }
+        ],
+        "revision": 3,
+        "teams_assigned": 1,
+        "complexity": 6,
+        "nre_cost": 5475000.0,
+        "improvements": [
+          {
+            "description": "Optimized injector pattern",
+            "kind": {
+              "Isp": 0.024421341512464882
+            },
+            "actualized": true
+          }
+        ],
+        "cumulative_testing_work": 785.0,
+        "tech_deficiency_ids": [],
+        "technology_id": null
+      },
+      {
+        "project_id": 2,
+        "design": {
+          "id": 2,
+          "name": "BLV Upper",
+          "cycle": "GasGenerator",
+          "thrust_n": 110000.0,
+          "mass_kg": 140.21097928446514,
+          "isp_s": 472.18762147459034,
+          "exit_pressure_pa": 7000.0,
+          "needs_atmosphere": false,
+          "propellant_mix": [
+            {
+              "propellant": "LOX",
+              "mass_fraction": 0.83
+            },
+            {
+              "propellant": "LH2",
+              "mass_fraction": 0.17
+            }
+          ],
+          "power_draw_w": 0.0
+        },
+        "preset": "Hydrolox",
+        "scale": 1.0,
+        "status": {
+          "Testing": {
+            "work_completed": 19.0
+          }
+        },
+        "flaws": [
+          {
+            "id": 8,
+            "description": "Valve response lag",
+            "consequence": {
+              "PerformanceDegradation": 0.0730831488526593
+            },
+            "activation_chance": 0.050014413068378484,
+            "discovery_probability": 0.0037253206947312004,
+            "discovered": false,
+            "trigger": "PerFlight"
+          },
+          {
+            "id": 9,
+            "description": "Igniter reliability issue",
+            "consequence": "EngineLoss",
+            "activation_chance": 0.1434199887468028,
+            "discovery_probability": 0.0030115007558562316,
+            "discovered": false,
+            "trigger": "PerFlight"
+          },
+          {
+            "id": 12,
+            "description": "Igniter reliability issue",
+            "consequence": "EngineLoss",
+            "activation_chance": 0.0009506110847252168,
+            "discovery_probability": 0.006920829298175794,
+            "discovered": false,
+            "trigger": "PerFlight"
+          }
+        ],
+        "revision": 5,
+        "teams_assigned": 1,
+        "complexity": 6,
+        "nre_cost": 5475000.0,
+        "improvements": [
+          {
+            "description": "Optimized injector pattern",
+            "kind": {
+              "Isp": 0.03921652698620005
+            },
+            "actualized": true
+          },
+          {
+            "description": "Optimized injector pattern",
+            "kind": {
+              "Isp": 0.03265648428604539
+            },
+            "actualized": true
+          }
+        ],
+        "cumulative_testing_work": 606.0,
+        "tech_deficiency_ids": [],
+        "technology_id": null
+      }
+    ],
+    "rocket_projects": [
+      {
+        "project_id": 1,
+        "design": {
+          "id": 1,
+          "name": "BLV-1",
+          "stage_groups": [
+            [
+              {
+                "id": 1,
+                "name": "BLV S1",
+                "engine": {
+                  "id": 1,
+                  "name": "BLV Booster",
+                  "cycle": "GasGenerator",
+                  "thrust_n": 900000.0,
+                  "mass_kg": 1147.1807396001693,
+                  "isp_s": 270.0,
+                  "exit_pressure_pa": 80000.0,
+                  "needs_atmosphere": true,
+                  "propellant_mix": [
+                    {
+                      "propellant": "LOX",
+                      "mass_fraction": 0.73
+                    },
+                    {
+                      "propellant": "RP1",
+                      "mass_fraction": 0.27
+                    }
+                  ],
+                  "power_draw_w": 0.0
+                },
+                "engine_count": 1,
+                "propellant_mass_kg": 42000.0,
+                "structural_mass_kg": 3000.0,
+                "fairing": null,
+                "power_sources": [
+                  {
+                    "kind": {
+                      "SolarPanel": {
+                        "peak_w_at_1au": 414.71807396001697
+                      }
+                    },
+                    "mass_kg": 2.2643714522943066,
+                    "material_cost": 47324.93416384419,
+                    "stored_kwd": 0.0,
+                    "capacity_kwd": 0.0
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "id": 2,
+                "name": "BLV S2",
+                "engine": {
+                  "id": 2,
+                  "name": "BLV Upper",
+                  "cycle": "GasGenerator",
+                  "thrust_n": 110000.0,
+                  "mass_kg": 140.21097928446514,
+                  "isp_s": 440.0,
+                  "exit_pressure_pa": 7000.0,
+                  "needs_atmosphere": false,
+                  "propellant_mix": [
+                    {
+                      "propellant": "LOX",
+                      "mass_fraction": 0.83
+                    },
+                    {
+                      "propellant": "LH2",
+                      "mass_fraction": 0.17
+                    }
+                  ],
+                  "power_draw_w": 0.0
+                },
+                "engine_count": 1,
+                "propellant_mass_kg": 8000.0,
+                "structural_mass_kg": 800.0,
+                "fairing": null,
+                "power_sources": [
+                  {
+                    "kind": {
+                      "SolarPanel": {
+                        "peak_w_at_1au": 94.02109792844652
+                      }
+                    },
+                    "mass_kg": 0.5954876937365825,
+                    "material_cost": 13404.219179192129,
+                    "stored_kwd": 0.0,
+                    "capacity_kwd": 0.0
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        "status": {
+          "Testing": {
+            "work_completed": 5.0
+          }
+        },
+        "flaws": [],
+        "revision": 4,
+        "teams_assigned": 1,
+        "complexity": 5,
+        "nre_cost": 4075000.0,
+        "cumulative_testing_work": 605.0
+      }
+    ],
+    "reactor_projects": [],
+    "third_party_catalog": [
+      {
+        "design": {
+          "id": 10001,
+          "name": "KM-15 Kick Motor",
+          "cycle": "PressureFed",
+          "thrust_n": 75000.0,
+          "mass_kg": 35.0,
+          "isp_s": 245.0,
+          "exit_pressure_pa": 70000.0,
+          "needs_atmosphere": false,
+          "propellant_mix": [
+            {
+              "propellant": "SolidMix",
+              "mass_fraction": 1.0
+            }
+          ],
+          "power_draw_w": 0.0
+        },
+        "preset": "Solid",
+        "complexity": 5,
+        "purchase_cost_per_unit": 800000.0,
+        "available_from": {
+          "year": 2001,
+          "month": 1,
+          "day": 1
+        }
+      },
+      {
+        "design": {
+          "id": 10002,
+          "name": "RD-33K",
+          "cycle": "StagedCombustion",
+          "thrust_n": 1680000.0,
+          "mass_kg": 1220.0,
+          "isp_s": 297.0,
+          "exit_pressure_pa": 80000.0,
+          "needs_atmosphere": false,
+          "propellant_mix": [
+            {
+              "propellant": "LOX",
+              "mass_fraction": 0.73
+            },
+            {
+              "propellant": "RP1",
+              "mass_fraction": 0.27
+            }
+          ],
+          "power_draw_w": 0.0
+        },
+        "preset": "Kerolox",
+        "complexity": 8,
+        "purchase_cost_per_unit": 12000000.0,
+        "available_from": {
+          "year": 2001,
+          "month": 1,
+          "day": 1
+        }
+      },
+      {
+        "design": {
+          "id": 10003,
+          "name": "HT-40",
+          "cycle": "PressureFed",
+          "thrust_n": 40000.0,
+          "mass_kg": 90.0,
+          "isp_s": 267.0,
+          "exit_pressure_pa": 7000.0,
+          "needs_atmosphere": false,
+          "propellant_mix": [
+            {
+              "propellant": "NTO",
+              "mass_fraction": 0.57
+            },
+            {
+              "propellant": "UDMH",
+              "mass_fraction": 0.43
+            }
+          ],
+          "power_draw_w": 0.0
+        },
+        "preset": "Hypergolic",
+        "complexity": 5,
+        "purchase_cost_per_unit": 2500000.0,
+        "available_from": {
+          "year": 2001,
+          "month": 1,
+          "day": 1
+        }
+      }
+    ],
+    "contracted_engines": [],
+    "rocket_designs": [],
+    "manufacturing": {
+      "floor_space": {
+        "total_units": 12,
+        "under_construction": []
+      },
+      "orders": [],
+      "inventory": {
+        "engines": [],
+        "stages": [],
+        "rockets": [
+          {
+            "item_id": 30,
+            "rocket_project_id": 1,
+            "design_id": 1,
+            "rocket_name": "BLV-1",
+            "build_cost": 15123549.141912317,
+            "revision": 3,
+            "rocket_flaws": [
+              {
+                "id": 14,
+                "description": "Combustion instability at partial throttle",
+                "consequence": {
+                  "PerformanceDegradation": 0.14605798299982065
+                },
+                "activation_chance": 0.008286273670680038,
+                "discovery_probability": 0.008684214609554404,
+                "discovered": false,
+                "trigger": "PerFlight"
+              }
+            ]
+          },
+          {
+            "item_id": 35,
+            "rocket_project_id": 1,
+            "design_id": 1,
+            "rocket_name": "BLV-1",
+            "build_cost": 14818409.168067029,
+            "revision": 4,
+            "rocket_flaws": []
+          }
+        ]
+      },
+      "next_order_id": 36,
+      "next_inventory_id": 36
+    },
+    "notified_manufacturing_idle": true,
+    "active_contracts": [
+      {
+        "id": 83,
+        "name": "Probe to LEO",
+        "destination": "leo",
+        "payload_kg": 1500.0,
+        "payment": 33300000.0,
+        "deadline": {
+          "year": 2004,
+          "month": 4,
+          "day": 21
+        },
+        "status": "Accepted",
+        "market_id": 2,
+        "bid_deadline": {
+          "year": 2003,
+          "month": 12,
+          "day": 31
+        },
+        "budget_ceiling": 77480000.0,
+        "player_bid": 33300000.0
+      }
+    ],
+    "reputation": {
+      "success_factor": 50.848,
+      "lost_payload_factor": -26.1003125,
+      "drought_factor": 0.0,
+      "expiry_factor": 0.0
+    },
+    "launch_history": [
+      {
+        "launch_date": {
+          "year": 2002,
+          "month": 6,
+          "day": 14
+        },
+        "rocket_name": "BLV-1",
+        "contract_id": null,
+        "destination": "earth_surface",
+        "payload_kg": 0.0,
+        "outcome": "Success",
+        "flaws_activated": [
+          {
+            "flaw_description": "Nozzle cooling channel restriction",
+            "consequence": {
+              "PerformanceDegradation": 0.06611334421035514
+            },
+            "engine_name": "BLV Booster"
+          },
+          {
+            "flaw_description": "Oxidizer seal embrittlement",
+            "consequence": "EngineLoss",
+            "engine_name": "BLV Booster"
+          },
+          {
+            "flaw_description": "Sensor drift accumulation",
+            "consequence": {
+              "PerformanceDegradation": 0.06411379847051635
+            },
+            "engine_name": "BLV Booster"
+          },
+          {
+            "flaw_description": "Igniter reliability issue",
+            "consequence": "EngineLoss",
+            "engine_name": "BLV Booster"
+          }
+        ]
+      },
+      {
+        "launch_date": {
+          "year": 2002,
+          "month": 10,
+          "day": 15
+        },
+        "rocket_name": "BLV-1",
+        "contract_id": null,
+        "destination": "earth_surface",
+        "payload_kg": 0.0,
+        "outcome": "Success",
+        "flaws_activated": [
+          {
+            "flaw_description": "Sensor drift accumulation",
+            "consequence": {
+              "PerformanceDegradation": 0.06411379847051635
+            },
+            "engine_name": "BLV Booster"
+          },
+          {
+            "flaw_description": "Igniter reliability issue",
+            "consequence": "EngineLoss",
+            "engine_name": "BLV Booster"
+          }
+        ]
+      },
+      {
+        "launch_date": {
+          "year": 2003,
+          "month": 1,
+          "day": 2
+        },
+        "rocket_name": "BLV-1",
+        "contract_id": null,
+        "destination": "leo",
+        "payload_kg": 0.0,
+        "outcome": "Success",
+        "flaws_activated": []
+      },
+      {
+        "launch_date": {
+          "year": 2003,
+          "month": 10,
+          "day": 2
+        },
+        "rocket_name": "BLV-1",
+        "contract_id": 75,
+        "destination": "leo",
+        "payload_kg": 2200.0,
+        "outcome": "Success",
+        "flaws_activated": []
+      }
+    ],
+    "monthly_financials": [
+      {
+        "year": 2003,
+        "month": 2,
+        "income": 0.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2003,
+        "month": 3,
+        "income": 0.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2003,
+        "month": 4,
+        "income": 0.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2003,
+        "month": 5,
+        "income": 0.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2003,
+        "month": 6,
+        "income": 0.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2003,
+        "month": 7,
+        "income": 0.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2003,
+        "month": 8,
+        "income": 0.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2003,
+        "month": 9,
+        "income": 0.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2003,
+        "month": 10,
+        "income": 33300000.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2003,
+        "month": 11,
+        "income": 0.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2003,
+        "month": 12,
+        "income": 0.0,
+        "expenses": 1350000.0
+      },
+      {
+        "year": 2004,
+        "month": 1,
+        "income": 0.0,
+        "expenses": 1350000.0
+      }
+    ],
+    "last_launch_date": {
+      "year": 2003,
+      "month": 10,
+      "day": 2
+    },
+    "engine_build_counts": {
+      "2": 7,
+      "1": 7
+    },
+    "rocket_build_counts": {
+      "1": 7
+    },
+    "rocket_cost_history": {
+      "1": [
+        19126829.213360325,
+        19086829.213360325,
+        17308512.363004573,
+        16222374.788696658,
+        15519016.057596665,
+        15123549.141912317,
+        14818409.168067029
+      ]
+    },
+    "engine_cost_history": {
+      "2": [
+        893973.5791529217,
+        893973.5791529217,
+        809268.944485748,
+        759808.49360286,
+        729966.3671850014,
+        705154.572775906,
+        683415.1221980748
+      ],
+      "1": [
+        2575967.6342074005,
+        2545967.6342074005,
+        2442066.4576147324,
+        2229955.7660769946,
+        2121387.960266456,
+        2055132.95717772,
+        2086398.166158883
+      ]
+    },
+    "contracted_engine_build_counts": {},
+    "auto_build_targets": {
+      "1": 2
+    },
+    "bid_rules": {
+      "2": {
+        "enabled": true,
+        "margin": 1.0
+      },
+      "3": {
+        "enabled": true,
+        "margin": 1.0
+      },
+      "7": {
+        "enabled": true,
+        "margin": 1.0
+      },
+      "6": {
+        "enabled": true,
+        "margin": 1.0
+      },
+      "4": {
+        "enabled": true,
+        "margin": 1.0
+      },
+      "5": {
+        "enabled": true,
+        "margin": 1.0
+      },
+      "1": {
+        "enabled": true,
+        "margin": 1.0
+      },
+      "8": {
+        "enabled": true,
+        "margin": 1.0
+      }
+    }
+  },
+  "event_log": {
+    "events": [
+      [
+        {
+          "year": 2001,
+          "month": 1,
+          "day": 1
+        },
+        "GameStarted"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "TeamHired": {
+            "name": "Team 2"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "ManufacturingTeamHired": {
+            "name": "Mfg Team 1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "EngineDesignStarted": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "EngineDesignStarted": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 1,
+          "day": 2
+        },
+        "ManufacturingIdle"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 1,
+          "day": 2
+        },
+        {
+          "TeamHired": {
+            "name": "Team 3"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 1,
+          "day": 2
+        },
+        {
+          "ManufacturingTeamHired": {
+            "name": "Mfg Team 2"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 1,
+          "day": 3
+        },
+        {
+          "ManufacturingTeamHired": {
+            "name": "Mfg Team 3"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 2,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 2,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 2,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 1
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 3,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 3,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 3,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 3,
+          "day": 4
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "ComSat to GEO",
+            "company": "DinoSoar",
+            "amount": 169250000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 4,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 4,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 4,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 4,
+          "day": 1
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "ComSat to GTO",
+            "company": "DinoSoar",
+            "amount": 187800000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 4,
+          "day": 1
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 4,
+          "day": 3
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "ComSat to GEO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 5,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "ComSat to GTO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 6,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 1
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "RelaySat to GTO",
+            "company": "DinoSoar",
+            "amount": 211170000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 7,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 7,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 7,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 4
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 7,
+          "day": 1
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "RelaySat to GTO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 7,
+          "day": 10
+        },
+        {
+          "EngineDesignComplete": {
+            "engine_name": "BLV Booster",
+            "flaw_count": 5
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 7,
+          "day": 26
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 8,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 8,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 8,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 1
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 8,
+          "day": 1
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "RelaySat to GTO",
+            "company": "DinoSoar",
+            "amount": 215800000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 8,
+          "day": 31
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "RelaySat to GTO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 9,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "BroadcastSat to GEO",
+            "company": "DinoSoar",
+            "amount": 304910000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 10,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 10,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 10,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 10,
+          "day": 1
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "BroadcastSat to GEO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 10,
+          "day": 7
+        },
+        {
+          "EngineDesignComplete": {
+            "engine_name": "BLV Upper",
+            "flaw_count": 8
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 10,
+          "day": 7
+        },
+        {
+          "RocketDesignStarted": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 11,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 11,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 11,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 11,
+          "day": 6
+        },
+        {
+          "FlawDiscovered": {
+            "engine_name": "BLV Upper",
+            "flaw_description": "Main injector face erosion"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 11,
+          "day": 7
+        },
+        {
+          "FlawDiscovered": {
+            "engine_name": "BLV Booster",
+            "flaw_description": "Turbopump seal leak"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 11,
+          "day": 7
+        },
+        {
+          "ImprovementDiscovered": {
+            "engine_name": "BLV Booster",
+            "description": "Optimized injector pattern: +2% Isp"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 12,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 12,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 12,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 1
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 12,
+          "day": 6
+        },
+        {
+          "RevisionComplete": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 12,
+          "day": 7
+        },
+        {
+          "RevisionComplete": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 12,
+          "day": 7
+        },
+        {
+          "RocketDesignComplete": {
+            "rocket_name": "BLV-1",
+            "flaw_count": 5
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 12,
+          "day": 8
+        },
+        {
+          "RocketBuildOrdered": {
+            "rocket_name": "BLV-1",
+            "total_cost": 16286829.213360323
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 12,
+          "day": 8
+        },
+        {
+          "RocketBuildOrdered": {
+            "rocket_name": "BLV-1",
+            "total_cost": 16286829.213360323
+          }
+        }
+      ],
+      [
+        {
+          "year": 2001,
+          "month": 12,
+          "day": 25
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "EconomicShift": {
+            "condition": "Slowdown",
+            "description": "Government budget cuts reducing satellite procurement"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "BroadcastSat to GEO",
+            "company": "DinoSoar",
+            "amount": 314300000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 4
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 6
+        },
+        {
+          "ImprovementActualized": {
+            "engine_name": "BLV Booster",
+            "description": "Optimized injector pattern: +2% Isp"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 6
+        },
+        {
+          "RocketFlawDiscovered": {
+            "rocket_name": "BLV-1",
+            "flaw_description": "Oxidizer seal embrittlement"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 11
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 21
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S2"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 1,
+          "day": 31
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "BroadcastSat to GEO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 2,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 2,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 2,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 2,
+          "day": 1
+        },
+        {
+          "CampaignAnnounced": {
+            "program": "Concordia Comms Block",
+            "market_name": "GEO Communications",
+            "missions": 5,
+            "payload_kg": 2000.0,
+            "destination": "GEO",
+            "bid_deadline": {
+              "year": 2002,
+              "month": 3,
+              "day": 13
+            },
+            "liftable": false
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 2,
+          "day": 4
+        },
+        {
+          "FlawDiscovered": {
+            "engine_name": "BLV Upper",
+            "flaw_description": "Ullage gas contamination risk"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 2,
+          "day": 5
+        },
+        {
+          "RocketRevisionComplete": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 2,
+          "day": 24
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 3,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 3,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 3,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 3,
+          "day": 6
+        },
+        {
+          "RevisionComplete": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 3,
+          "day": 6
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S2"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 3,
+          "day": 23
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 4,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 4,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 4,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 4,
+          "day": 5
+        },
+        {
+          "ImprovementDiscovered": {
+            "engine_name": "BLV Upper",
+            "description": "Optimized injector pattern: +4% Isp"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 4,
+          "day": 6
+        },
+        {
+          "FlawDiscovered": {
+            "engine_name": "BLV Booster",
+            "flaw_description": "Combustion chamber hot spot"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 4,
+          "day": 6
+        },
+        {
+          "RocketFlawDiscovered": {
+            "rocket_name": "BLV-1",
+            "flaw_description": "Propellant line seal wear"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 4,
+          "day": 6
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 4,
+          "day": 6
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "EconomicShift": {
+            "condition": "Normal",
+            "description": "Space launch market operating at normal levels"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 6
+        },
+        {
+          "RevisionComplete": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 6
+        },
+        {
+          "RocketRevisionComplete": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 14
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 14
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 21
+        },
+        {
+          "RocketIntegrated": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 21
+        },
+        {
+          "FlawDiscovered": {
+            "engine_name": "BLV Booster",
+            "flaw_description": "Nozzle cooling channel restriction"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 21
+        },
+        {
+          "FlightDeparted": {
+            "rocket_name": "BLV-1",
+            "destination": "Low Earth Orbit"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 22
+        },
+        {
+          "RocketBuildOrdered": {
+            "rocket_name": "BLV-1",
+            "total_cost": 14678512.363004575
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 22
+        },
+        {
+          "MidFlightFlawActivated": {
+            "rocket_name": "BLV-1",
+            "flaw_description": "Ullage gas contamination risk",
+            "consequence": "stage loss"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 22
+        },
+        {
+          "FlawDiscovered": {
+            "engine_name": "BLV Upper",
+            "flaw_description": "Ullage gas contamination risk"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 5,
+          "day": 22
+        },
+        {
+          "SpacecraftLost": {
+            "rocket_name": "BLV-1",
+            "location": "Low Earth Orbit",
+            "reason": "Ullage gas contamination risk"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 1
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "RelaySat to GTO",
+            "company": "DinoSoar",
+            "amount": 169450000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "ComSat to GTO",
+            "company": "DinoSoar",
+            "amount": 210170000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 5
+        },
+        {
+          "RocketFlawDiscovered": {
+            "rocket_name": "BLV-1",
+            "flaw_description": "Sensor drift accumulation"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 5
+        },
+        {
+          "RocketFlawDiscovered": {
+            "rocket_name": "BLV-1",
+            "flaw_description": "Igniter reliability issue"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 14
+        },
+        {
+          "RocketIntegrated": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 14
+        },
+        {
+          "FlawDiscovered": {
+            "engine_name": "BLV Booster",
+            "flaw_description": "Nozzle cooling channel restriction"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 14
+        },
+        {
+          "RocketFlawDiscovered": {
+            "rocket_name": "BLV-1",
+            "flaw_description": "Sensor drift accumulation"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 14
+        },
+        {
+          "RocketFlawDiscovered": {
+            "rocket_name": "BLV-1",
+            "flaw_description": "Igniter reliability issue"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 14
+        },
+        {
+          "FlightDeparted": {
+            "rocket_name": "BLV-1",
+            "destination": "Low Earth Orbit"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 15
+        },
+        {
+          "FlightArrived": {
+            "rocket_name": "BLV-1",
+            "destination": "Earth Surface"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 15
+        },
+        {
+          "LaunchSuccess": {
+            "rocket_name": "BLV-1",
+            "destination": "Earth Surface"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 21
+        },
+        {
+          "RevisionComplete": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 6,
+          "day": 21
+        },
+        {
+          "RevisionComplete": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 7,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 7,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 7,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 4
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 7,
+          "day": 1
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "RelaySat to GTO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 7,
+          "day": 1
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "ComSat to GTO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 7,
+          "day": 5
+        },
+        {
+          "RocketRevisionComplete": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 7,
+          "day": 15
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 7,
+          "day": 21
+        },
+        {
+          "ImprovementActualized": {
+            "engine_name": "BLV Upper",
+            "description": "Optimized injector pattern: +4% Isp"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 7,
+          "day": 24
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S2"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 1
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "BroadcastSat to GTO",
+            "company": "DinoSoar",
+            "amount": 302690000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 4
+        },
+        {
+          "RocketRevisionComplete": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 4
+        },
+        {
+          "RocketBuildOrdered": {
+            "rocket_name": "BLV-1",
+            "total_cost": 13812374.788696658
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 7
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 17
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 20
+        },
+        {
+          "ImprovementDiscovered": {
+            "engine_name": "BLV Upper",
+            "description": "Optimized injector pattern: +3% Isp"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 29
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 8,
+          "day": 31
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "BroadcastSat to GTO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 9,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "BroadcastSat to GTO",
+            "company": "DinoSoar",
+            "amount": 292270000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 9,
+          "day": 5
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 9,
+          "day": 13
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S2"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 9,
+          "day": 19
+        },
+        {
+          "FlawDiscovered": {
+            "engine_name": "BLV Upper",
+            "flaw_description": "Combustion instability at partial throttle"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 1
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "BroadcastSat to GTO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 15
+        },
+        {
+          "RocketIntegrated": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 15
+        },
+        {
+          "FlightDeparted": {
+            "rocket_name": "BLV-1",
+            "destination": "Low Earth Orbit"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 16
+        },
+        {
+          "RocketBuildOrdered": {
+            "rocket_name": "BLV-1",
+            "total_cost": 13229016.057596665
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 16
+        },
+        {
+          "FlightArrived": {
+            "rocket_name": "BLV-1",
+            "destination": "Earth Surface"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 16
+        },
+        {
+          "LaunchSuccess": {
+            "rocket_name": "BLV-1",
+            "destination": "Earth Surface"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 19
+        },
+        {
+          "RevisionComplete": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 10,
+          "day": 28
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 11,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 11,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 11,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 11,
+          "day": 18
+        },
+        {
+          "ImprovementActualized": {
+            "engine_name": "BLV Upper",
+            "description": "Optimized injector pattern: +3% Isp"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 11,
+          "day": 18
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 11,
+          "day": 25
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 12,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 12,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 12,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2002,
+          "month": 12,
+          "day": 3
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S2"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 2
+        },
+        {
+          "RocketIntegrated": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 2
+        },
+        {
+          "FlightDeparted": {
+            "rocket_name": "BLV-1",
+            "destination": "Low Earth Orbit"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 3
+        },
+        {
+          "RocketBuildOrdered": {
+            "rocket_name": "BLV-1",
+            "total_cost": 12793549.141912317
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 3
+        },
+        {
+          "FlightArrived": {
+            "rocket_name": "BLV-1",
+            "destination": "Low Earth Orbit"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 3
+        },
+        {
+          "LaunchSuccess": {
+            "rocket_name": "BLV-1",
+            "destination": "Low Earth Orbit"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 12
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 14
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 15
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 1,
+          "day": 17
+        },
+        {
+          "FlawDiscovered": {
+            "engine_name": "BLV Upper",
+            "flaw_description": "Turbopump bearing fatigue"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 2,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 2,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 2,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 2,
+          "day": 3
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 2,
+          "day": 10
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 2,
+          "day": 16
+        },
+        {
+          "RevisionComplete": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 2,
+          "day": 18
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S2"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 3,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 3,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 3,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 3,
+          "day": 4
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "BroadcastSat to GTO",
+            "company": "DinoSoar",
+            "amount": 205310000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 3,
+          "day": 18
+        },
+        {
+          "RocketIntegrated": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 3,
+          "day": 19
+        },
+        {
+          "BidPlaced": {
+            "contract_name": "University Payload to LEO",
+            "amount": 34910000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 3,
+          "day": 30
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 4,
+          "day": 1
+        },
+        {
+          "RocketFlawDiscovered": {
+            "rocket_name": "BLV-1",
+            "flaw_description": "Combustion instability at partial throttle"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 4,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 4,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 4,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 4
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 4,
+          "day": 1
+        },
+        {
+          "BidRejected": {
+            "contract_name": "University Payload to LEO"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 4,
+          "day": 3
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "BroadcastSat to GTO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 4,
+          "day": 7
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "RocketRevisionComplete": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 1
+        },
+        {
+          "BidPlaced": {
+            "contract_name": "CubeSat Bundle to SSO",
+            "amount": 34910000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 2
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "BroadcastSat to GEO",
+            "company": "DinoSoar",
+            "amount": 291050000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 2
+        },
+        {
+          "BidRejected": {
+            "contract_name": "CubeSat Bundle to SSO"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 2
+        },
+        {
+          "RocketIntegrated": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 2
+        },
+        "ManufacturingIdle"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 26
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 5,
+          "day": 26
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 6,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "BidPlaced": {
+            "contract_name": "TechDemo to SSO",
+            "amount": 33300000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "RelaySat to GTO",
+            "company": "DinoSoar",
+            "amount": 190370000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 6,
+          "day": 1
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "BroadcastSat to GEO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 7,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 7,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 7,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 7,
+          "day": 1
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "RelaySat to GTO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 7,
+          "day": 2
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "RelaySat to GEO",
+            "company": "DinoSoar",
+            "amount": 277510000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 7,
+          "day": 2
+        },
+        {
+          "BidRejected": {
+            "contract_name": "TechDemo to SSO"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 8,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 8,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 8,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 8,
+          "day": 1
+        },
+        {
+          "BidPlaced": {
+            "contract_name": "CubeSat Bundle to LEO",
+            "amount": 33300000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 8,
+          "day": 1
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "RelaySat to GEO",
+            "success": true
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 9,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "BidPlaced": {
+            "contract_name": "WeatherSat to LEO",
+            "amount": 33300000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "BidRejected": {
+            "contract_name": "CubeSat Bundle to LEO"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 9,
+          "day": 1
+        },
+        {
+          "CompetitorRocketBuilt": {
+            "company": "DinoSoar",
+            "rocket_name": "Brontosaur IV"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 1
+        },
+        {
+          "BidPlaced": {
+            "contract_name": "TechDemo to LEO",
+            "amount": 33300000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 2
+        },
+        {
+          "ContractAwarded": {
+            "contract_name": "WeatherSat to LEO",
+            "amount": 33300000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 2
+        },
+        {
+          "FlightDeparted": {
+            "rocket_name": "BLV-1",
+            "destination": "Low Earth Orbit"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 3
+        },
+        {
+          "RocketBuildOrdered": {
+            "rocket_name": "BLV-1",
+            "total_cost": 12448409.168067029
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 3
+        },
+        {
+          "FlightArrived": {
+            "rocket_name": "BLV-1",
+            "destination": "Low Earth Orbit"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 3
+        },
+        {
+          "PaymentReceived": {
+            "amount": 33300000.0,
+            "contract_name": "WeatherSat to LEO"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 3
+        },
+        {
+          "LaunchSuccess": {
+            "rocket_name": "BLV-1",
+            "destination": "Low Earth Orbit"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 10,
+          "day": 29
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Upper"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 11,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 11,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 11,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 11,
+          "day": 1
+        },
+        {
+          "BidRejected": {
+            "contract_name": "TechDemo to LEO"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 11,
+          "day": 2
+        },
+        {
+          "BidPlaced": {
+            "contract_name": "University Payload to LEO",
+            "amount": 33300000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 11,
+          "day": 5
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S2"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 11,
+          "day": 18
+        },
+        {
+          "EngineBuilt": {
+            "engine_name": "BLV Booster"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 11,
+          "day": 26
+        },
+        {
+          "StageBuilt": {
+            "stage_name": "BLV-1 S1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 12,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 12,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 12,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 3
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 12,
+          "day": 2
+        },
+        {
+          "ContractAwardedToCompetitor": {
+            "contract_name": "RelaySat to GTO",
+            "company": "DinoSoar",
+            "amount": 296370000.0,
+            "player_bid": null
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 12,
+          "day": 2
+        },
+        {
+          "BidRejected": {
+            "contract_name": "University Payload to LEO"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 12,
+          "day": 3
+        },
+        {
+          "BidPlaced": {
+            "contract_name": "Probe to LEO",
+            "amount": 33300000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 12,
+          "day": 21
+        },
+        {
+          "RocketIntegrated": {
+            "rocket_name": "BLV-1"
+          }
+        }
+      ],
+      [
+        {
+          "year": 2003,
+          "month": 12,
+          "day": 21
+        },
+        "ManufacturingIdle"
+      ],
+      [
+        {
+          "year": 2004,
+          "month": 1,
+          "day": 1
+        },
+        "MonthStart"
+      ],
+      [
+        {
+          "year": 2004,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "SalariesPaid": {
+            "amount": 1350000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2004,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "ContractsRefreshed": {
+            "count": 2
+          }
+        }
+      ],
+      [
+        {
+          "year": 2004,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "BidPlaced": {
+            "contract_name": "TechDemo to LEO",
+            "amount": 31600000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2004,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "ContractAwarded": {
+            "contract_name": "Probe to LEO",
+            "amount": 33300000.0
+          }
+        }
+      ],
+      [
+        {
+          "year": 2004,
+          "month": 1,
+          "day": 1
+        },
+        {
+          "CompetitorLaunch": {
+            "company": "DinoSoar",
+            "contract_name": "RelaySat to GTO",
+            "success": true
+          }
+        }
+      ]
+    ],
+    "max_size": 1000,
+    "total_pushed": 278
+  },
+  "seed": {
+    "seed": 42
+  },
+  "speed": "Paused",
+  "previous_speed": "Normal",
+  "available_contracts": [
+    {
+      "id": 84,
+      "name": "ComSat to GTO",
+      "destination": "gto",
+      "payload_kg": 6400.0,
+      "payment": 260550000.0,
+      "deadline": {
+        "year": 2004,
+        "month": 6,
+        "day": 24
+      },
+      "status": "Available",
+      "market_id": 1,
+      "bid_deadline": {
+        "year": 2004,
+        "month": 1,
+        "day": 31
+      },
+      "budget_ceiling": 312660000.0
+    },
+    {
+      "id": 85,
+      "name": "TechDemo to LEO",
+      "destination": "leo",
+      "payload_kg": 400.0,
+      "payment": 5380000.0,
+      "deadline": {
+        "year": 2004,
+        "month": 4,
+        "day": 24
+      },
+      "status": "Available",
+      "market_id": 3,
+      "bid_deadline": {
+        "year": 2004,
+        "month": 1,
+        "day": 31
+      },
+      "budget_ceiling": 6186999.999999999,
+      "player_bid": 31600000.0
+    }
+  ],
+  "next_contract_id": 86,
+  "active_flights": [],
+  "next_flight_id": 6,
+  "next_rocket_id": 6,
+  "spacecraft": [],
+  "economy": {
+    "condition": "Normal",
+    "modifier": 1.0,
+    "event_index": 2,
+    "end_date": {
+      "year": 2005,
+      "month": 2,
+      "day": 1
+    }
+  },
+  "markets": [
+    {
+      "id": 1,
+      "name": "GEO Communications",
+      "description": "Commercial geostationary communications satellites",
+      "active": true,
+      "base_volume": 1.5,
+      "destinations": [
+        {
+          "location_id": "gto",
+          "display_name": "GTO",
+          "min_payload_kg": 2000.0,
+          "max_payload_kg": 7000.0,
+          "rate_per_kg": 40000.0,
+          "weight": 0.6
+        },
+        {
+          "location_id": "geo",
+          "display_name": "GEO",
+          "min_payload_kg": 2000.0,
+          "max_payload_kg": 5000.0,
+          "rate_per_kg": 80000.0,
+          "weight": 0.4
+        }
+      ],
+      "rep_target": 50.0,
+      "w_cost": 0.6,
+      "w_rep": 0.4,
+      "budget_tolerance": 1.2,
+      "economy_sensitivity": "Moderate",
+      "name_prefixes": [
+        "ComSat",
+        "BroadcastSat",
+        "RelaySat"
+      ],
+      "modifiers": [],
+      "annual_growth": 0.018195461832194098,
+      "activation_date": {
+        "year": 2001,
+        "month": 1,
+        "day": 1
+      },
+      "deadline_days": [
+        90,
+        240
+      ],
+      "failure_severity": 1.2,
+      "cadence": "Steady",
+      "volume_accumulator": 0.6651222960110652
+    },
+    {
+      "id": 2,
+      "name": "Government Science",
+      "description": "NASA, ESA and other agency science missions",
+      "active": true,
+      "base_volume": 0.3379414292693747,
+      "destinations": [
+        {
+          "location_id": "leo",
+          "display_name": "LEO",
+          "min_payload_kg": 500.0,
+          "max_payload_kg": 5000.0,
+          "rate_per_kg": 48750.37116592566,
+          "weight": 0.2858438683349732
+        },
+        {
+          "location_id": "sso",
+          "display_name": "SSO",
+          "min_payload_kg": 500.0,
+          "max_payload_kg": 3000.0,
+          "rate_per_kg": 58500.445399110795,
+          "weight": 0.2623661792339678
+        },
+        {
+          "location_id": "l1",
+          "display_name": "L1",
+          "min_payload_kg": 200.0,
+          "max_payload_kg": 3000.0,
+          "rate_per_kg": 78000.59386548106,
+          "weight": 0.13231555712077317
+        },
+        {
+          "location_id": "l2",
+          "display_name": "L2",
+          "min_payload_kg": 200.0,
+          "max_payload_kg": 3000.0,
+          "rate_per_kg": 78000.59386548106,
+          "weight": 0.1365746584511786
+        },
+        {
+          "location_id": "lunar_orbit",
+          "display_name": "Lunar Orbit",
+          "min_payload_kg": 200.0,
+          "max_payload_kg": 2000.0,
+          "rate_per_kg": 117000.89079822159,
+          "weight": 0.09242115739465304
+        }
+      ],
+      "rep_target": 40.0,
+      "w_cost": 0.4,
+      "w_rep": 0.6,
+      "budget_tolerance": 1.3,
+      "economy_sensitivity": "Low",
+      "name_prefixes": [
+        "Observatory",
+        "SciSat",
+        "Probe",
+        "WeatherSat"
+      ],
+      "modifiers": [],
+      "annual_growth": 0.022532614401479995,
+      "activation_date": {
+        "year": 2001,
+        "month": 1,
+        "day": 1
+      },
+      "deadline_days": [
+        120,
+        360
+      ],
+      "failure_severity": 0.7,
+      "cadence": "Steady",
+      "volume_accumulator": 0.5340676242386972
+    },
+    {
+      "id": 3,
+      "name": "Rideshare / Smallsat",
+      "description": "Universities, startups, and small agencies launching CubeSats and microsats",
+      "active": true,
+      "base_volume": 0.5,
+      "destinations": [
+        {
+          "location_id": "leo",
+          "display_name": "LEO",
+          "min_payload_kg": 50.0,
+          "max_payload_kg": 500.0,
+          "rate_per_kg": 15000.0,
+          "weight": 0.6
+        },
+        {
+          "location_id": "sso",
+          "display_name": "SSO",
+          "min_payload_kg": 50.0,
+          "max_payload_kg": 300.0,
+          "rate_per_kg": 30000.0,
+          "weight": 0.4
+        }
+      ],
+      "rep_target": -10.0,
+      "w_cost": 0.8,
+      "w_rep": 0.2,
+      "budget_tolerance": 1.15,
+      "economy_sensitivity": "Moderate",
+      "name_prefixes": [
+        "CubeSat Bundle",
+        "University Payload",
+        "TechDemo"
+      ],
+      "modifiers": [],
+      "annual_growth": 0.0536404715599145,
+      "activation_date": {
+        "year": 2001,
+        "month": 1,
+        "day": 1
+      },
+      "deadline_days": [
+        60,
+        150
+      ],
+      "failure_severity": 1.0,
+      "cadence": "Steady",
+      "volume_accumulator": 0.22852176777427724
+    },
+    {
+      "id": 4,
+      "name": "NASA Crew & Cargo",
+      "description": "ISS resupply and crew rotation under commercial contract. Crew-adjacent missions: failures end careers",
+      "active": false,
+      "base_volume": 0.47779468697832234,
+      "destinations": [
+        {
+          "location_id": "leo",
+          "display_name": "LEO",
+          "min_payload_kg": 2000.0,
+          "max_payload_kg": 6000.0,
+          "rate_per_kg": 38320.743203384496,
+          "weight": 1.0
+        }
+      ],
+      "rep_target": 60.0,
+      "w_cost": 0.5,
+      "w_rep": 0.5,
+      "budget_tolerance": 1.25,
+      "economy_sensitivity": "Low",
+      "name_prefixes": [
+        "ISS Resupply",
+        "Station Cargo",
+        "Crew Rotation"
+      ],
+      "modifiers": [],
+      "annual_growth": 0.04882433717887237,
+      "activation_date": null,
+      "deadline_days": [
+        90,
+        270
+      ],
+      "failure_severity": 2.0,
+      "cadence": "Steady",
+      "volume_accumulator": 0.0
+    },
+    {
+      "id": 5,
+      "name": "LEO Constellation",
+      "description": "Broadband internet constellation deployment",
+      "active": false,
+      "base_volume": 1.307902121997708,
+      "destinations": [
+        {
+          "location_id": "leo",
+          "display_name": "LEO",
+          "min_payload_kg": 500.0,
+          "max_payload_kg": 5000.0,
+          "rate_per_kg": 16057.0163612184,
+          "weight": 0.6135031064885162
+        },
+        {
+          "location_id": "sso",
+          "display_name": "SSO",
+          "min_payload_kg": 500.0,
+          "max_payload_kg": 3000.0,
+          "rate_per_kg": 21409.3551482912,
+          "weight": 0.41214855808437484
+        }
+      ],
+      "rep_target": 20.0,
+      "w_cost": 0.8,
+      "w_rep": 0.2,
+      "budget_tolerance": 1.15,
+      "economy_sensitivity": "High",
+      "name_prefixes": [
+        "Constellation Batch",
+        "LEO Deploy",
+        "Network Sat"
+      ],
+      "modifiers": [],
+      "annual_growth": 0.05609098359779312,
+      "activation_date": null,
+      "deadline_days": [
+        60,
+        180
+      ],
+      "failure_severity": 1.0,
+      "cadence": {
+        "Burst": {
+          "burst_chance": 0.2
+        }
+      },
+      "volume_accumulator": 0.0
+    },
+    {
+      "id": 6,
+      "name": "MEO Constellation",
+      "description": "Navigation and communications constellation in medium Earth orbit",
+      "active": false,
+      "base_volume": 0.5591545778862288,
+      "destinations": [
+        {
+          "location_id": "meo",
+          "display_name": "MEO",
+          "min_payload_kg": 500.0,
+          "max_payload_kg": 3000.0,
+          "rate_per_kg": 25265.800585765537,
+          "weight": 1.0
+        }
+      ],
+      "rep_target": 30.0,
+      "w_cost": 0.8,
+      "w_rep": 0.2,
+      "budget_tolerance": 1.15,
+      "economy_sensitivity": "High",
+      "name_prefixes": [
+        "NavSat Batch",
+        "MEO Deploy",
+        "Constellation Unit"
+      ],
+      "modifiers": [],
+      "annual_growth": 0.05476021535586318,
+      "activation_date": null,
+      "deadline_days": [
+        90,
+        210
+      ],
+      "failure_severity": 1.0,
+      "cadence": {
+        "Burst": {
+          "burst_chance": 0.2
+        }
+      },
+      "volume_accumulator": 0.0
+    },
+    {
+      "id": 7,
+      "name": "National Security",
+      "description": "Defense and intelligence satellite launches. Irreplaceable payloads; failures draw hearings",
+      "active": false,
+      "base_volume": 0.2853777123226515,
+      "destinations": [
+        {
+          "location_id": "leo",
+          "display_name": "LEO",
+          "min_payload_kg": 1000.0,
+          "max_payload_kg": 10000.0,
+          "rate_per_kg": 61630.14286275346,
+          "weight": 0.3176153472526863
+        },
+        {
+          "location_id": "gto",
+          "display_name": "GTO",
+          "min_payload_kg": 2000.0,
+          "max_payload_kg": 7000.0,
+          "rate_per_kg": 82173.52381700462,
+          "weight": 0.27323967924217246
+        },
+        {
+          "location_id": "geo",
+          "display_name": "GEO",
+          "min_payload_kg": 2000.0,
+          "max_payload_kg": 5000.0,
+          "rate_per_kg": 154075.35715688366,
+          "weight": 0.19181464829214145
+        },
+        {
+          "location_id": "sso",
+          "display_name": "SSO",
+          "min_payload_kg": 1000.0,
+          "max_payload_kg": 5000.0,
+          "rate_per_kg": 71901.83333987904,
+          "weight": 0.2640011005344939
+        }
+      ],
+      "rep_target": 80.0,
+      "w_cost": 0.35,
+      "w_rep": 0.65,
+      "budget_tolerance": 1.4,
+      "economy_sensitivity": "None",
+      "name_prefixes": [
+        "NatSec Payload",
+        "Defense Sat",
+        "Classified Mission"
+      ],
+      "modifiers": [],
+      "annual_growth": 0.0288754840921469,
+      "activation_date": null,
+      "deadline_days": [
+        120,
+        360
+      ],
+      "failure_severity": 1.5,
+      "cadence": {
+        "Lumpy": {
+          "quiet_chance": 0.5
+        }
+      },
+      "volume_accumulator": 0.0
+    },
+    {
+      "id": 8,
+      "name": "Earth Observation",
+      "description": "Imaging, radar, and environmental monitoring satellites",
+      "active": false,
+      "base_volume": 0.6125656490476898,
+      "destinations": [
+        {
+          "location_id": "leo",
+          "display_name": "LEO",
+          "min_payload_kg": 100.0,
+          "max_payload_kg": 1000.0,
+          "rate_per_kg": 23179.50041472028,
+          "weight": 0.35586195466776754
+        },
+        {
+          "location_id": "sso",
+          "display_name": "SSO",
+          "min_payload_kg": 100.0,
+          "max_payload_kg": 800.0,
+          "rate_per_kg": 32451.300580608393,
+          "weight": 0.5864139371327793
+        }
+      ],
+      "rep_target": 10.0,
+      "w_cost": 0.75,
+      "w_rep": 0.25,
+      "budget_tolerance": 1.15,
+      "economy_sensitivity": "Moderate",
+      "name_prefixes": [
+        "ImagingSat",
+        "RadarSat",
+        "EarthWatch"
+      ],
+      "modifiers": [],
+      "annual_growth": 0.02921357031016216,
+      "activation_date": null,
+      "deadline_days": [
+        60,
+        180
+      ],
+      "failure_severity": 1.0,
+      "cadence": {
+        "Lumpy": {
+          "quiet_chance": 0.4
+        }
+      },
+      "volume_accumulator": 0.0
+    }
+  ],
+  "technologies": [
+    {
+      "id": 1,
+      "name": "Methalox",
+      "description": "Liquid methane/LOX propulsion — promising but unproven in flight",
+      "unlocked": true,
+      "difficulty": 0,
+      "deficiencies": [
+        {
+          "id": 100,
+          "description": "Nozzle erosion from exhaust products",
+          "kind": {
+            "IspPenalty": 0.16793528745754083
+          },
+          "solvability": 0.9466886783044939,
+          "solved": false,
+          "total_attempts": 0
+        },
+        {
+          "id": 101,
+          "description": "Heavier propellant handling systems required",
+          "kind": {
+            "MassPenalty": 0.18520595877673734
+          },
+          "solvability": 0.9328997723363722,
+          "solved": false,
+          "total_attempts": 0
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Nuclear Thermal",
+      "description": "Nuclear reactor heating hydrogen propellant — very high Isp but experimental",
+      "unlocked": false,
+      "difficulty": 2,
+      "deficiencies": [
+        {
+          "id": 200,
+          "description": "Nozzle erosion from exhaust products",
+          "kind": {
+            "IspPenalty": 0.1819374437788102
+          },
+          "solvability": 0.531128650726153,
+          "solved": false,
+          "total_attempts": 0
+        },
+        {
+          "id": 201,
+          "description": "Non-optimal mixture ratio range",
+          "kind": {
+            "IspPenalty": 0.2419045226252789
+          },
+          "solvability": 0.23331153184888287,
+          "solved": false,
+          "total_attempts": 0
+        },
+        {
+          "id": 202,
+          "description": "Heavier propellant handling systems required",
+          "kind": {
+            "MassPenalty": 0.19979300905883535
+          },
+          "solvability": 0.0,
+          "solved": false,
+          "total_attempts": 0
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Fission Reactor",
+      "description": "Compact space-rated nuclear reactor producing electricity continuously — enables high-power probes beyond reach of solar panels",
+      "unlocked": false,
+      "difficulty": 2,
+      "deficiencies": [
+        {
+          "id": 300,
+          "description": "Poorly understood reactor kinetics",
+          "kind": {
+            "ComplexityPenalty": 2
+          },
+          "solvability": 0.1418453345945085,
+          "solved": false,
+          "total_attempts": 0
+        },
+        {
+          "id": 301,
+          "description": "Fuel element power density shortfall",
+          "kind": {
+            "PowerPenalty": 0.1746023677984346
+          },
+          "solvability": 0.44796072387515745,
+          "solved": false,
+          "total_attempts": 0
+        },
+        {
+          "id": 302,
+          "description": "Immature fuel fabrication processes",
+          "kind": {
+            "ComplexityPenalty": 1
+          },
+          "solvability": 0.29367931934298763,
+          "solved": false,
+          "total_attempts": 0
+        },
+        {
+          "id": 303,
+          "description": "Poorly understood reactor kinetics",
+          "kind": {
+            "ComplexityPenalty": 4
+          },
+          "solvability": 0.30299496339400794,
+          "solved": false,
+          "total_attempts": 0
+        }
+      ]
+    }
+  ],
+  "fired_market_events": [],
+  "competitors": [
+    {
+      "company": {
+        "name": "DinoSoar",
+        "money": 5993864245.680674,
+        "next_team_id": 14,
+        "next_engine_id": 1,
+        "next_project_id": 3,
+        "next_flaw_id": 2,
+        "next_rocket_project_id": 2,
+        "next_contracted_engine_id": 1,
+        "next_reactor_project_id": 1,
+        "next_reactor_id": 1,
+        "teams": [
+          {
+            "id": 1,
+            "name": "Team 1",
+            "monthly_salary": 150000.0
+          }
+        ],
+        "manufacturing_teams": [
+          {
+            "id": 2,
+            "name": "Line 1",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 3,
+            "name": "Line 2",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 4,
+            "name": "Line 3",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 5,
+            "name": "Line 4",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 6,
+            "name": "Line 5",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 7,
+            "name": "Line 6",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 8,
+            "name": "Line 7",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 9,
+            "name": "Line 8",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 10,
+            "name": "Line 9",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 11,
+            "name": "Line 10",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 12,
+            "name": "Line 11",
+            "monthly_salary": 300000.0
+          },
+          {
+            "id": 13,
+            "name": "Line 12",
+            "monthly_salary": 300000.0
+          }
+        ],
+        "engine_projects": [
+          {
+            "project_id": 1,
+            "design": {
+              "id": 20001,
+              "name": "TR-68 Thunderlizard",
+              "cycle": "GasGenerator",
+              "thrust_n": 3140000.0,
+              "mass_kg": 6600.0,
+              "isp_s": 386.0,
+              "exit_pressure_pa": 60000.0,
+              "needs_atmosphere": false,
+              "propellant_mix": [
+                {
+                  "propellant": "LOX",
+                  "mass_fraction": 0.86
+                },
+                {
+                  "propellant": "LH2",
+                  "mass_fraction": 0.14
+                }
+              ],
+              "power_draw_w": 0.0
+            },
+            "preset": "Hydrolox",
+            "scale": 1.0,
+            "status": {
+              "Testing": {
+                "work_completed": 0.0
+              }
+            },
+            "flaws": [],
+            "revision": 0,
+            "teams_assigned": 0,
+            "complexity": 12,
+            "nre_cost": 0.0,
+            "improvements": [],
+            "cumulative_testing_work": 0.0,
+            "tech_deficiency_ids": [],
+            "technology_id": null
+          },
+          {
+            "project_id": 2,
+            "design": {
+              "id": 20002,
+              "name": "DL-10 Dactyl",
+              "cycle": "Expander",
+              "thrust_n": 110000.0,
+              "mass_kg": 300.0,
+              "isp_s": 462.0,
+              "exit_pressure_pa": 5000.0,
+              "needs_atmosphere": false,
+              "propellant_mix": [
+                {
+                  "propellant": "LOX",
+                  "mass_fraction": 0.83
+                },
+                {
+                  "propellant": "LH2",
+                  "mass_fraction": 0.17
+                }
+              ],
+              "power_draw_w": 0.0
+            },
+            "preset": "Hydrolox",
+            "scale": 1.0,
+            "status": {
+              "Testing": {
+                "work_completed": 0.0
+              }
+            },
+            "flaws": [],
+            "revision": 0,
+            "teams_assigned": 0,
+            "complexity": 8,
+            "nre_cost": 0.0,
+            "improvements": [],
+            "cumulative_testing_work": 0.0,
+            "tech_deficiency_ids": [],
+            "technology_id": null
+          }
+        ],
+        "rocket_projects": [
+          {
+            "project_id": 1,
+            "design": {
+              "id": 20001,
+              "name": "Brontosaur IV",
+              "stage_groups": [
+                [
+                  {
+                    "id": 20001,
+                    "name": "Common Booster Core",
+                    "engine": {
+                      "id": 20001,
+                      "name": "TR-68 Thunderlizard",
+                      "cycle": "GasGenerator",
+                      "thrust_n": 3140000.0,
+                      "mass_kg": 6600.0,
+                      "isp_s": 386.0,
+                      "exit_pressure_pa": 60000.0,
+                      "needs_atmosphere": false,
+                      "propellant_mix": [
+                        {
+                          "propellant": "LOX",
+                          "mass_fraction": 0.86
+                        },
+                        {
+                          "propellant": "LH2",
+                          "mass_fraction": 0.14
+                        }
+                      ],
+                      "power_draw_w": 0.0
+                    },
+                    "engine_count": 1,
+                    "propellant_mass_kg": 200000.0,
+                    "structural_mass_kg": 26000.0,
+                    "fairing": null,
+                    "power_sources": []
+                  }
+                ],
+                [
+                  {
+                    "id": 20002,
+                    "name": "Cryo Upper",
+                    "engine": {
+                      "id": 20002,
+                      "name": "DL-10 Dactyl",
+                      "cycle": "Expander",
+                      "thrust_n": 110000.0,
+                      "mass_kg": 300.0,
+                      "isp_s": 462.0,
+                      "exit_pressure_pa": 5000.0,
+                      "needs_atmosphere": false,
+                      "propellant_mix": [
+                        {
+                          "propellant": "LOX",
+                          "mass_fraction": 0.83
+                        },
+                        {
+                          "propellant": "LH2",
+                          "mass_fraction": 0.17
+                        }
+                      ],
+                      "power_draw_w": 0.0
+                    },
+                    "engine_count": 1,
+                    "propellant_mass_kg": 27000.0,
+                    "structural_mass_kg": 3500.0,
+                    "fairing": {
+                      "mass_kg": 2500.0,
+                      "diameter_m": 5.1
+                    },
+                    "power_sources": []
+                  }
+                ]
+              ]
+            },
+            "status": {
+              "Testing": {
+                "work_completed": 0.0
+              }
+            },
+            "flaws": [
+              {
+                "id": 1,
+                "description": "Booster core separation ordnance defect",
+                "consequence": "StageLoss",
+                "activation_chance": 0.021193790761425815,
+                "discovery_probability": 0.0,
+                "discovered": false,
+                "trigger": "PerFlight"
+              }
+            ],
+            "revision": 0,
+            "teams_assigned": 0,
+            "complexity": 5,
+            "nre_cost": 0.0,
+            "cumulative_testing_work": 0.0
+          }
+        ],
+        "reactor_projects": [],
+        "third_party_catalog": [
+          {
+            "design": {
+              "id": 10001,
+              "name": "KM-15 Kick Motor",
+              "cycle": "PressureFed",
+              "thrust_n": 75000.0,
+              "mass_kg": 35.0,
+              "isp_s": 245.0,
+              "exit_pressure_pa": 70000.0,
+              "needs_atmosphere": false,
+              "propellant_mix": [
+                {
+                  "propellant": "SolidMix",
+                  "mass_fraction": 1.0
+                }
+              ],
+              "power_draw_w": 0.0
+            },
+            "preset": "Solid",
+            "complexity": 5,
+            "purchase_cost_per_unit": 800000.0,
+            "available_from": {
+              "year": 2001,
+              "month": 1,
+              "day": 1
+            }
+          },
+          {
+            "design": {
+              "id": 10002,
+              "name": "RD-33K",
+              "cycle": "StagedCombustion",
+              "thrust_n": 1680000.0,
+              "mass_kg": 1220.0,
+              "isp_s": 297.0,
+              "exit_pressure_pa": 80000.0,
+              "needs_atmosphere": false,
+              "propellant_mix": [
+                {
+                  "propellant": "LOX",
+                  "mass_fraction": 0.73
+                },
+                {
+                  "propellant": "RP1",
+                  "mass_fraction": 0.27
+                }
+              ],
+              "power_draw_w": 0.0
+            },
+            "preset": "Kerolox",
+            "complexity": 8,
+            "purchase_cost_per_unit": 12000000.0,
+            "available_from": {
+              "year": 2001,
+              "month": 1,
+              "day": 1
+            }
+          },
+          {
+            "design": {
+              "id": 10003,
+              "name": "HT-40",
+              "cycle": "PressureFed",
+              "thrust_n": 40000.0,
+              "mass_kg": 90.0,
+              "isp_s": 267.0,
+              "exit_pressure_pa": 7000.0,
+              "needs_atmosphere": false,
+              "propellant_mix": [
+                {
+                  "propellant": "NTO",
+                  "mass_fraction": 0.57
+                },
+                {
+                  "propellant": "UDMH",
+                  "mass_fraction": 0.43
+                }
+              ],
+              "power_draw_w": 0.0
+            },
+            "preset": "Hypergolic",
+            "complexity": 5,
+            "purchase_cost_per_unit": 2500000.0,
+            "available_from": {
+              "year": 2001,
+              "month": 1,
+              "day": 1
+            }
+          }
+        ],
+        "contracted_engines": [],
+        "rocket_designs": [],
+        "manufacturing": {
+          "floor_space": {
+            "total_units": 40,
+            "under_construction": []
+          },
+          "orders": [
+            {
+              "id": 61,
+              "order_type": {
+                "Engine": {
+                  "source": {
+                    "PlayerDesign": 1
+                  },
+                  "engine_id": 20001,
+                  "engine_name": "TR-68 Thunderlizard",
+                  "engine_mass_kg": 6600.0,
+                  "complexity": 12,
+                  "revision": 0,
+                  "flaws": [],
+                  "improvements": []
+                }
+              },
+              "work_completed": 510.0436934952045,
+              "work_required": 527.7965262952084,
+              "material_cost": 14416188.876907745,
+              "labor_cost": 6200000.0,
+              "teams_assigned": 4,
+              "floor_space_used": 1,
+              "waiting_for_prerequisites": false,
+              "prior_builds": 52
+            },
+            {
+              "id": 62,
+              "order_type": {
+                "Stage": {
+                  "rocket_project_id": 1,
+                  "group_index": 0,
+                  "stage_index": 0,
+                  "stage_name": "Brontosaur IV S1",
+                  "structural_mass_kg": 26000.0
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 67.9173543095953,
+              "material_cost": 10023189.149134977,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 1,
+              "waiting_for_prerequisites": true,
+              "prior_builds": 52
+            },
+            {
+              "id": 65,
+              "order_type": {
+                "RocketIntegration": {
+                  "rocket_project_id": 1,
+                  "design_id": 20001,
+                  "rocket_name": "Brontosaur IV",
+                  "total_stages": 2,
+                  "revision": 0,
+                  "rocket_flaws": [
+                    {
+                      "id": 1,
+                      "description": "Booster core separation ordnance defect",
+                      "consequence": "StageLoss",
+                      "activation_chance": 0.021193790761425815,
+                      "discovery_probability": 0.0,
+                      "discovered": false,
+                      "trigger": "PerFlight"
+                    }
+                  ]
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 44.22720408920717,
+              "material_cost": 1970233.487766001,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 2,
+              "waiting_for_prerequisites": true,
+              "prior_builds": 52
+            },
+            {
+              "id": 66,
+              "order_type": {
+                "Engine": {
+                  "source": {
+                    "PlayerDesign": 1
+                  },
+                  "engine_id": 20001,
+                  "engine_name": "TR-68 Thunderlizard",
+                  "engine_mass_kg": 6600.0,
+                  "complexity": 12,
+                  "revision": 0,
+                  "flaws": [],
+                  "improvements": []
+                }
+              },
+              "work_completed": 474.4416266270742,
+              "work_required": 526.2906429759519,
+              "material_cost": 14375057.309579382,
+              "labor_cost": 5720000.0,
+              "teams_assigned": 4,
+              "floor_space_used": 1,
+              "waiting_for_prerequisites": false,
+              "prior_builds": 53
+            },
+            {
+              "id": 67,
+              "order_type": {
+                "Stage": {
+                  "rocket_project_id": 1,
+                  "group_index": 0,
+                  "stage_index": 0,
+                  "stage_name": "Brontosaur IV S1",
+                  "structural_mass_kg": 26000.0
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 67.72357582518431,
+              "material_cost": 9994591.474475415,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 1,
+              "waiting_for_prerequisites": true,
+              "prior_builds": 53
+            },
+            {
+              "id": 70,
+              "order_type": {
+                "RocketIntegration": {
+                  "rocket_project_id": 1,
+                  "design_id": 20001,
+                  "rocket_name": "Brontosaur IV",
+                  "total_stages": 2,
+                  "revision": 0,
+                  "rocket_flaws": [
+                    {
+                      "id": 1,
+                      "description": "Booster core separation ordnance defect",
+                      "consequence": "StageLoss",
+                      "activation_chance": 0.021193790761425815,
+                      "discovery_probability": 0.0,
+                      "discovered": false,
+                      "trigger": "PerFlight"
+                    }
+                  ]
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 44.101017186533156,
+              "material_cost": 1964612.113625679,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 2,
+              "waiting_for_prerequisites": true,
+              "prior_builds": 53
+            },
+            {
+              "id": 71,
+              "order_type": {
+                "Engine": {
+                  "source": {
+                    "PlayerDesign": 1
+                  },
+                  "engine_id": 20001,
+                  "engine_name": "TR-68 Thunderlizard",
+                  "engine_mass_kg": 6600.0,
+                  "complexity": 12,
+                  "revision": 0,
+                  "flaws": [],
+                  "improvements": []
+                }
+              },
+              "work_completed": 421.3540942443165,
+              "work_required": 524.8170855309531,
+              "material_cost": 14334808.688397298,
+              "labor_cost": 5120000.0,
+              "teams_assigned": 4,
+              "floor_space_used": 1,
+              "waiting_for_prerequisites": false,
+              "prior_builds": 54
+            },
+            {
+              "id": 72,
+              "order_type": {
+                "Stage": {
+                  "rocket_project_id": 1,
+                  "group_index": 0,
+                  "stage_index": 0,
+                  "stage_name": "Brontosaur IV S1",
+                  "structural_mass_kg": 26000.0
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 67.53395706473127,
+              "material_cost": 9966607.688570244,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 1,
+              "waiting_for_prerequisites": true,
+              "prior_builds": 54
+            },
+            {
+              "id": 75,
+              "order_type": {
+                "RocketIntegration": {
+                  "rocket_project_id": 1,
+                  "design_id": 20001,
+                  "rocket_name": "Brontosaur IV",
+                  "total_stages": 2,
+                  "revision": 0,
+                  "rocket_flaws": [
+                    {
+                      "id": 1,
+                      "description": "Booster core separation ordnance defect",
+                      "consequence": "StageLoss",
+                      "activation_chance": 0.021193790761425815,
+                      "discovery_probability": 0.0,
+                      "discovered": false,
+                      "trigger": "PerFlight"
+                    }
+                  ]
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 43.977539060758836,
+              "material_cost": 1959111.4100786846,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 2,
+              "waiting_for_prerequisites": true,
+              "prior_builds": 54
+            },
+            {
+              "id": 76,
+              "order_type": {
+                "Engine": {
+                  "source": {
+                    "PlayerDesign": 1
+                  },
+                  "engine_id": 20001,
+                  "engine_name": "TR-68 Thunderlizard",
+                  "engine_mass_kg": 6600.0,
+                  "complexity": 12,
+                  "revision": 0,
+                  "flaws": [],
+                  "improvements": []
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 523.3745803744589,
+              "material_cost": 14295408.226749882,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 1,
+              "waiting_for_prerequisites": false,
+              "prior_builds": 55
+            },
+            {
+              "id": 77,
+              "order_type": {
+                "Stage": {
+                  "rocket_project_id": 1,
+                  "group_index": 0,
+                  "stage_index": 0,
+                  "stage_name": "Brontosaur IV S1",
+                  "structural_mass_kg": 26000.0
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 67.3483341420214,
+              "material_cost": 9939213.605222192,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 1,
+              "waiting_for_prerequisites": true,
+              "prior_builds": 55
+            },
+            {
+              "id": 78,
+              "order_type": {
+                "Engine": {
+                  "source": {
+                    "PlayerDesign": 2
+                  },
+                  "engine_id": 20002,
+                  "engine_name": "DL-10 Dactyl",
+                  "engine_mass_kg": 300.0,
+                  "complexity": 8,
+                  "revision": 0,
+                  "flaws": [],
+                  "improvements": []
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 44.58842465215777,
+              "material_cost": 844728.6679443112,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 1,
+              "waiting_for_prerequisites": false,
+              "prior_builds": 55
+            },
+            {
+              "id": 79,
+              "order_type": {
+                "Stage": {
+                  "rocket_project_id": 1,
+                  "group_index": 1,
+                  "stage_index": 0,
+                  "stage_name": "Brontosaur IV S2",
+                  "structural_mass_kg": 3500.0
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 14.967452212528572,
+              "material_cost": 3426992.538580661,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 1,
+              "waiting_for_prerequisites": true,
+              "prior_builds": 55
+            },
+            {
+              "id": 80,
+              "order_type": {
+                "RocketIntegration": {
+                  "rocket_project_id": 1,
+                  "design_id": 20001,
+                  "rocket_name": "Brontosaur IV",
+                  "total_stages": 2,
+                  "revision": 0,
+                  "rocket_flaws": [
+                    {
+                      "id": 1,
+                      "description": "Booster core separation ordnance defect",
+                      "consequence": "StageLoss",
+                      "activation_chance": 0.021193790761425815,
+                      "discovery_probability": 0.0,
+                      "discovered": false,
+                      "trigger": "PerFlight"
+                    }
+                  ]
+                }
+              },
+              "work_completed": 0.0,
+              "work_required": 43.85666299057356,
+              "material_cost": 1953726.6229040711,
+              "labor_cost": 0.0,
+              "teams_assigned": 0,
+              "floor_space_used": 2,
+              "waiting_for_prerequisites": true,
+              "prior_builds": 55
+            }
+          ],
+          "inventory": {
+            "engines": [],
+            "stages": [
+              {
+                "item_id": 65,
+                "rocket_project_id": 1,
+                "group_index": 1,
+                "stage_index": 0,
+                "stage_name": "Brontosaur IV S2",
+                "build_cost": 4985382.102590678
+              },
+              {
+                "item_id": 66,
+                "rocket_project_id": 1,
+                "group_index": 1,
+                "stage_index": 0,
+                "stage_name": "Brontosaur IV S2",
+                "build_cost": 4957952.265081321
+              },
+              {
+                "item_id": 69,
+                "rocket_project_id": 1,
+                "group_index": 1,
+                "stage_index": 0,
+                "stage_name": "Brontosaur IV S2",
+                "build_cost": 4973494.762403649
+              }
+            ],
+            "rockets": []
+          },
+          "next_order_id": 81,
+          "next_inventory_id": 70
+        },
+        "notified_manufacturing_idle": false,
+        "active_contracts": [],
+        "reputation": {
+          "success_factor": 96.4815627911168,
+          "lost_payload_factor": 0.0,
+          "drought_factor": 0.0,
+          "expiry_factor": 0.0
+        },
+        "launch_history": [],
+        "monthly_financials": [],
+        "last_launch_date": {
+          "year": 2004,
+          "month": 1,
+          "day": 1
+        },
+        "engine_build_counts": {
+          "2": 56,
+          "1": 56
+        },
+        "rocket_build_counts": {
+          "20001": 56
+        },
+        "rocket_cost_history": {
+          "20001": [
+            42630399.802063204,
+            42042277.86588192,
+            40917423.57531149,
+            40795671.8962774,
+            40387386.50584882,
+            40440358.00681796,
+            40997554.62795062,
+            40115722.56036886,
+            40009516.09802036,
+            39809821.22681402,
+            39821297.58070637,
+            40257025.58325361
+          ]
+        },
+        "engine_cost_history": {},
+        "contracted_engine_build_counts": {},
+        "auto_build_targets": {
+          "1": 4
+        },
+        "bid_rules": {}
+      },
+      "rocket_project_id": 1,
+      "design_id": 20001,
+      "failure_rate": 0.021193790761425815,
+      "scheduled_launches": []
+    }
+  ],
+  "award_history": [
+    {
+      "date": {
+        "year": 2001,
+        "month": 3,
+        "day": 4
+      },
+      "market_id": 1,
+      "contract_name": "ComSat to GEO",
+      "destination": "geo",
+      "payload_kg": 3400.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 169250000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2001,
+        "month": 4,
+        "day": 1
+      },
+      "market_id": 1,
+      "contract_name": "ComSat to GTO",
+      "destination": "gto",
+      "payload_kg": 6900.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 187800000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2001,
+        "month": 6,
+        "day": 1
+      },
+      "market_id": 1,
+      "contract_name": "RelaySat to GTO",
+      "destination": "gto",
+      "payload_kg": 6600.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 211170000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2001,
+        "month": 8,
+        "day": 1
+      },
+      "market_id": 1,
+      "contract_name": "RelaySat to GTO",
+      "destination": "gto",
+      "payload_kg": 4100.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 215800000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2001,
+        "month": 9,
+        "day": 1
+      },
+      "market_id": 1,
+      "contract_name": "BroadcastSat to GEO",
+      "destination": "geo",
+      "payload_kg": 4900.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 304910000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2002,
+        "month": 1,
+        "day": 1
+      },
+      "market_id": 1,
+      "contract_name": "BroadcastSat to GEO",
+      "destination": "geo",
+      "payload_kg": 4500.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 314300000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2002,
+        "month": 6,
+        "day": 1
+      },
+      "market_id": 1,
+      "contract_name": "RelaySat to GTO",
+      "destination": "gto",
+      "payload_kg": 6000.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 169450000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2002,
+        "month": 6,
+        "day": 1
+      },
+      "market_id": 1,
+      "contract_name": "ComSat to GTO",
+      "destination": "gto",
+      "payload_kg": 4600.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 210170000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2002,
+        "month": 8,
+        "day": 1
+      },
+      "market_id": 1,
+      "contract_name": "BroadcastSat to GTO",
+      "destination": "gto",
+      "payload_kg": 6100.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 302690000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2002,
+        "month": 9,
+        "day": 1
+      },
+      "market_id": 1,
+      "contract_name": "BroadcastSat to GTO",
+      "destination": "gto",
+      "payload_kg": 5900.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 292270000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 3,
+        "day": 4
+      },
+      "market_id": 1,
+      "contract_name": "BroadcastSat to GTO",
+      "destination": "gto",
+      "payload_kg": 5800.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 205310000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 4,
+        "day": 1
+      },
+      "market_id": 3,
+      "contract_name": "University Payload to LEO",
+      "destination": "leo",
+      "payload_kg": 100.0,
+      "outcome": {
+        "PlayerRejected": {
+          "bid": 34910000.0
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 5,
+        "day": 2
+      },
+      "market_id": 1,
+      "contract_name": "BroadcastSat to GEO",
+      "destination": "geo",
+      "payload_kg": 4800.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 291050000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 5,
+        "day": 2
+      },
+      "market_id": 3,
+      "contract_name": "CubeSat Bundle to SSO",
+      "destination": "sso",
+      "payload_kg": 300.0,
+      "outcome": {
+        "PlayerRejected": {
+          "bid": 34910000.0
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 6,
+        "day": 1
+      },
+      "market_id": 1,
+      "contract_name": "RelaySat to GTO",
+      "destination": "gto",
+      "payload_kg": 6100.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 190370000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 7,
+        "day": 2
+      },
+      "market_id": 1,
+      "contract_name": "RelaySat to GEO",
+      "destination": "geo",
+      "payload_kg": 4200.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 277510000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 7,
+        "day": 2
+      },
+      "market_id": 3,
+      "contract_name": "TechDemo to SSO",
+      "destination": "sso",
+      "payload_kg": 200.0,
+      "outcome": {
+        "PlayerRejected": {
+          "bid": 33300000.0
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 9,
+        "day": 1
+      },
+      "market_id": 3,
+      "contract_name": "CubeSat Bundle to LEO",
+      "destination": "leo",
+      "payload_kg": 500.0,
+      "outcome": {
+        "PlayerRejected": {
+          "bid": 33300000.0
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 10,
+        "day": 2
+      },
+      "market_id": 2,
+      "contract_name": "WeatherSat to LEO",
+      "destination": "leo",
+      "payload_kg": 2200.0,
+      "outcome": {
+        "PlayerWon": {
+          "amount": 33300000.0
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 11,
+        "day": 1
+      },
+      "market_id": 3,
+      "contract_name": "TechDemo to LEO",
+      "destination": "leo",
+      "payload_kg": 100.0,
+      "outcome": {
+        "PlayerRejected": {
+          "bid": 33300000.0
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 12,
+        "day": 2
+      },
+      "market_id": 1,
+      "contract_name": "RelaySat to GTO",
+      "destination": "gto",
+      "payload_kg": 6400.0,
+      "outcome": {
+        "CompetitorWon": {
+          "company": "DinoSoar",
+          "amount": 296370000.0,
+          "player_bid": null
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2003,
+        "month": 12,
+        "day": 2
+      },
+      "market_id": 3,
+      "contract_name": "University Payload to LEO",
+      "destination": "leo",
+      "payload_kg": 100.0,
+      "outcome": {
+        "PlayerRejected": {
+          "bid": 33300000.0
+        }
+      }
+    },
+    {
+      "date": {
+        "year": 2004,
+        "month": 1,
+        "day": 1
+      },
+      "market_id": 2,
+      "contract_name": "Probe to LEO",
+      "destination": "leo",
+      "payload_kg": 1500.0,
+      "outcome": {
+        "PlayerWon": {
+          "amount": 33300000.0
+        }
+      }
+    }
+  ],
+  "active_campaigns": [],
+  "next_campaign_id": 2,
+  "balance": {
+    "costs": {
+      "starting_money": 200000000.0,
+      "engineering_monthly_salary": 150000.0,
+      "engineering_hiring_cost": 150000.0,
+      "manufacturing_monthly_salary": 300000.0,
+      "manufacturing_hiring_cost": 900000.0,
+      "floor_space_cost": 5000000.0,
+      "floor_space_build_days": 30,
+      "starting_floor_space": 12,
+      "reactor_ref_material_cost": 30000000.0,
+      "resource_prices": {
+        "aluminium": 20.0,
+        "steel": 12.0,
+        "superalloys": 320.0,
+        "composites": 200.0,
+        "wiring": 600.0,
+        "electronics": 80000.0,
+        "plumbing": 6000.0,
+        "solid_propellant": 60.0,
+        "heu": 400000.0
+      }
+    },
+    "work": {
+      "engine_design_base_days": 120.0,
+      "rocket_design_base_days": 60.0,
+      "engine_build_base_days": 90.0,
+      "engine_design_complexity_exponent": 2.5,
+      "rocket_design_complexity_exponent": 2.5,
+      "engine_build_complexity_exponent": 1.5,
+      "engine_build_mass_exponent": 0.6,
+      "engine_build_mass_anchor_kg": 1150.0,
+      "engine_design_scale_exponent": 0.4,
+      "stage_build_base_days": 60.0,
+      "stage_build_mass_exponent": 0.75,
+      "rocket_integration_base_days": 20.0,
+      "rocket_integration_days_per_stage": 30.0,
+      "learning_curve_exponent": -0.15,
+      "rocket_modification_work_fraction": 0.1,
+      "flaw_revision_work": 30.0,
+      "testing_cycle_work": 30.0
+    },
+    "markets": {
+      "deadline_min_days": 60,
+      "deadline_max_days": 180,
+      "payment_variance_min": 0.8,
+      "payment_variance_max": 1.2,
+      "bid_window_days": 30,
+      "rep_scale": 10.0,
+      "campaign_miss_rep_penalty": 2.0,
+      "campaign_max_misses": 2,
+      "campaign_cancel_rep_penalty": 4.0,
+      "archetypes": [
+        {
+          "key": "market_geo_comsats",
+          "presence_probability": 1.0,
+          "volume_mult_range": [
+            1.0,
+            1.0
+          ],
+          "rate_mult_range": [
+            1.0,
+            1.0
+          ],
+          "annual_growth_range": [
+            -0.02,
+            0.02
+          ],
+          "weight_tilt_strength": 0.0,
+          "campaign": {
+            "spawn_chance_per_month": 0.03,
+            "mission_count_range": [
+              3,
+              5
+            ],
+            "interval_days_range": [
+              60,
+              120
+            ],
+            "discount_range": [
+              0.1,
+              0.2
+            ],
+            "program_names": [
+              "Meridian Constellation",
+              "EchoRelay Fleet",
+              "PanAm Sat Series",
+              "Orion Direct Broadcast",
+              "Concordia Comms Block"
+            ],
+            "bid_window_days": 40
+          },
+          "template": {
+            "id": 1,
+            "name": "GEO Communications",
+            "description": "Commercial geostationary communications satellites",
+            "active": true,
+            "base_volume": 1.5,
+            "destinations": [
+              {
+                "location_id": "gto",
+                "display_name": "GTO",
+                "min_payload_kg": 2000.0,
+                "max_payload_kg": 7000.0,
+                "rate_per_kg": 40000.0,
+                "weight": 0.6
+              },
+              {
+                "location_id": "geo",
+                "display_name": "GEO",
+                "min_payload_kg": 2000.0,
+                "max_payload_kg": 5000.0,
+                "rate_per_kg": 80000.0,
+                "weight": 0.4
+              }
+            ],
+            "rep_target": 50.0,
+            "w_cost": 0.6,
+            "w_rep": 0.4,
+            "budget_tolerance": 1.2,
+            "economy_sensitivity": "Moderate",
+            "name_prefixes": [
+              "ComSat",
+              "BroadcastSat",
+              "RelaySat"
+            ],
+            "modifiers": [],
+            "annual_growth": 0.0,
+            "activation_date": null,
+            "deadline_days": [
+              90,
+              240
+            ],
+            "failure_severity": 1.2,
+            "cadence": "Steady",
+            "volume_accumulator": 0.0
+          }
+        },
+        {
+          "key": "market_gov_science",
+          "presence_probability": 1.0,
+          "volume_mult_range": [
+            0.8,
+            1.3
+          ],
+          "rate_mult_range": [
+            0.9,
+            1.15
+          ],
+          "annual_growth_range": [
+            -0.01,
+            0.03
+          ],
+          "weight_tilt_strength": 0.15,
+          "template": {
+            "id": 2,
+            "name": "Government Science",
+            "description": "NASA, ESA and other agency science missions",
+            "active": true,
+            "base_volume": 0.3,
+            "destinations": [
+              {
+                "location_id": "leo",
+                "display_name": "LEO",
+                "min_payload_kg": 500.0,
+                "max_payload_kg": 5000.0,
+                "rate_per_kg": 50000.0,
+                "weight": 0.3
+              },
+              {
+                "location_id": "sso",
+                "display_name": "SSO",
+                "min_payload_kg": 500.0,
+                "max_payload_kg": 3000.0,
+                "rate_per_kg": 60000.0,
+                "weight": 0.3
+              },
+              {
+                "location_id": "l1",
+                "display_name": "L1",
+                "min_payload_kg": 200.0,
+                "max_payload_kg": 3000.0,
+                "rate_per_kg": 80000.0,
+                "weight": 0.15
+              },
+              {
+                "location_id": "l2",
+                "display_name": "L2",
+                "min_payload_kg": 200.0,
+                "max_payload_kg": 3000.0,
+                "rate_per_kg": 80000.0,
+                "weight": 0.15
+              },
+              {
+                "location_id": "lunar_orbit",
+                "display_name": "Lunar Orbit",
+                "min_payload_kg": 200.0,
+                "max_payload_kg": 2000.0,
+                "rate_per_kg": 120000.0,
+                "weight": 0.1
+              }
+            ],
+            "rep_target": 40.0,
+            "w_cost": 0.4,
+            "w_rep": 0.6,
+            "budget_tolerance": 1.3,
+            "economy_sensitivity": "Low",
+            "name_prefixes": [
+              "Observatory",
+              "SciSat",
+              "Probe",
+              "WeatherSat"
+            ],
+            "modifiers": [],
+            "annual_growth": 0.0,
+            "activation_date": null,
+            "deadline_days": [
+              120,
+              360
+            ],
+            "failure_severity": 0.7,
+            "cadence": "Steady",
+            "volume_accumulator": 0.0
+          }
+        },
+        {
+          "key": "market_rideshare",
+          "presence_probability": 1.0,
+          "volume_mult_range": [
+            1.0,
+            1.0
+          ],
+          "rate_mult_range": [
+            1.0,
+            1.0
+          ],
+          "annual_growth_range": [
+            0.02,
+            0.08
+          ],
+          "weight_tilt_strength": 0.0,
+          "template": {
+            "id": 3,
+            "name": "Rideshare / Smallsat",
+            "description": "Universities, startups, and small agencies launching CubeSats and microsats",
+            "active": true,
+            "base_volume": 0.5,
+            "destinations": [
+              {
+                "location_id": "leo",
+                "display_name": "LEO",
+                "min_payload_kg": 50.0,
+                "max_payload_kg": 500.0,
+                "rate_per_kg": 15000.0,
+                "weight": 0.6
+              },
+              {
+                "location_id": "sso",
+                "display_name": "SSO",
+                "min_payload_kg": 50.0,
+                "max_payload_kg": 300.0,
+                "rate_per_kg": 30000.0,
+                "weight": 0.4
+              }
+            ],
+            "rep_target": -10.0,
+            "w_cost": 0.8,
+            "w_rep": 0.2,
+            "budget_tolerance": 1.15,
+            "economy_sensitivity": "Moderate",
+            "name_prefixes": [
+              "CubeSat Bundle",
+              "University Payload",
+              "TechDemo"
+            ],
+            "modifiers": [],
+            "annual_growth": 0.0,
+            "activation_date": null,
+            "deadline_days": [
+              60,
+              150
+            ],
+            "failure_severity": 1.0,
+            "cadence": "Steady",
+            "volume_accumulator": 0.0
+          }
+        },
+        {
+          "key": "market_cots",
+          "presence_probability": 0.7,
+          "volume_mult_range": [
+            0.8,
+            1.3
+          ],
+          "rate_mult_range": [
+            0.9,
+            1.1
+          ],
+          "annual_growth_range": [
+            0.0,
+            0.05
+          ],
+          "weight_tilt_strength": 0.0,
+          "emergence": {
+            "year_range": [
+              2004,
+              2008
+            ],
+            "flavor": "NASA announces Commercial Orbital Transportation Services program",
+            "cross_effects": []
+          },
+          "campaign": {
+            "spawn_chance_per_month": 0.06,
+            "mission_count_range": [
+              4,
+              8
+            ],
+            "interval_days_range": [
+              45,
+              90
+            ],
+            "discount_range": [
+              0.15,
+              0.25
+            ],
+            "program_names": [
+              "Commercial Resupply Cycle A",
+              "Commercial Resupply Cycle B",
+              "Station Logistics Block",
+              "Crew & Cargo Demonstration"
+            ],
+            "bid_window_days": 45
+          },
+          "template": {
+            "id": 4,
+            "name": "NASA Crew & Cargo",
+            "description": "ISS resupply and crew rotation under commercial contract. Crew-adjacent missions: failures end careers",
+            "active": false,
+            "base_volume": 0.5,
+            "destinations": [
+              {
+                "location_id": "leo",
+                "display_name": "LEO",
+                "min_payload_kg": 2000.0,
+                "max_payload_kg": 6000.0,
+                "rate_per_kg": 40000.0,
+                "weight": 1.0
+              }
+            ],
+            "rep_target": 60.0,
+            "w_cost": 0.5,
+            "w_rep": 0.5,
+            "budget_tolerance": 1.25,
+            "economy_sensitivity": "Low",
+            "name_prefixes": [
+              "ISS Resupply",
+              "Station Cargo",
+              "Crew Rotation"
+            ],
+            "modifiers": [],
+            "annual_growth": 0.0,
+            "activation_date": null,
+            "deadline_days": [
+              90,
+              270
+            ],
+            "failure_severity": 2.0,
+            "cadence": "Steady",
+            "volume_accumulator": 0.0
+          }
+        },
+        {
+          "key": "market_leo_constellation",
+          "presence_probability": 0.6,
+          "volume_mult_range": [
+            0.7,
+            1.5
+          ],
+          "rate_mult_range": [
+            0.85,
+            1.15
+          ],
+          "annual_growth_range": [
+            0.04,
+            0.12
+          ],
+          "weight_tilt_strength": 0.1,
+          "exclusive_group": "constellation",
+          "emergence": {
+            "year_range": [
+              2008,
+              2015
+            ],
+            "flavor": "Major LEO broadband constellation announced — GEO market share declining",
+            "cross_effects": [
+              {
+                "target": 1,
+                "modifier": {
+                  "id": "constellation_competition",
+                  "description": "LEO constellations taking market share",
+                  "volume_mult": 0.6,
+                  "rate_mult": 0.9,
+                  "end_date": null
+                }
+              }
+            ]
+          },
+          "campaign": {
+            "spawn_chance_per_month": 0.06,
+            "mission_count_range": [
+              4,
+              8
+            ],
+            "interval_days_range": [
+              45,
+              90
+            ],
+            "discount_range": [
+              0.1,
+              0.2
+            ],
+            "program_names": [
+              "Starweave Deployment",
+              "Aurora Broadband Shell",
+              "Loom Constellation Build-out",
+              "Skynet Mesh Phase 1"
+            ],
+            "bid_window_days": 40
+          },
+          "template": {
+            "id": 5,
+            "name": "LEO Constellation",
+            "description": "Broadband internet constellation deployment",
+            "active": false,
+            "base_volume": 1.0,
+            "destinations": [
+              {
+                "location_id": "leo",
+                "display_name": "LEO",
+                "min_payload_kg": 500.0,
+                "max_payload_kg": 5000.0,
+                "rate_per_kg": 15000.0,
+                "weight": 0.6
+              },
+              {
+                "location_id": "sso",
+                "display_name": "SSO",
+                "min_payload_kg": 500.0,
+                "max_payload_kg": 3000.0,
+                "rate_per_kg": 20000.0,
+                "weight": 0.4
+              }
+            ],
+            "rep_target": 20.0,
+            "w_cost": 0.8,
+            "w_rep": 0.2,
+            "budget_tolerance": 1.15,
+            "economy_sensitivity": "High",
+            "name_prefixes": [
+              "Constellation Batch",
+              "LEO Deploy",
+              "Network Sat"
+            ],
+            "modifiers": [],
+            "annual_growth": 0.0,
+            "activation_date": null,
+            "deadline_days": [
+              60,
+              180
+            ],
+            "failure_severity": 1.0,
+            "cadence": {
+              "Burst": {
+                "burst_chance": 0.2
+              }
+            },
+            "volume_accumulator": 0.0
+          }
+        },
+        {
+          "key": "market_meo_constellation",
+          "presence_probability": 0.3,
+          "volume_mult_range": [
+            0.7,
+            1.4
+          ],
+          "rate_mult_range": [
+            0.9,
+            1.1
+          ],
+          "annual_growth_range": [
+            0.03,
+            0.1
+          ],
+          "weight_tilt_strength": 0.0,
+          "exclusive_group": "constellation",
+          "emergence": {
+            "year_range": [
+              2008,
+              2015
+            ],
+            "flavor": "MEO navigation constellation contracts opening up — GEO demand softening",
+            "cross_effects": [
+              {
+                "target": 1,
+                "modifier": {
+                  "id": "constellation_competition",
+                  "description": "MEO constellations taking market share",
+                  "volume_mult": 0.7,
+                  "rate_mult": 0.95,
+                  "end_date": null
+                }
+              }
+            ]
+          },
+          "template": {
+            "id": 6,
+            "name": "MEO Constellation",
+            "description": "Navigation and communications constellation in medium Earth orbit",
+            "active": false,
+            "base_volume": 0.7,
+            "destinations": [
+              {
+                "location_id": "meo",
+                "display_name": "MEO",
+                "min_payload_kg": 500.0,
+                "max_payload_kg": 3000.0,
+                "rate_per_kg": 25000.0,
+                "weight": 1.0
+              }
+            ],
+            "rep_target": 30.0,
+            "w_cost": 0.8,
+            "w_rep": 0.2,
+            "budget_tolerance": 1.15,
+            "economy_sensitivity": "High",
+            "name_prefixes": [
+              "NavSat Batch",
+              "MEO Deploy",
+              "Constellation Unit"
+            ],
+            "modifiers": [],
+            "annual_growth": 0.0,
+            "activation_date": null,
+            "deadline_days": [
+              90,
+              210
+            ],
+            "failure_severity": 1.0,
+            "cadence": {
+              "Burst": {
+                "burst_chance": 0.2
+              }
+            },
+            "volume_accumulator": 0.0
+          }
+        },
+        {
+          "key": "market_nssl",
+          "presence_probability": 0.5,
+          "volume_mult_range": [
+            0.8,
+            1.2
+          ],
+          "rate_mult_range": [
+            0.9,
+            1.2
+          ],
+          "annual_growth_range": [
+            0.0,
+            0.04
+          ],
+          "weight_tilt_strength": 0.1,
+          "emergence": {
+            "year_range": [
+              2010,
+              2018
+            ],
+            "flavor": "National security space launch program opens to new providers",
+            "cross_effects": []
+          },
+          "template": {
+            "id": 7,
+            "name": "National Security",
+            "description": "Defense and intelligence satellite launches. Irreplaceable payloads; failures draw hearings",
+            "active": false,
+            "base_volume": 0.3,
+            "destinations": [
+              {
+                "location_id": "leo",
+                "display_name": "LEO",
+                "min_payload_kg": 1000.0,
+                "max_payload_kg": 10000.0,
+                "rate_per_kg": 60000.0,
+                "weight": 0.3
+              },
+              {
+                "location_id": "gto",
+                "display_name": "GTO",
+                "min_payload_kg": 2000.0,
+                "max_payload_kg": 7000.0,
+                "rate_per_kg": 80000.0,
+                "weight": 0.25
+              },
+              {
+                "location_id": "geo",
+                "display_name": "GEO",
+                "min_payload_kg": 2000.0,
+                "max_payload_kg": 5000.0,
+                "rate_per_kg": 150000.0,
+                "weight": 0.2
+              },
+              {
+                "location_id": "sso",
+                "display_name": "SSO",
+                "min_payload_kg": 1000.0,
+                "max_payload_kg": 5000.0,
+                "rate_per_kg": 70000.0,
+                "weight": 0.25
+              }
+            ],
+            "rep_target": 80.0,
+            "w_cost": 0.35,
+            "w_rep": 0.65,
+            "budget_tolerance": 1.4,
+            "economy_sensitivity": "None",
+            "name_prefixes": [
+              "NatSec Payload",
+              "Defense Sat",
+              "Classified Mission"
+            ],
+            "modifiers": [],
+            "annual_growth": 0.0,
+            "activation_date": null,
+            "deadline_days": [
+              120,
+              360
+            ],
+            "failure_severity": 1.5,
+            "cadence": {
+              "Lumpy": {
+                "quiet_chance": 0.5
+              }
+            },
+            "volume_accumulator": 0.0
+          }
+        },
+        {
+          "key": "market_earth_obs",
+          "presence_probability": 0.7,
+          "volume_mult_range": [
+            0.7,
+            1.4
+          ],
+          "rate_mult_range": [
+            0.85,
+            1.15
+          ],
+          "annual_growth_range": [
+            0.02,
+            0.1
+          ],
+          "weight_tilt_strength": 0.2,
+          "emergence": {
+            "year_range": [
+              2005,
+              2012
+            ],
+            "flavor": "Commercial Earth observation market taking off",
+            "cross_effects": []
+          },
+          "template": {
+            "id": 8,
+            "name": "Earth Observation",
+            "description": "Imaging, radar, and environmental monitoring satellites",
+            "active": false,
+            "base_volume": 0.5,
+            "destinations": [
+              {
+                "location_id": "leo",
+                "display_name": "LEO",
+                "min_payload_kg": 100.0,
+                "max_payload_kg": 1000.0,
+                "rate_per_kg": 25000.0,
+                "weight": 0.4
+              },
+              {
+                "location_id": "sso",
+                "display_name": "SSO",
+                "min_payload_kg": 100.0,
+                "max_payload_kg": 800.0,
+                "rate_per_kg": 35000.0,
+                "weight": 0.6
+              }
+            ],
+            "rep_target": 10.0,
+            "w_cost": 0.75,
+            "w_rep": 0.25,
+            "budget_tolerance": 1.15,
+            "economy_sensitivity": "Moderate",
+            "name_prefixes": [
+              "ImagingSat",
+              "RadarSat",
+              "EarthWatch"
+            ],
+            "modifiers": [],
+            "annual_growth": 0.0,
+            "activation_date": null,
+            "deadline_days": [
+              60,
+              180
+            ],
+            "failure_severity": 1.0,
+            "cadence": {
+              "Lumpy": {
+                "quiet_chance": 0.4
+              }
+            },
+            "volume_accumulator": 0.0
+          }
+        }
+      ]
+    },
+    "flaws": {
+      "count_stddev": 1.5,
+      "performance_degradation_weight": 0.5,
+      "engine_loss_weight": 0.35,
+      "degradation_min": 0.03,
+      "degradation_max": 0.15,
+      "rocket_endurance_fraction": 0.3,
+      "reactor_endurance_fraction": 0.3,
+      "improvement_discovery_chance": 0.08,
+      "reactor_improvement_discovery_chance": 0.08,
+      "improvement_decay": 0.7,
+      "modification_flaw_prob": 0.1,
+      "flaw_discovery_exponent": 2.0
+    },
+    "reputation": {
+      "success_gain": 20.0,
+      "failure_penalty": 20.0,
+      "lost_payload_penalty": 50.0,
+      "partial_failure_penalty": 10.0,
+      "success_decay": 0.8,
+      "lost_payload_decay": 0.85,
+      "expiry_decay": 0.8,
+      "expiry_penalty": 10.0,
+      "drought_penalty": 10.0,
+      "reactor_meu_min_reputation": 60.0,
+      "reactor_heu_min_reputation": 150.0
+    },
+    "competitor": {
+      "enabled": true,
+      "name": "DinoSoar",
+      "production_lines": 12,
+      "floor_space": 40,
+      "starting_money": 3000000000.0,
+      "initial_stock": 3,
+      "auto_build_target": 4,
+      "prior_builds": 40,
+      "catalog_cost": 39000000.0,
+      "margin_min": 2.6,
+      "margin_max": 7.2,
+      "bid_floor": 60000000.0,
+      "bid_jitter": 0.05,
+      "block_discount": 0.1,
+      "launch_lead_days": 30,
+      "failure_base": 0.003,
+      "failure_spread": 0.047,
+      "failure_skew": 8.0,
+      "capability": [
+        {
+          "location_id": "leo",
+          "max_payload_kg": 26000.0
+        },
+        {
+          "location_id": "sso",
+          "max_payload_kg": 20000.0
+        },
+        {
+          "location_id": "gto",
+          "max_payload_kg": 13500.0
+        },
+        {
+          "location_id": "geo",
+          "max_payload_kg": 6600.0
+        },
+        {
+          "location_id": "meo",
+          "max_payload_kg": 10000.0
+        },
+        {
+          "location_id": "l1",
+          "max_payload_kg": 9000.0
+        },
+        {
+          "location_id": "l2",
+          "max_payload_kg": 9000.0
+        },
+        {
+          "location_id": "lunar_orbit",
+          "max_payload_kg": 9000.0
+        }
+      ]
+    },
+    "engine_materials": {
+      "kerolox": 1.0,
+      "methalox": 1.0,
+      "hydrolox": 3.0,
+      "hypergolic": 1.0,
+      "solid": 1.0,
+      "xenon": 1.0,
+      "photon": 1.0,
+      "hydrogen": 1.0,
+      "pressure_fed": 0.8,
+      "gas_generator": 1.0,
+      "expander": 1.3,
+      "staged_combustion": 1.6,
+      "full_flow": 2.0,
+      "nuclear_thermal": 1.0,
+      "electric_propulsion": 1.0,
+      "solar_sail": 1.0
+    }
+  }
+}
