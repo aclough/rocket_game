@@ -174,10 +174,17 @@ fn sanitize_name(company_name: &str) -> String {
         .collect()
 }
 
-/// Default save directory.
-pub fn save_dir() -> std::path::PathBuf {
+/// Root data directory — everything the game writes lives under here.
+///
+/// One place to change when Task 6 makes this platform-aware.
+pub fn data_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    Path::new(&home).join(".rocket_tycoon").join("saves")
+    Path::new(&home).join(".rocket_tycoon")
+}
+
+/// Default save directory.
+pub fn save_dir() -> PathBuf {
+    data_dir().join("saves")
 }
 
 /// Build a save file path for a company name.

@@ -874,7 +874,7 @@ impl App {
 
     /// Run the main application loop.
     pub fn run(&mut self) -> io::Result<()> {
-        crate::crash::install_hook();
+        crate::report::install_hook();
 
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -897,9 +897,9 @@ impl App {
         match caught {
             Ok(result) => result,
             Err(_) => {
-                let panic_text = crate::crash::take_panic_text()
+                let panic_text = crate::report::take_panic_text()
                     .unwrap_or_else(|| "panic with no captured message".into());
-                eprint!("{}", crate::crash::handle_panic(&self.game, &panic_text));
+                eprint!("{}", crate::report::handle_panic(&self.game, &panic_text));
                 Err(io::Error::other("the game hit a bug and stopped"))
             }
         }
@@ -986,6 +986,7 @@ impl App {
                 self.autosave();
                 self.running = false;
             }
+            KeyCode::F(12) => self.write_report(),
             KeyCode::Char('?') => {
                 self.enter_modal(InputMode::Help {
                     scope: HelpScope::Tab(self.active_tab),
@@ -3521,6 +3522,16 @@ impl App {
         if let Err(e) = save::autosave(&self.game) {
             self.status_message = Some(format!("Autosave failed: {e}"));
         }
+    }
+
+    /// Write a session report (F12). Tells the player exactly where it
+    /// went — a diagnostic they can't find is a diagnostic that doesn't
+    /// exist.
+    fn write_report(&mut self) {
+        self.status_message = Some(match crate::report::write_session_report(&self.game) {
+            Ok(path) => format!("Report written to {}", path.display()),
+            Err(e) => format!("Could not write report: {e}"),
+        });
     }
 
     fn save_game(&mut self) {

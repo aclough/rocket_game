@@ -50,6 +50,7 @@ pub const GLOBAL: &[KeyBinding] = &[
     always("↑ ↓", "Move the selection (or scroll)"),
     always("S", "Save the game"),
     always("?", "Show this help"),
+    always("F12", "Write a bug report (state summary + a save to attach)"),
     always("Q", "Quit"),
 ];
 

@@ -158,6 +158,10 @@ Four separate things bundled under one roadmap bullet:
 
 ### 2.4 Session / bug report dump (Task 5)
 
+*(Built. `crash.rs` was renamed `report.rs` — it serves both the crash
+and on-demand paths, which produce the same document apart from the
+panic section. Git hash comes from a new `build.rs`.)*
+
 One keypress (proposal: `F12`, also invoked by the panic hook) writes
 `~/.rocket_tycoon/reports/<company>-<date>.txt` containing:
 
@@ -606,7 +610,7 @@ bite before Task 3, so there's time to reverse any of them:
 - [x] Task 2 — help pane
 - [x] Task 3 — onboarding & automation
 - [x] Task 4 — save robustness
-- [ ] Task 5 — session/bug report dump
+- [x] Task 5 — session/bug report dump
 - [ ] Task 6 — Windows support + CI
 - [ ] → friends round on Discord
 - [ ] Task 7 — feedback fixes
