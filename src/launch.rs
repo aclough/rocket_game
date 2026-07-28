@@ -266,7 +266,10 @@ pub fn simulate_launch(
         }
     }
 
-    // Apply Isp penalty for overexpansion on first stage group (sea level)
+    // Apply Isp penalty for overexpansion on first stage group (sea level).
+    // Deliberately *not* recorded as an activation: this is nozzle geometry,
+    // not a flaw, and the designer's "Eff dV" column already shows the
+    // sea-level figure, so it is visible before the player commits.
     if !degraded.stage_groups.is_empty() {
         for stage in degraded.stage_groups[0].iter_mut() {
             let frac = stage.engine.isp_fraction_at(ambient);
@@ -280,26 +283,19 @@ pub fn simulate_launch(
     // Compute degraded delta-v
     let degraded_dv = degraded.total_delta_v(payload_kg);
 
-    // Determine outcome
+    // Determine outcome. Anything short of nominal names what went wrong:
+    // a shortfall with no attribution tells the player nothing they can act
+    // on, and the reason built here is the one carried all the way to the
+    // arrival event and the launch record.
     let outcome = if degraded_dv >= required_dv {
         LaunchOutcome::Success
-    } else if degraded_dv >= required_dv * 0.95 {
-        let shortfall = ((1.0 - degraded_dv / required_dv) * 100.0).round();
-        LaunchOutcome::PartialFailure {
-            reason: format!("{}% delta-v shortfall", shortfall),
-        }
     } else {
-        // Check if it was a stage loss
-        let stage_lost = activations.iter().any(|a| matches!(a.consequence, FlawConsequence::StageLoss));
-        if stage_lost {
-            LaunchOutcome::Failure {
-                reason: "Stage loss during flight".to_string(),
-            }
+        let shortfall = ((1.0 - degraded_dv / required_dv) * 100.0).round();
+        let reason = describe_shortfall(&activations, shortfall);
+        if degraded_dv >= required_dv * 0.95 {
+            LaunchOutcome::PartialFailure { reason }
         } else {
-            let shortfall = ((1.0 - degraded_dv / required_dv) * 100.0).round();
-            LaunchOutcome::Failure {
-                reason: format!("{}% delta-v shortfall", shortfall),
-            }
+            LaunchOutcome::Failure { reason }
         }
     };
 
@@ -311,6 +307,42 @@ pub fn simulate_launch(
         rocket_flaw_discoveries,
         contracted_flaw_discoveries,
         flaw_rolled_groups: (0..groups_needed).collect(),
+    }
+}
+
+/// Rank an activation by how much of the shortfall it plausibly explains,
+/// so the launch report leads with the thing worth looking at rather than
+/// whichever flaw happened to roll first.
+fn severity(activation: &FlawActivation) -> f64 {
+    match activation.consequence {
+        FlawConsequence::StageLoss => f64::INFINITY,
+        FlawConsequence::EngineLoss => 1.0e6,
+        FlawConsequence::PerformanceDegradation(frac) => frac,
+    }
+}
+
+/// Build the reason text for a launch that came up short, naming its most
+/// severe cause. With nothing activated the vehicle simply never had the
+/// delta-v, which is a design problem and worth saying so plainly.
+fn describe_shortfall(activations: &[FlawActivation], shortfall: f64) -> String {
+    let primary = activations.iter().max_by(|a, b| {
+        severity(a).partial_cmp(&severity(b)).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    match primary {
+        Some(cause) if activations.len() > 1 => format!(
+            "{} (+{} more) — {}% delta-v shortfall",
+            cause.flaw_description,
+            activations.len() - 1,
+            shortfall,
+        ),
+        Some(cause) => format!(
+            "{} — {}% delta-v shortfall",
+            cause.flaw_description, shortfall,
+        ),
+        None => format!(
+            "Design {}% short of the required delta-v (no flaws activated)",
+            shortfall,
+        ),
     }
 }
 
@@ -523,6 +555,78 @@ mod tests {
         assert_eq!(result.flaws_activated[0].flaw_description, "Turbopump seal failure");
         // Should have discovered the flaw
         assert_eq!(result.engine_flaw_discoveries.len(), 1);
+    }
+
+    /// A launch that comes up short has to say *what* came up short. The
+    /// old text was a bare percentage, or "degraded performance" when the
+    /// list happened to be empty — neither tells the player what to fix.
+    #[test]
+    fn shortfall_reasons_name_their_cause() {
+        let degradation = |desc: &str, frac: f64| FlawActivation {
+            flaw_description: desc.into(),
+            consequence: FlawConsequence::PerformanceDegradation(frac),
+            engine_name: "Lifter".into(),
+        };
+
+        // Nothing activated: the vehicle simply never had the delta-v.
+        let reason = describe_shortfall(&[], 4.0);
+        assert!(reason.contains("Design 4% short"), "got {reason:?}");
+        assert!(!reason.contains("degraded performance"), "got {reason:?}");
+
+        // One cause: named, with the shortfall alongside it.
+        let reason = describe_shortfall(&[degradation("Turbopump vibration", 0.05)], 3.0);
+        assert_eq!(reason, "Turbopump vibration — 3% delta-v shortfall");
+
+        // Several: lead with the worst, and admit there were others.
+        let reason = describe_shortfall(&[
+            degradation("Minor chatter", 0.01),
+            degradation("Turbopump vibration", 0.20),
+        ], 3.0);
+        assert!(reason.starts_with("Turbopump vibration"), "got {reason:?}");
+        assert!(reason.contains("+1 more"), "got {reason:?}");
+
+        // Losing hardware outranks any performance hit, however large.
+        let reason = describe_shortfall(&[
+            degradation("Minor chatter", 0.9),
+            FlawActivation {
+                flaw_description: "Engine shutdown".into(),
+                consequence: FlawConsequence::EngineLoss,
+                engine_name: "Lifter".into(),
+            },
+        ], 3.0);
+        assert!(reason.starts_with("Engine shutdown"), "got {reason:?}");
+    }
+
+    /// The reason the sim computes is the one the player must eventually
+    /// read, so it has to name the flaw rather than restate the arithmetic.
+    #[test]
+    fn a_guaranteed_flaw_is_named_in_the_outcome_reason() {
+        let design = make_design();
+        let flaw = Flaw {
+            id: FlawId(1),
+            description: "Turbopump seal failure".into(),
+            consequence: FlawConsequence::PerformanceDegradation(0.5),
+            activation_chance: 1.0,
+            discovery_probability: 0.5,
+            discovered: false, trigger: FlawTrigger::PerFlight,
+        };
+        let rp = make_rocket_project(design.clone(), vec![]);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        const PAYLOAD_KG: f64 = 5_000.0;
+        // Heavy enough that the first stage losing half its performance
+        // actually costs the vehicle orbit rather than eating into margin.
+        let result = simulate_launch(
+            &design, "leo", PAYLOAD_KG,
+            &[make_engine_project(1, vec![flaw]), make_engine_project(2, vec![])],
+            &rp.flaws, &[], &mut rng,
+        );
+
+        let reason = match &result.outcome {
+            LaunchOutcome::PartialFailure { reason } | LaunchOutcome::Failure { reason } => reason,
+            LaunchOutcome::Success => panic!("a 50% performance loss should not fly nominally"),
+        };
+        assert!(reason.contains("Turbopump seal failure"), "got {reason:?}");
     }
 
     #[test]

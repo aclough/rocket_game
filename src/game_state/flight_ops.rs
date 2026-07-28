@@ -308,7 +308,10 @@ impl GameState {
             flaws_activated: sim.flaws_activated,
             launch_date: self.date,
             persist,
-            launch_partial: matches!(sim.outcome, LaunchOutcome::PartialFailure { .. }),
+            launch_partial: match &sim.outcome {
+                LaunchOutcome::PartialFailure { reason } => Some(reason.clone()),
+                _ => None,
+            },
             flaw_rolled_groups: sim.flaw_rolled_groups,
             reactor_flaws_rolled: false,
         };
@@ -896,7 +899,8 @@ impl GameState {
         events.push(evt);
 
         // Determine outcome based on launch sim result (stored in flight)
-        let is_partial = flight.launch_partial;
+        let partial_reason = flight.launch_partial.clone();
+        let is_partial = partial_reason.is_some();
 
         if is_partial {
             let manifest: Vec<crate::contract::ContractId> = flight.payloads.iter()
@@ -963,10 +967,7 @@ impl GameState {
         }
 
         // Generate outcome event
-        let outcome = if is_partial {
-            let reason = flight.flaws_activated.first()
-                .map(|f| f.flaw_description.clone())
-                .unwrap_or_else(|| "degraded performance".to_string());
+        let outcome = if let Some(reason) = partial_reason {
             let evt = GameEvent::LaunchPartialFailure {
                 rocket_name: flight.rocket_name.clone(),
                 reason: reason.clone(),
@@ -1112,7 +1113,7 @@ impl GameState {
             flaws_activated: vec![],
             launch_date: self.date,
             persist: true, // spacecraft flights always persist
-            launch_partial: false,
+            launch_partial: None,
             flaw_rolled_groups: std::collections::HashSet::new(),
             reactor_flaws_rolled: false,
         };

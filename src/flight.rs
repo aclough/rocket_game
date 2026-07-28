@@ -135,9 +135,13 @@ pub struct Flight {
     /// Whether to persist as a Spacecraft on arrival.
     #[serde(default)]
     pub persist: bool,
-    /// Whether the launch sim determined a partial failure (degraded dv near required).
-    #[serde(default)]
-    pub launch_partial: bool,
+    /// Why the launch sim called this a partial failure (degraded dv near
+    /// required), or `None` for a nominal ascent. This is the *only* record
+    /// of the reason — arrival reports it verbatim rather than guessing a
+    /// cause from `flaws_activated`, which by then also holds mid-flight
+    /// activations that had nothing to do with the ascent.
+    #[serde(default, deserialize_with = "de_launch_partial")]
+    pub launch_partial: Option<String>,
     /// Stage groups that have already had flaws rolled (to avoid rolling per-leg).
     #[serde(default)]
     pub flaw_rolled_groups: std::collections::HashSet<usize>,
@@ -148,6 +152,31 @@ pub struct Flight {
     #[serde(default)]
     pub reactor_flaws_rolled: bool,
 }
+
+/// Accept both shapes of `Flight::launch_partial`: the pre-M5 `bool` and
+/// the current `Option<String>`. A save written before the reason was
+/// carried has no better answer than the text arrival used to synthesize,
+/// so a legacy `true` maps to exactly that — an old flight already in
+/// transit keeps its partial status and its half payment.
+fn de_launch_partial<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        Legacy(bool),
+        Reason(Option<String>),
+    }
+    Ok(match Either::deserialize(d)? {
+        Either::Legacy(true) => Some(LEGACY_PARTIAL_REASON.to_string()),
+        Either::Legacy(false) => None,
+        Either::Reason(reason) => reason,
+    })
+}
+
+/// The text arrival synthesized before the reason was carried on the flight.
+pub const LEGACY_PARTIAL_REASON: &str = "degraded performance";
 
 /// Sub-phase of the current leg, used for status display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -526,7 +555,7 @@ mod tests {
             flaws_activated: vec![],
             launch_date: crate::calendar::GameDate::new(2001, 1, 1),
             persist: false,
-            launch_partial: false,
+            launch_partial: None,
             flaw_rolled_groups: std::collections::HashSet::new(),
             reactor_flaws_rolled: false,
         };
@@ -553,6 +582,38 @@ mod tests {
         let v = serde_json::to_value(&flight).unwrap();
         let back: Flight = serde_json::from_value(v).unwrap();
         assert_eq!(back.company, CompanyRef::Competitor(0));
+    }
+
+    /// `launch_partial` changed from `bool` to `Option<String>` when the
+    /// launch sim's reason started being carried through to arrival. Saves
+    /// written with either shape must still load, and a legacy `true` must
+    /// stay partial — otherwise an in-transit flight quietly upgrades itself
+    /// to a full success and pays the player twice what it should.
+    #[test]
+    fn launch_partial_reads_both_the_old_bool_and_the_new_reason() {
+        let flight = make_two_leg_flight();
+        let mut v = serde_json::to_value(&flight).unwrap();
+
+        for (legacy, expected) in [
+            (serde_json::json!(true), Some(LEGACY_PARTIAL_REASON.to_string())),
+            (serde_json::json!(false), None),
+        ] {
+            v.as_object_mut().unwrap().insert("launch_partial".into(), legacy);
+            let back: Flight = serde_json::from_value(v.clone()).unwrap();
+            assert_eq!(back.launch_partial, expected);
+        }
+
+        // A save with the field missing entirely predates it and is nominal.
+        v.as_object_mut().unwrap().remove("launch_partial");
+        let back: Flight = serde_json::from_value(v).unwrap();
+        assert_eq!(back.launch_partial, None);
+
+        // And the current shape round-trips its reason verbatim.
+        let mut flight = make_two_leg_flight();
+        flight.launch_partial = Some("Turbopump seal failure — 3% delta-v shortfall".into());
+        let v = serde_json::to_value(&flight).unwrap();
+        let back: Flight = serde_json::from_value(v).unwrap();
+        assert_eq!(back.launch_partial, flight.launch_partial);
     }
 
     /// Build a 2-leg flight (Earth Surface -> LEO -> GTO) using a real
@@ -633,7 +694,7 @@ mod tests {
             flaws_activated: vec![],
             launch_date: crate::calendar::GameDate::new(2001, 1, 1),
             persist: false,
-            launch_partial: false,
+            launch_partial: None,
             flaw_rolled_groups: std::collections::HashSet::new(),
             reactor_flaws_rolled: false,
         }

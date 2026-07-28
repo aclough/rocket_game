@@ -421,7 +421,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
         flaws_activated: sim.flaws_activated,
         launch_date: gs.date,
         persist: true,
-        launch_partial: false,
+        launch_partial: None,
         flaw_rolled_groups: sim.flaw_rolled_groups,
         reactor_flaws_rolled: false,
     };
@@ -958,11 +958,67 @@ fn arrive_test_flight(
         flaws_activated: vec![],
         launch_date: gs.date,
         persist: false,
-        launch_partial: false,
+        launch_partial: None,
         flaw_rolled_groups: std::collections::HashSet::new(),
         reactor_flaws_rolled: false,
     };
     gs.resolve_arrived_flight(flight)
+}
+
+/// Arrival used to re-derive the partial-failure reason from
+/// `flaws_activated.first()`, which reported the wrong flaw when several
+/// activated and fell back to a bare "degraded performance" when the cause
+/// wasn't a flaw at all. The reason the launch sim computed is the only one
+/// that's true, so it has to reach the event unchanged.
+#[test]
+fn arrival_reports_the_launch_sims_reason_verbatim() {
+    use crate::flight::{Flight, FlightId, FlightLeg, FlightStatus};
+    use crate::rocket::{RocketDesign, RocketId};
+
+    let mut gs = GameState::new("Test".into(), 1_000_000.0, 42);
+    let reason = "Turbopump seal failure (+2 more) — 3% delta-v shortfall";
+
+    let design = RocketDesign {
+        id: RocketDesignId(999), name: "CarrierStub".into(),
+        stage_groups: vec![],
+    };
+    let rocket = design.instantiate(RocketId(999), "earth_surface", 0.0);
+    let events = gs.resolve_arrived_flight(Flight {
+        id: FlightId(1),
+        company: crate::flight::CompanyRef::Player,
+        rocket_name: "Carrier".into(),
+        rocket_project_id: RocketProjectId(999),
+        design,
+        rocket,
+        payloads: vec![],
+        current_location: "leo".into(),
+        route: vec![FlightLeg {
+            from: "earth_surface".into(), to: "leo".into(),
+            delta_v_cost: 0.0, burn_days: 0, coast_days: 0,
+            ambient_pressure_pa: 0.0,
+        }],
+        current_leg: 0,
+        leg_days_remaining: 0,
+        status: FlightStatus::Arrived,
+        // A mid-flight activation unrelated to the ascent — exactly the
+        // entry `.first()` would have latched onto if it were still used.
+        flaws_activated: vec![crate::launch::FlawActivation {
+            flaw_description: "Coolant loop chatter".into(),
+            consequence: crate::flaw::FlawConsequence::PerformanceDegradation(0.01),
+            engine_name: "Upper".into(),
+        }],
+        launch_date: gs.date,
+        persist: false,
+        launch_partial: Some(reason.to_string()),
+        flaw_rolled_groups: std::collections::HashSet::new(),
+        reactor_flaws_rolled: false,
+    });
+
+    let reported = events.iter().find_map(|e| match e {
+        crate::event::GameEvent::LaunchPartialFailure { reason, .. } => Some(reason.clone()),
+        _ => None,
+    }).expect("a flight flagged partial must report a partial failure");
+    assert_eq!(reported, reason);
 }
 
 #[test]
