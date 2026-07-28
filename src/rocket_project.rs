@@ -204,34 +204,31 @@ fn design_stats(design: &RocketDesign) -> (u32, u32, u32) {
 ///
 /// Uses binary search over payload mass.
 pub fn max_payload_to(design: &RocketDesign, from: &str, to: &str) -> f64 {
-    // First check if the destination is reachable at all (with 0 payload).
-    // Use the stage-aware planner so rockets with mixed thrust classes get
-    // the right per-edge dv (e.g. ion stages use spiral costs).
-    let rocket_mass = design.total_mass_kg();
-    let path = DELTA_V_MAP.shortest_path_for_rocket(from, to, design, 0.0);
-    if path.is_none() {
+    // Ask the planner about every candidate payload rather than pricing the
+    // route once at zero payload and then comparing vacuum delta-v against
+    // that frozen number. The route's cost and the vehicle's usable delta-v
+    // both move with payload — drag scales with mass, and gravity losses
+    // scale with how sluggishly the stack leaves the pad — so a fixed
+    // threshold credited heavy rockets with delta-v they never had.
+    let reachable = |payload: f64| {
+        DELTA_V_MAP.shortest_path_for_rocket(from, to, design, payload).is_some()
+    };
+    if !reachable(0.0) {
         return 0.0;
     }
 
-    let required_dv = path.unwrap().1;
-    let available_dv = design.total_delta_v(0.0);
-    if available_dv < required_dv {
-        return 0.0;
-    }
-
-    // Binary search for max payload
+    // Bracket: grow until the design can no longer make it.
     let mut lo = 0.0_f64;
-    let mut hi = rocket_mass * 2.0; // generous upper bound
-
-    // First find an upper bound where we can't make it
-    while design.total_delta_v(hi) >= required_dv && hi < 1_000_000.0 {
+    let mut hi = (design.total_mass_kg() * 2.0).max(1.0);
+    while reachable(hi) && hi < 1_000_000.0 {
         hi *= 2.0;
     }
 
-    for _ in 0..50 {
+    // Feasibility is monotonic in payload, so bisect. 40 halvings take the
+    // bracket well below the 1 kg the answer is rounded to.
+    for _ in 0..40 {
         let mid = (lo + hi) / 2.0;
-        let dv = design.total_delta_v(mid);
-        if dv >= required_dv {
+        if reachable(mid) {
             lo = mid;
         } else {
             hi = mid;
@@ -314,6 +311,52 @@ mod tests {
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
             power_draw_w: 0.0,
+        }
+    }
+
+    /// Piling propellant onto a fixed engine used to *raise* reported
+    /// payload without limit, because the payload search compared vacuum
+    /// delta-v against a route cost that charged drag but never gravity.
+    /// A stack too heavy to leave the pad was reported lifting 5.5 t to
+    /// LEO — more than the same stack at four times the thrust-to-weight.
+    ///
+    /// Gravity is now charged against the stages that fly the ascent, so
+    /// extra propellant on an engine that can't lift it is what it should
+    /// be: dead weight.
+    #[test]
+    fn extra_propellant_cannot_buy_payload_a_weak_engine_cannot_lift() {
+        let sized = |propellant: f64| {
+            let engine = kerolox_engine(1, 4_000_000.0, 1_500.0, 300.0);
+            RocketDesign {
+                id: crate::rocket::RocketDesignId(1),
+                name: "Sweep".into(),
+                stage_groups: vec![vec![Stage {
+                    id: StageId(1), name: "S1".into(),
+                    engine, engine_count: 1,
+                    propellant_mass_kg: propellant,
+                    structural_mass_kg: propellant * 0.06,
+                    fairing: None,
+                    power_sources: Vec::new(),
+                }]],
+            }
+        };
+
+        // Thrust is fixed, so TWR at liftoff falls as propellant rises and
+        // crosses 1.0 partway along this sweep.
+        let mut best_flyable = 0.0_f64;
+        for propellant in [100_000.0, 200_000.0, 300_000.0, 400_000.0,
+                           500_000.0, 600_000.0, 800_000.0] {
+            let design = sized(propellant);
+            let twr = 4_000_000.0 / (design.total_mass_kg() * 9.81);
+            let payload = max_payload_to(&design, "earth_surface", "leo");
+            if twr >= 1.0 {
+                best_flyable = best_flyable.max(payload);
+            } else {
+                assert!(payload <= best_flyable,
+                    "a TWR {twr:.2} stack ({propellant:.0} kg of propellant) reported \
+                     {payload:.0} kg to LEO, beating the best any flyable version of \
+                     the same rocket managed ({best_flyable:.0} kg)");
+            }
         }
     }
 

@@ -1,8 +1,5 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
-Launch:
-[] Double check what happens with rockets with TWRs less than 1 at launch.  Adding more fuel seems to increase payload to orbit.
-
 Design
 [] Auto-size fueltanks to reasonable values
 

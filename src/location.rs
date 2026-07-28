@@ -634,7 +634,13 @@ impl DeltaVMap {
 }
 
 /// Velocity at which the rocket begins pitching from vertical (gravity turn initiation).
-pub const KICK_OVER_VELOCITY: f64 = 50.0;
+pub const KICK_OVER_VELOCITY: f64 = 45.0;
+
+/// Size of the initial pitch-over kick, in radians.
+pub const PITCH_KICK_RAD: f64 = 0.02;
+
+/// Integration timestep for the ascent, in seconds.
+pub const ASCENT_TIMESTEP_S: f64 = 0.25;
 
 /// Simulate gravity turn ascent to estimate gravity losses.
 ///
@@ -649,7 +655,7 @@ pub const KICK_OVER_VELOCITY: f64 = 50.0;
 ///
 /// Parameters come from the stage group (thrust, mass flow, propellant) and
 /// the launch location (surface gravity, body radius). The only free parameter
-/// is KICK_OVER_VELOCITY (~50 m/s), the velocity at which the rocket begins
+/// is KICK_OVER_VELOCITY (45 m/s), the velocity at which the rocket begins
 /// pitching from vertical.
 ///
 /// For multi-stage rockets, each stage group is simulated sequentially:
@@ -659,7 +665,7 @@ pub const KICK_OVER_VELOCITY: f64 = 50.0;
 /// # Arguments
 /// * `surface_gravity` - Surface gravity in m/s² (e.g. 9.81 for Earth)
 /// * `body_radius` - Radius of the body in meters (e.g. 6_371_000.0 for Earth)
-/// * `stage_params` - Per group: (thrust_n, mass_flow_kg_s, propellant_kg)
+/// * `stage_params` - Per group: (thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_kg)
 /// * `initial_mass_kg` - Total rocket mass including payload
 ///
 /// # Returns
@@ -667,44 +673,66 @@ pub const KICK_OVER_VELOCITY: f64 = 50.0;
 pub fn simulate_gravity_losses(
     surface_gravity: f64,
     body_radius: f64,
-    stage_params: &[(f64, f64, f64)],
+    stage_params: &[(f64, f64, f64, f64)],
     initial_mass_kg: f64,
 ) -> Vec<f64> {
-    let g = surface_gravity;
     let mut velocity = 0.0_f64;
     let mut pitch = std::f64::consts::FRAC_PI_2; // 90° = vertical
     let mut mass = initial_mass_kg;
+    // Height gained so far. The vehicle does not fly the whole ascent at
+    // sea level: both the gravity it fights and the radius its curvature
+    // term uses change on the way up, and holding them at their surface
+    // values stalls the pitch-over — which is what made upper stages look
+    // like they were burning most of their delta-v straight up.
+    let mut altitude = 0.0_f64;
     let mut results = Vec::with_capacity(stage_params.len());
 
     let mut kicked_over = false;
 
-    for &(thrust, mass_flow, propellant) in stage_params {
+    for &(thrust, mass_flow, propellant, dry_mass) in stage_params {
         let mut gravity_loss = 0.0;
         let mut remaining_prop = propellant;
 
-        // Skip stages with no propellant/mass flow (solar sails)
-        if mass_flow <= 0.0 || propellant <= 0.0 {
+        // Local conditions decide when the ascent is over: reaching circular
+        // velocity for the current radius means the vehicle is in orbit, and
+        // every burn after that is a transfer the delta-v graph already
+        // prices impulsively. Without the cutoff the integrator keeps
+        // charging `g·sin(pitch)·dt` for the whole of every remaining burn,
+        // which for a low-thrust upper stage is tens of km/s of fiction
+        // across a burn measured in weeks.
+        let orbital = |alt: f64| {
+            let r = body_radius + alt;
+            (surface_gravity * body_radius * body_radius / r).sqrt()
+        };
+
+        // Skip stages with no propellant/mass flow (solar sails), and any
+        // stage that only ignites once the vehicle is already orbital.
+        if mass_flow <= 0.0 || propellant <= 0.0 || velocity >= orbital(altitude) {
             results.push(0.0);
             continue;
         }
 
-        while remaining_prop > 1e-6 {
-            let dt = (1.0_f64).min(remaining_prop / mass_flow);
+        while remaining_prop > 1e-6 && velocity < orbital(altitude) {
+            let dt = ASCENT_TIMESTEP_S.min(remaining_prop / mass_flow);
+            let r = body_radius + altitude;
+            let g = surface_gravity * (body_radius / r).powi(2);
+
             gravity_loss += g * pitch.sin() * dt;
 
             let net_accel = thrust / mass - g * pitch.sin();
             velocity += net_accel * dt;
             velocity = velocity.max(0.0); // can't go backwards
+            altitude = (altitude + velocity * pitch.sin() * dt).max(0.0);
 
             if velocity > KICK_OVER_VELOCITY {
                 // Initiate gravity turn with a small kick if we haven't already
                 if !kicked_over {
                     kicked_over = true;
                     // Small initial pitch-over: ~1 degree
-                    pitch -= 0.02;
+                    pitch -= PITCH_KICK_RAD;
                 }
                 let pitch_rate = g * pitch.cos() / velocity
-                    - velocity * pitch.cos() / body_radius;
+                    - velocity * pitch.cos() / r;
                 pitch -= pitch_rate * dt;
                 pitch = pitch.clamp(0.0, std::f64::consts::FRAC_PI_2);
             }
@@ -715,6 +743,11 @@ pub fn simulate_gravity_losses(
         }
 
         results.push(gravity_loss);
+        // Stage separation: the spent group's structure falls away, so the
+        // next group doesn't haul it. Omitting this was charging upper
+        // stages for mass they'd already dropped, which both understated
+        // their acceleration and inflated their gravity loss.
+        mass = (mass - dry_mass).max(0.0);
         // Next group inherits velocity and pitch
     }
 
@@ -1116,6 +1149,45 @@ mod tests {
     const EARTH_RADIUS: f64 = 6_371_000.0;
     const MOON_RADIUS: f64 = 1_737_000.0;
 
+    /// The ascent model's anchor to reality.
+    ///
+    /// `KICK_OVER_VELOCITY` and `PITCH_KICK_RAD` are the model's only free
+    /// parameters — nothing derives them, so without a reference vehicle
+    /// they're arbitrary, and the gravity loss they produce feeds straight
+    /// into what every rocket in the game can lift. This pins them to a
+    /// Falcon 9 v1.2 flying its own published numbers: ~411 t / 22.2 t of
+    /// first stage burning ~160 s, ~107.5 t / 4 t of second stage burning
+    /// ~400 s, 15.6 t of payload, liftoff TWR ~1.4. Gravity losses for that
+    /// class are documented at roughly 1.5-1.7 km/s, most of it on the
+    /// first stage.
+    ///
+    /// Retune the parameters if this drifts — don't widen the band.
+    #[test]
+    fn gravity_loss_matches_a_real_launch_vehicle() {
+        let s1_thrust = 8_000_000.0;
+        let s1_flow = s1_thrust / (300.0 * 9.80665);
+        let s2_thrust = 934_000.0;
+        let s2_flow = s2_thrust / (348.0 * 9.80665);
+        let total_mass = 411_000.0 + 22_200.0 + 107_500.0 + 4_000.0 + 15_600.0;
+
+        let losses = simulate_gravity_losses(
+            9.81, EARTH_RADIUS,
+            &[
+                (s1_thrust, s1_flow, 411_000.0, 22_200.0),
+                (s2_thrust, s2_flow, 107_500.0, 4_000.0),
+            ],
+            total_mass,
+        );
+        let total: f64 = losses.iter().sum();
+
+        assert!((1_500.0..=1_700.0).contains(&total),
+            "Falcon 9 class should lose 1.5-1.7 km/s to gravity, got {total:.0} \
+             (S1 {:.0}, S2 {:.0})", losses[0], losses[1]);
+        assert!(losses[0] > losses[1] * 2.0,
+            "the first stage should carry most of the loss, got S1 {:.0} vs S2 {:.0}",
+            losses[0], losses[1]);
+    }
+
     #[test]
     fn test_gravity_loss_single_stage_positive() {
         // A single stage launching from Earth: should have significant gravity loss
@@ -1127,7 +1199,7 @@ mod tests {
         let dry_mass = 10_000.0;
         let total_mass = dry_mass + propellant;
 
-        let losses = simulate_gravity_losses(9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant)], total_mass);
+        let losses = simulate_gravity_losses(9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant, dry_mass)], total_mass);
         assert_eq!(losses.len(), 1);
         assert!(losses[0] > 500.0, "Earth launch should have >500 m/s gravity loss, got {}", losses[0]);
         assert!(losses[0] < 3000.0, "Gravity loss should be <3000 m/s, got {}", losses[0]);
@@ -1147,14 +1219,14 @@ mod tests {
         // 1 engine
         let loss_1 = simulate_gravity_losses(
             9.81, EARTH_RADIUS,
-            &[(single_thrust, mass_flow_per_engine, propellant)],
+            &[(single_thrust, mass_flow_per_engine, propellant, dry_mass)],
             total_mass,
         )[0];
 
         // 3 engines (3x thrust, 3x flow, same propellant = 1/3 burn time)
         let loss_3 = simulate_gravity_losses(
             9.81, EARTH_RADIUS,
-            &[(single_thrust * 3.0, mass_flow_per_engine * 3.0, propellant)],
+            &[(single_thrust * 3.0, mass_flow_per_engine * 3.0, propellant, dry_mass)],
             total_mass,
         )[0];
 
@@ -1173,10 +1245,10 @@ mod tests {
         let total_mass = 60_000.0;
 
         let loss_earth = simulate_gravity_losses(
-            9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant)], total_mass,
+            9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant, 10_000.0)], total_mass,
         )[0];
         let loss_moon = simulate_gravity_losses(
-            1.62, MOON_RADIUS, &[(thrust, mass_flow, propellant)], total_mass,
+            1.62, MOON_RADIUS, &[(thrust, mass_flow, propellant, 10_000.0)], total_mass,
         )[0];
 
         assert!(loss_moon < loss_earth,
@@ -1209,8 +1281,8 @@ mod tests {
         let losses = simulate_gravity_losses(
             9.81, EARTH_RADIUS,
             &[
-                (thrust_s1, mass_flow_s1, prop_s1),
-                (thrust_s2, mass_flow_s2, prop_s2),
+                (thrust_s1, mass_flow_s1, prop_s1, 5_000.0),
+                (thrust_s2, mass_flow_s2, prop_s2, 1_000.0),
             ],
             total_mass,
         );
@@ -1232,7 +1304,7 @@ mod tests {
         let total_mass = 220_000.0;
 
         let losses = simulate_gravity_losses(
-            9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant)], total_mass,
+            9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant, 20_000.0)], total_mass,
         );
         assert_eq!(losses.len(), 1);
         // Should be moderate — not as bad as a weak first stage, but still significant

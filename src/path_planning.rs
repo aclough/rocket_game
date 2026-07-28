@@ -55,9 +55,23 @@ fn payload_above_group(design: &RocketDesign, gi: usize, payload_mass_kg: f64) -
 }
 
 /// Full delta-v for stage group `gi` assuming upper groups are full and a
-/// payload of `payload_mass_kg` sits at the top.
-fn full_group_dv(design: &RocketDesign, gi: usize, payload_mass_kg: f64) -> f64 {
-    design.group_delta_v(gi, payload_above_group(design, gi, payload_mass_kg))
+/// payload of `payload_mass_kg` sits at the top, net of the gravity loss
+/// that group pays on the way up.
+///
+/// Charging gravity here rather than on the edges is what keeps the planner
+/// honest about low-TWR designs: the loss depends on the ascent profile,
+/// not on which transfer is being flown, and a vehicle heavy enough to
+/// crawl off the pad can burn more delta-v fighting gravity than the extra
+/// propellant bought it. Edges stay responsible for drag, which the graph
+/// already charges per-transfer — see `edge_cost_for_class`.
+fn full_group_dv(
+    design: &RocketDesign,
+    gi: usize,
+    payload_mass_kg: f64,
+    gravity_losses: &[f64],
+) -> f64 {
+    let vacuum = design.group_delta_v(gi, payload_above_group(design, gi, payload_mass_kg));
+    (vacuum - gravity_losses.get(gi).copied().unwrap_or(0.0)).max(0.0)
 }
 
 /// Edge dv cost for a given thrust class. None if the class can't use the
@@ -94,6 +108,7 @@ struct EdgeOutcome {
 /// Try to traverse `transfer` in `class` starting from
 /// `(active_stage, dv_left_in_active)`. Returns Some(outcome) if feasible,
 /// None otherwise.
+#[allow(clippy::too_many_arguments)] // one search state, spread across params rather than boxed into a struct nothing else would use
 fn try_class(
     transfer: &Transfer,
     design: &RocketDesign,
@@ -102,6 +117,7 @@ fn try_class(
     active_stage: usize,
     dv_left_in_active: f64,
     class: ThrustClass,
+    gravity_losses: &[f64],
 ) -> Option<EdgeOutcome> {
     let cost = edge_cost_for_class(transfer, rocket_mass_kg, class)?;
 
@@ -129,7 +145,7 @@ fn try_class(
         {
             return None;
         }
-        let stage_dv = full_group_dv(design, new_active, payload_mass_kg);
+        let stage_dv = full_group_dv(design, new_active, payload_mass_kg, gravity_losses);
         if stage_dv >= remaining {
             return Some(EdgeOutcome {
                 cost,
@@ -320,8 +336,9 @@ impl DeltaVMap {
         if design.stage_groups.is_empty() {
             return None;
         }
-        let initial_dv = full_group_dv(design, 0, payload_mass_kg);
-        self.astar_search(from, to, design, payload_mass_kg, 0, initial_dv)
+        let gravity_losses = crate::rocket::group_gravity_losses(design, payload_mass_kg, from);
+        let initial_dv = full_group_dv(design, 0, payload_mass_kg, &gravity_losses);
+        self.astar_search(from, to, design, payload_mass_kg, 0, initial_dv, &gravity_losses)
     }
 
     /// Stage-aware shortest-path planner starting from a partial rocket
@@ -344,12 +361,21 @@ impl DeltaVMap {
             rocket.stage_states.get(gi)
                 .is_some_and(|g| g.iter().any(|s| s.attached && s.propellant_remaining_kg > 0.0))
         })?;
-        let initial_dv = rocket.group_remaining_delta_v(design, active_stage);
+        // Zero for anything already off a surface, which is the usual case
+        // here — a parked spacecraft flying on from orbit owes no ascent.
+        // A craft sitting on the lunar surface does, and pays it.
+        let gravity_losses =
+            crate::rocket::group_gravity_losses(design, rocket.payload_mass_kg, from);
+        let initial_dv = (rocket.group_remaining_delta_v(design, active_stage)
+            - gravity_losses.get(active_stage).copied().unwrap_or(0.0))
+            .max(0.0);
         self.astar_search(
             from, to, design, rocket.payload_mass_kg, active_stage, initial_dv,
+            &gravity_losses,
         )
     }
 
+    #[allow(clippy::too_many_arguments)] // ditto — the search's starting state
     fn astar_search(
         &self,
         from: &str,
@@ -358,6 +384,7 @@ impl DeltaVMap {
         payload_mass_kg: f64,
         initial_active_stage: usize,
         initial_dv_left: f64,
+        gravity_losses: &[f64],
     ) -> Option<(Vec<&'static str>, f64)> {
         let from_idx = self.locations().iter().position(|l| l.id == from)?;
         let to_idx = self.locations().iter().position(|l| l.id == to)?;
@@ -430,6 +457,7 @@ impl DeltaVMap {
                         state.active_stage,
                         state.dv_left_in_active,
                         class,
+                        gravity_losses,
                     ) {
                         Some(o) => o,
                         None => continue,
@@ -513,10 +541,16 @@ mod tests {
         }
     }
 
-    /// 2-stage chemical: big booster + smaller upper.
+    /// 2-stage chemical: big booster + high-energy upper (the 420 s Isp
+    /// stands in for a hydrolox second stage).
+    ///
+    /// Sized to reach GTO with margin now that the planner charges gravity
+    /// losses. The earlier fixture had ~11 km/s of vacuum delta-v and a
+    /// liftoff TWR of 1.5, which buys LEO and nothing beyond it once the
+    /// ~2.6 km/s it spends fighting gravity is taken off the top.
     fn two_stage_chemical() -> RocketDesign {
-        let s1 = stage(1, "S1", kerolox_engine(1, 7_000_000.0, 1500.0, 280.0), 1, 350_000.0, 25_000.0);
-        let s2 = stage(2, "S2", kerolox_engine(2, 1_000_000.0, 800.0, 340.0), 1, 90_000.0, 5_000.0);
+        let s1 = stage(1, "S1", kerolox_engine(1, 18_000_000.0, 1500.0, 280.0), 1, 500_000.0, 25_000.0);
+        let s2 = stage(2, "S2", kerolox_engine(2, 1_500_000.0, 800.0, 420.0), 1, 300_000.0, 15_000.0);
         RocketDesign {
             id: RocketDesignId(1), name: "TwoChem".into(),
             stage_groups: vec![vec![s1], vec![s2]],
@@ -524,9 +558,10 @@ mod tests {
     }
 
     /// 2-stage hybrid: chemical booster + ion upper. Sized so S1 alone can
-    /// reach LEO and the ion S2 carries enough xenon to spiral to NEA.
+    /// reach LEO — gravity losses included — and the ion S2 carries enough
+    /// xenon to spiral to NEA.
     fn chemical_then_ion() -> RocketDesign {
-        let s1 = stage(1, "S1", kerolox_engine(1, 35_000_000.0, 5_000.0, 280.0), 1, 2_000_000.0, 50_000.0);
+        let s1 = stage(1, "S1", kerolox_engine(1, 50_000_000.0, 5_000.0, 280.0), 1, 2_400_000.0, 40_000.0);
         let s2 = stage(2, "S2-Ion", ion_engine(2, 500.0, 200.0, 3500.0), 1, 30_000.0, 5_000.0);
         RocketDesign {
             id: RocketDesignId(2), name: "ChemIon".into(),
@@ -618,7 +653,10 @@ mod tests {
         // S1 + S2 together cover the ascent. The high-thrust attempt should
         // succeed by spilling from S1 into S2; the next leg should see S2
         // partially drained.
-        let s1 = stage(1, "S1", kerolox_engine(1, 7_000_000.0, 1_500.0, 280.0), 1, 200_000.0, 15_000.0);
+        // S1 thrust is sized for a liftoff TWR above 1 — at the original
+        // 7 MN this stack couldn't leave the pad, and "has enough delta-v"
+        // no longer implies "flies" now that gravity is charged.
+        let s1 = stage(1, "S1", kerolox_engine(1, 12_000_000.0, 1_500.0, 280.0), 1, 200_000.0, 15_000.0);
         let s2 = stage(2, "S2", kerolox_engine(2, 1_500_000.0, 800.0, 340.0), 1, 600_000.0, 30_000.0);
         let design = RocketDesign {
             id: RocketDesignId(10), name: "SmallS1+BigS2".into(),
@@ -626,7 +664,8 @@ mod tests {
         };
 
         // Sanity: stage 1 alone shouldn't reach LEO.
-        let s1_dv = full_group_dv(&design, 0, 1_000.0);
+        let losses = crate::rocket::group_gravity_losses(&design, 1_000.0, "earth_surface");
+        let s1_dv = full_group_dv(&design, 0, 1_000.0, &losses);
         let drag = aero_drag_loss(design.total_mass_kg() + 1_000.0);
         assert!(s1_dv < 7_800.0 + drag,
             "test setup wrong: S1 alone has {} dv > 8000 m/s ascent need", s1_dv);

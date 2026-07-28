@@ -901,6 +901,58 @@ pub struct StageGroupStats {
     pub burn_time_s: f64,
 }
 
+/// Per-stage-group gravity loss (m/s) for a design ascending from
+/// `launch_from`, carrying `payload_kg`.
+///
+/// This is the *only* place the ascent profile is integrated. Both the
+/// designer stats table and the path planner call it, so what the player
+/// reads as "Eff dV" and what the planner charges to reach orbit can't
+/// drift apart. Departures from a non-surface location (an orbital depot)
+/// have no vertical ascent and so no loss.
+///
+/// Losses accumulate across groups in firing order: a group that ignites
+/// after the vehicle is already near orbital velocity is pitched over far
+/// enough that its own loss is close to zero, which is what lets the same
+/// vector serve a mid-mission transfer burn as well as the ascent.
+pub fn group_gravity_losses(
+    design: &RocketDesign,
+    payload_kg: f64,
+    launch_from: &str,
+) -> Vec<f64> {
+    let n = design.stage_groups.len();
+    let Some(props) = DELTA_V_MAP.surface_properties(launch_from) else {
+        return vec![0.0; n];
+    };
+    // Per group: (thrust_n, mass_flow_kg_s, propellant_kg).
+    //
+    // A low-thrust group is zeroed out rather than integrated. The delta-v
+    // graph already models electric propulsion as spiralling *from orbit*
+    // (`low_thrust_delta_v`), never as lifting off, and an ion stage can't
+    // hold itself up anyway: the integrator would watch its velocity decay
+    // to zero and then bill it for gravity across a burn lasting weeks.
+    let stage_params: Vec<(f64, f64, f64, f64)> = design.stage_groups.iter()
+        .map(|group| {
+            if group.iter().any(|s| s.engine.is_low_thrust()) {
+                return (0.0, 0.0, 0.0, 0.0);
+            }
+            (
+                group.iter().map(|s| s.total_thrust_n()).sum(),
+                group.iter()
+                    .map(|s| s.engine.mass_flow_rate() * s.engine_count as f64)
+                    .sum(),
+                group.iter().map(|s| s.propellant_mass_kg).sum(),
+                group.iter().map(|s| s.dry_mass_kg()).sum(),
+            )
+        })
+        .collect();
+    location::simulate_gravity_losses(
+        props.gravity_m_s2,
+        props.radius_m,
+        &stage_params,
+        design.total_mass_kg() + payload_kg,
+    )
+}
+
 /// Compute per-stage-group stats for a rocket design.
 ///
 /// `payload_kg` and `launch_from` are user-configurable in the designer.
@@ -921,7 +973,7 @@ pub fn compute_stage_stats(
     let has_atmosphere = surface_props.is_some_and(|p| p.has_atmosphere);
     let ambient_pressure = surface_props.map_or(0.0, |p| p.ambient_pressure_pa);
 
-    // Collect per-group params for gravity sim: (thrust_n, mass_flow_kg_s, propellant_kg)
+    // Per-group params, still needed below for thrust / burn time.
     let mut stage_params: Vec<(f64, f64, f64)> = Vec::with_capacity(n);
     for group in &design.stage_groups {
         let thrust: f64 = group.iter().map(|s| s.total_thrust_n()).sum();
@@ -933,14 +985,7 @@ pub fn compute_stage_stats(
     }
 
     let total_mass = design.total_mass_kg() + payload_kg;
-    // Gravity losses only apply to surface-launch profiles. For
-    // in-orbit / free-space "launch sites" (e.g. LEO depot) there's no
-    // vertical ascent against a body, so the loss is zero per group.
-    let gravity_losses: Vec<f64> = if let Some(props) = surface_props {
-        location::simulate_gravity_losses(props.gravity_m_s2, props.radius_m, &stage_params, total_mass)
-    } else {
-        vec![0.0; n]
-    };
+    let gravity_losses = group_gravity_losses(design, payload_kg, launch_from);
 
     // Compute aero drag loss for first stage only
     let first_stage_aero = if has_atmosphere {

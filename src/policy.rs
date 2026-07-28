@@ -281,8 +281,15 @@ impl BasicPolicy {
     }
 
     /// Fixed two-stage template: one kerolox booster engine under a
-    /// 42 t first stage, one hydrolox engine under an 8 t upper stage.
+    /// 60 t first stage, one hydrolox engine under an 8 t upper stage.
     /// Sized to put a small-sat class payload into LEO with margin.
+    ///
+    /// The first stage was 42 t until the planner started charging gravity
+    /// losses. Staging that early handed over at a steep pitch and left the
+    /// upper stage burning most of its delta-v fighting gravity — 1.9 km/s
+    /// of it — which cost the template three quarters of its payload. The
+    /// extra 18 t buys a handover near-horizontal, where the upper stage's
+    /// loss falls to nothing; capability lands within 3% of where it was.
     fn build_template(&self, game: &GameState) -> Option<RocketDesign> {
         let company = &game.player_company;
         let booster = company.engine_projects.iter()
@@ -308,8 +315,8 @@ impl BasicPolicy {
             // vacuum bell of its own engine family.
             engine: booster.design_variant(false),
             engine_count: 1,
-            propellant_mass_kg: 42_000.0,
-            structural_mass_kg: 3_000.0,
+            propellant_mass_kg: 60_000.0,
+            structural_mass_kg: 4_300.0,
             fairing: None,
             power_sources: Vec::new(),
         };
