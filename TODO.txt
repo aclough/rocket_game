@@ -1,8 +1,5 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
-Design
-[] Auto-size fueltanks to reasonable values
-
 Contracts:
 [] Campaigns of a type, e.g., resupply to ISS shouldn't be re-bid until the previous contract has finished.
 
