@@ -336,6 +336,28 @@ impl GameState {
             // identical programs.
             let campaign_query = format!("campaigns_{}_{}", self.date.year, self.date.month);
             let mut campaign_rng = self.seed.world_query(&campaign_query);
+
+            // A customer with a program still putting missions out isn't
+            // in the market for another one. Note this is "still issuing",
+            // not "still flying": once the last mission has been handed
+            // over, the market is free to announce again even though those
+            // contracts are outstanding. Waiting for them to land instead
+            // would hold the market shut through the whole tail of a
+            // program — and would do it to whoever *lost* the block bid
+            // just as hard, locking them out for the years a rival spends
+            // flying it.
+            let still_issuing: std::collections::HashSet<crate::contract::MarketId> =
+                self.active_campaigns.iter()
+                    .filter(|c| matches!(c.status, contract::CampaignStatus::Soliciting { .. })
+                        || c.missions_issued < c.missions_total)
+                    .map(|c| c.market_id)
+                    .collect();
+            // Program names are drawn from a small pool, so without this a
+            // market can run two "Commercial Resupply Cycle A" programs at
+            // once and issue two contracts of the same name and number.
+            let mut taken_names: Vec<String> =
+                self.active_campaigns.iter().map(|c| c.name.clone()).collect();
+
             let mut announced: Vec<contract::Campaign> = Vec::new();
             for arch in &self.balance.markets.archetypes {
                 let Some(spec) = &arch.campaign else { continue };
@@ -344,10 +366,18 @@ impl GameState {
                 if !market.active {
                     continue;
                 }
+                // The roll happens either way and its result is dropped if
+                // the market is busy, so blocking a program doesn't shift
+                // the draws every other archetype sees this month.
                 if let Some(campaign) = contract::spawn_campaign(
                     market, spec, &mut campaign_rng,
                     &mut self.next_campaign_id, self.date, econ_mod,
+                    &taken_names,
                 ) {
+                    if still_issuing.contains(&campaign.market_id) {
+                        continue;
+                    }
+                    taken_names.push(campaign.name.clone());
                     announced.push(campaign);
                 }
             }

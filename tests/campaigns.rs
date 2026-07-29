@@ -64,7 +64,7 @@ fn spawn_draws_params_within_spec() {
     for seed_value in 0..30u64 {
         let mut rng = StdRng::seed_from_u64(seed_value);
         let campaign = spawn_campaign(
-            &market, &spec, &mut rng, &mut next_campaign_id, current_date, 1.0,
+            &market, &spec, &mut rng, &mut next_campaign_id, current_date, 1.0, &[],
         )
         .unwrap_or_else(|| panic!("seed {seed_value}: spawn_chance 1.0 must always spawn"));
 
@@ -146,7 +146,7 @@ fn block_buy_price_is_discounted() {
     for seed_value in 0..10u64 {
         let mut rng = StdRng::seed_from_u64(seed_value);
         let campaign = spawn_campaign(
-            &market, &spec, &mut rng, &mut next_campaign_id, current_date, 1.0,
+            &market, &spec, &mut rng, &mut next_campaign_id, current_date, 1.0, &[],
         )
         .unwrap_or_else(|| panic!("seed {seed_value}: spawn_chance 1.0 must always spawn"));
 
@@ -166,7 +166,7 @@ fn missions_are_correlated_and_numbered() {
     let mut next_campaign_id = 1u64;
     let mut rng = StdRng::seed_from_u64(99);
     let campaign = spawn_campaign(
-        &market, &spec, &mut rng, &mut next_campaign_id, current_date, 1.0,
+        &market, &spec, &mut rng, &mut next_campaign_id, current_date, 1.0, &[],
     )
     .expect("spawn_chance 1.0 must spawn");
 
@@ -839,4 +839,69 @@ fn validation_rejects_bad_campaign_specs() {
     // Sanity: the unmutated default config validates cleanly.
     let good = BalanceConfig::default().markets;
     assert!(good.validate().is_ok(), "default config should validate");
+}
+
+/// A market whose solicitation window outlives the monthly announcement
+/// roll: the program is still taking bids when the next roll comes round.
+/// Names come from a one-entry pool, so any second announcement is a
+/// visible duplicate.
+fn slow_campaign_world(seed: u64) -> GameState {
+    let mut config = BalanceConfig::default();
+    let arch = config.markets.archetypes.iter_mut()
+        .find(|a| a.key == "market_rideshare")
+        .expect("market_rideshare archetype exists");
+    arch.campaign = Some(CampaignSpec {
+        spawn_chance_per_month: 1.0,
+        mission_count_range: (4, 4),
+        interval_days_range: (60, 60),
+        discount_range: (0.1, 0.1),
+        program_names: vec!["End To End Program".into()],
+        bid_window_days: 45,
+    });
+    GameState::with_balance("Test".into(), seed, config)
+}
+
+/// A market announcing a program every month must still only run one at a
+/// time while it has missions left to issue. Without the interlock this
+/// fixture announces a fresh program at every monthly roll while the last
+/// one is still soliciting — all drawn from a one-name pool, so the player
+/// sees several "End To End Program" solicitations at once and, once won,
+/// two different contracts both called "... Flight 1".
+#[test]
+fn a_market_runs_one_program_at_a_time_while_it_is_still_issuing() {
+    let mut gs = slow_campaign_world(7);
+
+    let mut saw_a_campaign = false;
+    for _ in 0..(365 * 3) {
+        gs.advance_day();
+
+        // Programs still handing out missions are the ones that hold the
+        // market. Those that have issued everything may coexist with a
+        // successor while their last flights are outstanding.
+        let issuing: Vec<&rocket_tycoon::contract::Campaign> = gs.active_campaigns.iter()
+            .filter(|c| matches!(c.status, CampaignStatus::Soliciting { .. })
+                || c.missions_issued < c.missions_total)
+            .collect();
+        saw_a_campaign |= !issuing.is_empty();
+
+        for market_id in issuing.iter().map(|c| c.market_id) {
+            let n = issuing.iter().filter(|c| c.market_id == market_id).count();
+            assert!(n <= 1,
+                "{} programs issuing at once in one market on {:?}: {:?}",
+                n, gs.date,
+                issuing.iter().map(|c| c.name.as_str()).collect::<Vec<_>>());
+        }
+
+        // And no two live programs anywhere share a name, whatever stage
+        // they're at — that's what produces duplicate contract names.
+        let mut names: Vec<&str> = gs.active_campaigns.iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        let before = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), before,
+            "two live programs share a name on {:?}: {:?}", gs.date, names);
+    }
+    assert!(saw_a_campaign, "test premise: spawn chance 1.0 should announce programs");
 }

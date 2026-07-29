@@ -564,6 +564,9 @@ fn pre_redesign_campaign_status() -> CampaignStatus {
 /// the announcement-time rate multiplier; the per-mission ceiling
 /// follows the same rule as single solicitations
 /// (reference × `budget_tolerance`).
+/// `taken_names` are program names already in use by live campaigns; the
+/// draw avoids them so two concurrent programs can't share a name (and
+/// therefore can't issue two contracts called "… Flight 1").
 pub fn spawn_campaign(
     market: &Market,
     spec: &CampaignSpec,
@@ -571,6 +574,7 @@ pub fn spawn_campaign(
     next_campaign_id: &mut u64,
     current_date: GameDate,
     economy_modifier: f64,
+    taken_names: &[String],
 ) -> Option<Campaign> {
     if rng.gen::<f64>() >= spec.spawn_chance_per_month {
         return None;
@@ -591,7 +595,19 @@ pub fn spawn_campaign(
         rng.gen_range(spec.mission_count_range.0..=spec.mission_count_range.1);
     let interval_days =
         rng.gen_range(spec.interval_days_range.0..=spec.interval_days_range.1);
-    let name = spec.program_names[rng.gen_range(0..spec.program_names.len())].clone();
+    // Prefer a name nobody's using. Falling back to the full pool rather
+    // than declining to announce keeps a busy market from going quiet
+    // because it ran out of names — with the still-issuing interlock in
+    // `advance_month` this shouldn't be reachable anyway, and a duplicate
+    // name is a better failure than a missing program.
+    let free_names: Vec<&String> = spec.program_names.iter()
+        .filter(|n| !taken_names.contains(n))
+        .collect();
+    let name = if free_names.is_empty() {
+        spec.program_names[rng.gen_range(0..spec.program_names.len())].clone()
+    } else {
+        free_names[rng.gen_range(0..free_names.len())].clone()
+    };
 
     let id = CampaignId(*next_campaign_id);
     *next_campaign_id += 1;
