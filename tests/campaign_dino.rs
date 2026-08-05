@@ -105,10 +105,12 @@ fn dino_outbids_expensive_player() {
     assert!(player_bid <= 240_000_000.0, "fixture invariant: player bid must still fit the ceiling");
     assert!(gs.place_campaign_bid(cid, player_bid).is_some(), "seed {seed}: player bid should be accepted");
 
-    // Advance up to (not past) the deadline, then recompute dino's
-    // expected bid right before the tick that resolves it — that's
-    // the free stock/cost basis actually scored.
-    while gs.date < bid_deadline {
+    // Run every tick through the deadline day, then recompute dino's
+    // expected bid right before the tick that resolves it — that's the
+    // free stock/cost basis actually scored. A tick works under the date
+    // the clock reads now and rolls over at the end, so the resolving
+    // tick is the first one that *runs* past the deadline.
+    while gs.date <= bid_deadline {
         gs.advance_day();
     }
     let campaign_now = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap().clone();
@@ -200,7 +202,7 @@ fn player_undercut_wins() {
     let player_bid = dino_expected * 0.5;
     assert!(gs.place_campaign_bid(cid, player_bid).is_some(), "seed {seed}: player bid should be accepted");
 
-    while gs.date < bid_deadline {
+    while gs.date <= bid_deadline {
         gs.advance_day();
     }
     let events = gs.advance_day();
@@ -259,7 +261,7 @@ fn exact_tie_goes_to_player() {
         .expect("seed 7103: DinoSoar should be willing to block-bid a fresh gto campaign");
     assert!(gs.place_campaign_bid(cid, dino_expected).is_some(), "seed {seed}: player bid should be accepted");
 
-    while gs.date < bid_deadline {
+    while gs.date <= bid_deadline {
         gs.advance_day();
     }
     // Confirm dino's bid hasn't drifted within the 2-day window, so
@@ -337,7 +339,7 @@ fn dino_ignores_small_payload_blocks() {
         "seed {seed}: floored bid ${bid} should be hopelessly over the ${ceiling} ceiling",
     );
 
-    while gs.date < bid_deadline {
+    while gs.date <= bid_deadline {
         gs.advance_day();
     }
     let events = gs.advance_day();
@@ -381,7 +383,7 @@ fn dino_block_missions_launch_on_cadence() {
     gs.active_campaigns.push(contested_campaign(7005, program, bid_deadline, gs.date));
     // No player bid: DinoSoar wins unopposed.
 
-    while gs.date < bid_deadline {
+    while gs.date <= bid_deadline {
         gs.advance_day();
     }
     let award_events = gs.advance_day();
@@ -452,9 +454,10 @@ fn dino_missed_mission_strikes_the_clause() {
     let program = "Overreach Program";
     gs.active_campaigns.push(contested_campaign(7010, program, bid_deadline, gs.date));
 
-    while gs.date < bid_deadline {
+    while gs.date <= bid_deadline {
         gs.advance_day();
     }
+    let last_tick_date = gs.date;
     let events = gs.advance_day();
     assert!(
         events.iter().any(|e| matches!(e, GameEvent::CampaignAwardedToCompetitor { .. })),
@@ -464,18 +467,28 @@ fn dino_missed_mission_strikes_the_clause() {
     // Force the issued mission overdue before its scheduled launch
     // day (launch = issue + 30-day lead, so an immediate deadline
     // always beats it).
+    //
+    // Dated a day behind the clock, not to `gs.date`: a tick works under
+    // the date the clock reads now and rolls over only at the end, so a
+    // mission due *today* is not yet overdue when today's tick runs.
+    let overdue_since = last_tick_date;
     let mission_id = {
         let c = gs.competitors[0].company.active_contracts.iter_mut()
             .find(|c| c.campaign_id == Some(cid))
             .expect("Flight 1 should be on DinoSoar's books");
-        c.deadline = gs.date;
+        c.deadline = overdue_since;
         c.id
     };
     let expiry_before = gs.competitors[0].company.reputation.expiry_factor;
     let severity = gs.markets.iter()
         .find(|m| m.id == MARKET_GEO_COMSATS).unwrap().failure_severity;
 
-    let events = gs.advance_day();
+    // A tick works under the date the clock reads now, so a mission due
+    // *today* is not yet overdue when today's tick runs — expiry needs the
+    // date to be strictly past the deadline. The strike lands on the
+    // following tick.
+    let mut events = gs.advance_day();
+    events.extend(gs.advance_day());
 
     assert!(
         events.iter().any(|e| matches!(
@@ -523,7 +536,7 @@ fn competitor_won_campaign_save_roundtrip() {
     let program = "Vanguard Series";
     gs.active_campaigns.push(contested_campaign(7006, program, bid_deadline, gs.date));
 
-    while gs.date < bid_deadline {
+    while gs.date <= bid_deadline {
         gs.advance_day();
     }
     let events = gs.advance_day();
@@ -574,7 +587,7 @@ fn resolution_is_deterministic() {
             .expect("seed: DinoSoar should be willing to block-bid a fresh gto campaign");
         gs.place_campaign_bid(cid, dino_expected * 1.5).expect("player bid should be accepted");
 
-        while gs.date < bid_deadline {
+        while gs.date <= bid_deadline {
             gs.advance_day();
         }
         gs.advance_day();

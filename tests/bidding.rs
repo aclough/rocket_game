@@ -46,6 +46,10 @@ fn bid_within_ceiling_wins_at_deadline() {
     let mut gs = GameState::with_balance("Test".into(), 1, solo_balance());
     let idx = advance_to_first_solicitation(&mut gs, 40);
 
+    // Track the id, not just the name: market names repeat month to month,
+    // so a later generation can mint a second contract with this same name
+    // while the bid window is still open.
+    let id = gs.available_contracts[idx].id;
     let name = gs.available_contracts[idx].name.clone();
     let payment = gs.available_contracts[idx].payment;
     let ceiling = gs.available_contracts[idx].budget_ceiling;
@@ -74,13 +78,21 @@ fn bid_within_ceiling_wins_at_deadline() {
     );
 
     let mut awarded: Option<(String, f64)> = None;
-    while gs.date <= deadline {
+    // A tick does its work under the date the clock reads now and rolls the
+    // date only at the end, so bids resolve on the first tick that *runs*
+    // past the deadline. Loop on the date the body ran under — `gs.date`
+    // alone is already a day ahead and would stop short of that tick.
+    loop {
+        let ran_on = gs.date;
         for e in gs.advance_day() {
             if let GameEvent::ContractAwarded { contract_name, amount } = e {
                 if contract_name == name {
                     awarded = Some((contract_name, amount));
                 }
             }
+        }
+        if ran_on > deadline {
+            break;
         }
     }
 
@@ -90,14 +102,14 @@ fn bid_within_ceiling_wins_at_deadline() {
     assert_eq!(awarded_amount, bid);
 
     assert!(
-        gs.available_contracts.iter().all(|c| c.name != name),
+        gs.available_contracts.iter().all(|c| c.id != id),
         "awarded contract `{name}` must be gone from available_contracts",
     );
     let active = gs
         .player_company
         .active_contracts
         .iter()
-        .find(|c| c.name == name)
+        .find(|c| c.id == id)
         .unwrap_or_else(|| panic!("awarded contract `{name}` must be in active_contracts"));
     assert_eq!(active.payment, bid, "active contract payment must equal the winning bid");
     assert!(matches!(active.status, ContractStatus::Accepted));
@@ -111,6 +123,9 @@ fn bid_over_ceiling_is_rejected() {
     let mut gs = GameState::with_balance("Test".into(), 2, solo_balance());
     let idx = advance_to_first_solicitation(&mut gs, 40);
 
+    // See the note in `bid_within_ceiling_wins_at_deadline`: names repeat
+    // across monthly generations, so identity has to come from the id.
+    let id = gs.available_contracts[idx].id;
     let name = gs.available_contracts[idx].name.clone();
     let ceiling = gs.available_contracts[idx].budget_ceiling;
     let deadline = gs.available_contracts[idx]
@@ -123,7 +138,12 @@ fn bid_over_ceiling_is_rejected() {
 
     let mut rejected = false;
     let mut awarded = false;
-    while gs.date <= deadline {
+    // A tick does its work under the date the clock reads now and rolls the
+    // date only at the end, so bids resolve on the first tick that *runs*
+    // past the deadline. Loop on the date the body ran under — `gs.date`
+    // alone is already a day ahead and would stop short of that tick.
+    loop {
+        let ran_on = gs.date;
         for e in gs.advance_day() {
             match e {
                 GameEvent::BidRejected { contract_name } if contract_name == name => rejected = true,
@@ -131,17 +151,20 @@ fn bid_over_ceiling_is_rejected() {
                 _ => {}
             }
         }
+        if ran_on > deadline {
+            break;
+        }
     }
 
     assert!(rejected, "seed 2: expected BidRejected for `{name}` (bid {bid} > ceiling {ceiling})");
     assert!(!awarded, "an over-ceiling bid must never be awarded");
 
     assert!(
-        gs.available_contracts.iter().all(|c| c.name != name),
+        gs.available_contracts.iter().all(|c| c.id != id),
         "rejected contract `{name}` must be gone from available_contracts",
     );
     assert!(
-        gs.player_company.active_contracts.iter().all(|c| c.name != name),
+        gs.player_company.active_contracts.iter().all(|c| c.id != id),
         "rejected contract `{name}` must never reach active_contracts",
     );
 }
@@ -291,13 +314,21 @@ fn bids_are_revisable_until_deadline() {
     );
 
     let mut awarded_amount = None;
-    while gs.date <= deadline {
+    // A tick does its work under the date the clock reads now and rolls the
+    // date only at the end, so bids resolve on the first tick that *runs*
+    // past the deadline. Loop on the date the body ran under — `gs.date`
+    // alone is already a day ahead and would stop short of that tick.
+    loop {
+        let ran_on = gs.date;
         for e in gs.advance_day() {
             if let GameEvent::ContractAwarded { contract_name, amount } = e {
                 if contract_name == name {
                     awarded_amount = Some(amount);
                 }
             }
+        }
+        if ran_on > deadline {
+            break;
         }
     }
 

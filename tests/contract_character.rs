@@ -200,6 +200,12 @@ fn expiry_applies_market_severity_end_to_end() {
             budget_ceiling: 0.0,
             player_bid: None,
         });
+        // A tick works under the date the clock reads now and rolls over only
+        // at the end, so a contract due *today* is not yet overdue when
+        // today's tick runs — expiry needs the date strictly past the
+        // deadline. It lands on the following tick. (`expiry_factor` moves
+        // only on expiry or launch success, so the extra tick is inert.)
+        gs.advance_day();
         gs.advance_day();
 
         let expected = -expiry_penalty * cots_severity;
@@ -228,6 +234,12 @@ fn expiry_applies_market_severity_end_to_end() {
             budget_ceiling: 0.0,
             player_bid: None,
         });
+        // A tick works under the date the clock reads now and rolls over only
+        // at the end, so a contract due *today* is not yet overdue when
+        // today's tick runs — expiry needs the date strictly past the
+        // deadline. It lands on the following tick. (`expiry_factor` moves
+        // only on expiry or launch success, so the extra tick is inert.)
+        gs.advance_day();
         gs.advance_day();
 
         let expected = -expiry_penalty * gov_science_severity;

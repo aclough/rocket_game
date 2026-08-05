@@ -89,12 +89,34 @@ fn inject_contract(gs: &mut GameState, id: u64, name: &str, market_id: MarketId)
 fn advance_through(gs: &mut GameState, deadline: GameDate, max_days: u32) -> Vec<GameEvent> {
     let mut all = Vec::new();
     for _ in 0..max_days {
+        // A tick does its work under the date the clock reads *now* and only
+        // rolls over at the end, so bids resolve on the first tick that
+        // *runs* past the deadline. Test against the date the body ran
+        // under, not the post-tick one — the latter is already a day ahead
+        // and would return before the resolving tick ever happened.
+        let ran_on = gs.date;
         all.extend(gs.advance_day());
-        if gs.date > deadline {
+        if ran_on > deadline {
             return all;
         }
     }
     panic!("resolution did not happen within {max_days} days of deadline {deadline}");
+}
+
+/// `available_contracts` is re-sorted by market id every time the monthly
+/// block adds to it (`advance.rs`), and the first tick of a new game now runs
+/// on 2001-01-01 — a month start. So an index captured at injection time goes
+/// stale the moment any tick runs.
+///
+/// Keyed on name, not id: `next_contract_id` also starts at 1, so a
+/// hand-injected `ContractId(1)` collides with the first real contract the
+/// monthly block mints. The names here are unique per test.
+fn player_bid_for(gs: &GameState, name: &str) -> Option<f64> {
+    gs.available_contracts
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("contract {name:?} is no longer in available_contracts"))
+        .player_bid
 }
 
 fn temp_save_path(tag: &str) -> std::path::PathBuf {
@@ -134,7 +156,7 @@ fn rule_places_bid_at_cost_plus_margin() {
         MARKET_RIDESHARE,
         BidRule { enabled: true, margin: 0.5 },
     );
-    let idx = inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
 
     let events = gs.advance_day();
     let bid_placed = events.iter().find_map(|e| match e {
@@ -149,7 +171,7 @@ fn rule_places_bid_at_cost_plus_margin() {
         "expected BidPlaced at $15M (cost $10M * 1.5) on the first tick, got events: {events:?}",
     );
     assert_eq!(
-        gs.available_contracts[idx].player_bid,
+        player_bid_for(&gs, "Rideshare A"),
         Some(15_000_000.0),
         "contract's player_bid should be set to the rule's computed bid",
     );
@@ -203,8 +225,8 @@ fn disabled_rule_and_missing_rule_stay_silent() {
         BidRule { enabled: false, margin: 0.5 },
     );
     // MARKET_GEO_COMSATS: no rule entry at all.
-    let idx_a = inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
-    let idx_b = inject_contract(&mut gs, 2, "Comsat A", MARKET_GEO_COMSATS);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 2, "Comsat A", MARKET_GEO_COMSATS);
 
     let mut all_events = Vec::new();
     for _ in 0..4 {
@@ -216,11 +238,11 @@ fn disabled_rule_and_missing_rule_stay_silent() {
         "no BidPlaced should fire for a disabled rule or a market with no rule, got: {all_events:?}",
     );
     assert_eq!(
-        gs.available_contracts[idx_a].player_bid, None,
+        player_bid_for(&gs, "Rideshare A"), None,
         "disabled-rule contract should stay unbid",
     );
     assert_eq!(
-        gs.available_contracts[idx_b].player_bid, None,
+        player_bid_for(&gs, "Comsat A"), None,
         "no-rule contract should stay unbid",
     );
 }
@@ -237,7 +259,7 @@ fn no_cost_history_no_bid() {
         MARKET_RIDESHARE,
         BidRule { enabled: true, margin: 0.5 },
     );
-    let idx = inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
 
     let events = gs.advance_day();
     assert!(
@@ -245,7 +267,7 @@ fn no_cost_history_no_bid() {
         "no build-cost history means no cost basis, so no bid should fire: {events:?}",
     );
     assert_eq!(
-        gs.available_contracts[idx].player_bid, None,
+        player_bid_for(&gs, "Rideshare A"), None,
         "contract should remain unbid without cost history",
     );
 }
@@ -267,8 +289,8 @@ fn gate_blocks_overcommitment() {
     gs.player_company.manufacturing.inventory.rockets.truncate(1);
     assert_eq!(gs.player_company.manufacturing.inventory.rockets.len(), 1);
 
-    let idx_first = inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
-    let idx_second = inject_contract(&mut gs, 2, "Rideshare B", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 2, "Rideshare B", MARKET_RIDESHARE);
 
     let events = gs.advance_day();
     let bids: Vec<_> = events.iter().filter_map(|e| match e {
@@ -280,11 +302,11 @@ fn gate_blocks_overcommitment() {
         "with only 1 rocket in stock, exactly one bid should fire; got {bids:?}",
     );
     assert_eq!(
-        gs.available_contracts[idx_first].player_bid, Some(15_000_000.0),
+        player_bid_for(&gs, "Rideshare A"), Some(15_000_000.0),
         "the first contract in list order should be the one that gets bid",
     );
     assert_eq!(
-        gs.available_contracts[idx_second].player_bid, None,
+        player_bid_for(&gs, "Rideshare B"), None,
         "the second contract should stay unbid while stock is exhausted",
     );
 
@@ -339,7 +361,7 @@ fn accepted_unflown_contract_reserves_stock() {
         budget_ceiling: 0.0,
         player_bid: None,
     });
-    let idx = inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
 
     let events = gs.advance_day();
     assert!(
@@ -348,7 +370,7 @@ fn accepted_unflown_contract_reserves_stock() {
          so no bid should fire: {events:?}",
     );
     assert_eq!(
-        gs.available_contracts[idx].player_bid, None,
+        player_bid_for(&gs, "Rideshare A"), None,
         "solicitation should stay unbid while stock is fully reserved",
     );
 }
@@ -380,7 +402,7 @@ fn manual_bid_not_overridden() {
     }
 
     assert_eq!(
-        gs.available_contracts[idx].player_bid,
+        player_bid_for(&gs, "Rideshare A"),
         Some(42_000_000.0),
         "manual bid should never be overwritten by the rule engine",
     );

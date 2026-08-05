@@ -16,7 +16,15 @@ impl GameState {
     pub fn advance_day(&mut self) -> Vec<GameEvent> {
         let mut events = Vec::new();
 
-        self.date = self.date.next_day();
+        // The date is *not* bumped here — the tick does today's work under
+        // today's date and only rolls over at the very end. That ordering is
+        // what makes "launch to LEO on the 1st arrives on the 1st" true: the
+        // flight created while the clock read the 1st is resolved by a tick
+        // still stamped the 1st. Bumping first would stamp it the 2nd.
+        //
+        // One consequence: the very first tick of a new game runs its body on
+        // the start date (2001-01-01), so January gets its contracts on day
+        // one instead of the game opening with an empty first month.
 
         // Daily R&D across the player's project lists. The tick is a
         // Company method so competitors can eventually run the same
@@ -662,6 +670,9 @@ impl GameState {
         if self.player_company.has_actionable_manufacturing_orders() {
             self.player_company.notified_manufacturing_idle = false;
         }
+
+        // Today is done — roll over. Everything above ran under today's date.
+        self.date = self.date.next_day();
 
         events
     }

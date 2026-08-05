@@ -219,7 +219,21 @@ fn missions_are_correlated_and_numbered() {
 /// A GameState with monthly rideshare campaign announcements rigged on
 /// (2 missions, 30-day cadence, 20-day bid window).
 fn campaign_world(seed: u64) -> GameState {
+    GameState::with_balance("Test".into(), seed, campaign_balance(true))
+}
+
+/// `campaign_world` with the scripted competitor switched off, so the player
+/// really is the sole bidder. Tests that assert "a reference bid always wins"
+/// need this: otherwise DinoSoar is free to underbid, and whether it does
+/// comes down to where its cost basis happens to sit on the announcement
+/// date — which shifts with any calendar change.
+fn solo_campaign_world(seed: u64) -> GameState {
+    GameState::with_balance("Test".into(), seed, campaign_balance(false))
+}
+
+fn campaign_balance(competitor_enabled: bool) -> BalanceConfig {
     let mut config = BalanceConfig::default();
+    config.competitor.enabled = competitor_enabled;
     let arch = config
         .markets
         .archetypes
@@ -234,7 +248,7 @@ fn campaign_world(seed: u64) -> GameState {
         program_names: vec!["End To End Program".into()],
         bid_window_days: 20,
     });
-    GameState::with_balance("Test".into(), seed, config)
+    config
 }
 
 /// Advance until the first campaign announcement and return its id.
@@ -356,7 +370,10 @@ fn won_campaign_issues_preaccepted_missions_and_retires() {
         .map(|c| c.deadline)
         .max()
         .expect("missions outstanding");
-    while gs.date <= last_deadline.add_days(1) {
+    // +2, not +1: a tick runs under today's date and rolls over at the end,
+    // so the tick that processes `last_deadline + 1` is the one that starts
+    // with the clock reading `last_deadline + 1`.
+    while gs.date <= last_deadline.add_days(2) {
         gs.advance_day();
     }
     assert!(
@@ -372,7 +389,7 @@ fn won_campaign_issues_preaccepted_missions_and_retires() {
 #[test]
 fn reference_block_bid_wins_across_seeds() {
     for seed in 1..=20u64 {
-        let mut gs = campaign_world(seed);
+        let mut gs = solo_campaign_world(seed);
         let cid = advance_to_announcement(&mut gs);
         let (reference, deadline) = {
             let c = gs.active_campaigns.iter().find(|c| c.id == cid).unwrap();
@@ -383,7 +400,9 @@ fn reference_block_bid_wins_across_seeds() {
             }
         };
         gs.place_campaign_bid(cid, reference).expect("bid lands");
-        while gs.date <= deadline.add_days(1) {
+        // +2: see the note on the retirement sweep above — the resolving
+        // tick is the first one that *runs* past the deadline.
+        while gs.date <= deadline.add_days(2) {
             gs.advance_day();
         }
         // The campaign either still exists as Won, or won and already
@@ -563,12 +582,16 @@ fn missed_mission_takes_extra_rep_hit_and_strikes() {
     let cid = rocket_tycoon::contract::CampaignId(8001);
     gs.active_campaigns.push(won_campaign_fixture(&gs, 8001, 4));
 
-    // Issue mission 1, then force it overdue.
+    // Issue mission 1, then force it overdue. Dated to the day the issuing
+    // tick ran under: a tick works under the date the clock reads now and
+    // rolls over only at the end, so a mission due *today* is not yet overdue
+    // when today's tick runs — expiry needs the date strictly past it.
+    let issued_on = gs.date;
     gs.advance_day();
     let mission = gs.player_company.active_contracts.iter_mut()
         .find(|c| c.campaign_id == Some(cid))
         .expect("mission 1 should have issued pre-accepted");
-    mission.deadline = gs.date;
+    mission.deadline = issued_on;
     let severity = gs.markets.iter()
         .find(|m| m.id == MARKET_RIDESHARE).unwrap().failure_severity;
     let expiry_before = gs.player_company.reputation.expiry_factor;
@@ -617,12 +640,20 @@ fn program_cancelled_after_max_misses() {
         .find(|m| m.id == MARKET_RIDESHARE).unwrap().failure_severity;
     let expiry_before = gs.player_company.reputation.expiry_factor;
 
+    // A tick works under the date the clock reads now and only rolls over at
+    // the end, so a mission due *today* is not yet overdue when today's tick
+    // runs — expiry needs the date strictly past the deadline. Dating each
+    // mission to the day the *previous* tick ran under keeps one tick per
+    // strike, which the mission accounting below depends on.
+
     // Strike 1: issue mission 1, expire it.
+    let day1 = gs.date;
     gs.advance_day();
     gs.player_company.active_contracts.iter_mut()
         .find(|c| c.campaign_id == Some(cid))
         .expect("mission 1 issued")
-        .deadline = gs.date;
+        .deadline = day1;
+    let day2 = gs.date;
     gs.advance_day();
 
     // Strike 2 (issued the same tick that expired mission 1): expire
@@ -630,7 +661,7 @@ fn program_cancelled_after_max_misses() {
     gs.player_company.active_contracts.iter_mut()
         .find(|c| c.campaign_id == Some(cid))
         .expect("mission 2 issued")
-        .deadline = gs.date;
+        .deadline = day2;
     let events = gs.advance_day();
 
     let cancelled = events.iter().find_map(|e| match e {

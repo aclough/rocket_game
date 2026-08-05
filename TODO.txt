@@ -4,4 +4,3 @@ Power:
 [] Make color coding of contracts take into account spacecraft duration
 [] Check on grandfathered power
     [] Maybe add a default battery instead?
-[] Timing for batteries and launches, related fenceposts.  We want a launch to LEO on the 1st of the month to arrive in LEO, then deliver any payload, then check battery, then for it to progress to the 2nd.

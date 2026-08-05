@@ -29,21 +29,32 @@ fn test_advance_day() {
     let events = gs.advance_day();
     assert_eq!(gs.date, GameDate::new(2001, 1, 2));
     assert_eq!(gs.elapsed_days(), 1);
-    // Normal day should produce no events (DayAdvanced no longer logged)
-    assert!(events.is_empty());
+    // A tick does *today's* work and rolls the date only at the end, so the
+    // very first tick runs on the start date — 2001-01-01, a month start.
+    // A new game therefore opens with January's contracts instead of sitting
+    // out its first month.
+    assert!(events.iter().any(|e| matches!(e, GameEvent::MonthStart)));
+
+    // An ordinary mid-month day still produces nothing (DayAdvanced is not
+    // logged).
+    let quiet = gs.advance_day();
+    assert_eq!(gs.date, GameDate::new(2001, 1, 3));
+    assert!(quiet.is_empty());
 }
 
 #[test]
 fn test_advance_to_new_month() {
     let mut gs = GameState::new("Test".into(), 100.0, 1);
-    // Advance 31 days to get to Feb 1
+    // 31 ticks cover Jan 1 through Jan 31, leaving the clock reading Feb 1.
     for _ in 0..31 {
         gs.advance_day();
     }
     assert_eq!(gs.date, GameDate::new(2001, 2, 1));
-    // Last tick should have produced MonthStart
-    let recent = gs.event_log.recent(10);
-    assert!(recent.iter().any(|(_, e)| matches!(e, GameEvent::MonthStart)));
+    // February's MonthStart belongs to the tick that *runs* on Feb 1, which
+    // is the next one — not the one that merely rolled the date onto it.
+    let events = gs.advance_day();
+    assert!(events.iter().any(|e| matches!(e, GameEvent::MonthStart)));
+    assert_eq!(gs.date, GameDate::new(2001, 2, 2));
 }
 
 #[test]
@@ -1976,4 +1987,112 @@ fn test_cycle_auto_build_target_requires_testing_and_wraps() {
     assert_eq!(gs.player_company.cycle_auto_build_target(0), Some(3));
     assert_eq!(gs.player_company.cycle_auto_build_target(0), Some(0));
     assert!(!gs.player_company.auto_build_targets.contains_key(&pid));
+}
+
+/// The launch/battery fencepost: a launch to LEO on the 1st arrives on the
+/// 1st, delivers, and has its battery checked once — at LEO, after delivery —
+/// before the clock reaches the 2nd.
+///
+/// Three things have to hold together for that, and each one was broken
+/// separately before:
+///   * `advance_day` runs the day's work under today's date and rolls over
+///     only at the end, so the tick that resolves a launch made while the
+///     clock read the 1st is itself stamped the 1st.
+///   * the in-flight power tick runs *after* the leg completes, and is
+///     skipped entirely for a flight that arrived, so the battery is not
+///     charged against the launch site it just left.
+///   * the arriving craft is ticked once, by the parked-fleet loop, and not
+///     also as a flight — the arrival-day double drain.
+#[test]
+fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
+    use crate::power::PowerSource;
+    use crate::rocket_project::{RocketProject, RocketProjectId};
+
+    const BATTERY_KWD: f64 = 5.0;
+
+    let (mut design, engine_projects) = make_three_stage_design();
+    // A battery on the upper stage — the one that survives to orbit — so the
+    // craft has explicit power (and so a second drain would be visible rather
+    // than browning it out).
+    design.stage_groups[2][0].power_sources = vec![PowerSource::new_battery(BATTERY_KWD)];
+
+    let mut gs = GameState::new("Test".into(), 200_000_000.0, 42);
+    gs.player_company.engine_projects = engine_projects;
+    assert_eq!(gs.date, GameDate::new(2001, 1, 1), "fixture premise: games start on the 1st");
+
+    let rp = RocketProject::new(
+        RocketProjectId(1), design.clone(), &crate::balance_config::BalanceConfig::default(),
+    );
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(99);
+    let sim = crate::launch::simulate_launch(
+        &design, "leo", 0.0,
+        &gs.player_company.engine_projects, &rp.flaws, &[], &mut rng,
+    );
+
+    let rocket_mass = sim.degraded_design.total_mass_kg();
+    let thrust = sim.degraded_design.group_thrust_n(0);
+    let (path, _) = crate::location::DELTA_V_MAP
+        .shortest_path("earth_surface", "leo", rocket_mass)
+        .expect("the three-stage fixture reaches LEO");
+    let route = crate::flight::build_route(&path, rocket_mass, thrust, false);
+    let leg_days = route.first().map(|l| l.total_days()).unwrap_or(0);
+    assert_eq!(leg_days, 0, "earth_surface -> leo is a same-day leg");
+
+    let rocket = sim.degraded_design.instantiate(
+        crate::rocket::RocketId(1), "earth_surface", 0.0,
+    );
+
+    gs.active_flights.push(crate::flight::Flight {
+        id: crate::flight::FlightId(1),
+        company: crate::flight::CompanyRef::Player,
+        rocket_name: "Fencepost".into(),
+        rocket_project_id: RocketProjectId(1),
+        design: sim.degraded_design,
+        rocket,
+        payloads: vec![],
+        current_location: "earth_surface".into(),
+        route,
+        current_leg: 0,
+        leg_days_remaining: leg_days,
+        status: crate::flight::FlightStatus::InTransit,
+        flaws_activated: sim.flaws_activated,
+        launch_date: gs.date,
+        persist: true,
+        launch_partial: None,
+        flaw_rolled_groups: sim.flaw_rolled_groups,
+        reactor_flaws_rolled: false,
+    });
+
+    let events = gs.advance_day();
+
+    // Arrived and delivered within the tick that ran on the 1st.
+    assert!(
+        gs.active_flights.is_empty(),
+        "a 0-day leg must complete on its launch day, not the day after",
+    );
+    assert_eq!(gs.spacecraft.len(), 1, "the persisting craft should be parked in orbit");
+    assert_eq!(gs.spacecraft[0].location, "leo");
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::LaunchSuccess { .. })),
+        "arrival should be reported by the tick that ran on the 1st, got {events:?}",
+    );
+    assert!(
+        gs.event_log.iter().any(|(d, e)| *d == GameDate::new(2001, 1, 1)
+            && matches!(e, GameEvent::LaunchSuccess { .. })),
+        "the arrival must be stamped the 1st, not the 2nd",
+    );
+    // ...and only then does the clock reach the 2nd.
+    assert_eq!(gs.date, GameDate::new(2001, 1, 2));
+
+    // Exactly one housekeeping day, charged at LEO. Two would mean the craft
+    // was ticked both as a flight and as a parked spacecraft.
+    let sc = &gs.spacecraft[0];
+    let one_day_kwd = sc.rocket.total_housekeeping_w(&sc.design) / 1000.0;
+    assert!(one_day_kwd > 0.0, "fixture premise: the surviving stage draws power");
+    let drained = BATTERY_KWD - sc.rocket.total_battery_charge_kwd();
+    assert!(
+        (drained - one_day_kwd).abs() < 1e-9,
+        "arrival day should cost exactly one housekeeping day ({one_day_kwd} kWd), drained {drained}",
+    );
 }

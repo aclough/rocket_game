@@ -297,12 +297,16 @@ pub fn build_route(
                 .unwrap_or_else(|| transfer.total_delta_v(rocket_mass_kg));
             let coast_days = transfer.transit_days;
 
-            // Burn time: dv / acceleration, where acceleration = thrust / mass
+            // Burn time: dv / acceleration, where acceleration = thrust / mass.
+            // Whole days only: a burn that starts and finishes inside a single
+            // day costs no calendar days, so `burn_days` counts the days the
+            // engines are still firing when the clock rolls over. Rounding up
+            // instead would charge a ~9-minute ascent a full day and stop a
+            // launch to LEO from ever arriving on its launch day.
             let burn_days = if total_thrust_n > 0.0 {
                 let accel = total_thrust_n / rocket_mass_kg;
                 let burn_time_s = dv_cost / accel;
-                
-                (burn_time_s / 86400.0).ceil() as u32
+                (burn_time_s / 86400.0).floor() as u32
             } else {
                 0
             };
@@ -391,10 +395,11 @@ pub fn build_route_for_rocket(
             .map(|gi| design.group_effective_thrust_n(gi, avail_for_engines))
             .unwrap_or(0.0);
 
+        // Whole days only — see the note in `build_route`.
         let burn_days = if thrust > 0.0 {
             let accel = thrust / current_mass;
             let burn_time_s = dv_cost / accel;
-            (burn_time_s / 86400.0).ceil() as u32
+            (burn_time_s / 86400.0).floor() as u32
         } else {
             0
         };
@@ -501,8 +506,13 @@ mod tests {
         assert_eq!(legs[0].from, "earth_surface");
         assert_eq!(legs[0].to, "leo");
         assert!(legs[0].delta_v_cost > 0.0);
-        // Chemical rocket burn to LEO is sub-day
-        assert_eq!(legs[0].burn_days, 1); // ceil of a few minutes
+        // A chemical ascent burns for a few minutes, so it occupies no whole
+        // calendar days — and LEO has no coast either. That makes the leg
+        // same-day, which is what lets a launch on the 1st reach orbit,
+        // deliver, and have its battery checked before the clock hits the 2nd.
+        assert_eq!(legs[0].burn_days, 0);
+        assert_eq!(legs[0].coast_days, 0);
+        assert_eq!(legs[0].total_days(), 0);
     }
 
     #[test]

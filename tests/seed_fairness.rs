@@ -124,9 +124,13 @@ fn assert_year1_reference_bid_wins(seed: u64) {
         }
     };
 
-    // Run to resolution and demand the player award.
+    // Run to resolution and demand the player award. A tick works under the
+    // date the clock reads now and rolls over only at the end, so bids
+    // resolve on the first tick that *runs* past the deadline — loop on the
+    // date the body ran under, not the post-tick one.
     let mut won = false;
-    while gs.date <= bid_deadline {
+    loop {
+        let ran_on = gs.date;
         for evt in gs.advance_day() {
             match evt {
                 GameEvent::ContractAwarded { contract_name, .. }
@@ -139,6 +143,9 @@ fn assert_year1_reference_bid_wins(seed: u64) {
                     panic!("seed {seed}: reference bid on {contract_name} was rejected"),
                 _ => {}
             }
+        }
+        if ran_on > bid_deadline {
+            break;
         }
     }
     assert!(won, "seed {seed}: reference bid on {name} never resolved to an award");

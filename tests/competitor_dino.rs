@@ -67,8 +67,14 @@ fn inject_geo_solicitation(
 fn advance_through(gs: &mut GameState, deadline: rocket_tycoon::calendar::GameDate, max_days: u32) -> Vec<GameEvent> {
     let mut all = Vec::new();
     for _ in 0..max_days {
+        // A tick does its work under the date the clock reads *now* and only
+        // rolls over at the end, so bids resolve on the first tick that
+        // *runs* past the deadline. Test the date the body ran under —
+        // `gs.date` alone is already a day ahead and would return before the
+        // resolving tick ever happened.
+        let ran_on = gs.date;
         all.extend(gs.advance_day());
-        if gs.date > deadline {
+        if ran_on > deadline {
             return all;
         }
     }

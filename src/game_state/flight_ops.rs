@@ -456,27 +456,6 @@ impl GameState {
                 flight.leg_days_remaining -= 1;
             }
 
-            // Power tick: drain or recharge batteries from supply vs.
-            // housekeeping demand at the current location's solar
-            // distance. Brownout strands the flight (housekeeping lost →
-            // loss of control). No-op for grandfathered designs with no
-            // explicit power sources.
-            let sun_au = crate::location::DELTA_V_MAP
-                .location(&flight.current_location)
-                .map_or(1.0, |l| l.sun_distance_au());
-            let brownout = flight.rocket.run_daily_power_tick(&flight.design, sun_au);
-            if brownout {
-                flight.status = FlightStatus::Stranded;
-                stranded_indices.push(i);
-                let evt = GameEvent::PowerLost {
-                    rocket_name: flight.rocket_name.clone(),
-                    location: crate::contract::destination_display_name(
-                        &flight.current_location).to_string(),
-                };
-                events.push(evt);
-                continue;
-            }
-
             // Roll endurance (PerDay) flaws for this flight's rocket project
             for rf in &rocket_flaw_table {
                 if rf.project_id != flight.rocket_project_id {
@@ -760,6 +739,38 @@ impl GameState {
                     // All legs complete
                     flight.status = FlightStatus::Arrived;
                     arrived_indices.push(i);
+                }
+            }
+
+            // Power tick: drain or recharge batteries from supply vs.
+            // housekeeping demand at the current location's solar distance.
+            // Brownout strands the flight (housekeeping lost → loss of
+            // control). No-op for grandfathered designs with no explicit
+            // power sources.
+            //
+            // Runs last, so a leg completed this tick is charged at the
+            // location it *reached* rather than the one it left. A flight
+            // that arrived is skipped entirely: it is about to become a
+            // Spacecraft, and the parked-fleet loop in `advance_day` ticks
+            // it there — after its payload is delivered, and exactly once.
+            // Ticking here as well was the arrival-day double drain.
+            // Stranded and destroyed flights `continue` above and never
+            // reach this point.
+            if !matches!(flight.status, FlightStatus::Arrived) {
+                let sun_au = crate::location::DELTA_V_MAP
+                    .location(&flight.current_location)
+                    .map_or(1.0, |l| l.sun_distance_au());
+                let brownout = flight.rocket.run_daily_power_tick(&flight.design, sun_au);
+                if brownout {
+                    flight.status = FlightStatus::Stranded;
+                    stranded_indices.push(i);
+                    let evt = GameEvent::PowerLost {
+                        rocket_name: flight.rocket_name.clone(),
+                        location: crate::contract::destination_display_name(
+                            &flight.current_location).to_string(),
+                    };
+                    events.push(evt);
+                    continue;
                 }
             }
         }
