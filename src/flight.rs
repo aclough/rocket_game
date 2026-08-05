@@ -480,7 +480,12 @@ mod tests {
             rocket_project_id: RocketProjectId(1),
             name: "LEM".into(),
         };
-        assert!((lem_payload.mass_kg() - 700.0).abs() < 0.01);
+        // 700 plus the default battery: a stage that fits no power sources
+        // still carries the kit that keeps its own lights on.
+        let lem_battery = crate::power::PowerSource::default_battery_for_stage(
+            &lem_design.stage_groups[0][0],
+        ).mass_kg;
+        assert!((lem_payload.mass_kg() - (700.0 + lem_battery)).abs() < 0.01);
 
         // Outer Spacecraft (CSM-class) carrying the LEM as a nested payload.
         let (csm_design, csm_rocket) = tiny_spacecraft(2, 1000.0, 200.0);
@@ -493,8 +498,16 @@ mod tests {
             rocket_project_id: RocketProjectId(2),
             name: "CSM".into(),
         };
-        // CSM (1300) + LEM (700) = 2000.
-        assert!((csm_payload.mass_kg() - 2000.0).abs() < 0.01);
+        // CSM (1300) + LEM (700) = 2000, plus a default battery on each —
+        // the nested one rides along inside the LEM's own mass.
+        let csm_battery = crate::power::PowerSource::default_battery_for_stage(
+            &csm_design.stage_groups[0][0],
+        ).mass_kg;
+        let expected = 2000.0 + csm_battery + lem_battery;
+        assert!(
+            (csm_payload.mass_kg() - expected).abs() < 0.01,
+            "expected {expected}, got {}", csm_payload.mass_kg(),
+        );
     }
 
     #[test]

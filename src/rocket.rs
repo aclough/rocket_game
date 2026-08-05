@@ -101,7 +101,7 @@ impl RocketDesign {
         let mut total = 0.0;
         for group in &self.stage_groups {
             for stage in group {
-                for src in &stage.power_sources {
+                for src in stage.effective_power_sources().iter() {
                     total += stage_source_supply_w(stage, src, sun_distance_au);
                 }
             }
@@ -118,6 +118,40 @@ impl RocketDesign {
             }
         }
         total
+    }
+
+    /// Total battery capacity (kilowatt-days) across all stages, counting
+    /// the default battery on any stage the player left bare.
+    pub fn total_battery_kwd(&self) -> f64 {
+        let mut total = 0.0;
+        for group in &self.stage_groups {
+            for stage in group {
+                for src in stage.effective_power_sources().iter() {
+                    if let crate::power::PowerSourceKind::Battery = src.kind {
+                        total += src.capacity_kwd;
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    /// How many days this design can run its own housekeeping at
+    /// `sun_distance_au` before the batteries are flat. `INFINITY` when
+    /// steady supply covers demand — panels, RTGs and reactors don't run
+    /// down.
+    ///
+    /// Counts every stage, i.e. the design as built before any staging.
+    /// This is the figure the designer quotes and the one contract
+    /// readiness checks a route against; a craft partway through a flight
+    /// has already dropped stages, so ask its `Rocket` instead.
+    pub fn endurance_days(&self, sun_distance_au: f64) -> f64 {
+        let deficit_w = self.total_housekeeping_w()
+            - self.total_power_supply_w(sun_distance_au);
+        if deficit_w <= 0.0 {
+            return f64::INFINITY;
+        }
+        self.total_battery_kwd() / (deficit_w / 1000.0)
     }
 
     /// Power available for engines (after housekeeping is subtracted) at
@@ -229,7 +263,7 @@ impl RocketDesign {
                 group.iter().map(|stage| {
                     // Sum battery capacity across the stage's power
                     // sources, then start fully charged.
-                    let battery_capacity: f64 = stage.power_sources.iter()
+                    let battery_capacity: f64 = stage.effective_power_sources().iter()
                         .filter_map(|p| match &p.kind {
                             crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
                             _ => None,
@@ -650,7 +684,7 @@ impl Rocket {
                     .and_then(|g| g.get(si))
                     .is_some_and(|ss| ss.attached);
                 if !attached { continue; }
-                for src in &stage.power_sources {
+                for src in stage.effective_power_sources().iter() {
                     total += stage_source_supply_w(stage, src, sun_distance_au);
                 }
             }
@@ -683,7 +717,7 @@ impl Rocket {
                     .and_then(|g| g.get(si))
                     .is_some_and(|ss| ss.attached);
                 if !attached { continue; }
-                for src in &stage.power_sources {
+                for src in stage.effective_power_sources().iter() {
                     if let crate::power::PowerSourceKind::Battery = src.kind {
                         total += src.capacity_kwd;
                     }
@@ -702,23 +736,6 @@ impl Rocket {
             .sum()
     }
 
-    /// True if at least one attached stage has any explicit power source.
-    /// Stages with no power_sources are treated as grandfathered in
-    /// (Phase 1 doesn't enforce power on legacy designs).
-    pub fn has_explicit_power(&self, design: &RocketDesign) -> bool {
-        for (gi, group) in design.stage_groups.iter().enumerate() {
-            for (si, stage) in group.iter().enumerate() {
-                let attached = self.stage_states.get(gi)
-                    .and_then(|g| g.get(si))
-                    .is_some_and(|ss| ss.attached);
-                if attached && !stage.power_sources.is_empty() {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
     /// Run one day of power balance.
     ///
     /// Priority of supply against housekeeping demand:
@@ -730,13 +747,12 @@ impl Rocket {
     ///   4. If batteries hit zero with demand unmet, brownout (return
     ///      true).
     ///
-    /// No-op on rockets with no explicit power sources (grandfathered).
+    /// Runs on every rocket. There is no grandfathered case: a stage the
+    /// player left bare still carries its default battery, so it lives
+    /// about a day away from the pad rather than forever.
     pub fn run_daily_power_tick(
         &mut self, design: &RocketDesign, sun_distance_au: f64,
     ) -> bool {
-        if !self.has_explicit_power(design) {
-            return false;
-        }
         let free_supply_w = self.free_supply_w(design, sun_distance_au);
         let demand_w = self.total_housekeeping_w(design);
         let net_w = free_supply_w - demand_w;
@@ -768,7 +784,7 @@ impl Rocket {
                     .and_then(|g| g.get(si))
                     .is_some_and(|ss| ss.attached);
                 if !attached { continue; }
-                for src in &stage.power_sources {
+                for src in stage.effective_power_sources().iter() {
                     match src.kind {
                         crate::power::PowerSourceKind::SolarPanel { .. }
                         | crate::power::PowerSourceKind::Rtg { .. }
@@ -806,7 +822,7 @@ impl Rocket {
                 if !crate::power::fuel_cell_can_run_on(&stage.engine) {
                     continue;
                 }
-                for src in &stage.power_sources {
+                for src in stage.effective_power_sources().iter() {
                     if remaining_w <= 0.0 { return produced_w; }
                     let (peak_w, kg_per_kwd) = match src.kind {
                         crate::power::PowerSourceKind::FuelCell { peak_w, kg_per_kwd }
@@ -841,7 +857,7 @@ impl Rocket {
                     .and_then(|g| g.get(si))
                     .is_some_and(|ss| ss.attached);
                 if !attached { continue; }
-                let stage_capacity: f64 = stage.power_sources.iter()
+                let stage_capacity: f64 = stage.effective_power_sources().iter()
                     .filter_map(|p| match p.kind {
                         crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
                         _ => None,
@@ -1439,8 +1455,12 @@ mod tests {
             stage_groups: vec![vec![s1]],
         };
 
-        // wet = structural(2000) + engine(250) + prop(30000) = 32250
-        assert_eq!(design.total_mass_kg(), 32_250.0);
+        // wet = structural(2000) + engine(250) + prop(30000) = 32250, plus
+        // the default battery the stage carries for having fitted no power.
+        let battery = crate::power::PowerSource::default_battery_for_stage(
+            &design.stage_groups[0][0],
+        ).mass_kg;
+        assert_eq!(design.total_mass_kg(), 32_250.0 + battery);
     }
 
     #[test]
@@ -1761,15 +1781,58 @@ mod tests {
     }
 
     #[test]
-    fn rocket_with_no_power_sources_is_grandfathered() {
-        // A design with no power_sources skips power tracking entirely —
-        // run_daily_power_tick is a no-op and never browns out.
+    fn endurance_reports_how_long_a_design_can_keep_its_own_lights_on() {
+        // Nothing fitted: the default battery, sized to exactly one day of
+        // the stage's own housekeeping. This is the figure that decides
+        // whether a design can survive a route.
+        let bare = powered_design(0.0, 0.0);
+        let days = bare.endurance_days(1.0);
+        assert!(
+            (days - crate::power::DEFAULT_BATTERY_DAYS).abs() < 1e-9,
+            "a bare design should last exactly the default reserve, got {days}",
+        );
+
+        // A panel that covers housekeeping never runs down.
+        let demand = bare.total_housekeeping_w();
+        let solar = powered_design(demand * 2.0, 1.0);
+        assert!(
+            solar.endurance_days(1.0).is_infinite(),
+            "steady supply above demand means the batteries never drain",
+        );
+
+        // The same panel out at 10 AU collects 1% of the light, so the
+        // battery is back to setting the clock.
+        let far = solar.endurance_days(10.0);
+        assert!(far.is_finite() && far > 0.0, "expected a finite reserve, got {far}");
+    }
+
+    #[test]
+    fn a_stage_with_no_power_sources_still_carries_its_default_battery() {
+        // A bare stage used to be exempt from the power system entirely,
+        // which made it immortal anywhere in the solar system. It now flies
+        // the default battery: no supply, one day of reserve, then dark.
         let design = powered_design(0.0, 0.0);
+        let stage = &design.stage_groups[0][0];
+        assert!(stage.power_sources.is_empty(), "fixture premise: nothing fitted");
+
+        let sources = stage.effective_power_sources();
+        assert_eq!(sources.len(), 1, "a bare stage still has power kit");
+        assert!(matches!(sources[0].kind, crate::power::PowerSourceKind::Battery));
+        assert!(sources[0].mass_kg > 0.0, "the default battery has mass");
+        assert!(
+            design.total_mass_kg() > stage.structural_mass_kg,
+            "and that mass reaches the design's totals",
+        );
+
         let mut rocket = design.instantiate(RocketId(1), "leo", 1000.0);
-        assert!(!rocket.has_explicit_power(&design));
-        for _ in 0..1000 {
-            assert!(!rocket.run_daily_power_tick(&design, 1.0));
-        }
+        assert!(
+            !rocket.run_daily_power_tick(&design, 1.0),
+            "the first day runs on the reserve",
+        );
+        assert!(
+            rocket.run_daily_power_tick(&design, 1.0),
+            "with nothing generating, the reserve is gone and the craft browns out",
+        );
     }
 
     #[test]

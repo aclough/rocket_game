@@ -745,8 +745,8 @@ impl GameState {
             // Power tick: drain or recharge batteries from supply vs.
             // housekeeping demand at the current location's solar distance.
             // Brownout strands the flight (housekeeping lost → loss of
-            // control). No-op for grandfathered designs with no explicit
-            // power sources.
+            // control). Runs on every design: a stage with a bare power rack
+            // still carries its default battery, so nothing is exempt.
             //
             // Runs last, so a leg completed this tick is charged at the
             // location it *reached* rather than the one it left. A flight

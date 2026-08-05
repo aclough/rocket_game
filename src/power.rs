@@ -8,6 +8,12 @@ use serde::{Deserialize, Serialize};
 /// Solar irradiance at 1 AU, used as the reference for solar-panel rating.
 pub const SOLAR_FLUX_1AU_W_M2: f64 = 1361.0;
 
+/// How long the battery a stage carries by default can run that stage's
+/// own housekeeping. Short on purpose: it is enough to reach orbit and
+/// hand off a payload, not enough to cross the solar system, so anything
+/// with a real cruise has to be given real power.
+pub const DEFAULT_BATTERY_DAYS: f64 = 1.0;
+
 /// Heat-rejection technology for a reactor's radiator. One variant for now;
 /// the enum exists so future research can introduce better radiators
 /// (heatpipe, pumped-fluid loops, droplet radiators…) without refactoring.
@@ -90,13 +96,20 @@ impl PowerSource {
         }
     }
 
-    /// Construct a default housekeeping battery for legacy stages.
-    /// Sized to ~1 W per 10 kg of `dry_mass_kg` and a one-day reserve, so
-    /// existing tests/saves keep working without authoring data.
-    pub fn default_battery_for(dry_mass_kg: f64) -> Self {
-        let housekeeping_w = dry_mass_kg * 0.1; // 1 W per 10 kg
-        // capacity sized to one day at housekeeping load (kW × day)
-        let capacity_kwd = (housekeeping_w / 1000.0) * 1.0;
+    /// The battery every stage carries whether or not the player fitted
+    /// one: enough to run its own housekeeping for
+    /// `DEFAULT_BATTERY_DAYS`. A stage with nothing on its power rack is
+    /// not a stage exempt from power — it is a stage flying the minimum
+    /// kit, and that kit has mass.
+    ///
+    /// Sized from the stage's own demand rather than re-deriving watts
+    /// from mass, so `Stage::housekeeping_w` stays the single rule for
+    /// what a bus draws.
+    ///
+    /// Free, unlike `new_battery`: the player never chose it, so billing
+    /// for it would quietly move every design's unit cost.
+    pub fn default_battery_for_stage(stage: &crate::stage::Stage) -> Self {
+        let capacity_kwd = (stage.housekeeping_w() / 1000.0) * DEFAULT_BATTERY_DAYS;
         // Mass: lithium-ion ballpark ~250 Wh/kg ≈ 6 kWd/kg.
         let mass_kg = (capacity_kwd / 6.0).max(0.1);
         PowerSource {

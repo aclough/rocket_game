@@ -2,5 +2,3 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
 Power:
 [] Make color coding of contracts take into account spacecraft duration
-[] Check on grandfathered power
-    [] Maybe add a default battery instead?

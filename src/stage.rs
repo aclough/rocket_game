@@ -28,20 +28,41 @@ pub struct Stage {
     pub propellant_mass_kg: f64,
     pub structural_mass_kg: f64,
     pub fairing: Option<Fairing>,
-    /// Power sources (batteries, solar panels, RTGs…) installed on this
-    /// stage. Default empty for save compat; rockets without explicitly
-    /// added power get a tiny battery synthesised at instantiate time.
+    /// Power sources (batteries, solar panels, RTGs…) the player fitted to
+    /// this stage. Empty is normal — and empty does not mean unpowered.
+    /// Read it through [`Stage::effective_power_sources`] for anything
+    /// physical; this field is only the explicit, editable list.
     #[serde(default)]
     pub power_sources: Vec<PowerSource>,
 }
 
 impl Stage {
-    /// Dry mass: structural mass + all engines + fairing (if present)
-    /// + power sources.
+    /// The stage's power sources as the physics sees them: the explicit
+    /// list, or — when the player fitted nothing — the default battery
+    /// every stage carries.
+    ///
+    /// Every mass, supply, capacity and drain calculation goes through
+    /// here, so there is no such thing as a stage outside the power
+    /// system. A stage used to be exempt when this list was empty, which
+    /// made a design with no power sources immortal anywhere in the solar
+    /// system.
+    pub fn effective_power_sources(&self) -> std::borrow::Cow<'_, [PowerSource]> {
+        if self.power_sources.is_empty() {
+            std::borrow::Cow::Owned(vec![PowerSource::default_battery_for_stage(self)])
+        } else {
+            std::borrow::Cow::Borrowed(&self.power_sources)
+        }
+    }
+
+    /// Dry mass: structural mass, all engines, the fairing if present, and
+    /// the power sources.
+    ///
+    /// The default battery counts toward this — it is real kit, so it shows
+    /// up in delta-v and thrust-to-weight like anything else bolted on.
     pub fn dry_mass_kg(&self) -> f64 {
         let engine_mass = self.engine.mass_kg * self.engine_count as f64;
         let fairing_mass = self.fairing.as_ref().map_or(0.0, |f| f.mass_kg);
-        let power_mass: f64 = self.power_sources.iter().map(|p| p.mass_kg).sum();
+        let power_mass: f64 = self.effective_power_sources().iter().map(|p| p.mass_kg).sum();
         self.structural_mass_kg + engine_mass + fairing_mass + power_mass
     }
 
@@ -124,24 +145,32 @@ mod tests {
         }
     }
 
+    /// Mass of the battery a bare stage carries by default. Every dry-mass
+    /// figure below includes it: the stage fits no power sources of its own,
+    /// so `effective_power_sources` hands it the default kit, and that kit
+    /// weighs something.
+    fn default_battery_mass(s: &Stage) -> f64 {
+        PowerSource::default_battery_for_stage(s).mass_kg
+    }
+
     #[test]
     fn test_dry_mass_no_fairing() {
         let s = test_stage();
-        // structural 1500 + 1 engine * 500 = 2000
-        assert_eq!(s.dry_mass_kg(), 2000.0);
+        // structural 1500 + 1 engine * 500 = 2000, + the default battery
+        assert_eq!(s.dry_mass_kg(), 2000.0 + default_battery_mass(&s));
     }
 
     #[test]
     fn test_dry_mass_with_fairing() {
         let mut s = test_stage();
         s.fairing = Some(Fairing { mass_kg: 200.0, diameter_m: 4.0 });
-        assert_eq!(s.dry_mass_kg(), 2200.0);
+        assert_eq!(s.dry_mass_kg(), 2200.0 + default_battery_mass(&s));
     }
 
     #[test]
     fn test_wet_mass() {
         let s = test_stage();
-        assert_eq!(s.wet_mass_kg(), 22_000.0);
+        assert_eq!(s.wet_mass_kg(), 22_000.0 + default_battery_mass(&s));
     }
 
     #[test]
@@ -155,8 +184,8 @@ mod tests {
     fn test_multi_engine_dry_mass() {
         let mut s = test_stage();
         s.engine_count = 3;
-        // 1500 + 3*500 = 3000
-        assert_eq!(s.dry_mass_kg(), 3000.0);
+        // 1500 + 3*500 = 3000, + the default battery
+        assert_eq!(s.dry_mass_kg(), 3000.0 + default_battery_mass(&s));
     }
 
     #[test]

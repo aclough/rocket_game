@@ -2246,22 +2246,28 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                 style,
             )));
 
-            // Per-stage power summary (compact)
-            if !stage.power_sources.is_empty() {
-                let supply: f64 = stage.power_sources.iter()
+            // Per-stage power summary (compact). Always shown: a stage with
+            // an empty rack is not unpowered, it is flying the default
+            // battery, and the player should see the kit it is carrying.
+            {
+                let sources = stage.effective_power_sources();
+                let supply: f64 = sources.iter()
                     .map(|p| crate::rocket::stage_source_supply_w(stage, p, 1.0)).sum();
-                let battery: f64 = stage.power_sources.iter()
+                let battery: f64 = sources.iter()
                     .filter_map(|p| match p.kind {
                         crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
                         _ => None,
                     }).sum();
                 let demand = stage.housekeeping_w();
+                let fitted = if stage.power_sources.is_empty() {
+                    "default battery".to_string()
+                } else {
+                    format!("{} src", stage.power_sources.len())
+                };
                 lines.push(Line::from(Span::styled(
                     format!(
-                        "{}      power: {} src, {:.0}/{:.0} W @ 1AU, {:.2} kWd",
-                        group_indent,
-                        stage.power_sources.len(),
-                        supply, demand, battery,
+                        "{}      power: {}, {:.0}/{:.0} W @ 1AU, {:.2} kWd",
+                        group_indent, fitted, supply, demand, battery,
                     ),
                     Style::default().fg(Color::DarkGray),
                 )));
@@ -2363,36 +2369,32 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
         // attached stages; show whether designs balance.
         let mut total_housekeeping = 0.0;
         let mut total_supply_1au = 0.0;
-        let mut total_battery_kwd = 0.0;
-        let mut any_explicit = false;
         for group in &temp_design.stage_groups {
             for stage in group {
                 total_housekeeping += stage.housekeeping_w();
-                for src in &stage.power_sources {
-                    any_explicit = true;
+                for src in stage.effective_power_sources().iter() {
                     total_supply_1au += crate::rocket::stage_source_supply_w(stage, src, 1.0);
-                    if let crate::power::PowerSourceKind::Battery = src.kind {
-                        total_battery_kwd += src.capacity_kwd;
-                    }
                 }
             }
         }
-        let summary = if any_explicit {
-            let surplus = total_supply_1au - total_housekeeping;
-            let surplus_marker = if surplus >= 0.0 { "+" } else { "" };
-            format!(
-                "  Power: {:.0} W supply (@ 1 AU)  /  {:.0} W demand  ({}{:.0} W)  battery: {:.2} kWd",
-                total_supply_1au, total_housekeeping, surplus_marker, surplus, total_battery_kwd,
-            )
+        let total_battery_kwd = temp_design.total_battery_kwd();
+        // Endurance, not surplus, is what kills a mission: a craft with no
+        // generation is fine for a same-day LEO drop and dead on the way to
+        // Mars. Quote how long it lasts and flag only the case that cannot
+        // survive its own first day.
+        let endurance = temp_design.endurance_days(1.0);
+        let endurance_text = if endurance.is_infinite() {
+            "indefinite".to_string()
         } else {
-            format!(
-                "  Power: no explicit sources (grandfathered)  housekeeping demand: {:.0} W",
-                total_housekeeping,
-            )
+            format!("{endurance:.1} d")
         };
+        let summary = format!(
+            "  Power: {:.0} W supply (@ 1 AU)  /  {:.0} W demand  battery: {:.2} kWd  endurance: {}",
+            total_supply_1au, total_housekeeping, total_battery_kwd, endurance_text,
+        );
         lines.push(Line::from(Span::styled(
             summary,
-            if any_explicit && total_supply_1au < total_housekeeping {
+            if endurance < 1.0 {
                 Style::default().fg(Color::Red)
             } else {
                 Style::default().fg(Color::DarkGray)
@@ -3958,12 +3960,16 @@ fn draw_power_editor_modal(
     //   - thrust = housekeeping + engines at full power_draw_w * count.
     // For a chemical engine the two are equal; for an ion stage the
     // thrust draw can be orders of magnitude higher than housekeeping.
-    let supply_w: f64 = stage.power_sources.iter()
+    // Header figures read the effective rack — an empty rack still flies the
+    // default battery. The Equipped list below deliberately does not: it is
+    // the editable set the cursor indexes into, and the default is not
+    // something the player can select or remove.
+    let supply_w: f64 = stage.effective_power_sources().iter()
         .map(|p| crate::rocket::stage_source_supply_w(stage, p, 1.0)).sum();
     let idle_demand_w = stage.housekeeping_w();
     let engine_draw_w = stage.engine.power_draw_w * stage.engine_count as f64;
     let thrust_demand_w = idle_demand_w + engine_draw_w;
-    let battery_kwd: f64 = stage.power_sources.iter()
+    let battery_kwd: f64 = stage.effective_power_sources().iter()
         .filter_map(|p| match p.kind {
             crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
             _ => None,
@@ -4009,7 +4015,11 @@ fn draw_power_editor_modal(
     )));
     if n_equipped == 0 {
         lines.push(Line::from(Span::styled(
-            "    (none)",
+            format!(
+                "    (none fitted — flying the default battery, {battery_kwd:.2} kWd, \
+                 about {:.0} day of housekeeping)",
+                crate::power::DEFAULT_BATTERY_DAYS,
+            ),
             Style::default().fg(Color::DarkGray),
         )));
     }

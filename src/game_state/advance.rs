@@ -559,9 +559,6 @@ impl GameState {
         // spacecraft is gone after one event).
         let mut browned_out: Vec<usize> = Vec::new();
         for (i, sc) in self.spacecraft.iter_mut().enumerate() {
-            if !sc.rocket.has_explicit_power(&sc.design) {
-                continue;
-            }
             let sun_au = crate::location::DELTA_V_MAP
                 .location(&sc.location)
                 .map_or(1.0, |l| l.sun_distance_au());
