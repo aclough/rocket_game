@@ -1297,6 +1297,10 @@ fn contract_style(
 pub const SELECTION_BG: Color = Color::Rgb(48, 48, 72);
 
 fn check_contract_readiness(contract: &Contract, company: &Company) -> ContractReadiness {
+    // Keep looking after the first capable design rather than returning on
+    // it: green means "a rocket for this is already on the shelf", and a
+    // later project may be the one holding stock.
+    let mut best = ContractReadiness::Impossible;
     for project in &company.rocket_projects {
         // Only consider designs that are past InDesign (Testing, Revising, or Complete equivalent)
         if matches!(project.status, rocket_project::RocketDesignStatus::InDesign { .. }) {
@@ -1305,15 +1309,24 @@ fn check_contract_readiness(contract: &Contract, company: &Company) -> ContractR
         let max_payload = rocket_project::max_payload_to(
             &project.design, "earth_surface", &contract.destination,
         );
-        if max_payload >= contract.payload_kg {
-            if company.manufacturing.inventory.rocket_count(project.project_id) > 0 {
-                return ContractReadiness::Ready;
-            } else {
-                return ContractReadiness::NeedsBuild;
-            }
+        if max_payload < contract.payload_kg {
+            continue;
         }
+        // Lifting it is not the same as arriving with it. A design whose
+        // power runs out mid-transit does not count as capable, so it
+        // leaves the contract red rather than promising a delivery that
+        // ends as a dead spacecraft somewhere along the route.
+        if !rocket_project::survives_trip(
+            &project.design, "earth_surface", &contract.destination, contract.payload_kg,
+        ) {
+            continue;
+        }
+        if company.manufacturing.inventory.rocket_count(project.project_id) > 0 {
+            return ContractReadiness::Ready;
+        }
+        best = ContractReadiness::NeedsBuild;
     }
-    ContractReadiness::Impossible
+    best
 }
 
 fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {

@@ -239,6 +239,53 @@ pub fn max_payload_to(design: &RocketDesign, from: &str, to: &str) -> f64 {
     lo.floor().max(0.0)
 }
 
+/// Whether `design` can keep its own housekeeping powered for the whole
+/// trip from `from` to `to` carrying `payload_kg`.
+///
+/// Lifting the mass is only half the question. A craft running on nothing
+/// but its default battery reaches LEO and hands off a payload the same
+/// day, but goes dark long before it reaches Mars — and until this check
+/// existed, a contract it could never survive still showed as flyable.
+///
+/// Flies the real route with the real daily power tick rather than
+/// comparing a route length against an endurance number. Burns are flown
+/// too: staging drops panels and batteries along with the tanks, so a
+/// design that looks comfortable on the pad can be dark once its booster
+/// is gone. Same model as the flight loop, so a craft that survives here
+/// survives in flight for the same reasons.
+pub fn survives_trip(design: &RocketDesign, from: &str, to: &str, payload_kg: f64) -> bool {
+    let Some((path, _)) = DELTA_V_MAP.shortest_path_for_rocket(from, to, design, payload_kg)
+    else {
+        return false;
+    };
+
+    let sun_au_at = |loc: &str| {
+        DELTA_V_MAP.location(loc).map_or(1.0, |l| l.sun_distance_au())
+    };
+
+    let mut rocket = design.instantiate(crate::rocket::RocketId(0), from, payload_kg);
+    let route = crate::flight::build_route_for_rocket(&path, design, &rocket, payload_kg);
+
+    for leg in &route {
+        // Every leg costs at least the day it completes on, and the flight
+        // loop charges that day at the location it reached — so cruise days
+        // are billed at the departure end and the closing day at the far
+        // end. A zero-day leg is just the closing day.
+        let cruise_days = leg.total_days().saturating_sub(1);
+        let cruise_au = sun_au_at(&leg.from);
+        for _ in 0..cruise_days {
+            if rocket.run_daily_power_tick(design, cruise_au) {
+                return false;
+            }
+        }
+        rocket.burn_sequential(design, leg.delta_v_cost, leg.ambient_pressure_pa);
+        if rocket.run_daily_power_tick(design, sun_au_at(&leg.to)) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Compute max payload for all reachable destinations from a given location.
 /// Returns a sorted list of (destination_name, max_payload_kg).
 pub fn payload_table(design: &RocketDesign, from: &str) -> Vec<(&'static str, f64)> {
@@ -510,6 +557,53 @@ mod tests {
         let dests = ["leo", "nea", "made_up_place"];
         let table = payload_table_for(&design, "earth_surface", &dests);
         assert!(table.iter().any(|(n, _)| n.contains("LEO") || n.contains("Low Earth")));
+    }
+
+    /// Reaching a place and surviving the trip there are different
+    /// questions, and the readiness colours depend on both.
+    #[test]
+    fn a_design_can_reach_a_destination_it_cannot_stay_alive_to_reach() {
+        let bare = simple_two_stage_design();
+        assert!(
+            bare.stage_groups.iter().flatten().all(|s| s.power_sources.is_empty()),
+            "fixture premise: nothing fitted, so every stage flies the default battery",
+        );
+
+        // LEO is a same-day trip: arrive, hand off, done. One day of
+        // housekeeping is exactly what the default battery is for.
+        assert!(
+            max_payload_to(&bare, "earth_surface", "leo") > 0.0,
+            "fixture premise: this design reaches LEO",
+        );
+        assert!(
+            survives_trip(&bare, "earth_surface", "leo", 0.0),
+            "a same-day LEO delivery is what the default battery covers",
+        );
+
+        // GTO is not: the transfer takes days the battery cannot cover, and
+        // there is nothing aboard generating power.
+        assert!(
+            max_payload_to(&bare, "earth_surface", "gto") > 0.0,
+            "fixture premise: this design can lift mass to GTO",
+        );
+        assert!(
+            !survives_trip(&bare, "earth_surface", "gto", 0.0),
+            "no generation means the craft goes dark before it arrives",
+        );
+
+        // Give the upper stage a panel that covers its own housekeeping and
+        // the same trip becomes survivable — nothing about the delta-v
+        // changed, only whether the lights stay on.
+        let mut solar = simple_two_stage_design();
+        {
+            let upper = &mut solar.stage_groups[1][0];
+            let demand = upper.housekeeping_w();
+            upper.power_sources.push(crate::power::PowerSource::new_solar_panel(demand * 4.0));
+        }
+        assert!(
+            survives_trip(&solar, "earth_surface", "gto", 0.0),
+            "a panel that outpaces housekeeping keeps it alive the whole way",
+        );
     }
 
     #[test]
