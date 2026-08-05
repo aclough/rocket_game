@@ -239,8 +239,28 @@ pub fn max_payload_to(design: &RocketDesign, from: &str, to: &str) -> f64 {
     lo.floor().max(0.0)
 }
 
-/// Whether `design` can keep its own housekeeping powered for the whole
-/// trip from `from` to `to` carrying `payload_kg`.
+/// How a design's power holds up over a specific trip.
+///
+/// Days are counted the way the flight loop ticks them: `flight_days` is
+/// how many days the craft has to keep its own lights on, and it is 1 for
+/// a same-day run to LEO — the launch day itself. Calendar time from
+/// launch to arrival is therefore `flight_days - 1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TripPower {
+    /// Days the craft must stay powered, launch day included. Never 0.
+    pub flight_days: u32,
+    /// The day its batteries run out, 1-indexed to match `flight_days`,
+    /// or `None` if it arrives with the lights still on.
+    pub dark_on_day: Option<u32>,
+}
+
+impl TripPower {
+    pub fn survives(&self) -> bool {
+        self.dark_on_day.is_none()
+    }
+}
+
+/// Fly `path` and report how the design's power holds up.
 ///
 /// Lifting the mass is only half the question. A craft running on nothing
 /// but its default battery reaches LEO and hands off a payload the same
@@ -253,37 +273,65 @@ pub fn max_payload_to(design: &RocketDesign, from: &str, to: &str) -> f64 {
 /// design that looks comfortable on the pad can be dark once its booster
 /// is gone. Same model as the flight loop, so a craft that survives here
 /// survives in flight for the same reasons.
-pub fn survives_trip(design: &RocketDesign, from: &str, to: &str, payload_kg: f64) -> bool {
-    let Some((path, _)) = DELTA_V_MAP.shortest_path_for_rocket(from, to, design, payload_kg)
-    else {
-        return false;
-    };
-
+///
+/// Takes the path rather than looking it up, so a caller that already
+/// planned the mission doesn't pay for a second search.
+pub fn trip_power_along(
+    design: &RocketDesign,
+    path: &[&'static str],
+    payload_kg: f64,
+) -> TripPower {
     let sun_au_at = |loc: &str| {
         DELTA_V_MAP.location(loc).map_or(1.0, |l| l.sun_distance_au())
     };
+    let origin = path.first().copied().unwrap_or("earth_surface");
 
-    let mut rocket = design.instantiate(crate::rocket::RocketId(0), from, payload_kg);
-    let route = crate::flight::build_route_for_rocket(&path, design, &rocket, payload_kg);
+    let mut rocket = design.instantiate(crate::rocket::RocketId(0), origin, payload_kg);
+    let route = crate::flight::build_route_for_rocket(path, design, &rocket, payload_kg);
 
+    // Every leg costs at least the day it closes on, so a route of N legs
+    // is never shorter than N days however fast the transfers are.
+    let flight_days: u32 = route.iter().map(|l| l.total_days().max(1)).sum::<u32>().max(1);
+
+    let mut day = 0u32;
     for leg in &route {
-        // Every leg costs at least the day it completes on, and the flight
-        // loop charges that day at the location it reached — so cruise days
-        // are billed at the departure end and the closing day at the far
-        // end. A zero-day leg is just the closing day.
+        // Cruise days are billed at the departure end and the closing day
+        // at the far end, matching where the flight loop thinks the craft
+        // is when it charges each one. A zero-day leg is just the close.
         let cruise_days = leg.total_days().saturating_sub(1);
         let cruise_au = sun_au_at(&leg.from);
         for _ in 0..cruise_days {
+            day += 1;
             if rocket.run_daily_power_tick(design, cruise_au) {
-                return false;
+                return TripPower { flight_days, dark_on_day: Some(day) };
             }
         }
         rocket.burn_sequential(design, leg.delta_v_cost, leg.ambient_pressure_pa);
+        day += 1;
         if rocket.run_daily_power_tick(design, sun_au_at(&leg.to)) {
-            return false;
+            return TripPower { flight_days, dark_on_day: Some(day) };
         }
     }
-    true
+    TripPower { flight_days, dark_on_day: None }
+}
+
+/// `trip_power_along` for callers that have endpoints rather than a path.
+/// `None` when the design cannot fly the route at all.
+pub fn trip_power(
+    design: &RocketDesign,
+    from: &str,
+    to: &str,
+    payload_kg: f64,
+) -> Option<TripPower> {
+    let (path, _) = DELTA_V_MAP.shortest_path_for_rocket(from, to, design, payload_kg)?;
+    Some(trip_power_along(design, &path, payload_kg))
+}
+
+/// Whether `design` can keep its own housekeeping powered for the whole
+/// trip from `from` to `to` carrying `payload_kg`. False when it cannot
+/// fly the route at all.
+pub fn survives_trip(design: &RocketDesign, from: &str, to: &str, payload_kg: f64) -> bool {
+    trip_power(design, from, to, payload_kg).is_some_and(|p| p.survives())
 }
 
 /// Compute max payload for all reachable destinations from a given location.
@@ -604,6 +652,32 @@ mod tests {
             survives_trip(&solar, "earth_surface", "gto", 0.0),
             "a panel that outpaces housekeeping keeps it alive the whole way",
         );
+    }
+
+    /// The designer quotes both of these numbers, so pin how days are
+    /// counted: `flight_days` includes the launch day, which makes ETA
+    /// `flight_days - 1` and a same-day LEO run come out as zero.
+    #[test]
+    fn trip_power_counts_the_launch_day_and_names_the_day_it_goes_dark() {
+        let bare = simple_two_stage_design();
+
+        let leo = trip_power(&bare, "earth_surface", "leo", 0.0)
+            .expect("fixture premise: this design reaches LEO");
+        assert_eq!(leo.flight_days, 1, "a single-leg ascent is one day of lights-on");
+        assert_eq!(leo.dark_on_day, None, "the default battery covers exactly that");
+        assert!(leo.survives());
+
+        let gto = trip_power(&bare, "earth_surface", "gto", 0.0)
+            .expect("fixture premise: this design can lift mass to GTO");
+        assert!(gto.flight_days > 1, "GTO is more than one leg, so more than one day");
+        assert_eq!(
+            gto.dark_on_day, Some(2),
+            "one day of reserve carries it through day 1 and no further",
+        );
+        assert!(!gto.survives());
+
+        // A route the design cannot fly at all is not a power verdict.
+        assert_eq!(trip_power(&bare, "earth_surface", "mars_surface", 0.0), None);
     }
 
     #[test]

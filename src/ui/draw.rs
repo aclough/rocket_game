@@ -2112,20 +2112,35 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
             crate::path_planning::MissionPlan::Reachable { path, dv: required_dv } => {
                 let available_dv = temp_design.total_delta_v(state.payload_kg);
                 let margin = available_dv - required_dv;
-                let eta_days: u32 = path.windows(2)
-                    .filter_map(|w| DELTA_V_MAP.transfer(w[0], w[1]))
-                    .map(|t| t.transit_days)
-                    .sum();
-                let color = if margin < 0.0 { Color::Red }
+                // Reuses the path the planner just found, so the endurance
+                // answer costs no extra search — and it is the same check
+                // the contract list colours by, so the two agree.
+                let power = rocket_project::trip_power_along(
+                    &temp_design, &path, state.payload_kg,
+                );
+                // Calendar days from launch to arrival. `flight_days`
+                // counts the launch day itself, and a same-day run to LEO
+                // arrives before the clock moves.
+                let eta_days = power.flight_days.saturating_sub(1);
+                let color = if margin < 0.0 || !power.survives() { Color::Red }
                     else if margin < 500.0 { Color::Yellow }
                     else { Color::Green };
                 let eta_str = if eta_days == 0 { "<1 d".to_string() }
                     else { format!("{} d", eta_days) };
+                // Reaching it and surviving the trip are separate failures,
+                // so name which one bit.
+                let power_note = match power.dark_on_day {
+                    Some(day) => format!(
+                        "    POWER: dark on day {} of {}",
+                        day, power.flight_days,
+                    ),
+                    None => String::new(),
+                };
                 Line::from(Span::styled(
                     format!(
-                        "  Mission: {} → {}    Req Δv: {:.0}    Avail: {:.0}    Margin: {:+.0} m/s    ETA: {}",
+                        "  Mission: {} → {}    Req Δv: {:.0}    Avail: {:.0}    Margin: {:+.0} m/s    ETA: {}{}",
                         launch_display, destination_display,
-                        required_dv, available_dv, margin, eta_str,
+                        required_dv, available_dv, margin, eta_str, power_note,
                     ),
                     Style::default().fg(color),
                 ))
