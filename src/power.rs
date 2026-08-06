@@ -14,6 +14,29 @@ pub const SOLAR_FLUX_1AU_W_M2: f64 = 1361.0;
 /// with a real cruise has to be given real power.
 pub const DEFAULT_BATTERY_DAYS: f64 = 1.0;
 
+/// Specific energy of a space-rated battery, at cell level. Modern
+/// lithium-ion; the game has no era scaling for this yet.
+pub const BATTERY_WH_PER_KG: f64 = 250.0;
+
+/// Kilograms of battery per kilowatt-day of capacity.
+///
+/// A kilowatt-day is 24 kWh, so this is `24_000 / BATTERY_WH_PER_KG` — 96
+/// kg for every kWd. Capacity in this game is quoted in kilowatt-*days*
+/// because the power balance ticks daily, which makes a "1 kWd battery" a
+/// far bigger object than the number suggests: a 10 kWd pack is 240 kWh
+/// and very nearly a tonne.
+pub const BATTERY_KG_PER_KWD: f64 = 24_000.0 / BATTERY_WH_PER_KG;
+
+/// Reactant a hydrogen/oxygen fuel cell burns per kilowatt-day of output.
+///
+/// 2H₂ + O₂ → 2H₂O releases 237 kJ per mole of water, so 36 g of reactant
+/// yields 0.132 kWh — 0.273 kg/kWh, or 6.6 kg/kWd, and that is the
+/// thermodynamic ceiling at 100% efficiency. Apollo's cells ran around
+/// 65%, putting a real one near 10 kg/kWd, which is roughly where this
+/// sits. The previous 5 kg/kWd was below the Gibbs limit, i.e. a fuel
+/// cell that got more energy out than the reaction contains.
+pub const FUEL_CELL_KG_PER_KWD: f64 = 9.5;
+
 /// Heat-rejection technology for a reactor's radiator. One variant for now;
 /// the enum exists so future research can introduce better radiators
 /// (heatpipe, pumped-fluid loops, droplet radiators…) without refactoring.
@@ -110,8 +133,7 @@ impl PowerSource {
     /// for it would quietly move every design's unit cost.
     pub fn default_battery_for_stage(stage: &crate::stage::Stage) -> Self {
         let capacity_kwd = (stage.housekeeping_w() / 1000.0) * DEFAULT_BATTERY_DAYS;
-        // Mass: lithium-ion ballpark ~250 Wh/kg ≈ 6 kWd/kg.
-        let mass_kg = (capacity_kwd / 6.0).max(0.1);
+        let mass_kg = (capacity_kwd * BATTERY_KG_PER_KWD).max(0.1);
         PowerSource {
             kind: PowerSourceKind::Battery,
             mass_kg,
@@ -121,10 +143,12 @@ impl PowerSource {
         }
     }
 
-    /// Build a freshly-charged battery of a given capacity. Mass ratio
-    /// roughly matches modern lithium-ion (250 Wh/kg ≈ 6 kWd/kg).
+    /// Build a freshly-charged battery of a given capacity. Mass comes
+    /// from `BATTERY_KG_PER_KWD` — 96 kg per kilowatt-day, so a battery
+    /// big enough to run a bus for days is a substantial piece of the
+    /// stage, not a rounding error.
     pub fn new_battery(capacity_kwd: f64) -> Self {
-        let mass_kg = (capacity_kwd / 6.0).max(0.1);
+        let mass_kg = (capacity_kwd * BATTERY_KG_PER_KWD).max(0.1);
         // Material cost ~$50K per kWd (rough estimate, lithium pack scale).
         let material_cost = capacity_kwd * 50_000.0;
         PowerSource {
@@ -153,9 +177,13 @@ impl PowerSource {
     /// scale): mass ∝ peak^0.9, cost ∝ peak^0.85. No upper bound.
     pub fn new_solar_panel(peak_w_at_1au: f64) -> Self {
         let p = peak_w_at_1au.max(1.0);
-        // Reference: a 1 kW panel ≈ 5 kg, $100K. State-of-the-art space
-        // panels are ~150 W/kg; the 5 kg/kW choice is conservative for
-        // legacy/tycoon-game ranges. (Tunable in a balance pass.)
+        // Reference: a 1 kW panel ≈ 5 kg, $100K — i.e. 200 W/kg. That is
+        // optimistic, not conservative as this comment used to claim:
+        // roll-out arrays like ROSA reach ~150 W/kg, and a rigid ISS-style
+        // wing counting structure is nearer 30. Left as it is because the
+        // generosity is deliberate — panels are the answer the power system
+        // wants players to reach for — but it is a thumb on the scale, not
+        // a datasheet figure. (Tunable in a balance pass.)
         let ref_w = 1000.0;
         let ref_mass = 5.0;
         let ref_cost = 100_000.0;
@@ -225,9 +253,7 @@ impl PowerSource {
         PowerSource {
             kind: PowerSourceKind::FuelCell {
                 peak_w: p,
-                // ~5 kg of LOX/LH2 per kWd of output (≈Apollo-PEM
-                // efficiency, generous for hydrocarbon mixtures).
-                kg_per_kwd: 5.0,
+                kg_per_kwd: FUEL_CELL_KG_PER_KWD,
             },
             mass_kg,
             material_cost,
@@ -439,6 +465,48 @@ mod tests {
         assert_eq!(b.steady_output_w(1.0), 0.0);
         assert!((b.capacity_kwd - 2.0).abs() < 1e-9);
         assert!((b.stored_kwd - 2.0).abs() < 1e-9);
+    }
+
+    /// The conversion this file once got wrong by a factor of 576, by
+    /// treating a kilowatt-day as though it were a kilowatt-hour. Asserted
+    /// against the energy density rather than the derived constant, so
+    /// changing one without the other fails here.
+    #[test]
+    fn battery_mass_matches_its_stated_energy_density() {
+        for kwd in [0.5, 2.0, 10.0] {
+            let b = PowerSource::new_battery(kwd);
+            let watt_hours = kwd * 24.0 * 1000.0;
+            let expected_kg = watt_hours / BATTERY_WH_PER_KG;
+            assert!(
+                (b.mass_kg - expected_kg).abs() < 1e-9,
+                "{kwd} kWd = {watt_hours} Wh should mass {expected_kg} kg, got {}",
+                b.mass_kg,
+            );
+        }
+        // The headline number: a 10 kWd pack is 240 kWh and close to a tonne.
+        assert!((PowerSource::new_battery(10.0).mass_kg - 960.0).abs() < 1e-6);
+    }
+
+    /// A fuel cell cannot extract more energy from H2/O2 than the reaction
+    /// contains. 2H2 + O2 -> 2H2O gives 237 kJ per mole of water, so 36 g
+    /// of reactant yields 0.132 kWh: 6.6 kg/kWd is the ceiling at 100%
+    /// efficiency, and a real cell is worse.
+    #[test]
+    fn fuel_cell_reactant_use_stays_above_the_thermodynamic_floor() {
+        const GIBBS_LIMIT_KG_PER_KWD: f64 = 6.58;
+        let cell = PowerSource::new_fuel_cell(1_000.0);
+        let PowerSourceKind::FuelCell { kg_per_kwd, .. } = cell.kind else {
+            panic!("new_fuel_cell should build a fuel cell, got {:?}", cell.kind);
+        };
+        assert!(
+            (kg_per_kwd - FUEL_CELL_KG_PER_KWD).abs() < 1e-9,
+            "the cell should carry the shared rate, got {kg_per_kwd}",
+        );
+        assert!(
+            kg_per_kwd > GIBBS_LIMIT_KG_PER_KWD,
+            "{kg_per_kwd} kg/kWd is below the Gibbs limit of \
+             {GIBBS_LIMIT_KG_PER_KWD} — that is a cell producing free energy",
+        );
     }
 
     #[test]

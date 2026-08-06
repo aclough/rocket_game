@@ -201,9 +201,15 @@ mod tests {
     fn test_delta_v_no_payload() {
         let s = test_stage();
         let ve = s.engine.exhaust_velocity();
-        let expected = ve * (22_000.0_f64 / 2_000.0).ln();
+        // Against the stage's real masses, not the bare 2000/22000: the
+        // default battery is part of the dry mass it has to haul.
+        let expected = ve * (s.wet_mass_kg() / s.dry_mass_kg()).ln();
         let dv = s.delta_v(0.0);
         assert!((dv - expected).abs() < 1.0, "expected {}, got {}", expected, dv);
+        assert!(
+            s.dry_mass_kg() > 2_000.0,
+            "premise: the default battery is real mass, got {}", s.dry_mass_kg(),
+        );
     }
 
     #[test]
@@ -211,7 +217,8 @@ mod tests {
         let s = test_stage();
         let ve = s.engine.exhaust_velocity();
         let payload = 5_000.0;
-        let expected = ve * ((22_000.0_f64 + payload) / (2_000.0 + payload)).ln();
+        let expected = ve
+            * ((s.wet_mass_kg() + payload) / (s.dry_mass_kg() + payload)).ln();
         let dv = s.delta_v(payload);
         assert!((dv - expected).abs() < 1.0, "expected {}, got {}", expected, dv);
     }
