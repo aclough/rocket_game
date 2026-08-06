@@ -424,15 +424,9 @@ impl GameState {
         let mut capable_projects: Vec<RocketProjectId> = Vec::new();
         let mut best_cost: Option<f64> = None;
         for rp in &self.player_company.rocket_projects {
-            if !matches!(rp.status, crate::rocket_project::RocketDesignStatus::Testing { .. }) {
-                continue;
-            }
-            let cap = *self.payload_capability_cache
-                .entry((rp.project_id, rp.revision, destination.to_string()))
-                .or_insert_with(|| crate::rocket_project::max_payload_to(
-                    &rp.design, "earth_surface", destination,
-                ));
-            if payload_kg > cap * BID_PAYLOAD_MARGIN {
+            // `project_can_serve` is shared with the contract list's
+            // colours, so a white row and a placed bid now agree.
+            if !self.project_can_serve(rp, destination, payload_kg) {
                 continue;
             }
             capable_projects.push(rp.project_id);
@@ -457,7 +451,6 @@ impl GameState {
         if total_stock == 0 {
             return;
         }
-        let accepted_unflown = self.player_accepted_unflown();
 
         for i in 0..self.available_contracts.len() {
             let (market_id, dest, payload_kg) = {
@@ -481,14 +474,10 @@ impl GameState {
             let (capable_projects, best_cost) = self.player_capable_cost(&dest, payload_kg);
             let Some(cost) = best_cost else { continue };
 
-            // Readiness gate: free stock must cover this new bid.
-            let capable_stock = self.player_company.manufacturing.inventory.rockets.iter()
-                .filter(|r| capable_projects.contains(&r.rocket_project_id))
-                .count();
-            let pending_bids = self.available_contracts.iter()
-                .filter(|c| c.player_bid.is_some())
-                .count();
-            if capable_stock <= accepted_unflown + pending_bids {
+            // Readiness gate: free stock must cover this new bid. Shared
+            // with the contract list, which paints a contract amber rather
+            // than white when this is what's holding a bid back.
+            if self.free_capable_stock(&capable_projects) == 0 {
                 continue;
             }
 

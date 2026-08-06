@@ -545,3 +545,57 @@ fn basic_policy_installs_rules() {
         );
     }
 }
+
+// ---------------------------------------------------------------
+// 13. A design under revision still bids.
+// ---------------------------------------------------------------
+
+/// `auto_revise` is on by default, so the first flaw testing turns up
+/// flips a project from Testing to Revising. The bid engine used to
+/// require Testing exactly, which silenced every rule the moment that
+/// happened — while the contract list, which only ever skipped InDesign,
+/// went on showing the contract as ready to fly. Same stock, same cost
+/// history, same rule, no bid, no explanation.
+///
+/// A revision changes what gets built *next*. The rockets already on the
+/// shelf are the old revision and fly perfectly well, so they should
+/// still be bid with.
+#[test]
+fn a_revising_design_still_bids_with_the_stock_it_already_built() {
+    use rocket_tycoon::rocket_project::RocketDesignStatus;
+
+    let bid_for = |status: RocketDesignStatus| {
+        let mut gs = game_with_capable_player(13);
+        let (design_id, _) = borrowed_design_ids(&gs);
+        gs.player_company.rocket_cost_history.insert(design_id, vec![10_000_000.0]);
+        gs.player_company.bid_rules.insert(
+            MARKET_RIDESHARE,
+            BidRule { enabled: true, margin: 0.5 },
+        );
+        gs.player_company.rocket_projects[0].status = status;
+        inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+        let events = gs.advance_day();
+        events.iter().any(|e| matches!(
+            e, GameEvent::BidPlaced { contract_name, .. } if contract_name == "Rideshare A",
+        ))
+    };
+
+    assert!(
+        bid_for(RocketDesignStatus::Testing { work_completed: 0.0 }),
+        "premise: a Testing design bids",
+    );
+    assert!(
+        bid_for(RocketDesignStatus::Revising {
+            remaining_indices: vec![0],
+            work_completed: 0.0,
+        }),
+        "a design under revision should still bid — its built stock is unaffected",
+    );
+    assert!(
+        !bid_for(RocketDesignStatus::InDesign {
+            work_completed: 0.0,
+            work_required: 100.0,
+        }),
+        "a design still being drawn has nothing built to bid with",
+    );
+}

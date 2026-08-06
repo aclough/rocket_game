@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use serde::{Serialize, Deserialize};
@@ -169,13 +170,23 @@ pub struct GameState {
     /// remember their balance; old saves load with defaults.
     #[serde(default)]
     pub balance: crate::balance_config::BalanceConfig,
-    /// Max-payload lookups for the bid rule engine, keyed by
-    /// (project, revision, destination). Path planning is far too
-    /// slow to run per contract per day. Not serialized — rebuilt on
-    /// demand; cleared when a design is modified (modifications
-    /// change stage_groups without bumping revision).
+    /// Max-payload lookups, keyed by (project, revision, destination).
+    /// Path planning is far too slow to run per contract per day — or,
+    /// for the contract list's colours, per contract per frame. Not
+    /// serialized — rebuilt on demand; cleared when a design is modified
+    /// (modifications change stage_groups without bumping revision).
+    ///
+    /// Interior-mutable so the read-only draw path can share it with the
+    /// bid engine rather than recomputing everything uncached.
     #[serde(skip)]
-    pub payload_capability_cache: HashMap<(RocketProjectId, u32, String), f64>,
+    pub payload_capability_cache: RefCell<HashMap<(RocketProjectId, u32, String), f64>>,
+    /// Trip-survival lookups, keyed by (project, revision, destination,
+    /// payload bits). Payload matters here in a way it doesn't for
+    /// max-payload, and a given contract asks the same question every day
+    /// until its deadline, so the key includes it. Same lifecycle as
+    /// `payload_capability_cache`.
+    #[serde(skip)]
+    pub trip_survival_cache: RefCell<HashMap<(RocketProjectId, u32, String, u64), bool>>,
 }
 
 fn default_next_contract_id() -> u64 { 1 }
@@ -262,7 +273,8 @@ impl GameState {
             next_campaign_id: 1,
             technologies,
             balance,
-            payload_capability_cache: HashMap::new(),
+            payload_capability_cache: RefCell::new(HashMap::new()),
+            trip_survival_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -301,13 +313,13 @@ impl GameState {
         let work_required = self.balance.work.rocket_design_work_required(project.complexity)
             * self.balance.work.rocket_modification_work_fraction;
         project.design.stage_groups = new_stage_groups;
-        // The design's performance changed under the same revision —
-        // drop every cached capability figure.
-        self.payload_capability_cache.clear();
         project.status = RocketDesignStatus::InDesign {
             work_completed: 0.0,
             work_required,
         };
+        // The design's performance changed under the same revision —
+        // drop every cached capability figure.
+        self.clear_capability_caches();
 
         // Roll for a new undiscovered flaw. Uses the per-flight trigger
         // distribution from the engine flaw generator (it's the same
@@ -344,6 +356,104 @@ impl GameState {
     /// Days elapsed since the game started.
     pub fn elapsed_days(&self) -> u32 {
         self.start_date.days_until(&self.date)
+    }
+
+    /// Drop every memoized capability figure. Call whenever a design
+    /// changes under the same revision.
+    pub fn clear_capability_caches(&self) {
+        self.payload_capability_cache.borrow_mut().clear();
+        self.trip_survival_cache.borrow_mut().clear();
+    }
+
+    /// Memoized `max_payload_to` from the pad.
+    pub fn payload_capability(
+        &self, project: &crate::rocket_project::RocketProject, destination: &str,
+    ) -> f64 {
+        let key = (project.project_id, project.revision, destination.to_string());
+        if let Some(cap) = self.payload_capability_cache.borrow().get(&key) {
+            return *cap;
+        }
+        let cap = crate::rocket_project::max_payload_to(
+            &project.design, "earth_surface", destination,
+        );
+        self.payload_capability_cache.borrow_mut().insert(key, cap);
+        cap
+    }
+
+    /// Memoized `survives_trip` from the pad.
+    pub fn survives_trip(
+        &self, project: &crate::rocket_project::RocketProject,
+        destination: &str, payload_kg: f64,
+    ) -> bool {
+        let key = (
+            project.project_id, project.revision,
+            destination.to_string(), payload_kg.to_bits(),
+        );
+        if let Some(ok) = self.trip_survival_cache.borrow().get(&key) {
+            return *ok;
+        }
+        let ok = crate::rocket_project::survives_trip(
+            &project.design, "earth_surface", destination, payload_kg,
+        );
+        self.trip_survival_cache.borrow_mut().insert(key, ok);
+        ok
+    }
+
+    /// Whether this project can serve a delivery of `payload_kg` to
+    /// `destination`.
+    ///
+    /// The single rule behind both the contract list's colours and the bid
+    /// engine's choice of design. They used to answer this separately and
+    /// disagreed three ways, so a contract could sit white — promising a
+    /// bid — while every rule stayed silent on it:
+    ///
+    /// * The design has to be past `InDesign`. A revision changes what
+    ///   gets *built next*; rockets already on the shelf are the old
+    ///   revision and fly perfectly well. The bid engine used to require
+    ///   `Testing` exactly, so with `auto_revise` on by default, the first
+    ///   flaw testing turned up silenced bidding entirely.
+    /// * It has to lift the payload with [`BID_PAYLOAD_MARGIN`] to spare.
+    ///   Readiness used to accept anything up to the physical maximum, so
+    ///   contracts in the last 10% were permanently white and never bid.
+    /// * It has to survive the trip. Readiness gained this check before
+    ///   the bid engine did, so the rules could bid on a mission the list
+    ///   painted red.
+    pub fn project_can_serve(
+        &self, project: &crate::rocket_project::RocketProject,
+        destination: &str, payload_kg: f64,
+    ) -> bool {
+        use crate::rocket_project::RocketDesignStatus;
+        if matches!(project.status, RocketDesignStatus::InDesign { .. }) {
+            return false;
+        }
+        if payload_kg > self.payload_capability(project, destination) * BID_PAYLOAD_MARGIN {
+            return false;
+        }
+        self.survives_trip(project, destination, payload_kg)
+    }
+
+    /// Every project that can serve this delivery.
+    pub fn capable_projects_for(
+        &self, destination: &str, payload_kg: f64,
+    ) -> Vec<RocketProjectId> {
+        self.player_company.rocket_projects.iter()
+            .filter(|rp| self.project_can_serve(rp, destination, payload_kg))
+            .map(|rp| rp.project_id)
+            .collect()
+    }
+
+    /// Built rockets from `capable` that aren't already spoken for.
+    ///
+    /// The bid engine refuses to commit stock it hasn't got, and the
+    /// contract list colours by the same number, so a row is only white
+    /// when a bid would actually follow it.
+    pub fn free_capable_stock(&self, capable: &[RocketProjectId]) -> usize {
+        let capable_stock = self.player_company.manufacturing.inventory.rockets.iter()
+            .filter(|r| capable.contains(&r.rocket_project_id))
+            .count();
+        let committed = self.player_accepted_unflown()
+            + self.available_contracts.iter().filter(|c| c.player_bid.is_some()).count();
+        capable_stock.saturating_sub(committed)
     }
 
     /// Toggle between paused and the last non-paused speed.

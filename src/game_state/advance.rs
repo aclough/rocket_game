@@ -404,23 +404,11 @@ impl GameState {
                 // clock — a block commitment is a decision, not a
                 // ticker item.
                 let dest = campaign.destination.clone();
-                let mut liftable = false;
-                for rp in &self.player_company.rocket_projects {
-                    if !matches!(rp.status,
-                        crate::rocket_project::RocketDesignStatus::Testing { .. })
-                    {
-                        continue;
-                    }
-                    let cap = *self.payload_capability_cache
-                        .entry((rp.project_id, rp.revision, dest.clone()))
-                        .or_insert_with(|| crate::rocket_project::max_payload_to(
-                            &rp.design, "earth_surface", &dest,
-                        ));
-                    if campaign.payload_kg <= cap * crate::game_state::BID_PAYLOAD_MARGIN {
-                        liftable = true;
-                        break;
-                    }
-                }
+                // Same capability rule the bid engine and the contract
+                // colours use — a program worth pausing for is one you
+                // could actually bid on.
+                let liftable = self.player_company.rocket_projects.iter()
+                    .any(|rp| self.project_can_serve(rp, &dest, campaign.payload_kg));
                 if liftable {
                     self.speed = GameSpeed::Paused;
                 }
