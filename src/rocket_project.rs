@@ -199,6 +199,11 @@ fn design_stats(design: &RocketDesign) -> (u32, u32, u32) {
     (total_stages, unique_engines, max_parallel)
 }
 
+/// Payloads above this are not a rocket, they are a bug. Bounds the
+/// bracket search in `max_payload_to` so a design the planner will
+/// fly with anything aboard can't spin it forever.
+const PAYLOAD_SEARCH_CEILING_KG: f64 = 1_000_000.0;
+
 /// Compute the maximum payload mass (in kg) that a rocket design can deliver
 /// to a given destination. Returns 0.0 if the destination is unreachable.
 ///
@@ -217,16 +222,26 @@ pub fn max_payload_to(design: &RocketDesign, from: &str, to: &str) -> f64 {
         return 0.0;
     }
 
-    // Bracket: grow until the design can no longer make it.
+    // Bracket by growing from a low guess rather than halving down from a
+    // high one. Payload is a small fraction of liftoff mass, so a bracket
+    // opened at twice total mass spends its first several searches on
+    // payloads nothing could lift — and each search is the expensive part.
+    // A percent of total mass lands within a few doublings of the answer
+    // from either side.
     let mut lo = 0.0_f64;
-    let mut hi = (design.total_mass_kg() * 2.0).max(1.0);
-    while reachable(hi) && hi < 1_000_000.0 {
+    let mut hi = (design.total_mass_kg() * 0.01).max(1.0);
+    while reachable(hi) && hi < PAYLOAD_SEARCH_CEILING_KG {
+        lo = hi;
         hi *= 2.0;
     }
 
-    // Feasibility is monotonic in payload, so bisect. 40 halvings take the
-    // bracket well below the 1 kg the answer is rounded to.
+    // Feasibility is monotonic in payload, so bisect. Stop once the
+    // bracket is finer than the kilogram the answer is rounded to; the
+    // iteration cap is only a backstop against a pathological bracket.
     for _ in 0..40 {
+        if hi - lo <= 0.05 {
+            break;
+        }
         let mid = (lo + hi) / 2.0;
         if reachable(mid) {
             lo = mid;
@@ -678,6 +693,52 @@ mod tests {
 
         // A route the design cannot fly at all is not a power verdict.
         assert_eq!(trip_power(&bare, "earth_surface", "mars_surface", 0.0), None);
+    }
+
+    /// The route memos key on this, so it has to move when anything the
+    /// planner reads moves — and stay put when nothing does.
+    #[test]
+    fn design_fingerprint_tracks_what_the_planner_reads() {
+        let base = simple_two_stage_design();
+        let f = base.fingerprint();
+        assert_eq!(f, simple_two_stage_design().fingerprint(), "stable for equal designs");
+
+        let mut renamed = simple_two_stage_design();
+        renamed.name = "Something Else".into();
+        renamed.stage_groups[0][0].name = "Booster".into();
+        assert_eq!(
+            renamed.fingerprint(), f,
+            "names reach no number the planner uses — renaming must not \
+             throw the cache away",
+        );
+
+        let mut fuelled = simple_two_stage_design();
+        fuelled.stage_groups[0][0].propellant_mass_kg += 1.0;
+        assert_ne!(fuelled.fingerprint(), f, "propellant changes the answer");
+
+        let mut heavier = simple_two_stage_design();
+        heavier.stage_groups[1][0].structural_mass_kg += 1.0;
+        assert_ne!(heavier.fingerprint(), f, "dry mass changes the answer");
+
+        let mut better_engine = simple_two_stage_design();
+        better_engine.stage_groups[0][0].engine.isp_s += 1.0;
+        assert_ne!(better_engine.fingerprint(), f, "a degraded or improved engine differs");
+
+        let mut more_engines = simple_two_stage_design();
+        more_engines.stage_groups[0][0].engine_count += 1;
+        assert_ne!(more_engines.fingerprint(), f, "engine count changes thrust");
+
+        let mut powered = simple_two_stage_design();
+        powered.stage_groups[1][0].power_sources
+            .push(crate::power::PowerSource::new_solar_panel(500.0));
+        assert_ne!(
+            powered.fingerprint(), f,
+            "power kit has mass and decides trip survival",
+        );
+
+        let mut staged = simple_two_stage_design();
+        staged.stage_groups.pop();
+        assert_ne!(staged.fingerprint(), f, "dropping a stage changes the vehicle");
     }
 
     #[test]

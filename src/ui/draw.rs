@@ -877,9 +877,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             // Show payload table for destinations served by active markets
             // (or the LEO/MEO/GTO/GEO fallback when none are active yet).
             let dests = relevant_destinations(&app.game);
-            let table = crate::rocket_project::payload_table_for(
-                &project.design, "earth_surface", &dests,
-            );
+            let table = app.game.payload_table(&project.design, "earth_surface", &dests);
             if !table.is_empty() {
                 lines.push(Line::from("      Max payload:"));
                 for (dest, payload) in &table {
@@ -1471,7 +1469,7 @@ fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
             let payload_info = game.player_company.rocket_projects.iter()
                 .find(|rp| rp.project_id == r.rocket_project_id)
                 .map(|rp| {
-                    let leo = rocket_project::max_payload_to(&rp.design, "earth_surface", "leo");
+                    let leo = game.payload_capability(&rp.design, "earth_surface", "leo");
                     format!("  LEO: {}", format_mass(leo))
                 })
                 .unwrap_or_default();
@@ -2425,9 +2423,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
         // Payload feasibility for destinations served by active markets
         // (or the LEO/MEO/GTO/GEO fallback when none are active yet).
         let dests = relevant_destinations(&app.game);
-        let table = rocket_project::payload_table_for(
-            &temp_design, state.launch_from, &dests,
-        );
+        let table = app.game.payload_table(&temp_design, state.launch_from, &dests);
         if !table.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  Payload Feasibility:",

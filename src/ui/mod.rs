@@ -307,6 +307,32 @@ fn is_solid_engine(engine: &EngineDesign) -> bool {
 /// a nominal test mass most players never touch, and a rule that solved
 /// for a mission delta-v would quietly hang every tank in the vehicle off
 /// a number nobody chose.
+/// How long the paused game waits for a keypress before looping. Long
+/// enough that idling costs nothing, short enough that the UI still feels
+/// immediate.
+const PAUSED_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// How long to block waiting for input before the main loop comes round
+/// again.
+///
+/// Paused, there is no tick to be late for, so wait the whole interval.
+/// Running, wait only what is left until the next tick falls due.
+///
+/// Subtracting a stale `last_tick` in the paused case was a busy loop:
+/// nothing resets it while the clock is stopped, so the elapsed time grows
+/// past the interval, `saturating_sub` floors the timeout at zero, and the
+/// loop spins at full speed redrawing — pinning a core and starving input
+/// handling behind a redraw it does thousands of times a second.
+fn input_timeout(
+    speed: GameSpeed, tick_rate: Duration, since_last_tick: Duration,
+) -> Duration {
+    if speed == GameSpeed::Paused {
+        tick_rate
+    } else {
+        tick_rate.saturating_sub(since_last_tick)
+    }
+}
+
 const TARGET_LIFTOFF_TWR: f64 = 1.2;
 const TARGET_STAGE_TWR: f64 = 1.0;
 
@@ -1144,12 +1170,12 @@ impl App {
             terminal.draw(|frame| draw::draw(frame, self))?;
 
             let tick_rate = if self.game.speed == GameSpeed::Paused {
-                Duration::from_millis(100) // Still responsive to input when paused
+                PAUSED_POLL_INTERVAL // Still responsive to input when paused
             } else {
                 Duration::from_millis(self.game.speed.tick_ms())
             };
 
-            let timeout = tick_rate.saturating_sub(last_tick.elapsed());
+            let timeout = input_timeout(self.game.speed, tick_rate, last_tick.elapsed());
 
             if event::poll(timeout)? {
                 if let Event::Key(key) = event::read()? {
@@ -3868,6 +3894,52 @@ mod sync_tests {
         assert_eq!(ion_prop, MIN_AUTOSIZED_PROPELLANT,
             "an ion engine in the booster slot can lift nothing, so its tank \
              should bottom out; got {ion_prop} kg (was {kerolox_prop} kg)");
+    }
+}
+
+#[cfg(test)]
+mod loop_timing_tests {
+    use super::*;
+
+    /// The paused game must not busy-loop. `last_tick` is only reset when a
+    /// day advances, so with the clock stopped it goes arbitrarily stale;
+    /// subtracting it floored the poll timeout at zero and pinned a core.
+    #[test]
+    fn a_paused_game_waits_for_input_however_stale_the_clock_is() {
+        let rate = PAUSED_POLL_INTERVAL;
+        for stale in [
+            Duration::from_millis(0),
+            Duration::from_millis(99),
+            Duration::from_millis(101),
+            Duration::from_secs(60),
+            Duration::from_secs(86_400),
+        ] {
+            assert_eq!(
+                input_timeout(GameSpeed::Paused, rate, stale), rate,
+                "paused, {stale:?} since the last tick: must still wait the \
+                 full interval, not spin",
+            );
+        }
+    }
+
+    /// Running, the timeout is the time left until the tick falls due —
+    /// that is what keeps the game to its chosen speed.
+    #[test]
+    fn a_running_game_waits_only_until_its_next_tick() {
+        let rate = Duration::from_millis(250);
+        assert_eq!(
+            input_timeout(GameSpeed::Normal, rate, Duration::from_millis(0)),
+            rate,
+        );
+        assert_eq!(
+            input_timeout(GameSpeed::Normal, rate, Duration::from_millis(100)),
+            Duration::from_millis(150),
+        );
+        // Overdue: don't wait at all, the tick is already late.
+        assert_eq!(
+            input_timeout(GameSpeed::Normal, rate, Duration::from_millis(400)),
+            Duration::ZERO,
+        );
     }
 }
 

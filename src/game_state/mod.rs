@@ -95,6 +95,12 @@ const EVENT_LOG_SIZE: usize = 1000;
 /// maximum. Shared by the bid rule engine and `BasicPolicy`.
 pub const BID_PAYLOAD_MARGIN: f64 = 0.9;
 
+/// Entries to hold in each route-planning memo before dropping the lot.
+/// Sized for a busy board (designs x destinations x contracts) with room
+/// to spare; the bound exists because designer keystrokes mint a new
+/// fingerprint every time.
+const CAPABILITY_CACHE_LIMIT: usize = 4096;
+
 /// Why a launch manifest couldn't be assembled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestError {
@@ -170,23 +176,25 @@ pub struct GameState {
     /// remember their balance; old saves load with defaults.
     #[serde(default)]
     pub balance: crate::balance_config::BalanceConfig,
-    /// Max-payload lookups, keyed by (project, revision, destination).
-    /// Path planning is far too slow to run per contract per day — or,
-    /// for the contract list's colours, per contract per frame. Not
-    /// serialized — rebuilt on demand; cleared when a design is modified
-    /// (modifications change stage_groups without bumping revision).
+    /// Max-payload lookups, keyed by (design fingerprint, from, to). A
+    /// single one costs around 8 ms — the planner bisects payload over
+    /// forty-odd route searches — and it is asked per contract per day by
+    /// the bid engine, and per project per destination per *frame* by the
+    /// draw path. Not serialized; rebuilt on demand.
     ///
-    /// Interior-mutable so the read-only draw path can share it with the
-    /// bid engine rather than recomputing everything uncached.
+    /// Keyed on the design rather than a project id so the rocket designer
+    /// shares it while editing a design that belongs to no project, and so
+    /// a modification that changes the stage groups without bumping the
+    /// revision can't return a stale figure. Interior-mutable so the
+    /// read-only draw path can fill it too.
     #[serde(skip)]
-    pub payload_capability_cache: RefCell<HashMap<(RocketProjectId, u32, String), f64>>,
-    /// Trip-survival lookups, keyed by (project, revision, destination,
+    pub payload_capability_cache: RefCell<HashMap<(u64, String, String), f64>>,
+    /// Trip-survival lookups, keyed by (design fingerprint, from, to,
     /// payload bits). Payload matters here in a way it doesn't for
     /// max-payload, and a given contract asks the same question every day
-    /// until its deadline, so the key includes it. Same lifecycle as
-    /// `payload_capability_cache`.
+    /// until its deadline. Same lifecycle as `payload_capability_cache`.
     #[serde(skip)]
-    pub trip_survival_cache: RefCell<HashMap<(RocketProjectId, u32, String, u64), bool>>,
+    pub trip_survival_cache: RefCell<HashMap<(u64, String, String, u64), bool>>,
 }
 
 fn default_next_contract_id() -> u64 { 1 }
@@ -365,38 +373,64 @@ impl GameState {
         self.trip_survival_cache.borrow_mut().clear();
     }
 
-    /// Memoized `max_payload_to` from the pad.
+    /// Memoized `max_payload_to`.
     pub fn payload_capability(
-        &self, project: &crate::rocket_project::RocketProject, destination: &str,
+        &self, design: &RocketDesign, from: &str, to: &str,
     ) -> f64 {
-        let key = (project.project_id, project.revision, destination.to_string());
+        let key = (design.fingerprint(), from.to_string(), to.to_string());
         if let Some(cap) = self.payload_capability_cache.borrow().get(&key) {
             return *cap;
         }
-        let cap = crate::rocket_project::max_payload_to(
-            &project.design, "earth_surface", destination,
-        );
-        self.payload_capability_cache.borrow_mut().insert(key, cap);
+        let cap = crate::rocket_project::max_payload_to(design, from, to);
+        let mut cache = self.payload_capability_cache.borrow_mut();
+        // Every keystroke in the designer is a new fingerprint, so this
+        // grows without a bound of its own. Dropping the lot on overflow
+        // costs one cold frame and is simpler than tracking recency.
+        if cache.len() >= CAPABILITY_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, cap);
         cap
     }
 
-    /// Memoized `survives_trip` from the pad.
+    /// Memoized `survives_trip`.
     pub fn survives_trip(
-        &self, project: &crate::rocket_project::RocketProject,
-        destination: &str, payload_kg: f64,
+        &self, design: &RocketDesign, from: &str, to: &str, payload_kg: f64,
     ) -> bool {
         let key = (
-            project.project_id, project.revision,
-            destination.to_string(), payload_kg.to_bits(),
+            design.fingerprint(), from.to_string(), to.to_string(), payload_kg.to_bits(),
         );
         if let Some(ok) = self.trip_survival_cache.borrow().get(&key) {
             return *ok;
         }
-        let ok = crate::rocket_project::survives_trip(
-            &project.design, "earth_surface", destination, payload_kg,
-        );
-        self.trip_survival_cache.borrow_mut().insert(key, ok);
+        let ok = crate::rocket_project::survives_trip(design, from, to, payload_kg);
+        let mut cache = self.trip_survival_cache.borrow_mut();
+        if cache.len() >= CAPABILITY_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, ok);
         ok
+    }
+
+    /// `payload_table_for`, memoized per destination.
+    pub fn payload_table(
+        &self, design: &RocketDesign, from: &str, destinations: &[&str],
+    ) -> Vec<(&'static str, f64)> {
+        let mut results = Vec::new();
+        for &dest in destinations {
+            if dest == from {
+                continue;
+            }
+            let Some(location) = crate::location::DELTA_V_MAP.location(dest) else {
+                continue;
+            };
+            let payload = self.payload_capability(design, from, dest);
+            if payload > 0.0 {
+                results.push((location.display_name, payload));
+            }
+        }
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results
     }
 
     /// Whether this project can serve a delivery of `payload_kg` to
@@ -426,10 +460,11 @@ impl GameState {
         if matches!(project.status, RocketDesignStatus::InDesign { .. }) {
             return false;
         }
-        if payload_kg > self.payload_capability(project, destination) * BID_PAYLOAD_MARGIN {
+        let cap = self.payload_capability(&project.design, "earth_surface", destination);
+        if payload_kg > cap * BID_PAYLOAD_MARGIN {
             return false;
         }
-        self.survives_trip(project, destination, payload_kg)
+        self.survives_trip(&project.design, "earth_surface", destination, payload_kg)
     }
 
     /// Every project that can serve this delivery.
