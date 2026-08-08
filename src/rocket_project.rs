@@ -632,25 +632,28 @@ mod tests {
             "fixture premise: nothing fitted, so every stage flies the default battery",
         );
 
-        // LEO is a same-day trip: arrive, hand off, done. One day of
+        // LEO, SSO and GTO are all same-day trips: the launch injects
+        // directly and the payload separates that morning. One day of
         // housekeeping is exactly what the default battery is for.
-        assert!(
-            max_payload_to(&bare, "earth_surface", "leo") > 0.0,
-            "fixture premise: this design reaches LEO",
-        );
-        assert!(
-            survives_trip(&bare, "earth_surface", "leo", 0.0),
-            "a same-day LEO delivery is what the default battery covers",
-        );
+        for direct in ["leo", "sso", "gto"] {
+            assert!(
+                max_payload_to(&bare, "earth_surface", direct) > 0.0,
+                "fixture premise: this design reaches {direct}",
+            );
+            assert!(
+                survives_trip(&bare, "earth_surface", direct, 0.0),
+                "a same-day {direct} delivery is what the default battery covers",
+            );
+        }
 
-        // GTO is not: the transfer takes days the battery cannot cover, and
-        // there is nothing aboard generating power.
+        // MEO is not: it climbs through LEO, so the craft is still flying on
+        // the second day and there is nothing aboard generating power.
         assert!(
-            max_payload_to(&bare, "earth_surface", "gto") > 0.0,
-            "fixture premise: this design can lift mass to GTO",
+            max_payload_to(&bare, "earth_surface", "meo") > 0.0,
+            "fixture premise: this design can lift mass to MEO",
         );
         assert!(
-            !survives_trip(&bare, "earth_surface", "gto", 0.0),
+            !survives_trip(&bare, "earth_surface", "meo", 0.0),
             "no generation means the craft goes dark before it arrives",
         );
 
@@ -664,9 +667,40 @@ mod tests {
             upper.power_sources.push(crate::power::PowerSource::new_solar_panel(demand * 4.0));
         }
         assert!(
-            survives_trip(&solar, "earth_surface", "gto", 0.0),
+            survives_trip(&solar, "earth_surface", "meo", 0.0),
             "a panel that outpaces housekeeping keeps it alive the whole way",
         );
+    }
+
+    /// The headline consequence of launching straight to GTO: getting *to*
+    /// GTO stops costing endurance, and circularising at GEO starts costing
+    /// it. A GEO bird spends three days raising apogee under its own power,
+    /// which no default battery covers.
+    #[test]
+    fn circularising_at_geo_is_what_forces_a_real_power_system() {
+        let bare = simple_two_stage_design();
+        let path = ["earth_surface", "gto", "geo"];
+
+        let unpowered = trip_power_along(&bare, &path, 0.0);
+        assert_eq!(
+            unpowered.flight_days, 4,
+            "launch day plus three days of apogee raising",
+        );
+        assert_eq!(
+            unpowered.dark_on_day, Some(2),
+            "one day of default battery carries it through day 1 and no further",
+        );
+        assert!(!unpowered.survives());
+
+        let mut solar = simple_two_stage_design();
+        {
+            let upper = &mut solar.stage_groups[1][0];
+            let demand = upper.housekeeping_w();
+            upper.power_sources.push(crate::power::PowerSource::new_solar_panel(demand * 4.0));
+        }
+        let powered = trip_power_along(&solar, &path, 0.0);
+        assert_eq!(powered.flight_days, 4, "same route, same duration");
+        assert!(powered.survives(), "a panel carries it through the campaign");
     }
 
     /// The designer quotes both of these numbers, so pin how days are
@@ -682,14 +716,14 @@ mod tests {
         assert_eq!(leo.dark_on_day, None, "the default battery covers exactly that");
         assert!(leo.survives());
 
-        let gto = trip_power(&bare, "earth_surface", "gto", 0.0)
-            .expect("fixture premise: this design can lift mass to GTO");
-        assert!(gto.flight_days > 1, "GTO is more than one leg, so more than one day");
+        let meo = trip_power(&bare, "earth_surface", "meo", 0.0)
+            .expect("fixture premise: this design can lift mass to MEO");
+        assert!(meo.flight_days > 1, "MEO climbs through LEO, so more than one day");
         assert_eq!(
-            gto.dark_on_day, Some(2),
+            meo.dark_on_day, Some(2),
             "one day of reserve carries it through day 1 and no further",
         );
-        assert!(!gto.survives());
+        assert!(!meo.survives());
 
         // A route the design cannot fly at all is not a power verdict.
         assert_eq!(trip_power(&bare, "earth_surface", "mars_surface", 0.0), None);

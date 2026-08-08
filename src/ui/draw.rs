@@ -32,7 +32,7 @@ fn relevant_destinations(game: &crate::game_state::GameState) -> Vec<&str> {
         }
     }
     if dests.is_empty() {
-        dests.extend(["leo", "meo", "gto", "geo"]);
+        dests.extend(["leo", "sso", "meo", "gto", "geo"]);
     }
     dests
 }

@@ -394,16 +394,37 @@ impl DeltaVMap {
         });
         // Earth surface ↔ LEO: same nominal dv both ways, drag on ascent only.
         add_ground_pair(&mut transfers, "earth_surface", "leo", 7800.0, 0, true, None);
+        // Earth surface ↔ SSO. SSO is a launch destination, not somewhere you
+        // transfer to: +150 m/s for the higher orbit (~700 km against ~200)
+        // and +400 for throwing away the eastward rotation assist that a
+        // low-inclination LEO launch gets free. Losses are charged separately
+        // by the launch-site model, so this is ideal velocity like the 7800.
+        add_ground_pair(&mut transfers, "earth_surface", "sso", 8500.0, 0, true, None);
+        // Earth surface ↔ GTO. A commercial GTO mission injects off the ascent
+        // and separates the same day; it does not stop in LEO. Slightly under
+        // the 7800 + 2440 via-LEO sum because a direct ascent never
+        // circularises at perigee altitude only to climb back out of it.
+        add_ground_pair(&mut transfers, "earth_surface", "gto", 10_100.0, 0, true, None);
 
         // ─── Earth orbital climb (low-thrust climbs the ladder) ───
-        add_spiral_pair(&mut transfers, "leo", "sso", 500.0, None, 0);
+        // LEO ↔ SSO is a ~70° plane change, not a nudge: 2·v·sin(Δi/2) at
+        // v ≈ 7600 m/s. Electric propulsion is *worse* here, not better —
+        // Edelbaum's 2·v·sin(π/4·Δi) for a combined circular transfer. Both
+        // are "launch a second rocket instead" numbers, which is the point;
+        // the edge exists so a craft already in orbit has a sane answer
+        // rather than being routed back through the ground and relaunched.
+        add_spiral_pair(&mut transfers, "leo", "sso", 8700.0, Some(12_400.0), 0);
         add_spiral_pair(&mut transfers, "leo", "meo", 2100.0, Some(3500.0), 0);
         add_spiral_pair(&mut transfers, "meo", "geo", 2000.0, Some(2500.0), 0);
         add_spiral_pair(&mut transfers, "geo", "earth_escape", 700.0, Some(1500.0), 0);
 
         // ─── Earth high-thrust shortcuts (no low-thrust direct shortcuts to escape) ───
         add_impulsive_pair(&mut transfers, "leo", "gto", 2440.0, 1);
-        add_impulsive_pair(&mut transfers, "gto", "geo", 1500.0, 0);
+        // Circularising at GEO is an apogee-raising campaign, not a burn: a
+        // few burns at successive apogees with the spacecraft coasting through
+        // the belts on its own power in between. That coast is where a GEO
+        // mission's endurance requirement comes from.
+        add_impulsive_pair(&mut transfers, "gto", "geo", 1500.0, 3);
         add_impulsive_pair(&mut transfers, "leo", "lunar_orbit", 3850.0, 4);
         add_impulsive_pair(&mut transfers, "lunar_orbit", "earth_escape", 93.0, 4);
 
@@ -890,9 +911,11 @@ mod tests {
     fn test_shortest_path_multi_hop() {
         let map = DeltaVMap::earth_moon();
         let (path, dv) = map.shortest_path("earth_surface", "geo", REF_MASS).unwrap();
-        assert_eq!(path, vec!["earth_surface", "leo", "gto", "geo"]);
-        // 8100 + 2440 + 1500 = 12040
-        assert!((dv - 12040.0).abs() < 1.0);
+        // Direct-to-GTO beats stopping in LEO on the way: 10100 + drag + 1500
+        // against 7800 + drag + 2440 + 1500.
+        assert_eq!(path, vec!["earth_surface", "gto", "geo"]);
+        // 10100 + 300 drag + 1500 = 11900
+        assert!((dv - 11900.0).abs() < 1.0, "got {dv}");
     }
 
     #[test]
@@ -985,8 +1008,36 @@ mod tests {
     fn test_reverse_transfer_sso_to_leo() {
         let map = DeltaVMap::earth_moon();
         let (path, dv) = map.shortest_path("sso", "leo", REF_MASS).unwrap();
+        // Still the cheapest way down for something already in SSO — the
+        // plane change is dreadful, but landing and relaunching (8500 + 7800
+        // + drag) is worse.
         assert_eq!(path, vec!["sso", "leo"]);
-        assert_eq!(dv, 500.0);
+        assert_eq!(dv, 8700.0);
+    }
+
+    #[test]
+    fn launches_to_sso_and_gto_go_direct_not_through_leo() {
+        let map = DeltaVMap::earth_moon();
+        let (path, dv) = map.shortest_path("earth_surface", "sso", REF_MASS).unwrap();
+        assert_eq!(path, vec!["earth_surface", "sso"]);
+        assert!((dv - 8800.0).abs() < 1.0, "8500 + 300 drag, got {dv}");
+
+        let (path, dv) = map.shortest_path("earth_surface", "gto", REF_MASS).unwrap();
+        assert_eq!(path, vec!["earth_surface", "gto"]);
+        assert!((dv - 10_400.0).abs() < 1.0, "10100 + 300 drag, got {dv}");
+    }
+
+    #[test]
+    fn low_thrust_pays_more_than_impulsive_for_the_sso_plane_change() {
+        // The one edge in the map where electric propulsion is the *worse*
+        // option: Edelbaum's combined transfer beats a single impulse only for
+        // small plane changes, and 70° is not small.
+        let map = DeltaVMap::earth_moon();
+        let (_, dv_high) = map
+            .shortest_path_constrained("leo", "sso", REF_MASS, false).unwrap();
+        let (_, dv_low) = map
+            .shortest_path_constrained("leo", "sso", REF_MASS, true).unwrap();
+        assert!(dv_low > dv_high, "low {dv_low} should exceed high {dv_high}");
     }
 
     #[test]
@@ -1029,9 +1080,14 @@ mod tests {
         let map = DeltaVMap::earth_moon();
         assert_eq!(map.transfer("earth_surface", "suborbital").unwrap().transit_days, 0);
         assert_eq!(map.transfer("earth_surface", "leo").unwrap().transit_days, 0);
+        // A launch to SSO or GTO separates the same day it lifts off.
+        assert_eq!(map.transfer("earth_surface", "sso").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("earth_surface", "gto").unwrap().transit_days, 0);
         assert_eq!(map.transfer("leo", "sso").unwrap().transit_days, 0);
         assert_eq!(map.transfer("leo", "meo").unwrap().transit_days, 0);
-        assert_eq!(map.transfer("gto", "geo").unwrap().transit_days, 0);
+        // Circularising at GEO is an apogee-raising campaign, and the coast
+        // between burns is what a GEO mission needs endurance for.
+        assert_eq!(map.transfer("gto", "geo").unwrap().transit_days, 3);
         assert_eq!(map.transfer("lunar_orbit", "lunar_surface").unwrap().transit_days, 0);
         assert_eq!(map.transfer("lunar_surface", "lunar_orbit").unwrap().transit_days, 0);
         assert_eq!(map.transfer("leo", "gto").unwrap().transit_days, 1);
@@ -1046,7 +1102,9 @@ mod tests {
         assert_eq!(map.transfer("sso", "leo").unwrap().transit_days, 0);
         assert_eq!(map.transfer("meo", "leo").unwrap().transit_days, 0);
         assert_eq!(map.transfer("gto", "leo").unwrap().transit_days, 1);
-        assert_eq!(map.transfer("geo", "gto").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("geo", "gto").unwrap().transit_days, 3);
+        assert_eq!(map.transfer("sso", "earth_surface").unwrap().transit_days, 0);
+        assert_eq!(map.transfer("gto", "earth_surface").unwrap().transit_days, 0);
         assert_eq!(map.transfer("lunar_orbit", "leo").unwrap().transit_days, 4);
         assert_eq!(map.transfer("lunar_orbit", "l1").unwrap().transit_days, 2);
         assert_eq!(map.transfer("l1", "leo").unwrap().transit_days, 5);
