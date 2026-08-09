@@ -1612,7 +1612,19 @@ impl App {
         }
     }
 
+    /// The order the Manufacturing cursor is on. Selection indexes the
+    /// drawn tree, not the queue's own order.
+    fn selected_manufacturing_order(&self) -> Option<usize> {
+        self.game.player_company.manufacturing_display_order()
+            .get(self.selected_item)
+            .map(|row| row.order_index)
+    }
+
     fn handle_manufacturing_key(&mut self, key: KeyCode) {
+        // Selection indexes the drawn tree; every order-specific key below
+        // needs the queue index it stands for. `usize::MAX` for "nothing
+        // selected" lets the company-side bounds checks reject it.
+        let order_index = self.selected_manufacturing_order().unwrap_or(usize::MAX);
         match key {
             KeyCode::Char('b') | KeyCode::Char('B') => {
                 // Buy floor space
@@ -1620,9 +1632,9 @@ impl App {
                 self.status_message = Some(format!("Ordered 1 floor space unit ({})", crate::ui::draw::format_money(cost)));
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
-                if self.game.player_company.add_team_to_manufacturing_order(self.selected_item) {
+                if self.game.player_company.add_team_to_manufacturing_order(order_index) {
                     self.status_message = Some("Mfg team assigned".into());
-                } else if let Some(from) = self.game.player_company.steal_manufacturing_team_to_order(self.selected_item) {
+                } else if let Some(from) = self.game.player_company.steal_manufacturing_team_to_order(order_index) {
                     self.status_message = Some(format!("Mfg team reassigned from {}", from));
                 } else {
                     self.status_message = Some("No mfg teams to reassign".into());
@@ -1630,7 +1642,7 @@ impl App {
             }
             KeyCode::Char('-') => {
                 if self.game.player_company
-                    .remove_team_from_manufacturing_order(self.selected_item)
+                    .remove_team_from_manufacturing_order(order_index)
                 {
                     self.status_message = Some("Mfg team removed".into());
                 } else {
@@ -1651,7 +1663,7 @@ impl App {
                 // rather than waiting for the tick, because the whole point
                 // is a deadline.
                 let company = &mut self.game.player_company;
-                let target = company.manufacturing.orders.get(self.selected_item)
+                let target = company.manufacturing.orders.get(order_index)
                     .and_then(|o| o.parent_rocket());
                 let Some(rp_id) = target else {
                     self.status_message = Some(
@@ -3775,6 +3787,8 @@ impl App {
                         }
                     }
                     Tab::Manufacturing => {
+                        // The cursor walks the drawn tree, which holds one
+                        // row per order — same length, different order.
                         let max = self.game.player_company.manufacturing.orders.len().saturating_sub(1);
                         if self.selected_item < max {
                             self.selected_item += 1;

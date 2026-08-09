@@ -2241,12 +2241,13 @@ fn a_rush_job_preempts_the_whole_floor() {
     gs.player_company.rush_projects.insert(RocketProjectId(1));
     gs.player_company.assign_manufacturing_teams();
 
-    let rushed: u32 = gs.player_company.manufacturing.orders.iter()
-        .filter(|o| gs.player_company.order_is_rushed(o))
-        .map(|o| o.teams_assigned).sum();
-    let rest: u32 = gs.player_company.manufacturing.orders.iter()
-        .filter(|o| !gs.player_company.order_is_rushed(o))
-        .map(|o| o.teams_assigned).sum();
+    let flags = gs.player_company.rushed_order_flags();
+    let rushed: u32 = gs.player_company.manufacturing.orders.iter().enumerate()
+        .filter(|(i, _)| flags[*i])
+        .map(|(_, o)| o.teams_assigned).sum();
+    let rest: u32 = gs.player_company.manufacturing.orders.iter().enumerate()
+        .filter(|(i, _)| !flags[*i])
+        .map(|(_, o)| o.teams_assigned).sum();
     assert_eq!(rushed, 6, "every team goes to the rush");
     assert_eq!(rest, 0, "and nothing is left on ordinary work");
 }
@@ -2268,14 +2269,15 @@ fn a_rush_reaches_the_engine_builds_holding_it_up() {
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
     gs.player_company.rush_projects.insert(RocketProjectId(1));
 
-    let standalone: Vec<_> = gs.player_company.manufacturing.orders.iter()
-        .filter(|o| o.parent_rocket().is_none())
+    let flags = gs.player_company.rushed_order_flags();
+    let standalone: Vec<usize> = gs.player_company.manufacturing.orders.iter()
+        .enumerate()
+        .filter(|(_, o)| o.parent_rocket().is_none())
+        .map(|(i, _)| i)
         .collect();
     assert_eq!(standalone.len(), 4, "premise: four ownerless engine builds");
-    for o in &standalone {
-        assert!(gs.player_company.order_is_rushed(o),
-            "an engine a rushed stage is blocked on is part of the rush");
-    }
+    assert!(standalone.iter().any(|i| flags[*i]),
+        "the rush reaches the ownerless engines blocking it");
 }
 
 /// Two rush jobs share the floor the way two ordinary orders would.
@@ -2382,4 +2384,349 @@ fn a_rush_retires_on_the_first_rocket_not_the_last() {
         "premise: the second build is still in the queue");
     assert!(gs.player_company.rush_projects.is_empty(),
         "the rush ended with the rocket it was for");
+}
+
+/// The Manufacturing tab draws the queue as a tree and the cursor indexes
+/// that tree, so the row list has to hold every order exactly once — the
+/// same invariant that bit the Ready Rockets list.
+#[test]
+fn the_manufacturing_tree_is_a_permutation_of_the_queue() {
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    for _ in 0..2 {
+        gs.player_company.order_engine_build(0, &gs.balance).unwrap();
+    }
+
+    let rows = gs.player_company.manufacturing_display_order();
+    assert_eq!(rows.len(), gs.player_company.manufacturing.orders.len());
+    let mut seen: Vec<usize> = rows.iter().map(|r| r.order_index).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), rows.len(), "no order appears twice");
+}
+
+/// Integration, then the stages feeding it, then the engines feeding
+/// those. Standalone builds sit at the top level.
+#[test]
+fn the_manufacturing_tree_nests_integration_stages_engines() {
+    use crate::manufacturing::ManufacturingOrderType as T;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    // One extra engine nobody ordered for a rocket.
+    gs.player_company.order_engine_build(0, &gs.balance).unwrap();
+
+    let orders = &gs.player_company.manufacturing.orders;
+    let shape: Vec<(u8, &'static str)> = gs.player_company.manufacturing_display_order()
+        .iter()
+        .map(|r| (r.depth, match &orders[r.order_index].order_type {
+            T::RocketIntegration { .. } => "integration",
+            T::Stage { .. } => "stage",
+            T::Engine { .. } => "engine",
+        }))
+        .collect();
+
+    assert_eq!(shape[0], (0, "integration"), "the rocket heads its own tree");
+    // Every stage sits one level in, every engine under a stage two.
+    for (depth, kind) in &shape {
+        match *kind {
+            "integration" => assert_eq!(*depth, 0),
+            "stage" => assert_eq!(*depth, 1, "stages hang off the integration"),
+            _ => assert!(*depth == 2 || *depth == 0,
+                "an engine is either under a stage or standalone, got depth {depth}"),
+        }
+    }
+    // An engine at depth 2 always follows a stage, never an integration.
+    for w in shape.windows(2) {
+        if w[1] == (2, "engine") {
+            assert!(w[0].0 >= 1, "depth-2 engine follows a stage or another engine");
+        }
+    }
+    assert!(shape.contains(&(0, "engine")),
+        "the hand-built engine sits at the top level: {shape:?}");
+}
+
+/// Rush jobs are drawn as one contiguous block at the top, so the header
+/// is emitted once and rushed orders never appear twice.
+#[test]
+fn rushed_orders_form_one_block_at_the_top() {
+    use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    let (design2, _) = make_three_stage_design();
+    let mut rp2 = RocketProject::new(
+        RocketProjectId(2), design2, &crate::balance_config::BalanceConfig::default());
+    rp2.status = RocketDesignStatus::Testing { work_completed: 100.0 };
+    gs.player_company.rocket_projects.push(rp2);
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.order_rocket_build(1, &gs.balance).unwrap();
+    gs.player_company.rush_projects.insert(RocketProjectId(2));
+
+    let rows = gs.player_company.manufacturing_display_order();
+    let flags: Vec<bool> = rows.iter().map(|r| r.rushed).collect();
+    assert!(flags[0], "the rush leads");
+    // true...true then false...false, never alternating.
+    let first_normal = flags.iter().position(|f| !f).expect("some normal work too");
+    assert!(flags[first_normal..].iter().all(|f| !f),
+        "the rush block is contiguous: {flags:?}");
+}
+
+
+/// Orders name a rocket *project*, so a second build of the same rocket
+/// looks identical to the one being rushed. The rush has to stay pinned
+/// to one build, or ordering another of the same rocket silently drags it
+/// into the rush too.
+#[test]
+fn a_second_build_of_a_rushed_rocket_stays_in_the_ordinary_queue() {
+    use crate::rocket_project::RocketProjectId;
+    use crate::manufacturing::ManufacturingOrderType as T;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.rush_projects.insert(RocketProjectId(1));
+    // A second one of the same rocket, ordered while the rush is running.
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+
+    let flags = gs.player_company.rushed_order_flags();
+    let integrations: Vec<usize> = gs.player_company.manufacturing.orders.iter()
+        .enumerate()
+        .filter(|(_, o)| matches!(o.order_type, T::RocketIntegration { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(integrations.len(), 2, "premise: two builds of the same rocket");
+    assert!(flags[integrations[0]], "the build that was rushed still is");
+    assert!(!flags[integrations[1]], "the one ordered afterwards is not");
+}
+
+/// Every engine of a needed source *could* satisfy a rushed stage, but
+/// rushing all of them spreads the floor thinner and finishes the rush
+/// later. Claim what the stages need and leave the rest.
+#[test]
+fn a_rush_claims_the_engines_it_needs_and_no_more() {
+    use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
+    use crate::manufacturing::ManufacturingOrderType as T;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    let (design2, _) = make_three_stage_design();
+    let mut rp2 = RocketProject::new(
+        RocketProjectId(2), design2, &crate::balance_config::BalanceConfig::default());
+    rp2.status = RocketDesignStatus::Testing { work_completed: 100.0 };
+    gs.player_company.rocket_projects.push(rp2);
+    // Both rockets use the same engines, so both queue their own builds.
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.order_rocket_build(1, &gs.balance).unwrap();
+    gs.player_company.rush_projects.insert(RocketProjectId(2));
+
+    let flags = gs.player_company.rushed_order_flags();
+    let engine_total = gs.player_company.manufacturing.orders.iter()
+        .filter(|o| matches!(o.order_type, T::Engine { .. }))
+        .count();
+    let engine_rushed = gs.player_company.manufacturing.orders.iter().enumerate()
+        .filter(|(_, o)| matches!(o.order_type, T::Engine { .. }))
+        .filter(|(i, _)| flags[*i])
+        .count();
+    assert!(engine_total > engine_rushed,
+        "the other rocket's engines stay out of it: {engine_rushed} of {engine_total}");
+    // The design needs 4 Lifters and 1 Upper — one build's worth.
+    assert_eq!(engine_rushed, 5, "exactly one build's engines");
+}
+
+/// A rush inherits whatever is nearest done, so the work already sunk
+/// counts toward the deadline and the untouched builds fall through to
+/// whoever was going to get them.
+#[test]
+fn a_rush_claims_the_most_advanced_engines() {
+    use crate::rocket_project::RocketProjectId;
+    use crate::manufacturing::ManufacturingOrderType as T;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    // Hand-built engines first, so the rocket's own build queues none of
+    // them and every candidate is ownerless.
+    for _ in 0..4 {
+        gs.player_company.order_engine_build(0, &gs.balance).unwrap();
+    }
+    // Push the last one nearly to completion.
+    let last = gs.player_company.manufacturing.orders.len() - 1;
+    gs.player_company.manufacturing.orders[last].work_completed =
+        gs.player_company.manufacturing.orders[last].work_required * 0.9;
+
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.rush_projects.insert(RocketProjectId(1));
+
+    let flags = gs.player_company.rushed_order_flags();
+    assert!(flags[last], "the nearly-finished engine is the one to inherit");
+    // And it is an engine, not something else that drifted into the slot.
+    assert!(matches!(
+        gs.player_company.manufacturing.orders[last].order_type, T::Engine { .. }));
+}
+
+
+/// Each integration takes one build's worth of stages — one order per
+/// (group, index) — so a second build of the same rocket keeps its own
+/// stages instead of having them absorbed by the first.
+#[test]
+fn each_build_keeps_its_own_stages() {
+    use crate::manufacturing::ManufacturingOrderType as T;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+
+    let orders = &gs.player_company.manufacturing.orders;
+    let rows = gs.player_company.manufacturing_display_order();
+
+    // Walk the tree; every integration should be followed by three stages
+    // before the next integration starts.
+    let mut per_build: Vec<usize> = Vec::new();
+    for row in &rows {
+        match (&orders[row.order_index].order_type, row.depth) {
+            (T::RocketIntegration { .. }, 0) => per_build.push(0),
+            (T::Stage { .. }, 1) => *per_build.last_mut().expect("stage under an integration") += 1,
+            _ => {}
+        }
+    }
+    assert_eq!(per_build, vec![3, 3],
+        "two builds, three stages each — not one build hoarding six");
+}
+
+/// A stage wanting six engines with four already on the shelf is two
+/// builds away, not six. Claiming six parks the floor on engines nobody
+/// is waiting for, and under a rush spreads the teams three times thinner
+/// than the two that actually unblock the stage.
+#[test]
+fn a_stage_only_claims_the_engines_it_still_needs() {
+    use crate::engine_project::{EngineProjectId, EngineSource};
+    use crate::manufacturing::ManufacturingOrderType as T;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    // Three Lifters on S1, one on S2 — put two on the shelf up front.
+    for _ in 0..2 {
+        gs.player_company.order_engine_build(0, &gs.balance).unwrap();
+    }
+    run_manufacturing_to_idle(&mut gs);
+    let src = EngineSource::PlayerDesign(EngineProjectId(1));
+    assert_eq!(gs.player_company.manufacturing.inventory.engine_count(src), 2,
+        "premise: two engines waiting in stock");
+    // Those ticks may have pushed either project into a revision; this
+    // test is about attribution, not the design workflow.
+    gs.player_company.rocket_projects[0].status =
+        crate::rocket_project::RocketDesignStatus::Testing { work_completed: 100.0 };
+    gs.player_company.engine_projects[0].status =
+        crate::engine_project::EngineDesignStatus::Testing { work_completed: 100.0 };
+
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    // Plus some spares the player orders by hand afterwards.
+    for _ in 0..3 {
+        gs.player_company.order_engine_build(0, &gs.balance).unwrap();
+    }
+
+    let orders = &gs.player_company.manufacturing.orders;
+    let rows = gs.player_company.manufacturing_display_order();
+
+    // Walk the tree and count engines hanging under the first stage.
+    let mut under_s1 = 0;
+    let mut in_s1 = false;
+    for row in &rows {
+        match (&orders[row.order_index].order_type, row.depth) {
+            (T::Stage { group_index: 0, .. }, 1) => in_s1 = true,
+            (T::Engine { .. }, 2) if in_s1 => under_s1 += 1,
+            (_, d) if d <= 1 => in_s1 = false,
+            _ => {}
+        }
+    }
+    assert_eq!(under_s1, 1,
+        "S1 wants three, two are on the shelf, so one build is outstanding");
+    // The hand-ordered spares have no stage to belong to.
+    let top_level_engines = rows.iter()
+        .filter(|r| r.depth == 0)
+        .filter(|r| matches!(orders[r.order_index].order_type, T::Engine { .. }))
+        .count();
+    assert!(top_level_engines >= 3,
+        "spares beyond what the stages need sit at the top level, got {top_level_engines}");
+}
+
+/// An integration that has already taken its stages out of inventory
+/// needs nothing more. Left unchecked it reaches across and adopts the
+/// *next* build's stages — which aren't feeding it, and which under a
+/// rush pull teams off the integration that is the only thing left to do.
+#[test]
+fn a_finished_integration_does_not_adopt_the_next_builds_stages() {
+    use crate::rocket_project::RocketProjectId;
+    use crate::manufacturing::ManufacturingOrderType as T;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.rush_projects.insert(RocketProjectId(1));
+
+    // Unblock the first integration by hand: it has its stages now.
+    let first_integration = gs.player_company.manufacturing.orders.iter()
+        .position(|o| matches!(o.order_type, T::RocketIntegration { .. }))
+        .expect("premise: an integration order exists");
+    gs.player_company.manufacturing.orders[first_integration]
+        .waiting_for_prerequisites = false;
+
+    let rows = gs.player_company.manufacturing_display_order();
+    let orders = &gs.player_company.manufacturing.orders;
+
+    // The rush is now just that integration — nothing else feeds it.
+    let rushed: Vec<usize> = rows.iter().filter(|r| r.rushed)
+        .map(|r| r.order_index).collect();
+    assert_eq!(rushed, vec![first_integration],
+        "a finished integration's rush is the integration alone");
+
+    // And the second build still owns all three of its stages.
+    let second_build_stages = rows.iter()
+        .filter(|r| !r.rushed && r.depth == 1)
+        .filter(|r| matches!(orders[r.order_index].order_type, T::Stage { .. }))
+        .count();
+    assert_eq!(second_build_stages, 3, "the next build keeps its own stages");
+}
+
+/// A slot filled from inventory wants no build order. Left unchecked, an
+/// integration still waiting on S1 goes on adopting every fresh S2 that
+/// appears — and under a rush builds them one after another for a slot
+/// that was satisfied long ago.
+#[test]
+fn a_stage_already_in_inventory_does_not_claim_a_fresh_order() {
+    use crate::rocket_project::RocketProjectId;
+    use crate::manufacturing::{InventoryStage, ManufacturingOrderType as T};
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.rush_projects.insert(RocketProjectId(1));
+
+    // S2 (group 1) is already built and sitting on the shelf.
+    let item_id = gs.player_company.manufacturing.next_inventory_id();
+    gs.player_company.manufacturing.inventory.stages.push(InventoryStage {
+        item_id,
+        rocket_project_id: RocketProjectId(1),
+        group_index: 1,
+        stage_index: 0,
+        stage_name: "TestThreeStage S2".into(),
+        build_cost: 1_000_000.0,
+    });
+    // A second build queues a fresh S2 for a slot that is already covered.
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+
+    let orders = &gs.player_company.manufacturing.orders;
+    let rows = gs.player_company.manufacturing_display_order();
+    let rushed_s2 = rows.iter()
+        .filter(|r| r.rushed)
+        .filter(|r| matches!(
+            orders[r.order_index].order_type,
+            T::Stage { group_index: 1, .. }))
+        .count();
+    assert_eq!(rushed_s2, 0,
+        "the rush already has its S2; a fresh one belongs to the other build");
 }

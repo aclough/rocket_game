@@ -980,15 +980,35 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
         lines.push(Line::from(line_text));
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from("  Orders:"));
+    let rows = company.manufacturing_display_order();
 
-    if mfg.orders.is_empty() {
+    if rows.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from("  Orders:"));
         lines.push(Line::from("    No manufacturing orders."));
     }
 
-    for (i, order) in mfg.orders.iter().enumerate() {
-        let selected = i == app.selected_item;
+    // Two headers, emitted as the rush block starts and ends. Rushed
+    // orders appear only under "Rush jobs", never twice — the selection
+    // indexes these rows, so one order has to mean one row.
+    let mut header_drawn = (false, false);
+    for (row_index, row) in rows.iter().enumerate() {
+        if row.rushed && !header_drawn.0 {
+            header_drawn.0 = true;
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Rush jobs:",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )));
+        }
+        if !row.rushed && !header_drawn.1 {
+            header_drawn.1 = true;
+            lines.push(Line::from(""));
+            lines.push(Line::from("  Orders:"));
+        }
+
+        let order = &mfg.orders[row.order_index];
+        let selected = row_index == app.selected_item;
         let marker = if selected { "▶" } else { " " };
 
         let status_str = if order.waiting_for_prerequisites {
@@ -997,12 +1017,13 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
             format!("Teams: {}", order.teams_assigned)
         };
 
-        // Rush shows on every order the rush reaches, engines included, so
-        // it is clear what the floor is actually working on.
-        let rush = if company.order_is_rushed(order) { "  RUSH" } else { "" };
+        // Indent by depth: integration, then the stages feeding it, then
+        // the engine builds feeding those.
+        let indent = "    ".repeat(row.depth as usize);
         let line_text = format!(
-            "    {} [{}] {} \"{}\"  {}{}",
-            marker, i + 1, order.type_label(), order.display_name(), status_str, rush,
+            "    {} [{}] {}{} \"{}\"  {}",
+            marker, row_index + 1, indent,
+            order.type_label(), order.display_name(), status_str,
         );
         let text_width = line_text.chars().count() as u16;
 
@@ -1024,6 +1045,8 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
 
         let style = if selected {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else if row.rushed {
+            Style::default().fg(Color::Yellow)
         } else {
             Style::default()
         };
