@@ -139,8 +139,32 @@ pub fn generate_rocket_flaws(
         } else {
             FlawTrigger::PerFlight
         };
-        generate_single_flaw(id, trigger, rng, None, cfg)
+        generate_single_rocket_flaw(id, trigger, rng, cfg)
     }).collect()
+}
+
+/// Build one rocket-project flaw. Shares the probability core with engine
+/// and reactor flaws; only the description differs, so what you are asked
+/// to revise reads like part of the vehicle rather than part of an engine
+/// somebody else designed.
+pub fn generate_single_rocket_flaw(
+    id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cfg: &FlawsConfig,
+) -> Flaw {
+    let (consequence, activation_chance, discovery_probability) = roll_flaw_core(rng, cfg);
+    let description = match trigger {
+        FlawTrigger::PerDay =>
+            generate_rocket_endurance_flaw_description(&consequence, rng),
+        FlawTrigger::PerFlight => generate_rocket_flaw_description(&consequence, rng),
+    };
+    Flaw {
+        id,
+        description,
+        consequence,
+        activation_chance,
+        discovery_probability,
+        discovered: false,
+        trigger,
+    }
 }
 
 /// Roll the domain-agnostic core of a flaw: its consequence, activation
@@ -376,6 +400,85 @@ fn generate_endurance_flaw_description(consequence: &FlawConsequence, rng: &mut 
             "Guidance computer memory fault",
             "Wiring harness insulation breakdown",
             "Pressurization system leak",
+        ][..],
+    };
+
+    let idx = rng.gen_range(0..descriptions.len());
+    descriptions[idx].to_string()
+}
+
+/// Flaws in the vehicle rather than its engines: tankage, structure,
+/// separation, avionics, plumbing. An engine project already owns
+/// injectors and turbopumps, so a rocket project that borrowed those
+/// descriptions read as if you were revising somebody else's work.
+fn generate_rocket_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
+    let descriptions = match consequence {
+        FlawConsequence::PerformanceDegradation(_) => &[
+            "Tank baffle slosh damping insufficient",
+            "Aerodynamic fairing drag higher than modelled",
+            "Guidance loop overcorrects in high winds",
+            "Stage mass over budget after assembly",
+            "Thrust vector alignment out of tolerance",
+            "Residual propellant trapped at tank sump",
+        ][..],
+        FlawConsequence::EngineLoss => &[
+            "Propellant feed starves the outboard engine",
+            "Engine bay overheats without purge flow",
+            "Gimbal actuator mount flexes under load",
+            "Pogo suppressor undersized for this stage",
+            "Engine mount bolt preload inconsistent",
+            "Feed line collapses under transient pressure",
+        ][..],
+        FlawConsequence::StageLoss => &[
+            "Interstage buckles under max-Q loading",
+            "Separation pyrotechnics fire out of sequence",
+            "Common bulkhead weld porosity",
+            "Payload fairing fails to jettison cleanly",
+            "Tank pressurisation regulator runs away",
+            "Flight computer resets during staging transient",
+        ][..],
+    };
+
+    let idx = rng.gen_range(0..descriptions.len());
+    descriptions[idx].to_string()
+}
+
+/// The same, for flaws that bite gradually in transit rather than during
+/// a burn — wear and drift in the airframe and its systems.
+///
+/// These are latent defects, built in and carried until revised, so each
+/// one has to name a *property of the design* rather than an event that
+/// has already happened: "no micrometeoroid shielding", not
+/// "micrometeoroid pitting weakened a tank wall". The `PerDay` trigger
+/// then reads correctly — the longer the craft is out there, the more
+/// likely the weakness is what gets it.
+fn generate_rocket_endurance_flaw_description(
+    consequence: &FlawConsequence, rng: &mut StdRng,
+) -> String {
+    let descriptions = match consequence {
+        FlawConsequence::PerformanceDegradation(_) => &[
+            "Tank insulation degrades, boiloff climbs",
+            "Star tracker alignment drifts with thermal cycling",
+            "Attitude control propellant leaks past a seat",
+            "Solar array hinge stiffens, pointing lags",
+            "Thermal coating erodes under UV",
+            "Reaction wheel imbalance grows with hours",
+        ][..],
+        FlawConsequence::EngineLoss => &[
+            "Restart accumulator loses pressure over days",
+            "Engine bay heater fails, propellant lines chill",
+            "Ullage motor propellant slowly vents",
+            "Gimbal actuator lubricant migrates in vacuum",
+            "Feed line bellows fatigues on each thermal cycle",
+            "Engine controller watchdog trips intermittently",
+        ][..],
+        FlawConsequence::StageLoss => &[
+            "No micrometeoroid shielding over the tank wall",
+            "Battery cell imbalance goes uncorrected",
+            "Harness insulation embrittles and shorts",
+            "Pressurant slowly leaks past a check valve",
+            "Structural adhesive creeps under sustained load",
+            "Flight computer accumulates uncorrected bit flips",
         ][..],
     };
 
@@ -762,3 +865,101 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod description_pool_tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    fn cfg() -> FlawsConfig {
+        crate::balance_config::BalanceConfig::default().flaws
+    }
+
+    /// Every description a rocket project can produce, over enough rolls
+    /// to reach every entry in both pools.
+    fn all_rocket_descriptions() -> Vec<String> {
+        let mut rng = StdRng::seed_from_u64(7);
+        let cfg = cfg();
+        let mut out = Vec::new();
+        for i in 0..2_000u64 {
+            let trigger = if i % 2 == 0 { FlawTrigger::PerFlight } else { FlawTrigger::PerDay };
+            out.push(generate_single_rocket_flaw(FlawId(i), trigger, &mut rng, &cfg).description);
+        }
+        out
+    }
+
+    fn all_engine_descriptions() -> Vec<String> {
+        let mut rng = StdRng::seed_from_u64(7);
+        let cfg = cfg();
+        let mut out = Vec::new();
+        for i in 0..2_000u64 {
+            let trigger = if i % 2 == 0 { FlawTrigger::PerFlight } else { FlawTrigger::PerDay };
+            out.push(generate_single_flaw(FlawId(i), trigger, &mut rng, None, &cfg).description);
+        }
+        out
+    }
+
+    /// A rocket project owns tankage, structure, separation and avionics;
+    /// an engine project owns injectors and turbopumps. Revising a rocket
+    /// used to hand you "Injector pattern inefficiency", which reads as
+    /// somebody else's work.
+    #[test]
+    fn rocket_flaws_never_borrow_engine_internals() {
+        let rocket = all_rocket_descriptions();
+        let engine = all_engine_descriptions();
+
+        for d in &rocket {
+            assert!(!engine.contains(d),
+                "rocket flaw {d:?} is also in the engine pool");
+        }
+        // And the obvious engine-internal words stay out of it.
+        for word in ["Injector", "injector", "Turbopump", "turbopump",
+                     "Combustion chamber", "preburner", "Nozzle"] {
+            assert!(!rocket.iter().any(|d| d.contains(word)),
+                "a rocket flaw mentions {word:?}");
+        }
+    }
+
+    /// Both triggers draw from the rocket pools — the endurance half is
+    /// the one a player sees most, since it is what strands a craft.
+    #[test]
+    fn both_rocket_triggers_have_their_own_pool() {
+        let mut rng = StdRng::seed_from_u64(11);
+        let cfg = cfg();
+        let per_flight: Vec<String> = (0..300u64)
+            .map(|i| generate_single_rocket_flaw(
+                FlawId(i), FlawTrigger::PerFlight, &mut rng, &cfg).description)
+            .collect();
+        let per_day: Vec<String> = (0..300u64)
+            .map(|i| generate_single_rocket_flaw(
+                FlawId(i), FlawTrigger::PerDay, &mut rng, &cfg).description)
+            .collect();
+
+        assert!(per_flight.iter().any(|d| d.contains("Interstage")
+            || d.contains("separation") || d.contains("Separation")),
+            "per-flight flaws are staging and burn events");
+        assert!(per_day.iter().any(|d| d.contains("boiloff")
+            || d.contains("drifts") || d.contains("erodes")),
+            "per-day flaws are wear and drift");
+        assert!(per_flight.iter().all(|d| !per_day.contains(d)),
+            "the two pools stay distinct");
+    }
+
+    /// Only the description changed: the probability model is still shared
+    /// with engine and reactor flaws.
+    #[test]
+    fn rocket_flaws_keep_the_shared_probability_core() {
+        let cfg = cfg();
+        let mut a = StdRng::seed_from_u64(3);
+        let mut b = StdRng::seed_from_u64(3);
+        let rocket = generate_single_rocket_flaw(FlawId(1), FlawTrigger::PerFlight, &mut a, &cfg);
+        let engine = generate_single_flaw(FlawId(1), FlawTrigger::PerFlight, &mut b, None, &cfg);
+
+        // FlawConsequence has no PartialEq; its Display is faithful enough.
+        assert_eq!(rocket.consequence.to_string(), engine.consequence.to_string());
+        assert_eq!(rocket.activation_chance, engine.activation_chance);
+        assert_eq!(rocket.discovery_probability, engine.discovery_probability);
+        assert_ne!(rocket.description, engine.description, "but the words differ");
+    }
+}
+

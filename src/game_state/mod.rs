@@ -329,10 +329,9 @@ impl GameState {
         // drop every cached capability figure.
         self.clear_capability_caches();
 
-        // Roll for a new undiscovered flaw. Uses the per-flight trigger
-        // distribution from the engine flaw generator (it's the same
-        // schema for rocket flaws; existing rocket flaws are generated
-        // the same way via gaussian_sample over complexity).
+        // Roll for a new undiscovered flaw, the same way a rocket project
+        // rolls its own: shared probability core, vehicle-flavoured
+        // description.
         let new_flaw = self.seed.contingent_rng.gen::<f64>()
             < self.balance.flaws.modification_flaw_prob;
         if new_flaw {
@@ -345,8 +344,8 @@ impl GameState {
             } else {
                 crate::flaw::FlawTrigger::PerFlight
             };
-            let flaw = crate::flaw::generate_single_flaw(
-                id, trigger, &mut self.seed.contingent_rng, None, &self.balance.flaws,
+            let flaw = crate::flaw::generate_single_rocket_flaw(
+                id, trigger, &mut self.seed.contingent_rng, &self.balance.flaws,
             );
             // Re-borrow project (it was released across the rng calls).
             let project = self.player_company.rocket_projects.iter_mut()
