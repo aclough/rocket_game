@@ -320,7 +320,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             "  {} {} (Rev {})  {}",
             marker, project.design.name, project.revision, status_str,
         );
-        let text_width = line_text.len() as u16;
+        let text_width = line_text.chars().count() as u16;
 
         // Track gauge data for this line
         let line_idx = lines.len();
@@ -589,7 +589,7 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
             "  {} {} (Rev {})  {}",
             marker, project.design.name, project.revision, status_str,
         );
-        let text_width = line_text.len() as u16;
+        let text_width = line_text.chars().count() as u16;
 
         // Progress gauge, matching the engine pane: teal for design work,
         // green for the current testing cycle, amber for revision work.
@@ -780,7 +780,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             "  {} {} (Rev {})  {}{}",
             marker, project.design.name, project.revision, status_str, auto_suffix,
         );
-        let text_width = line_text.len() as u16;
+        let text_width = line_text.chars().count() as u16;
 
         // Track gauge data for this line
         let line_idx = lines.len();
@@ -967,7 +967,7 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
     // Show floor space construction
     for order in &mfg.floor_space.under_construction {
         let line_text = format!("    Building {} unit(s)", order.units);
-        let text_width = line_text.len() as u16;
+        let text_width = line_text.chars().count() as u16;
         let line_idx = lines.len();
         let build_days = app.game.balance.costs.floor_space_build_days;
         let ratio = build_days.saturating_sub(order.days_remaining) as f64
@@ -997,11 +997,14 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
             format!("Teams: {}", order.teams_assigned)
         };
 
+        // Rush shows on every order the rush reaches, engines included, so
+        // it is clear what the floor is actually working on.
+        let rush = if company.order_is_rushed(order) { "  RUSH" } else { "" };
         let line_text = format!(
-            "    {} [{}] {} \"{}\"  {}",
-            marker, i + 1, order.type_label(), order.display_name(), status_str,
+            "    {} [{}] {} \"{}\"  {}{}",
+            marker, i + 1, order.type_label(), order.display_name(), status_str, rush,
         );
-        let text_width = line_text.len() as u16;
+        let text_width = line_text.chars().count() as u16;
 
         // Add gauge for active (non-waiting) orders
         if !order.waiting_for_prerequisites {
@@ -3893,7 +3896,10 @@ struct GaugeInfo {
     ratio: f64,
     label: String,
     fill_color: Color,
-    /// Column where the text on this line ends (for positioning gauge after text).
+    /// Column where the text on this line ends (for positioning gauge
+    /// after text). Counted in characters, not bytes — these lines carry
+    /// multi-byte glyphs (`▶`, the priority markers), and a byte count
+    /// pushes the gauge right by one column per extra byte.
     text_width: u16,
     /// If true, use fixed-width right-aligned positioning instead of text-adjacent.
     right_aligned: bool,

@@ -491,12 +491,17 @@ impl GameState {
                 crate::manufacturing::ManufacturingEvent::StageBuilt { stage_name, .. } =>
                     GameEvent::StageBuilt { stage_name },
                 crate::manufacturing::ManufacturingEvent::RocketIntegrated {
-                    rocket_name, design_id, build_cost, ..
+                    rocket_name, design_id, build_cost, rocket_project_id, ..
                 } => {
                     self.player_company.rocket_cost_history
                         .entry(design_id)
                         .or_default()
                         .push(build_cost);
+                    // A rush job is over the moment its rocket exists — not
+                    // when the project's whole queue drains, or a second
+                    // build behind the urgent one would keep the floor
+                    // hostage after the deadline was already met.
+                    self.player_company.rush_projects.remove(&rocket_project_id);
                     GameEvent::RocketIntegrated { rocket_name }
                 }
                 crate::manufacturing::ManufacturingEvent::FloorSpaceComplete { units } =>
@@ -516,8 +521,13 @@ impl GameState {
             events.push(evt);
         }
 
-        // Auto-assign idle manufacturing teams to least-staffed orders
-        self.player_company.auto_assign_idle_manufacturing_teams();
+        // A rush job is over once its last order has left the queue —
+        // clear before assigning, so the floor goes back to normal on the
+        // same tick the rocket lands in inventory.
+        self.player_company.clear_finished_rush_jobs();
+        // Place manufacturing teams: round-robin normally, everything onto
+        // the rush job when there is one.
+        self.player_company.assign_manufacturing_teams();
         // Same for engineering teams — an idle engineer is pure burn.
         self.player_company.auto_assign_idle_engineering_teams();
 

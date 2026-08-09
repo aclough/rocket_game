@@ -1646,6 +1646,30 @@ impl App {
                     self.status_message = Some(format!("Hired {}", name));
                 }
             }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                // Rush the selected order's rocket. Reassigns immediately
+                // rather than waiting for the tick, because the whole point
+                // is a deadline.
+                let company = &mut self.game.player_company;
+                let target = company.manufacturing.orders.get(self.selected_item)
+                    .and_then(|o| o.parent_rocket());
+                let Some(rp_id) = target else {
+                    self.status_message = Some(
+                        "That order isn't building toward a rocket".into());
+                    return;
+                };
+                let name = company.rocket_projects.iter()
+                    .find(|rp| rp.project_id == rp_id)
+                    .map_or_else(|| "rocket".to_string(), |rp| rp.design.name.clone());
+                if company.rush_projects.remove(&rp_id) {
+                    self.status_message = Some(format!("{name}: rush cancelled"));
+                } else {
+                    company.rush_projects.insert(rp_id);
+                    self.status_message = Some(format!(
+                        "{name}: RUSH — the floor drops everything else"));
+                }
+                company.assign_manufacturing_teams();
+            }
             _ => {}
         }
     }

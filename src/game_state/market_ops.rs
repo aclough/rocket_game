@@ -664,7 +664,7 @@ impl GameState {
             // Auto-build events are the competitor's internal
             // bookkeeping, not news.
             let _ = comp.company.auto_reorder_rockets(&self.balance);
-            comp.company.auto_assign_idle_manufacturing_teams();
+            comp.company.assign_manufacturing_teams();
         }
     }
 

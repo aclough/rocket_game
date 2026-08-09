@@ -85,6 +85,14 @@ pub enum ManufacturingOrderType {
         flaws: Vec<crate::flaw::Flaw>,
         /// Actualized improvements at time of order placement.
         improvements: Vec<crate::engine_project::EngineImprovement>,
+        /// The rocket build this engine was ordered for, if any, so the
+        /// order inherits that rocket's priority. Without this a
+        /// prioritised rocket gains nothing until its engines exist:
+        /// its stage orders sit blocked, and blocked orders are skipped
+        /// by the assigner. `None` for standalone builds from the
+        /// Engines pane, which belong to no particular rocket.
+        #[serde(default)]
+        rocket_project_id: Option<RocketProjectId>,
     },
     /// Build a single stage (tank + structure).
     Stage {
@@ -202,6 +210,7 @@ impl ManufacturingOrder {
                 revision,
                 flaws,
                 improvements,
+                rocket_project_id: None,
             },
             work_completed: 0.0,
             work_required: base_work * learning,
@@ -211,6 +220,27 @@ impl ManufacturingOrder {
             floor_space_used: 1,
             waiting_for_prerequisites: false,
             prior_builds,
+        }
+    }
+
+    /// Tag an engine order as part of a specific rocket's build, so it
+    /// inherits that rocket's priority. Standalone builds leave it unset.
+    pub fn for_rocket(mut self, rp_id: RocketProjectId) -> Self {
+        if let ManufacturingOrderType::Engine { rocket_project_id, .. } = &mut self.order_type {
+            *rocket_project_id = Some(rp_id);
+        }
+        self
+    }
+
+    /// The rocket project whose priority this order should inherit, if
+    /// any. Read live rather than snapshotted, so changing a rocket's
+    /// priority takes effect on work already queued.
+    pub fn parent_rocket(&self) -> Option<RocketProjectId> {
+        match &self.order_type {
+            ManufacturingOrderType::Engine { rocket_project_id, .. } => *rocket_project_id,
+            ManufacturingOrderType::Stage { rocket_project_id, .. }
+            | ManufacturingOrderType::RocketIntegration { rocket_project_id, .. } =>
+                Some(*rocket_project_id),
         }
     }
 

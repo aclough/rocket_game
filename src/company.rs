@@ -14,7 +14,7 @@ use crate::engine::{EngineCycle, EngineId};
 use crate::engine_project::{EngineDesignStatus, EngineProject, EngineProjectId, EngineSource, PropellantPreset, WorkEvent};
 use crate::calendar::GameDate;
 use crate::event::GameEvent;
-use crate::manufacturing::{Manufacturing, ManufacturingOrder, InventoryEngine};
+use crate::manufacturing::{Manufacturing, ManufacturingOrder, ManufacturingOrderType, InventoryEngine};
 use crate::launch::LaunchRecord;
 use crate::reputation::Reputation;
 use crate::rocket::{RocketDesign, RocketDesignId};
@@ -41,6 +41,37 @@ enum ProjectKind {
     Engine(usize),
     Rocket(usize),
     Reactor(usize),
+}
+
+/// What a stage build order is waiting on: which engine it needs, and how
+/// many. `None` for anything that isn't a stage order, or whose rocket
+/// project or engine has since gone away.
+///
+/// A free function taking slices rather than a `&self` method because both
+/// callers iterate `manufacturing.orders` and need the lookup to borrow only
+/// the other fields of `Company`.
+fn stage_engine_need(
+    order_type: &crate::manufacturing::ManufacturingOrderType,
+    rocket_projects: &[RocketProject],
+    engine_projects: &[EngineProject],
+    contracted_engines: &[ContractedEngine],
+) -> Option<(EngineSource, u32)> {
+    let crate::manufacturing::ManufacturingOrderType::Stage {
+        rocket_project_id, group_index, stage_index, ..
+    } = order_type else {
+        return None;
+    };
+    let rp = rocket_projects.iter().find(|rp| rp.project_id == *rocket_project_id)?;
+    let stage = rp.design.stage_groups.get(*group_index)?.get(*stage_index)?;
+    let source = if let Some(ep) = engine_projects.iter()
+        .find(|ep| ep.design.id == stage.engine.id)
+    {
+        EngineSource::PlayerDesign(ep.project_id)
+    } else {
+        let ce = contracted_engines.iter().find(|ce| ce.design.id == stage.engine.id)?;
+        EngineSource::Contracted(ce.id)
+    };
+    Some((source, stage.engine_count))
 }
 
 /// A player's rocket company.
@@ -112,6 +143,11 @@ pub struct Company {
     /// Auto-build targets: maintain at least N rockets in inventory per project.
     #[serde(default)]
     pub auto_build_targets: HashMap<RocketProjectId, u32>,
+    /// Rocket projects currently being rushed. A rush job takes the whole
+    /// manufacturing floor until the rocket reaches inventory. Several can
+    /// run at once; they share the floor the way ordinary orders would.
+    #[serde(default)]
+    pub rush_projects: std::collections::HashSet<RocketProjectId>,
     /// Standing per-market bid rules (M3 Task 3): while enabled, the
     /// rule engine auto-bids marginal cost × (1 + margin) on that
     /// market's solicitations, gated on free stock.
@@ -183,6 +219,7 @@ impl Company {
             contracted_engine_build_counts: HashMap::new(),
             auto_build_targets: HashMap::new(),
             bid_rules: HashMap::new(),
+            rush_projects: std::collections::HashSet::new(),
         };
         // Start with one engineering team
         company.hire_team("Team 1".into(), balance_cfg);
@@ -719,7 +756,7 @@ impl Company {
                                     ep.flaws.clone(),
                                     ep.improvements.iter().filter(|i| i.actualized).cloned().collect(),
                                     balance_cfg,
-                                );
+                                ).for_rocket(rocket_project_id);
                                 total_cost += order.material_cost;
                                 self.manufacturing.orders.push(order);
                                 *self.engine_build_counts.entry(ep_id).or_insert(0) += 1;
@@ -889,46 +926,26 @@ impl Company {
 
     /// Try to unblock stage and integration orders that have their prerequisites ready.
     pub fn try_unblock_manufacturing_orders(&mut self) {
-        // Helper: find engine source by engine id (inline to avoid borrow issues)
-        let find_source = |engine_id: EngineId, engine_projects: &[EngineProject], contracted_engines: &[ContractedEngine]| -> Option<EngineSource> {
-            if let Some(ep) = engine_projects.iter().find(|ep| ep.design.id == engine_id) {
-                return Some(EngineSource::PlayerDesign(ep.project_id));
-            }
-            if let Some(ce) = contracted_engines.iter().find(|ce| ce.design.id == engine_id) {
-                return Some(EngineSource::Contracted(ce.id));
-            }
-            None
-        };
-
         for order in &mut self.manufacturing.orders {
             if !order.waiting_for_prerequisites {
                 continue;
             }
             match &order.order_type {
-                crate::manufacturing::ManufacturingOrderType::Stage {
-                    rocket_project_id, group_index, stage_index, ..
-                } => {
+                crate::manufacturing::ManufacturingOrderType::Stage { .. } => {
                     // Stage needs engines for this stage
-                    if let Some(rp) = self.rocket_projects.iter()
-                        .find(|rp| rp.project_id == *rocket_project_id)
-                    {
-                        if let Some(stage) = rp.design.stage_groups
-                            .get(*group_index)
-                            .and_then(|g| g.get(*stage_index))
-                        {
-                            // Find engine source
-                            if let Some(source) = find_source(stage.engine.id, &self.engine_projects, &self.contracted_engines) {
-                                let available = self.manufacturing.inventory.engine_count(source);
-                                if available >= stage.engine_count as usize {
-                                    order.waiting_for_prerequisites = false;
-                                    // Consume engines from inventory, rolling
-                                    // their full build_cost (material + labor)
-                                    // into this stage order's material_cost.
-                                    for _ in 0..stage.engine_count {
-                                        if let Some(eng) = self.manufacturing.inventory.take_engine(source) {
-                                            order.material_cost += eng.build_cost;
-                                        }
-                                    }
+                    if let Some((source, needed)) = stage_engine_need(
+                        &order.order_type, &self.rocket_projects,
+                        &self.engine_projects, &self.contracted_engines,
+                    ) {
+                        let available = self.manufacturing.inventory.engine_count(source);
+                        if available >= needed as usize {
+                            order.waiting_for_prerequisites = false;
+                            // Consume engines from inventory, rolling
+                            // their full build_cost (material + labor)
+                            // into this stage order's material_cost.
+                            for _ in 0..needed {
+                                if let Some(eng) = self.manufacturing.inventory.take_engine(source) {
+                                    order.material_cost += eng.build_cost;
                                 }
                             }
                         }
@@ -1004,30 +1021,102 @@ impl Company {
         self.manufacturing.orders.iter().any(|o| !o.waiting_for_prerequisites)
     }
 
-    /// Auto-assign idle manufacturing teams to the order with the fewest teams.
-    pub fn auto_assign_idle_manufacturing_teams(&mut self) {
+    /// Whether this order is part of a rush job.
+    ///
+    /// Two ways in. Stage and integration orders name their rocket, so they
+    /// are rushed exactly when that rocket is. Engine orders are rushed
+    /// when their own rocket is, *or* when some blocked rushed stage order
+    /// is waiting on that engine — which is the case that matters, because
+    /// a build drawing engines from stock or from work already on the line
+    /// queues no engine orders of its own. Rushing a rocket has to reach
+    /// whatever is actually holding it up, or it reaches nothing: its own
+    /// orders are blocked, and blocked orders can't take teams.
+    ///
+    /// The components themselves need no rebinding. Engines pool by source
+    /// and stages by (project, group, index), so the part that finishes
+    /// first goes to whoever is waiting — pile teams onto the half-built
+    /// engines and the rush job is what consumes them.
+    pub fn order_is_rushed(&self, order: &ManufacturingOrder) -> bool {
+        if order.parent_rocket().is_some_and(|id| self.rush_projects.contains(&id)) {
+            return true;
+        }
+        let ManufacturingOrderType::Engine { source, .. } = &order.order_type else {
+            return false;
+        };
+        self.manufacturing.orders.iter()
+            .filter(|o| o.waiting_for_prerequisites)
+            .filter(|o| o.parent_rocket().is_some_and(|id| self.rush_projects.contains(&id)))
+            .any(|o| stage_engine_need(
+                &o.order_type, &self.rocket_projects,
+                &self.engine_projects, &self.contracted_engines,
+            ).is_some_and(|(needed, _)| needed == *source))
+    }
+
+    /// Assign manufacturing teams across the actionable orders.
+    ///
+    /// With no rush job this is the plain "fewest teams wins" round-robin
+    /// over every unblocked order, and only idle teams move.
+    ///
+    /// A rush job preempts: every team is pulled off ordinary work and
+    /// split across the rush orders by the same round-robin, because a
+    /// deadline means now and waiting for teams to come free could take
+    /// weeks. Preempted teams are not remembered — when the rush ends they
+    /// fall idle and this function places them again on the next tick.
+    pub fn assign_manufacturing_teams(&mut self) {
+        let rushing: Vec<usize> = self.manufacturing.orders.iter().enumerate()
+            .filter(|(_, o)| !o.waiting_for_prerequisites)
+            .filter(|(_, o)| self.order_is_rushed(o))
+            .map(|(i, _)| i)
+            .collect();
+
+        if !rushing.is_empty() {
+            // Preempt: strip the floor, then hand it all to the rush.
+            for order in &mut self.manufacturing.orders {
+                order.teams_assigned = 0;
+            }
+        }
+
         loop {
             if self.unassigned_manufacturing_team_count() == 0 {
                 break;
             }
-            // Find the non-waiting order with the fewest teams assigned
+            // Ties keep the earliest order, matching the long-standing
+            // `min_by_key` behaviour.
             let best = self.manufacturing.orders.iter().enumerate()
-                .filter(|(_, o)| !o.waiting_for_prerequisites)
+                .filter(|(i, o)| {
+                    !o.waiting_for_prerequisites
+                        && (rushing.is_empty() || rushing.contains(i))
+                })
                 .min_by_key(|(_, o)| o.teams_assigned)
                 .map(|(i, _)| i);
             match best {
                 Some(idx) => {
                     let available = self.unassigned_manufacturing_team_count();
-                    self.manufacturing.add_team_to_order(idx, available);
+                    if !self.manufacturing.add_team_to_order(idx, available) {
+                        break;
+                    }
                 }
                 None => break,
             }
         }
     }
 
+    /// Drop rush jobs with nothing left to rush.
+    ///
+    /// The usual retirement is on the `RocketIntegrated` event — the rush
+    /// ends the moment its rocket exists. This is the backstop for a rush
+    /// declared on a project whose queue empties some other way, so a
+    /// stale entry can't sit there waiting to hijack the next build.
+    pub fn clear_finished_rush_jobs(&mut self) {
+        let inventory = &self.manufacturing;
+        self.rush_projects.retain(|id| {
+            inventory.orders.iter().any(|o| o.parent_rocket() == Some(*id))
+        });
+    }
+
     /// Auto-assign idle engineering teams to the least-staffed project
     /// that can absorb work, mirroring
-    /// `auto_assign_idle_manufacturing_teams`.
+    /// `assign_manufacturing_teams`.
     ///
     /// An idle engineering team is pure salary burn: there is no state
     /// in which paying a team to do nothing beats putting it on a
@@ -1040,6 +1129,10 @@ impl Company {
     /// designer drafts, not committed work.
     pub fn auto_assign_idle_engineering_teams(&mut self) {
         while self.unassigned_team_count() > 0 {
+            // Committed projects across the three pools, apportioned by
+            // D'Hondt. Only rockets carry a priority; engines and reactors
+            // compete at Normal, which is what they did before priorities
+            // existed.
             // Least-staffed committed project across the three pools.
             // `min_by_key` keeps the first of equal minima, so ties
             // resolve in a stable pool-then-index order.
@@ -1063,11 +1156,12 @@ impl Company {
                 ) { continue; }
                 consider(ProjectKind::Reactor(i), p.teams_assigned);
             }
+            let best = best.map(|(kind, _)| kind);
 
             let assigned = match best {
-                Some((ProjectKind::Engine(i), _)) => self.add_team_to_project(i),
-                Some((ProjectKind::Rocket(i), _)) => self.add_team_to_rocket_project(i),
-                Some((ProjectKind::Reactor(i), _)) => self.add_team_to_reactor_project(i),
+                Some(ProjectKind::Engine(i)) => self.add_team_to_project(i),
+                Some(ProjectKind::Rocket(i)) => self.add_team_to_rocket_project(i),
+                Some(ProjectKind::Reactor(i)) => self.add_team_to_reactor_project(i),
                 // Nothing to work on — the teams stay idle and the
                 // Overview's next-steps panel prompts for a project.
                 None => break,
@@ -1321,3 +1415,4 @@ impl Company {
     }
 
 }
+

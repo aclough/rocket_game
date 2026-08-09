@@ -133,6 +133,8 @@ const MANUFACTURING: &[KeyBinding] = &[
     always("+", Some("[+/-] Team"), "Assign a manufacturing team"),
     always("-", None, "Release a manufacturing team"),
     always("M", Some("[M] Hire"), "Hire a manufacturing team"),
+    on_item("R", Some("[R] Rush"),
+        "Rush this rocket — takes the whole floor until it's built"),
 ];
 
 // Contracts and Launches carry their keys in the pane title rather

@@ -2205,3 +2205,181 @@ fn a_second_rocket_does_not_raid_the_first_rockets_engines() {
         "the first rocket's stages have claimed the existing five",
     );
 }
+
+
+
+
+
+
+
+/// Declaring a rush job takes the whole floor, including teams that were
+/// already at work — a deadline means now, so waiting for teams to come
+/// free is the wrong shape.
+#[test]
+fn a_rush_job_preempts_the_whole_floor() {
+    use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    let (design2, _) = make_three_stage_design();
+    let mut rp2 = RocketProject::new(
+        RocketProjectId(2), design2, &crate::balance_config::BalanceConfig::default());
+    rp2.status = RocketDesignStatus::Testing { work_completed: 100.0 };
+    gs.player_company.rocket_projects.push(rp2);
+
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.order_rocket_build(1, &gs.balance).unwrap();
+    for i in 0..6 {
+        gs.player_company.hire_manufacturing_team(format!("Mfg{i}"), &gs.balance);
+    }
+    gs.player_company.assign_manufacturing_teams();
+    let spread: u32 = gs.player_company.manufacturing.orders.iter()
+        .filter(|o| o.parent_rocket() == Some(RocketProjectId(1)))
+        .map(|o| o.teams_assigned).sum();
+    assert!(spread < 6, "premise: the floor starts split between both rockets");
+
+    gs.player_company.rush_projects.insert(RocketProjectId(1));
+    gs.player_company.assign_manufacturing_teams();
+
+    let rushed: u32 = gs.player_company.manufacturing.orders.iter()
+        .filter(|o| gs.player_company.order_is_rushed(o))
+        .map(|o| o.teams_assigned).sum();
+    let rest: u32 = gs.player_company.manufacturing.orders.iter()
+        .filter(|o| !gs.player_company.order_is_rushed(o))
+        .map(|o| o.teams_assigned).sum();
+    assert_eq!(rushed, 6, "every team goes to the rush");
+    assert_eq!(rest, 0, "and nothing is left on ordinary work");
+}
+
+/// A rush job is almost always blocked when you declare it — its stages
+/// are waiting for engines. The rush has to reach whatever is holding it
+/// up, or it reaches nothing.
+#[test]
+fn a_rush_reaches_the_engine_builds_holding_it_up() {
+    use crate::rocket_project::RocketProjectId;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    // Hand-built engines, owned by no rocket — the case that defeated the
+    // first design.
+    for _ in 0..4 {
+        gs.player_company.order_engine_build(0, &gs.balance).unwrap();
+    }
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.rush_projects.insert(RocketProjectId(1));
+
+    let standalone: Vec<_> = gs.player_company.manufacturing.orders.iter()
+        .filter(|o| o.parent_rocket().is_none())
+        .collect();
+    assert_eq!(standalone.len(), 4, "premise: four ownerless engine builds");
+    for o in &standalone {
+        assert!(gs.player_company.order_is_rushed(o),
+            "an engine a rushed stage is blocked on is part of the rush");
+    }
+}
+
+/// Two rush jobs share the floor the way two ordinary orders would.
+#[test]
+fn two_rush_jobs_split_the_floor() {
+    use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    let (design2, _) = make_three_stage_design();
+    let mut rp2 = RocketProject::new(
+        RocketProjectId(2), design2, &crate::balance_config::BalanceConfig::default());
+    rp2.status = RocketDesignStatus::Testing { work_completed: 100.0 };
+    gs.player_company.rocket_projects.push(rp2);
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.order_rocket_build(1, &gs.balance).unwrap();
+    for i in 0..6 {
+        gs.player_company.hire_manufacturing_team(format!("Mfg{i}"), &gs.balance);
+    }
+
+    gs.player_company.rush_projects.insert(RocketProjectId(1));
+    gs.player_company.rush_projects.insert(RocketProjectId(2));
+    gs.player_company.assign_manufacturing_teams();
+
+    // Everything is rushed, so this is just the ordinary round-robin.
+    let assigned: u32 = gs.player_company.manufacturing.orders.iter()
+        .map(|o| o.teams_assigned).sum();
+    assert_eq!(assigned, 6, "all six placed");
+    for pid in [RocketProjectId(1), RocketProjectId(2)] {
+        let n: u32 = gs.player_company.manufacturing.orders.iter()
+            .filter(|o| o.parent_rocket() == Some(pid))
+            .map(|o| o.teams_assigned).sum();
+        assert!(n > 0, "both rush jobs get a share, got {n} for {pid:?}");
+    }
+}
+
+/// The rush ends when the rocket reaches inventory, and the floor goes
+/// back to normal without the player having to clear anything.
+#[test]
+fn a_rush_clears_itself_when_the_rocket_is_built() {
+    use crate::rocket_project::RocketProjectId;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.rush_projects.insert(RocketProjectId(1));
+
+    run_manufacturing_to_rocket(&mut gs);
+    assert_eq!(gs.player_company.manufacturing.inventory.rockets.len(), 1);
+    assert!(gs.player_company.rush_projects.is_empty(),
+        "the rush should retire with the rocket that needed it");
+}
+
+/// With nothing rushed, assignment is the round-robin it always was —
+/// which is what keeps the balance baseline still.
+#[test]
+fn no_rush_means_the_old_round_robin() {
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    for i in 0..6 {
+        gs.player_company.hire_manufacturing_team(format!("Mfg{i}"), &gs.balance);
+    }
+    gs.player_company.assign_manufacturing_teams();
+
+    let counts: Vec<u32> = gs.player_company.manufacturing.orders.iter()
+        .filter(|o| !o.waiting_for_prerequisites)
+        .map(|o| o.teams_assigned)
+        .collect();
+    let hi = counts.iter().max().copied().unwrap_or(0);
+    let lo = counts.iter().min().copied().unwrap_or(0);
+    assert!(hi - lo <= 1, "teams spread evenly: {counts:?}");
+}
+
+/// A second build queued behind the urgent one must not keep the floor
+/// hostage: the rush retires when its rocket exists, not when the
+/// project's whole queue drains.
+#[test]
+fn a_rush_retires_on_the_first_rocket_not_the_last() {
+    use crate::rocket_project::RocketProjectId;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    // Two builds of the same rocket in flight at once.
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    gs.player_company.rush_projects.insert(RocketProjectId(1));
+
+    gs.player_company.hire_manufacturing_team("MfgA".into(), &gs.balance);
+    for _ in 0..40 {
+        for order in &mut gs.player_company.manufacturing.orders {
+            if !order.waiting_for_prerequisites && order.teams_assigned > 0 {
+                order.work_completed = order.work_required;
+            }
+        }
+        gs.advance_day();
+        if !gs.player_company.manufacturing.inventory.rockets.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(gs.player_company.manufacturing.inventory.rockets.len(), 1,
+        "premise: the first of the two rockets is done");
+    assert!(!gs.player_company.manufacturing.orders.is_empty(),
+        "premise: the second build is still in the queue");
+    assert!(gs.player_company.rush_projects.is_empty(),
+        "the rush ended with the rocket it was for");
+}
