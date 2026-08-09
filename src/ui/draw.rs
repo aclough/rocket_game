@@ -1444,7 +1444,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
 
 fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
     let game = &app.game;
-    let rockets = &game.player_company.manufacturing.inventory.rockets;
+    let rockets = crate::ui::ready_rockets_in_display_order(&game.player_company);
 
     let mut lines = vec![];
 

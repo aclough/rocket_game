@@ -22,6 +22,26 @@ use crate::save;
 use crate::stage::{Stage, StageId};
 use crate::structure;
 
+/// The Ready Rockets list in the order it is drawn: grouped by rocket
+/// name, newest revision first, and build order within that.
+///
+/// `App::selected_item` indexes into *this* list on the Launches tab, so
+/// the draw side and the launch key have to agree on the order — hence
+/// one function rather than a sort in each. The underlying inventory is
+/// left in build order, which is what the competitor's stock lookup and
+/// the manufacturing pipeline expect.
+pub(crate) fn ready_rockets_in_display_order(
+    company: &crate::company::Company,
+) -> Vec<&crate::manufacturing::InventoryRocket> {
+    let mut rockets: Vec<_> = company.manufacturing.inventory.rockets.iter().collect();
+    rockets.sort_by(|a, b| {
+        a.rocket_name.cmp(&b.rocket_name)
+            .then(b.revision.cmp(&a.revision))
+            .then(a.item_id.0.cmp(&b.item_id.0))
+    });
+    rockets
+}
+
 /// What the help modal is describing, and what to return to on Esc.
 #[derive(Debug, Clone)]
 pub enum HelpScope {
@@ -1739,13 +1759,13 @@ impl App {
                 // 'k'/'K' = keep: the carrier becomes a Spacecraft at the
                 // destination instead of being discarded on arrival.
                 let persist = matches!(key, KeyCode::Char('k') | KeyCode::Char('K'));
-                // Launch the selected rocket
-                let rockets = &self.game.player_company.manufacturing.inventory.rockets;
-                if self.selected_item >= rockets.len() {
+                // Launch the selected rocket. Indexes the drawn order, not
+                // the inventory's build order.
+                let rockets = ready_rockets_in_display_order(&self.game.player_company);
+                let Some(rocket) = rockets.get(self.selected_item) else {
                     self.status_message = Some("No rocket selected".into());
                     return;
-                }
-                let rocket = &rockets[self.selected_item];
+                };
                 let item_id = rocket.item_id;
                 let project_id = rocket.rocket_project_id;
 
@@ -1759,11 +1779,13 @@ impl App {
 
                 // Enter launch modal — assemble multi-payload manifest.
                 let contract_picks = vec![false; self.game.player_company.active_contracts.len()];
-                let spacecraft_item_ids: Vec<_> = self.game.player_company.manufacturing.inventory.rockets
-                    .iter()
-                    .filter(|r| r.item_id != item_id)
-                    .map(|r| r.item_id)
-                    .collect();
+                // Same order as the Ready Rockets list it was picked from.
+                let spacecraft_item_ids: Vec<_> =
+                    ready_rockets_in_display_order(&self.game.player_company)
+                        .into_iter()
+                        .filter(|r| r.item_id != item_id)
+                        .map(|r| r.item_id)
+                        .collect();
                 let spacecraft_picks = vec![false; spacecraft_item_ids.len()];
                 self.enter_modal(InputMode::LaunchManifest {
                     rocket_item_id: item_id,
@@ -5365,3 +5387,71 @@ mod onboarding_tests {
     }
 }
 
+
+#[cfg(test)]
+mod ready_rocket_order_tests {
+    use super::*;
+    use crate::company::Company;
+    use crate::manufacturing::{InventoryItemId, InventoryRocket};
+    use crate::rocket::RocketDesignId;
+    use crate::rocket_project::RocketProjectId;
+
+    fn test_company() -> Company {
+        Company::new(
+            "Test".into(), 0.0,
+            &crate::seed::GameSeed::new(1),
+            &crate::balance_config::BalanceConfig::default(),
+        )
+    }
+
+    fn stock(company: &mut Company, item_id: u64, name: &str, revision: u32) {
+        company.manufacturing.inventory.rockets.push(InventoryRocket {
+            item_id: InventoryItemId(item_id),
+            rocket_project_id: RocketProjectId(1),
+            design_id: RocketDesignId(1),
+            rocket_name: name.into(),
+            build_cost: 1_000_000.0,
+            revision,
+            rocket_flaws: Vec::new(),
+        });
+    }
+
+    #[test]
+    fn ready_rockets_are_grouped_by_name_newest_revision_first() {
+        let mut company = test_company();
+        // Pushed in build order, which is nobody's idea of a useful list.
+        stock(&mut company, 1, "Zephyr", 0);
+        stock(&mut company, 2, "Atlas", 2);
+        stock(&mut company, 3, "Zephyr", 1);
+        stock(&mut company, 4, "Atlas", 5);
+        stock(&mut company, 5, "Atlas", 2);
+
+        let ordered: Vec<_> = ready_rockets_in_display_order(&company).iter()
+            .map(|r| (r.rocket_name.as_str(), r.revision, r.item_id.0))
+            .collect();
+        assert_eq!(ordered, vec![
+            ("Atlas", 5, 4),
+            ("Atlas", 2, 2),  // equal revision falls back to build order,
+            ("Atlas", 2, 5),  // so the list never reshuffles under the cursor
+            ("Zephyr", 1, 3),
+            ("Zephyr", 0, 1),
+        ]);
+    }
+
+    #[test]
+    fn display_order_is_a_permutation_of_the_inventory() {
+        // The Launches tab clamps the cursor against the raw inventory
+        // length, so the reordered view has to be the same size and hold
+        // the same items.
+        let mut company = test_company();
+        stock(&mut company, 1, "Zephyr", 0);
+        stock(&mut company, 2, "Atlas", 2);
+        stock(&mut company, 3, "Zephyr", 1);
+
+        let ordered = ready_rockets_in_display_order(&company);
+        assert_eq!(ordered.len(), company.manufacturing.inventory.rockets.len());
+        let mut seen: Vec<u64> = ordered.iter().map(|r| r.item_id.0).collect();
+        seen.sort_unstable();
+        assert_eq!(seen, vec![1, 2, 3]);
+    }
+}
