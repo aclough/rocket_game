@@ -2730,3 +2730,162 @@ fn a_stage_already_in_inventory_does_not_claim_a_fresh_order() {
     assert_eq!(rushed_s2, 0,
         "the rush already has its S2; a fresh one belongs to the other build");
 }
+
+/// The build estimate has to agree with the orders the pipeline actually
+/// queues, or it drifts the moment a work formula changes. Rebuild the
+/// critical path out of the real orders' `work_required` and compare.
+#[test]
+fn nominal_build_days_matches_the_orders_the_pipeline_queues() {
+    use crate::manufacturing::ManufacturingOrderType as T;
+
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    let estimate = gs.player_company
+        .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);
+
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    let orders = &gs.player_company.manufacturing.orders;
+
+    // One team is a work rate of exactly 1.0, so work-days are days.
+    assert!((crate::team::manufacturing_work_rate(1) - 1.0).abs() < 1e-9,
+        "the estimate's whole premise");
+
+    // Longest engine build feeding each stage, plus that stage, is when
+    // the stage is done; integration waits for the last of them.
+    let mut critical = 0.0_f64;
+    for (gi, group) in gs.player_company.rocket_projects[0].design.stage_groups
+        .iter().enumerate()
+    {
+        for (si, stage) in group.iter().enumerate() {
+            let engine_days = orders.iter()
+                .filter(|o| matches!(&o.order_type,
+                    T::Engine { engine_id, .. } if *engine_id == stage.engine.id))
+                .map(|o| o.work_required)
+                .fold(0.0_f64, f64::max);
+            let stage_days = orders.iter()
+                .find(|o| matches!(&o.order_type,
+                    T::Stage { group_index, stage_index, .. }
+                        if *group_index == gi && *stage_index == si))
+                .map(|o| o.work_required)
+                .expect("the build queued this stage");
+            critical = critical.max(engine_days + stage_days);
+        }
+    }
+    let integration = orders.iter()
+        .find(|o| matches!(o.order_type, T::RocketIntegration { .. }))
+        .map(|o| o.work_required)
+        .expect("the build queued an integration");
+
+    assert!((estimate - (critical + integration)).abs() < 1e-6,
+        "estimate {estimate} vs pipeline {}", critical + integration);
+}
+
+/// It's a critical path, not a total: a second stage that finishes sooner
+/// changes nothing, and one that finishes later sets the pace.
+#[test]
+fn nominal_build_days_follows_the_slowest_stage_not_the_sum() {
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+
+    let base = gs.player_company
+        .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);
+
+    // Shrink every stage but the first: the first was already the
+    // heaviest, so the critical path shouldn't move.
+    {
+        let design = &mut gs.player_company.rocket_projects[0].design;
+        for group in design.stage_groups.iter_mut().skip(1) {
+            for stage in group.iter_mut() {
+                stage.structural_mass_kg = 1.0;
+            }
+        }
+    }
+    let lighter_tail = gs.player_company
+        .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);
+    assert!((lighter_tail - base).abs() < 1e-6,
+        "shortening a stage that wasn't the pace-setter changes nothing: \
+         {lighter_tail} vs {base}");
+
+    // Now make the last stage enormous — it becomes the pace-setter.
+    {
+        let design = &mut gs.player_company.rocket_projects[0].design;
+        let last = design.stage_groups.last_mut().unwrap();
+        last[0].structural_mass_kg = 500_000.0;
+    }
+    let heavy_tail = gs.player_company
+        .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);
+    assert!(heavy_tail > base,
+        "a slower stage sets the pace: {heavy_tail} vs {base}");
+}
+
+/// Contracted engines arrive when ordered, so they add no build time —
+/// which is a real reason to buy one rather than design your own.
+#[test]
+fn contracted_engines_add_no_build_time() {
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    let with_own_engines = gs.player_company
+        .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);
+
+    let date = gs.date;
+    let seed = gs.seed.clone();
+    let idx = gs.player_company.third_party_catalog.iter()
+        .position(|e| e.available_from <= date)
+        .expect("a starter engine is on the market");
+    gs.player_company.contract_third_party(idx, date, &seed, &gs.balance).unwrap();
+    let bought = gs.player_company.contracted_engines[0].design.clone();
+
+    for group in gs.player_company.rocket_projects[0].design.stage_groups.iter_mut() {
+        for stage in group.iter_mut() {
+            stage.engine = bought.clone();
+        }
+    }
+    let with_bought_engines = gs.player_company
+        .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);
+
+    assert!(with_bought_engines < with_own_engines,
+        "buying engines skips their build time: {with_bought_engines} vs {with_own_engines}");
+}
+
+/// The learning curve is folded in, so the number answers "how long will
+/// the next one take", not "how long did the first one take".
+#[test]
+fn nominal_build_days_reflects_the_learning_curve() {
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    let first = gs.player_company
+        .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);
+
+    let design_id = gs.player_company.rocket_projects[0].design.id;
+    gs.player_company.rocket_build_counts.insert(design_id, 20);
+    let twenty_first = gs.player_company
+        .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);
+
+    assert!(twenty_first < first,
+        "practice makes it quicker: {twenty_first} vs {first}");
+}
+
+/// The contracts table shows how long is left, and distinguishes a
+/// deadline today from one already missed — `days_until` floors at zero,
+/// so both would otherwise read "0d".
+#[test]
+fn contract_rows_show_days_left_and_flag_overdue() {
+    use crate::ui::draw::test_support::contract_row_for_test;
+
+    let mut c = crate::contract::test_support::solicitation_fixture();
+    let today = crate::calendar::GameDate { year: 2001, month: 6, day: 1 };
+
+    c.deadline = today.add_days(45);
+    assert!(contract_row_for_test(&c, today).contains("45d"),
+        "row: {:?}", contract_row_for_test(&c, today));
+
+    c.deadline = today;
+    let due_today = contract_row_for_test(&c, today);
+    assert!(due_today.contains("0d"), "due today reads as zero: {due_today:?}");
+    assert!(!due_today.contains("over"), "but is not overdue: {due_today:?}");
+
+    c.deadline = crate::calendar::GameDate { year: 2001, month: 5, day: 31 };
+    let missed = contract_row_for_test(&c, today);
+    assert!(missed.contains("over"), "a passed deadline says so: {missed:?}");
+}
+

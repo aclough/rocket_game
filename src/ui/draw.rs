@@ -1,6 +1,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph};
 
+use crate::calendar::GameDate;
 use crate::contract::{self, Contract};
 use crate::engine::EngineCycle;
 use crate::engine_project::{EngineDesignStatus, EngineSource};
@@ -776,9 +777,14 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         } else {
             String::new()
         };
+        // Nominal build time: the design's critical path with one team on
+        // every part, so two designs can be compared without reference to
+        // how busy the floor happens to be.
+        let build_days = company.nominal_build_days(project, &app.game.balance);
         let line_text = format!(
-            "  {} {} (Rev {})  {}{}",
-            marker, project.design.name, project.revision, status_str, auto_suffix,
+            "  {} {} (Rev {})  {}  build ~{:.0}d{}",
+            marker, project.design.name, project.revision, status_str,
+            build_days, auto_suffix,
         );
         let text_width = line_text.chars().count() as u16;
 
@@ -1138,6 +1144,7 @@ impl ContractCols {
     const PAYLOAD: usize = 9;   // "123456 kg"
     const VALUE: usize = 10;    // "bid $12.5M"
     const DATE: usize = 12;     // "Dec 31, 2001" — the longest GameDate
+    const LEFT: usize = 5;      // "365d", or "over" once the date has passed
     const FLAGS: usize = 5;     // " ▲rep"
     const MIN_NAME: usize = 10;
     /// Past this the name column is just whitespace; leave the rest of
@@ -1149,7 +1156,7 @@ impl ContractCols {
         // marker + name + (sep+dest) + (sep+payload) + (sep+value)
         // + (sep+bid_close) + (sep+deadline) + flags
         let fixed_narrow = Self::MARKER + (1 + Self::DEST) + (1 + Self::PAYLOAD)
-            + (1 + Self::VALUE) + (1 + Self::DATE) + Self::FLAGS;
+            + (1 + Self::VALUE) + (1 + Self::DATE) + (1 + Self::LEFT) + Self::FLAGS;
         let fixed_wide = fixed_narrow + 1 + Self::DATE;
 
         let wide_name = inner.saturating_sub(fixed_wide);
@@ -1176,6 +1183,7 @@ impl ContractCols {
             s.push_str(&format!(" {:<w$}", "Bids close", w = Self::DATE));
         }
         s.push_str(&format!(" {:<w$}", "Deadline", w = Self::DATE));
+        s.push_str(&format!(" {:>w$}", "Left", w = Self::LEFT));
         s
     }
 }
@@ -1255,6 +1263,7 @@ fn contract_row(
     cols: &ContractCols,
     selected: bool,
     rep_flag: bool,
+    today: GameDate,
 ) -> String {
     let mut s = format!(
         "{}{:<name$} {:<dest$} {:>payload$} {:>value$}",
@@ -1283,10 +1292,32 @@ fn contract_row(
         ));
     }
     s.push_str(&format!(" {:<w$}", c.deadline.to_string(), w = ContractCols::DATE));
+    // `days_until` floors at zero, so a passed deadline and a deadline
+    // today would both read "0d" — the distinction matters most when
+    // you're scanning for what's about to bite.
+    s.push_str(&format!(
+        " {:>w$}",
+        if c.deadline < today { "over".to_string() }
+        else { format!("{}d", today.days_until(&c.deadline)) },
+        w = ContractCols::LEFT,
+    ));
     if rep_flag {
         s.push_str(" ▲rep");
     }
     s
+}
+
+/// Hooks for testing the row formatters, which are otherwise only
+/// reachable through a rendered frame.
+#[cfg(test)]
+pub mod test_support {
+    use super::*;
+
+    /// One contract row as the pane would draw it, at a width wide enough
+    /// for every column.
+    pub fn contract_row_for_test(c: &Contract, today: GameDate) -> String {
+        contract_row(c, &ContractCols::for_width(120), false, false, today)
+    }
 }
 
 /// Style for a contract row. Readiness owns the **foreground** colour;
@@ -1400,7 +1431,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
                 let rep_flag = c.bid_deadline.is_some()
                     && rep < 0.8 * market.rep_target;
                 lines.push(Line::from(Span::styled(
-                    contract_row(c, &cols, selected, rep_flag),
+                    contract_row(c, &cols, selected, rep_flag, game.date),
                     contract_style(
                         Some(check_contract_readiness(game, c)),
                         selected,
@@ -1423,7 +1454,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
             for (i, c) in orphan_contracts {
                 let selected = i == app.selected_item;
                 lines.push(Line::from(Span::styled(
-                    contract_row(c, &cols, selected, false),
+                    contract_row(c, &cols, selected, false, game.date),
                     contract_style(None, selected, false),
                 )));
             }
@@ -1450,7 +1481,7 @@ fn draw_contracts_tab(frame: &mut Frame, app: &App, area: Rect, border_style: St
             let idx = offset + i;
             let selected = idx == app.selected_item;
             lines.push(Line::from(Span::styled(
-                contract_row(c, &cols, selected, false),
+                contract_row(c, &cols, selected, false, game.date),
                 contract_style(
                     Some(check_contract_readiness(game, c)),
                     selected,

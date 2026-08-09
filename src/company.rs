@@ -1277,6 +1277,56 @@ impl Company {
         }
     }
 
+    /// Nominal days to build one of these from nothing, with one team on
+    /// every part at once.
+    ///
+    /// This is the critical path, not the total work: engines for a stage
+    /// build alongside each other, all stages build alongside each other,
+    /// and integration waits for the last of them. One team means a work
+    /// rate of exactly 1.0 (`n^0.85` at n=1), so work-days are days.
+    ///
+    /// Current learning-curve multipliers are folded in, so the number is
+    /// what the *next* one would cost rather than what the first did.
+    /// Contracted engines contribute nothing: they arrive on order.
+    ///
+    /// Deliberately ignores how many teams you actually have, floor space,
+    /// and anything already in stock — it is a property of the design, for
+    /// comparing one against another.
+    pub fn nominal_build_days(
+        &self, project: &RocketProject, balance: &BalanceConfig,
+    ) -> f64 {
+        let rocket_prior = *self.rocket_build_counts
+            .get(&project.design.id).unwrap_or(&0);
+        let rocket_learning = balance.work.learning_curve_multiplier(rocket_prior);
+
+        let mut critical_path = 0.0_f64;
+        for group in &project.design.stage_groups {
+            for stage in group {
+                let engine_days = match self.engine_source_for_id(stage.engine.id) {
+                    Some(EngineSource::PlayerDesign(ep_id)) => self.engine_projects.iter()
+                        .find(|ep| ep.project_id == ep_id)
+                        .map_or(0.0, |ep| {
+                            let prior = *self.engine_build_counts
+                                .get(&ep_id).unwrap_or(&0);
+                            balance.work.engine_build_work(ep.complexity, stage.engine.mass_kg)
+                                * balance.work.learning_curve_multiplier(prior)
+                        }),
+                    // Contracted engines are delivered when ordered.
+                    Some(EngineSource::Contracted(_)) | None => 0.0,
+                };
+                let stage_days = balance.work.stage_build_work(stage.structural_mass_kg)
+                    * rocket_learning;
+                critical_path = critical_path.max(engine_days + stage_days);
+            }
+        }
+
+        let total_stages: u32 = project.design.stage_groups.iter()
+            .map(|g| g.len() as u32)
+            .sum();
+        critical_path
+            + balance.work.rocket_integration_work(total_stages) * rocket_learning
+    }
+
     /// Drop rush jobs with nothing left to rush.
     ///
     /// The usual retirement is on the `RocketIntegrated` event — the rush
