@@ -609,6 +609,44 @@ impl Company {
         self.manufacturing.remove_team_from_order(order_index)
     }
 
+    /// Engines of `source` that are already paid for and still unspoken for:
+    /// everything sitting in inventory, plus everything on the manufacturing
+    /// line, less what blocked stage orders will claim the moment their
+    /// prerequisites are met.
+    ///
+    /// A stage order that is *not* blocked has already taken its engines out
+    /// of inventory (see `try_unblock_manufacturing_orders`), so only the
+    /// blocked ones represent a future claim.
+    pub fn uncommitted_engines(&self, source: EngineSource) -> usize {
+        let in_stock = self.manufacturing.inventory.engine_count(source);
+        let on_the_line = self.manufacturing.orders.iter()
+            .filter(|o| matches!(
+                &o.order_type,
+                crate::manufacturing::ManufacturingOrderType::Engine { source: s, .. }
+                    if *s == source
+            ))
+            .count();
+
+        let claimed: usize = self.manufacturing.orders.iter()
+            .filter(|o| o.waiting_for_prerequisites)
+            .filter_map(|o| match &o.order_type {
+                crate::manufacturing::ManufacturingOrderType::Stage {
+                    rocket_project_id, group_index, stage_index, ..
+                } => Some((rocket_project_id, group_index, stage_index)),
+                _ => None,
+            })
+            .filter_map(|(rp_id, gi, si)| {
+                let rp = self.rocket_projects.iter()
+                    .find(|rp| rp.project_id == *rp_id)?;
+                let stage = rp.design.stage_groups.get(*gi)?.get(*si)?;
+                (self.engine_source_for_id(stage.engine.id)? == source)
+                    .then_some(stage.engine_count as usize)
+            })
+            .sum();
+
+        (in_stock + on_the_line).saturating_sub(claimed)
+    }
+
     /// Order construction of a rocket. Auto-queues engine, stage, and integration orders.
     /// Returns the total material cost and event, or None if the rocket project isn't complete.
     pub fn order_rocket_build(&mut self, rocket_project_index: usize, balance_cfg: &BalanceConfig) -> Option<(f64, GameEvent)> {
@@ -628,11 +666,37 @@ impl Company {
         // Get current build count for this rocket design (for learning curve)
         let rocket_prior = *self.rocket_build_counts.get(&design_id).unwrap_or(&0);
 
+        // Engines the design needs that are already paid for — in stock or on
+        // the line — and not promised to some other blocked stage order. An
+        // engine the player ordered by hand from the Engines pane is the same
+        // engine this rocket needs, so a build tops the stock up rather than
+        // duplicating it. Snapshotted before the loop because the loop pushes
+        // orders and (for contracted engines) inventory as it goes.
+        let mut spare: HashMap<EngineSource, usize> = HashMap::new();
+        for group in &rp.design.stage_groups {
+            for stage in group {
+                if let Some(source) = self.engine_source_for_id(stage.engine.id) {
+                    spare.entry(source)
+                        .or_insert_with(|| self.uncommitted_engines(source));
+                }
+            }
+        }
+
         // Queue engine build orders for each engine needed
         for (gi, group) in rp.design.stage_groups.iter().enumerate() {
             for (si, stage) in group.iter().enumerate() {
                 let source = self.engine_source_for_id(stage.engine.id);
-                for _e in 0..stage.engine_count {
+                // Draw on the existing pool first; only build the shortfall.
+                let from_stock = match source {
+                    Some(s) => {
+                        let pool = spare.get_mut(&s).expect("prefilled above");
+                        let take = (*pool).min(stage.engine_count as usize);
+                        *pool -= take;
+                        take
+                    }
+                    None => 0,
+                };
+                for _e in from_stock..stage.engine_count as usize {
                     match source {
                         Some(EngineSource::PlayerDesign(ep_id)) => {
                             // Find the engine project for manufacturing details

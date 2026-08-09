@@ -2100,3 +2100,108 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
         "arrival day should cost exactly one housekeeping day ({one_day_kwd} kWd), drained {drained}",
     );
 }
+
+
+/// Count queued engine orders, regardless of source.
+fn queued_engine_orders(gs: &GameState) -> usize {
+    gs.player_company.manufacturing.orders.iter()
+        .filter(|o| matches!(o.order_type,
+            crate::manufacturing::ManufacturingOrderType::Engine { .. }))
+        .count()
+}
+
+/// Drive manufacturing until the order queue empties, without requiring a
+/// finished rocket — standalone engine builds produce no rocket.
+fn run_manufacturing_to_idle(gs: &mut GameState) {
+    gs.player_company.hire_manufacturing_team("MfgA".into(), &gs.balance);
+    for _ in 0..30 {
+        for order in &mut gs.player_company.manufacturing.orders {
+            if !order.waiting_for_prerequisites && order.teams_assigned > 0 {
+                order.work_completed = order.work_required;
+            }
+        }
+        gs.advance_day();
+        if gs.player_company.manufacturing.orders.is_empty() {
+            break;
+        }
+    }
+}
+
+/// Engines built by hand from the Engines pane are the same engines a rocket
+/// needs, so ordering the rocket should top the stock up rather than buy a
+/// second full set and leave the first sitting on the shelf.
+#[test]
+fn a_rocket_build_uses_engines_already_in_stock() {
+    use crate::engine_project::{EngineProjectId, EngineSource};
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    let src = EngineSource::PlayerDesign(EngineProjectId(1));
+
+    // The design wants four EP1 engines (3 on S1, 1 on S2) and one EP2.
+    // Build all four EP1s by hand first.
+    for _ in 0..4 {
+        gs.player_company.order_engine_build(0, &gs.balance)
+            .expect("EP1 is in Testing, so it can be built standalone");
+    }
+    run_manufacturing_to_idle(&mut gs);
+    assert_eq!(
+        gs.player_company.manufacturing.inventory.engine_count(src), 4,
+        "premise: four hand-built engines are sitting in stock",
+    );
+
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    assert_eq!(
+        queued_engine_orders(&gs), 1,
+        "only the EP2 for S3 is missing; the four EP1s are already on the shelf",
+    );
+
+    run_manufacturing_to_rocket(&mut gs);
+    assert_eq!(gs.player_company.manufacturing.inventory.rockets.len(), 1);
+    assert_eq!(
+        gs.player_company.manufacturing.inventory.engine_count(src), 0,
+        "the hand-built engines went into the rocket instead of gathering dust",
+    );
+}
+
+/// Same rule for engines still on the line: a build queued a moment ago
+/// counts as supply, otherwise the obvious workflow — queue the engines,
+/// then order the rocket — still pays twice.
+#[test]
+fn a_rocket_build_counts_engines_still_being_built() {
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+
+    for _ in 0..4 {
+        gs.player_company.order_engine_build(0, &gs.balance).unwrap();
+    }
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    assert_eq!(
+        queued_engine_orders(&gs), 5,
+        "four already on the line plus the one EP2 nobody has built yet",
+    );
+
+    run_manufacturing_to_rocket(&mut gs);
+    assert_eq!(gs.player_company.manufacturing.inventory.rockets.len(), 1,
+        "and the rocket still gets built");
+}
+
+/// The supply is not double-counted across rockets: engines a blocked stage
+/// order is already waiting on are spoken for, so a second rocket orders its
+/// own full set.
+#[test]
+fn a_second_rocket_does_not_raid_the_first_rockets_engines() {
+    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+
+    for _ in 0..4 {
+        gs.player_company.order_engine_build(0, &gs.balance).unwrap();
+    }
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    assert_eq!(queued_engine_orders(&gs), 5);
+
+    gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    assert_eq!(
+        queued_engine_orders(&gs), 10,
+        "the first rocket's stages have claimed the existing five",
+    );
+}
