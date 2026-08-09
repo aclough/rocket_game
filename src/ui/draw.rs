@@ -2970,15 +2970,19 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 for (i, c) in contracts.iter().enumerate() {
                     let mark = if *cursor == row { " ▶ " } else { "   " };
                     let check = if contract_picks[i] { "[✓]" } else { "[ ]" };
-                    let dest_name = contract::destination_display_name(&c.destination);
                     let style = if *cursor == row {
                         Style::default().fg(Color::Yellow)
                     } else {
                         Style::default()
                     };
+                    // No destination here: every contract name is built as
+                    // "<something> to <destination>", so spelling it out
+                    // again just reads as "… to LEO → Low Earth Orbit". The
+                    // summary above still names the manifest's destination
+                    // and flags contracts that disagree.
                     lines.push(Line::from(Span::styled(
-                        format!("{}{} {} → {} ({:.0} kg, {})",
-                            mark, check, c.name, dest_name, c.payload_kg, format_money(c.payment)),
+                        format!("{}{} {} ({:.0} kg, {})",
+                            mark, check, c.name, c.payload_kg, format_money(c.payment)),
                         style,
                     )));
                     row += 1;
