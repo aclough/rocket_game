@@ -101,6 +101,17 @@ pub const BID_PAYLOAD_MARGIN: f64 = 0.9;
 /// fingerprint every time.
 const CAPABILITY_CACHE_LIMIT: usize = 4096;
 
+/// What a design can put at one destination — see
+/// [`GameState::payload_table`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PayloadReach {
+    pub destination: &'static str,
+    pub max_payload_kg: f64,
+    /// False when the design can lift the mass but goes dark on the way:
+    /// a power problem wearing a delta-v problem's clothes.
+    pub survives: bool,
+}
+
 /// Why a launch manifest couldn't be assembled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestError {
@@ -412,9 +423,18 @@ impl GameState {
     }
 
     /// `payload_table_for`, memoized per destination.
+    /// One row of the designer's payload-feasibility table: how much this
+    /// design can put somewhere, and whether it stays alive long enough to
+    /// deliver it.
+    ///
+    /// The two are independent failures. Lifting the mass is a delta-v
+    /// question; arriving with the lights on is a power one, and a design
+    /// can pass the first and fail the second — which is exactly the case
+    /// worth flagging, since the payload figure on its own reads as
+    /// success.
     pub fn payload_table(
         &self, design: &RocketDesign, from: &str, destinations: &[&str],
-    ) -> Vec<(&'static str, f64)> {
+    ) -> Vec<PayloadReach> {
         let mut results = Vec::new();
         for &dest in destinations {
             if dest == from {
@@ -425,10 +445,19 @@ impl GameState {
             };
             let payload = self.payload_capability(design, from, dest);
             if payload > 0.0 {
-                results.push((location.display_name, payload));
+                results.push(PayloadReach {
+                    destination: location.display_name,
+                    max_payload_kg: payload,
+                    // Asked at the payload being quoted, since that is the
+                    // trip the row describes — a heavier load can take a
+                    // different route and so a different number of days.
+                    survives: self.survives_trip(design, from, dest, payload),
+                });
             }
         }
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| b.max_payload_kg
+            .partial_cmp(&a.max_payload_kg)
+            .unwrap_or(std::cmp::Ordering::Equal));
         results
     }
 

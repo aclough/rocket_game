@@ -886,9 +886,18 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             let table = app.game.payload_table(&project.design, "earth_surface", &dests);
             if !table.is_empty() {
                 lines.push(Line::from("      Max payload:"));
-                for (dest, payload) in &table {
-                    lines.push(Line::from(format!(
-                        "        {:20} {:>8}", dest, format_mass(*payload),
+                for row in &table {
+                    let (note, style) = if row.survives {
+                        ("", Style::default())
+                    } else {
+                        ("  ▲ no power to reach it", Style::default().fg(Color::Red))
+                    };
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "        {:20} {:>8}{}",
+                            row.destination, format_mass(row.max_payload_kg), note,
+                        ),
+                        style,
                     )));
                 }
             }
@@ -2486,9 +2495,24 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                 "  Payload Feasibility:",
                 Style::default().add_modifier(Modifier::BOLD),
             )));
-            for (dest, payload) in &table {
-                lines.push(Line::from(format!(
-                    "    {:24} {:>8}", dest, format_mass(*payload),
+            for row in &table {
+                // Lifting the mass and arriving with the lights on are
+                // separate failures, and a payload figure on its own reads
+                // as success — so say which one is missing.
+                let (note, style) = if row.survives {
+                    ("", Style::default())
+                } else {
+                    (
+                        "  ▲ goes dark en route — add power",
+                        Style::default().fg(Color::Red),
+                    )
+                };
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "    {:24} {:>8}{}",
+                        row.destination, format_mass(row.max_payload_kg), note,
+                    ),
+                    style,
                 )));
             }
         }
