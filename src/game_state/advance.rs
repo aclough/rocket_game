@@ -291,6 +291,24 @@ impl GameState {
                 }
             }
 
+            // Roll the geopolitical arc once a year. Runs before modifiers
+            // expire so a state entered this January is applied before
+            // anything gets a chance to look at the markets.
+            if self.date.month == 1 {
+                let year = self.date.year;
+                if let Some(shift) = crate::geopolitics::advance_geopolitics(
+                    &mut self.geopolitics, &self.seed, year,
+                ) {
+                    let mut geo_events = self.apply_geopolitical_shift(shift);
+                    for evt in geo_events.drain(..) {
+                        self.event_log.push(self.date, evt.clone());
+                        events.push(evt);
+                    }
+                    // A war is at least as worth stopping for as a recession.
+                    self.speed = GameSpeed::Paused;
+                }
+            }
+
             // Expire market modifiers
             for market in &mut self.markets {
                 market.expire_modifiers(self.date);

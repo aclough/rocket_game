@@ -112,12 +112,21 @@ fn assert_bands(summaries: &[RunSummary]) {
     // a profitable year).
     let n = summaries.len() as f64;
     // The agreed roguelike guard band: 1-6 bankruptcies per 100 seeds
-    // (target 2-4/100, baseline 3.0/100). The lower bound only means
-    // anything at scale, so it applies to the 200-seed run and not
-    // the 20-seed smoke check.
+    // (target 2-4/100, baseline 3.0/100). Neither bound means much at
+    // n=20, so both are size-aware.
+    //
+    // The ceiling needs the same treatment the floor already had. A 6%
+    // ceiling on twenty seeds means "at most one bankruptcy", and at a
+    // 4% true rate the chance of seeing two or more is 19% — a smoke
+    // check that cries wolf one run in five. Allowing two (10%) fails
+    // about 3% of the time instead, which is what a smoke check should
+    // feel like. The 200-seed run keeps the real 6% ceiling.
+    let ceiling = if summaries.len() >= 100 { 0.06 } else { 0.10 };
     assert!(
-        bankrupt as f64 / n <= 0.06,
-        "{bankrupt}/{n} seeds bankrupt (band <= 6%, baseline 3.0%)",
+        bankrupt as f64 / n <= ceiling,
+        "{bankrupt}/{n} seeds bankrupt (band <= {:.0}%, baseline 3.0%, \
+         measured 4.0% at 200 seeds)",
+        ceiling * 100.0,
     );
     if summaries.len() >= 100 {
         assert!(

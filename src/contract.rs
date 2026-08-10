@@ -173,6 +173,41 @@ pub struct MarketModifier {
     pub rate_mult: f64,
     /// When this modifier expires (None = permanent).
     pub end_date: Option<GameDate>,
+    /// Per-destination volume multipliers, keyed by `location_id`.
+    /// Absent means 1.0.
+    ///
+    /// A debris cascade is an orbit problem, not a market problem: it
+    /// wrecks LEO and SSO and barely touches GEO. A market-wide
+    /// `volume_mult` can't say that, so this scales one destination at a
+    /// time and the two consequences fall out together — the market's
+    /// total volume drops by the affected destinations' share of its
+    /// weight (see `Market::destination_share`), and what contracts
+    /// remain skew toward the orbits that still work (see
+    /// `pick_destination`).
+    #[serde(default)]
+    pub destination_volume_mult: Vec<(String, f64)>,
+    /// Added to the market's `rep_target` while active. Negative makes
+    /// the customer less choosy — a wartime buyer needs lift more than
+    /// it needs a spotless record.
+    #[serde(default)]
+    pub rep_target_delta: f64,
+}
+
+impl Default for MarketModifier {
+    /// A modifier that changes nothing — construct with
+    /// `MarketModifier { id, description, volume_mult: 0.6,
+    /// ..Default::default() }` and name only the fields you mean.
+    fn default() -> Self {
+        MarketModifier {
+            id: String::new(),
+            description: String::new(),
+            volume_mult: 1.0,
+            rate_mult: 1.0,
+            end_date: None,
+            destination_volume_mult: Vec::new(),
+            rep_target_delta: 0.0,
+        }
+    }
 }
 
 /// When a market's contracts arrive: evenly, in clumps, or in
@@ -312,7 +347,7 @@ pub fn bid_score(
     rep_scale: f64,
 ) -> f64 {
     market.w_cost * (budget_ceiling / bid)
-        + market.w_rep * rep_factor(reputation, market.rep_target, rep_scale)
+        + market.w_rep * rep_factor(reputation, market.effective_rep_target(), rep_scale)
 }
 
 impl Market {
@@ -333,6 +368,41 @@ impl Market {
         let econ = self.economy_sensitivity.apply(economy_modifier);
         let mod_mult: f64 = self.modifiers.iter().map(|m| m.volume_mult).product();
         self.base_volume * self.growth_factor(current_date) * mod_mult * econ
+            * self.destination_share()
+    }
+
+    /// Combined per-destination multiplier for one location — the product
+    /// across every active modifier. 1.0 when nothing touches it.
+    pub fn destination_mult(&self, location_id: &str) -> f64 {
+        self.modifiers.iter()
+            .flat_map(|m| m.destination_volume_mult.iter())
+            .filter(|(loc, _)| loc == location_id)
+            .map(|(_, mult)| *mult)
+            .product()
+    }
+
+    /// How much of this market's volume survives its per-destination
+    /// multipliers: the weight-weighted mean of them.
+    ///
+    /// Suppressing an orbit has to remove those launches rather than
+    /// redistribute them, so the market's total falls by exactly the
+    /// share of its weight that sat on the affected destinations. A
+    /// market with no LEO business is untouched by a LEO catastrophe;
+    /// one that is all LEO loses everything.
+    pub fn destination_share(&self) -> f64 {
+        let total: f64 = self.destinations.iter().map(|d| d.weight).sum();
+        if total <= 0.0 {
+            return 1.0;
+        }
+        let surviving: f64 = self.destinations.iter()
+            .map(|d| d.weight * self.destination_mult(&d.location_id))
+            .sum();
+        surviving / total
+    }
+
+    /// The reputation bar as it stands today, including any modifier.
+    pub fn effective_rep_target(&self) -> f64 {
+        self.rep_target + self.modifiers.iter().map(|m| m.rep_target_delta).sum::<f64>()
     }
 
     /// Effective rate multiplier from all modifiers.
@@ -406,14 +476,18 @@ pub fn generate_market_contracts(
 /// Pick a destination by weight (None if the market has no positive
 /// weights).
 fn pick_destination<'a>(market: &'a Market, rng: &mut StdRng) -> Option<&'a MarketDestination> {
-    let total_weight: f64 = market.destinations.iter().map(|d| d.weight).sum();
+    // Weights are scaled by any per-destination modifier, so a suppressed
+    // orbit gets proportionally fewer of the contracts that remain. The
+    // matching drop in how many there are is in `destination_share`.
+    let effective = |d: &MarketDestination| d.weight * market.destination_mult(&d.location_id);
+    let total_weight: f64 = market.destinations.iter().map(effective).sum();
     if total_weight <= 0.0 {
         return None;
     }
     let mut roll = rng.gen::<f64>() * total_weight;
     let mut dest = market.destinations.first()?;
     for d in &market.destinations {
-        roll -= d.weight;
+        roll -= effective(d);
         if roll <= 0.0 {
             dest = d;
             break;
@@ -908,31 +982,35 @@ pub fn event_market_templates() -> Vec<Market> {
         },
         Market {
             id: MARKET_NSSL,
-            name: "National Security".into(),
-            description: "Defense and intelligence satellite launches. \
+            name: "National Reconnaissance".into(),
+            description: "Imaging and signals intelligence satellites for the NRO. \
                           Irreplaceable payloads; failures draw hearings".into(),
             active: false,
             base_volume: 0.3,
             destinations: vec![
+                // Reconnaissance flies low and polar. The weighting matters
+                // beyond flavour: an ASAT exchange suppresses LEO and SSO
+                // for everyone else, and this is the customer whose own
+                // satellites were the target.
                 MarketDestination {
                     location_id: "leo".into(), display_name: "LEO".into(),
                     min_payload_kg: 1_000.0, max_payload_kg: 10_000.0,
-                    rate_per_kg: 60_000.0, weight: 0.3,
-                },
-                MarketDestination {
-                    location_id: "gto".into(), display_name: "GTO".into(),
-                    min_payload_kg: 2_000.0, max_payload_kg: 7_000.0,
-                    rate_per_kg: 80_000.0, weight: 0.25,
-                },
-                MarketDestination {
-                    location_id: "geo".into(), display_name: "GEO".into(),
-                    min_payload_kg: 2_000.0, max_payload_kg: 5_000.0,
-                    rate_per_kg: 150_000.0, weight: 0.2,
+                    rate_per_kg: 60_000.0, weight: 0.4,
                 },
                 MarketDestination {
                     location_id: "sso".into(), display_name: "SSO".into(),
                     min_payload_kg: 1_000.0, max_payload_kg: 5_000.0,
-                    rate_per_kg: 70_000.0, weight: 0.25,
+                    rate_per_kg: 70_000.0, weight: 0.35,
+                },
+                MarketDestination {
+                    location_id: "gto".into(), display_name: "GTO".into(),
+                    min_payload_kg: 2_000.0, max_payload_kg: 7_000.0,
+                    rate_per_kg: 80_000.0, weight: 0.15,
+                },
+                MarketDestination {
+                    location_id: "geo".into(), display_name: "GEO".into(),
+                    min_payload_kg: 2_000.0, max_payload_kg: 5_000.0,
+                    rate_per_kg: 150_000.0, weight: 0.1,
                 },
             ],
             rep_target: 80.0,
@@ -940,7 +1018,7 @@ pub fn event_market_templates() -> Vec<Market> {
             w_rep: 0.65,
             budget_tolerance: 1.4,
             economy_sensitivity: EconomySensitivity::None,
-            name_prefixes: vec!["NatSec Payload".into(), "Defense Sat".into(), "Classified Mission".into()],
+            name_prefixes: vec!["KEYHOLE Follow-on".into(), "Recon Payload".into(), "Classified Mission".into()],
             modifiers: Vec::new(),
             annual_growth: 0.0,
             activation_date: None,
@@ -1251,6 +1329,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                         volume_mult: 0.6,
                         rate_mult: 0.9,
                         end_date: None,
+                        ..Default::default()
                     },
                 }],
             }),
@@ -1289,6 +1368,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
                         volume_mult: 0.7,
                         rate_mult: 0.95,
                         end_date: None,
+                        ..Default::default()
                     },
                 }],
             }),
@@ -1459,10 +1539,12 @@ mod tests {
         market.add_modifier(MarketModifier {
             id: "test".into(), description: "Test".into(),
             volume_mult: 0.5, rate_mult: 1.0, end_date: None,
+            ..Default::default()
         });
         market.add_modifier(MarketModifier {
             id: "test".into(), description: "Test duplicate".into(),
             volume_mult: 0.3, rate_mult: 1.0, end_date: None,
+            ..Default::default()
         });
         assert_eq!(market.modifiers.len(), 1, "Should deduplicate by id");
     }
@@ -1475,6 +1557,7 @@ mod tests {
         market.add_modifier(MarketModifier {
             id: "test".into(), description: "Test".into(),
             volume_mult: 0.5, rate_mult: 1.0, end_date: None,
+            ..Default::default()
         });
         let vol_after = market.effective_volume(1.0, date);
         assert!((vol_after - vol_before * 0.5).abs() < 0.01);
@@ -1597,10 +1680,12 @@ mod tests {
             id: "temp".into(), description: "Temp".into(),
             volume_mult: 0.5, rate_mult: 1.0,
             end_date: Some(GameDate::new(2005, 1, 1)),
+            ..Default::default()
         });
         market.add_modifier(MarketModifier {
             id: "perm".into(), description: "Perm".into(),
             volume_mult: 0.8, rate_mult: 1.0, end_date: None,
+            ..Default::default()
         });
         market.expire_modifiers(GameDate::new(2006, 1, 1));
         assert_eq!(market.modifiers.len(), 1);

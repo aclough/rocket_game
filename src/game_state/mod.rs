@@ -160,6 +160,12 @@ pub struct GameState {
     /// Current economic conditions affecting the launch market.
     #[serde(default)]
     pub economy: crate::economy::EconomicState,
+    /// Great-power conflict, which inverts the market rather than
+    /// shrinking it. Kept separate from `economy` because it is an
+    /// annual hazard process, not a duration-driven Markov chain — see
+    /// the module docs.
+    #[serde(default)]
+    pub geopolitics: crate::geopolitics::Geopolitics,
     /// Active launch markets that generate contracts.
     #[serde(default = "default_markets")]
     pub markets: Vec<contract::Market>,
@@ -244,6 +250,8 @@ impl GameState {
         let seed = GameSeed::new(seed_value);
 
         let economy = crate::economy::initial_state(&seed, start);
+        // Peace on day one in every world; the arc is rolled each New Year.
+        let geopolitics = crate::geopolitics::Geopolitics::default();
         let technologies = crate::technology::generate_technologies(&seed);
 
         // Realize the archetype table for this world: presence rolls,
@@ -284,6 +292,7 @@ impl GameState {
             next_rocket_id: 1,
             spacecraft: Vec::new(),
             economy,
+            geopolitics,
             markets,
             fired_market_events: Vec::new(),
             competitors,

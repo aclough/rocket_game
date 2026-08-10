@@ -27,6 +27,7 @@ pub mod reputation;
 pub mod launch;
 pub mod flight;
 pub mod economy;
+pub mod geopolitics;
 pub mod technology;
 pub mod game_state;
 pub mod policy;

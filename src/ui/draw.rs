@@ -276,6 +276,19 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) 
                 Style::default().fg(color),
             ))
         },
+    ]);
+
+    // Only while something is happening — peacetime draws no line, so the
+    // pane looks exactly as it did before in the ~74% of worlds that never
+    // see a war.
+    if let Some(headline) = game.geopolitics.headline() {
+        lines.push(Line::from(Span::styled(
+            format!("  World:           {headline}"),
+            Style::default().fg(Color::Rgb(255, 100, 0)).add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    lines.extend([
         Line::from(""),
         Line::from(format!("  Seed:  {}", game.seed.seed())),
     ]);

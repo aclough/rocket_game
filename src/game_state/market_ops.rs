@@ -861,6 +861,88 @@ impl GameState {
         }
     }
 
+    /// Apply the market consequences of a geopolitical transition.
+    ///
+    /// Effects are `MarketModifier`s keyed by a stable id, so entering a
+    /// state adds them and leaving removes the same ones by name. The
+    /// reconnaissance market is exempt from the debris suppression: its
+    /// own satellites are the ones being shot down, which is precisely
+    /// why it needs more launches, not fewer.
+    pub(super) fn apply_geopolitical_shift(
+        &mut self, shift: crate::geopolitics::GeopoliticalShift,
+    ) -> Vec<GameEvent> {
+        use crate::geopolitics::{self as geo, GeopoliticalShift as Shift};
+        let mut events = vec![GameEvent::EconomicShift {
+            condition: match shift {
+                Shift::WarBegins => "Great Power War".into(),
+                Shift::WarEscalates => "ASAT Exchange".into(),
+                Shift::WarEndsWithoutDebris | Shift::WarEndsIntoReconstitution =>
+                    "War Ends".into(),
+                Shift::ReconstitutionEnds => "Reconstitution Complete".into(),
+            },
+            description: shift.flavor().to_string(),
+        }];
+
+        let nro = contract::MARKET_NSSL;
+        match shift {
+            Shift::WarBegins => {
+                // The surge is worthless if the player is locked out, so
+                // the war opens the market whether or not this world's
+                // seed had it emerging at all. Recorded as fired so the
+                // ordinary emergence can't announce it again later.
+                if let Some(m) = self.markets.iter_mut().find(|m| m.id == nro) {
+                    if !m.active {
+                        m.active = true;
+                        m.activation_date = Some(self.date);
+                        events.push(GameEvent::EconomicShift {
+                            condition: format!("{} Market Open", m.name),
+                            description: "War prompts the DoD to open national \
+                                          security bidding to previously excluded \
+                                          entrants".into(),
+                        });
+                    }
+                    m.add_modifier(geo::nro_war_modifier());
+                }
+                if !self.fired_market_events.iter().any(|k| k == "market_nssl") {
+                    self.fired_market_events.push("market_nssl".into());
+                }
+            }
+            Shift::WarEscalates => {
+                for market in self.markets.iter_mut().filter(|m| m.id != nro) {
+                    market.add_modifier(geo::debris_modifier());
+                }
+            }
+            Shift::WarEndsWithoutDebris => {
+                Self::drop_modifier(&mut self.markets, geo::MOD_WAR_NRO);
+            }
+            Shift::WarEndsIntoReconstitution => {
+                Self::drop_modifier(&mut self.markets, geo::MOD_WAR_NRO);
+                Self::drop_modifier(&mut self.markets, geo::MOD_ASAT_DEBRIS);
+                // The replacement wave expires on its own date, but the
+                // state machine also clears it — belt and braces, since a
+                // long game could outlive either.
+                let until = match self.geopolitics {
+                    crate::geopolitics::Geopolitics::Reconstitution { until_year } => until_year,
+                    _ => self.date.year + 1,
+                };
+                let end = GameDate { year: until, month: self.date.month, day: self.date.day };
+                for market in self.markets.iter_mut().filter(|m| m.id != nro) {
+                    market.add_modifier(geo::reconstitution_modifier(end));
+                }
+            }
+            Shift::ReconstitutionEnds => {
+                Self::drop_modifier(&mut self.markets, geo::MOD_RECONSTITUTION);
+            }
+        }
+        events
+    }
+
+    fn drop_modifier(markets: &mut [contract::Market], id: &str) {
+        for market in markets.iter_mut() {
+            market.modifiers.retain(|m| m.id != id);
+        }
+    }
+
     /// Check seed-driven market emergence and activate markets whose
     /// trigger year has arrived. Presence and timing are recomputed
     /// from the archetype table each call (`world_query` is
