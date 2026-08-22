@@ -365,6 +365,13 @@ pub struct EngineProject {
     /// partially resets the learning curve.
     #[serde(default = "crate::flaw::auto_revise_default")]
     pub auto_revise: bool,
+    /// Retired by the player — hidden from the Engines pane and from
+    /// the rocket designer's engine picker, but still present so every
+    /// id that refers to it keeps resolving: stages of rocket designs
+    /// that already use it, engines in inventory, build-cost history.
+    /// Deleting the project outright would dangle all of those.
+    #[serde(default)]
+    pub retired: bool,
 }
 
 impl EngineProject {
@@ -412,6 +419,7 @@ impl EngineProject {
 
         Some(EngineProject {
             auto_revise: crate::flaw::auto_revise_default(),
+            retired: false,
             project_id,
             design,
             preset,

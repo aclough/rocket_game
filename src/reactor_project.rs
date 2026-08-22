@@ -142,6 +142,12 @@ pub struct ReactorProject {
     /// partially resets the learning curve.
     #[serde(default = "crate::flaw::auto_revise_default")]
     pub auto_revise: bool,
+    /// Retired by the player — hidden from the Reactors pane and from
+    /// the power editor's reactor list. Unlike engines and rockets this
+    /// can never dangle: `PowerSourceKind::Reactor` carries a *cloned*
+    /// `ReactorDesign`, so a stage never refers back to the project.
+    #[serde(default)]
+    pub retired: bool,
 }
 
 impl ReactorProject {
@@ -159,6 +165,7 @@ impl ReactorProject {
         let work_required = reactor_design_work_required(complexity, balance_cfg);
         ReactorProject {
             auto_revise: crate::flaw::auto_revise_default(),
+            retired: false,
             project_id,
             design,
             status: ReactorDesignStatus::InDesign {

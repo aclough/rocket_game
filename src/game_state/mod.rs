@@ -497,6 +497,13 @@ impl GameState {
         if matches!(project.status, RocketDesignStatus::InDesign { .. }) {
             return false;
         }
+        // Retiring a design says you don't intend to fly it again, so it
+        // stops winning new work. Rockets of it already in inventory
+        // still launch, and contracts already held can still be flown on
+        // them — this only gates what the company bids for.
+        if project.retired {
+            return false;
+        }
         let cap = self.payload_capability(&project.design, "earth_surface", destination);
         if payload_kg > cap * BID_PAYLOAD_MARGIN {
             return false;

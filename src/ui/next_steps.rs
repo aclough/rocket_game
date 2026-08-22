@@ -13,7 +13,6 @@
 //! to ignore it and do something else entirely is not obstructed —
 //! which is deliberate for an audience that will resent being walked.
 
-use crate::engine_project::EngineDesignStatus;
 use crate::game_state::GameState;
 use crate::rocket_project::RocketDesignStatus;
 
@@ -44,17 +43,21 @@ pub fn next_steps(game: &GameState) -> Vec<NextStep> {
 
     // --- The opening sequence, in dependency order. ---
 
+    let live_rockets: Vec<_> = c.visible_rocket_projects()
+        .map(|(_, rp)| rp)
+        .collect();
+
     // A rocket needs two engines, and nothing in the UI says so. This
     // is the single least guessable step in the game.
-    let committed_engines = c.engine_projects.iter()
-        .filter(|p| !matches!(p.status, EngineDesignStatus::Proposed { .. }))
-        .count();
+    // Retired designs don't count as something you have: if you've
+    // retired everything, the next step really is to design one.
+    let committed_engines = c.visible_engine_projects().count();
     if committed_engines == 0 {
         steps.push(step(
             "Design your first engine — a sea-level booster".into(),
             "Engines", "N",
         ));
-    } else if committed_engines == 1 && c.rocket_projects.is_empty() {
+    } else if committed_engines == 1 && live_rockets.is_empty() {
         steps.push(step(
             "Design a second engine for the upper stage \
              (a different propellant flies higher)".into(),
@@ -63,7 +66,7 @@ pub fn next_steps(game: &GameState) -> Vec<NextStep> {
     }
 
     // Engines exist but no vehicle to put them in.
-    if committed_engines >= 1 && c.rocket_projects.is_empty() {
+    if committed_engines >= 1 && live_rockets.is_empty() {
         steps.push(step(
             "Design a rocket around your engines".into(),
             "Rockets", "N",
@@ -86,7 +89,7 @@ pub fn next_steps(game: &GameState) -> Vec<NextStep> {
     // be built without a team, and nothing says so until you try. Only
     // raised once a design is close, so the player isn't paying idle
     // manufacturing salaries through the whole design phase.
-    let design_ready = c.rocket_projects.iter().any(|p| matches!(
+    let design_ready = live_rockets.iter().any(|p| matches!(
         p.status, RocketDesignStatus::Testing { .. } | RocketDesignStatus::Revising { .. },
     ));
     if design_ready && c.manufacturing_teams.is_empty() {
@@ -110,7 +113,7 @@ pub fn next_steps(game: &GameState) -> Vec<NextStep> {
     // the game never says so. Only worth raising while flaws are known
     // and unfixed — auto-revise handles this for most players, so this
     // fires mainly for someone who turned it off.
-    let unrevised = c.rocket_projects.iter().any(|p|
+    let unrevised = live_rockets.iter().any(|p|
         matches!(p.status, RocketDesignStatus::Testing { .. })
         && p.discovered_flaw_count() > 0
         && !p.auto_revise

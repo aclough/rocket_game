@@ -827,6 +827,17 @@ pub enum InputMode {
     DvPlanner {
         state: Box<DvPlannerState>,
     },
+    /// "Are you sure?" before retiring a design. Holds the target's *id*
+    /// rather than its pane row, so a day tick landing while the prompt
+    /// is open can't redirect it at whatever slid into that slot.
+    ///
+    /// `effects` is the plan computed when the prompt opened — the same
+    /// decisions `Company::retire` will apply, so what the player reads
+    /// is what they get.
+    ConfirmRetire {
+        target: crate::company::RetireTarget,
+        effects: crate::company::RetirementEffects,
+    },
 }
 
 /// Which RocketDesignerState field a location picker should update.
@@ -1388,6 +1399,14 @@ impl App {
                         "Editor only available on In Design reactors".into());
                 }
             }
+            KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
+                let Some(i) = real_idx else {
+                    self.status_message = Some("No reactor selected".into());
+                    return;
+                };
+                let id = self.game.player_company.reactor_projects[i].project_id;
+                self.confirm_retire(crate::company::RetireTarget::Reactor(id));
+            }
             _ => {}
         }
     }
@@ -1511,14 +1530,62 @@ impl App {
                     self.status_message = Some(format!("Hired {}", name));
                 }
             }
+            KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
+                let Some(i) = real_idx else {
+                    self.status_message = Some("No engine selected".into());
+                    return;
+                };
+                let id = self.game.player_company.engine_projects[i].project_id;
+                self.confirm_retire(crate::company::RetireTarget::Engine(id));
+            }
             _ => {}
         }
     }
 
+    /// Open the retire confirmation for `target`, or explain why it
+    /// can't be retired. Shared by all three design panes so the prompt
+    /// and the refusal messages read the same wherever you press `X`.
+    fn confirm_retire(&mut self, target: crate::company::RetireTarget) {
+        use crate::company::RetireRefusal;
+        match self.game.player_company.retirement_plan(target) {
+            Ok(effects) => {
+                self.enter_modal(InputMode::ConfirmRetire { target, effects });
+            }
+            Err(RetireRefusal::EngineInUse { rockets }) => {
+                // Naming the blockers makes the fix obvious: retire the
+                // rockets first, then the engine goes quietly.
+                self.status_message = Some(format!(
+                    "Still used by {} — retire {} first",
+                    rockets.join(", "),
+                    if rockets.len() == 1 { "it" } else { "those" },
+                ));
+            }
+            Err(RetireRefusal::NotFound) => {
+                self.status_message = Some("Nothing selected".into());
+            }
+        }
+    }
+
+    /// Map the rocket-pane's visible selection (which hides retired
+    /// designs) back to the underlying `rocket_projects` index every
+    /// project-action API takes. Mirrors `engine_pane_real_index`.
+    fn rocket_pane_real_index(&self) -> Option<usize> {
+        self.game.player_company.visible_rocket_projects()
+            .nth(self.selected_item)
+            .map(|(real_idx, _)| real_idx)
+    }
+
     fn handle_rockets_key(&mut self, key: KeyCode) {
+        // Every action below wants the queue index its visible row
+        // stands for. `usize::MAX` for "nothing selected" lets the
+        // company-side bounds checks reject it, as on the other panes.
+        let real_idx = self.rocket_pane_real_index();
+        let idx = real_idx.unwrap_or(usize::MAX);
         match key {
             KeyCode::Char('a') | KeyCode::Char('A') => {
-                match self.game.player_company.rocket_projects.get_mut(self.selected_item) {
+                match real_idx.and_then(|i|
+                    self.game.player_company.rocket_projects.get_mut(i))
+                {
                     Some(p) => {
                         p.auto_revise = !p.auto_revise;
                         self.status_message = Some(format!(
@@ -1536,22 +1603,22 @@ impl App {
                 self.enter_modal(InputMode::RocketName { buffer: String::new() });
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
-                if self.game.player_company.add_team_to_rocket_project(self.selected_item) {
+                if self.game.player_company.add_team_to_rocket_project(idx) {
                     self.status_message = Some("Team assigned".into());
-                } else if let Some(from) = self.game.player_company.steal_engineering_team_to_rocket_project(self.selected_item) {
+                } else if let Some(from) = self.game.player_company.steal_engineering_team_to_rocket_project(idx) {
                     self.status_message = Some(format!("Team reassigned from {}", from));
                 } else {
                     self.status_message = Some("No teams to reassign".into());
                 }
             }
             KeyCode::Char('-') => {
-                if self.game.player_company.remove_team_from_rocket_project(self.selected_item) {
+                if self.game.player_company.remove_team_from_rocket_project(idx) {
                     self.status_message = Some("Team removed".into());
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 match self.game.player_company
-                    .start_rocket_revision(self.selected_item)
+                    .start_rocket_revision(idx)
                 {
                     Some(count) => {
                         self.status_message = Some(format!("Revising {} flaw(s)", count));
@@ -1573,7 +1640,7 @@ impl App {
             }
             KeyCode::Char('o') | KeyCode::Char('O') => {
                 // Order rocket build
-                if let Some((cost, evt)) = self.game.player_company.order_rocket_build(self.selected_item, &self.game.balance) {
+                if let Some((cost, evt)) = self.game.player_company.order_rocket_build(idx, &self.game.balance) {
                     self.game.event_log.push(self.game.date, evt);
                     self.status_message = Some(format!("Build ordered ({})", crate::ui::draw::format_money(cost)));
                 } else {
@@ -1584,10 +1651,8 @@ impl App {
                 // Modify the selected rocket project — opens the rocket
                 // designer in Modify mode (only propellant + power
                 // editable). Only allowed for InDesign / Testing.
-                if self.selected_item >= self.game.player_company.rocket_projects.len() {
-                    return;
-                }
-                let project = &self.game.player_company.rocket_projects[self.selected_item];
+                let Some(i) = real_idx else { return };
+                let project = &self.game.player_company.rocket_projects[i];
                 if let RocketDesignStatus::Revising { .. } = &project.status {
                     self.status_message = Some(
                         "Can't modify while revising — finish flaws first".into());
@@ -1598,16 +1663,23 @@ impl App {
                 ));
                 self.enter_modal(InputMode::RocketDesigner { state });
             }
-            KeyCode::Char('m')
+            KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
+                let Some(i) = real_idx else {
+                    self.status_message = Some("No rocket selected".into());
+                    return;
+                };
+                let id = self.game.player_company.rocket_projects[i].project_id;
+                self.confirm_retire(crate::company::RetireTarget::Rocket(id));
+            }
+            KeyCode::Char('m') if real_idx.is_some() => {
                 // Cycle auto-build target: 0 → 1 → 2 → 3 → 0
-                if self.selected_item < self.game.player_company.rocket_projects.len() => {
-                    match self.game.player_company.cycle_auto_build_target(self.selected_item) {
-                        Some(0) => self.status_message = Some("Auto-build: off".into()),
-                        Some(n) => self.status_message = Some(format!("Auto-build: {}", n)),
-                        None => self.status_message =
-                            Some("Must be in Testing to set auto-build".into()),
-                    }
+                match self.game.player_company.cycle_auto_build_target(idx) {
+                    Some(0) => self.status_message = Some("Auto-build: off".into()),
+                    Some(n) => self.status_message = Some(format!("Auto-build: {}", n)),
+                    None => self.status_message =
+                        Some("Must be in Testing to set auto-build".into()),
                 }
+            }
             _ => {}
         }
     }
@@ -1767,7 +1839,8 @@ impl App {
                 // Open delta-v planner setup
                 let eligible: Vec<usize> = self.game.player_company.rocket_projects.iter()
                     .enumerate()
-                    .filter(|(_, rp)| matches!(rp.status, RocketDesignStatus::Testing { .. }))
+                    .filter(|(_, rp)| matches!(rp.status, RocketDesignStatus::Testing { .. })
+                        && !rp.retired)
                     .map(|(i, _)| i)
                     .collect();
                 if eligible.is_empty() {
@@ -1842,6 +1915,54 @@ impl App {
             InputMode::Intro => {
                 // Any key dismisses.
                 self.exit_modal();
+            }
+            InputMode::ConfirmRetire { target, .. } => {
+                // Only `Y` retires. Deliberately no Enter default —
+                // Enter confirms in half the other modals, and muscle
+                // memory shouldn't be able to retire a design.
+                let target = *target;
+                if !matches!(key, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                    self.exit_modal();
+                    self.status_message = Some("Cancelled".into());
+                    return;
+                }
+                self.exit_modal();
+                // Re-planned inside `retire`, so a day tick that landed
+                // while the prompt was open is accounted for rather than
+                // acted on from a stale snapshot.
+                match self.game.player_company.retire(target) {
+                    Ok(e) => {
+                        let mut parts = vec![format!("Retired {}", e.design_name)];
+                        if e.teams_released > 0 {
+                            parts.push(format!("{} team(s) freed", e.teams_released));
+                        }
+                        if !e.cancelled.is_empty() {
+                            parts.push(format!("{} order(s) cancelled", e.cancelled.len()));
+                        }
+                        if !e.reassigned_engine_orders.is_empty() {
+                            parts.push(format!(
+                                "{} engine build(s) kept", e.reassigned_engine_orders.len()));
+                        }
+                        self.status_message = Some(parts.join(" — "));
+                        // The row is gone. Only pull the cursor back if
+                        // it now points past the end — retiring row 0 of
+                        // three shouldn't move the selection at all.
+                        let remaining = match target {
+                            crate::company::RetireTarget::Engine(_) =>
+                                self.game.player_company.visible_engine_projects().count(),
+                            crate::company::RetireTarget::Rocket(_) =>
+                                self.game.player_company.visible_rocket_projects().count(),
+                            crate::company::RetireTarget::Reactor(_) =>
+                                self.game.player_company.visible_reactor_projects().count(),
+                        };
+                        if self.selected_item >= remaining {
+                            self.selected_item = remaining.saturating_sub(1);
+                        }
+                    }
+                    Err(_) => {
+                        self.status_message = Some("Could not retire that design".into());
+                    }
+                }
             }
             InputMode::Help { .. } => {
                 // Any key dismisses. Returning to the designer restores
@@ -3720,9 +3841,16 @@ impl App {
     /// teams work on each. Manufacturing still gates on the rocket
     /// reaching `Testing`; by that point the engine has typically caught
     /// up, but the design phase can run concurrently.
+    ///
+    /// Retired engines are left out: the point of retiring one is to
+    /// stop reaching for it. Rocket designs that already use it keep
+    /// working, since their stages hold a cloned `EngineDesign`.
     pub fn available_engines(&self) -> Vec<(EngineSource, EngineDesign)> {
         let mut engines: Vec<(EngineSource, EngineDesign)> = Vec::new();
         for ep in &self.game.player_company.engine_projects {
+            if ep.retired {
+                continue;
+            }
             engines.push((EngineSource::PlayerDesign(ep.project_id), ep.design.clone()));
         }
         for ce in &self.game.player_company.contracted_engines {
@@ -3781,7 +3909,8 @@ impl App {
                         }
                     }
                     Tab::Rockets => {
-                        let max = self.game.player_company.rocket_projects.len().saturating_sub(1);
+                        let max = self.game.player_company.visible_rocket_projects()
+                            .count().saturating_sub(1);
                         if self.selected_item < max {
                             self.selected_item += 1;
                         }
@@ -4968,7 +5097,7 @@ mod help_tests {
     use super::*;
     use ratatui::backend::TestBackend;
 
-    fn render(app: &App, w: u16, h: u16) -> String {
+    pub(super) fn render(app: &App, w: u16, h: u16) -> String {
         let backend = TestBackend::new(w, h);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw::draw(frame, app)).unwrap();
@@ -4983,7 +5112,10 @@ mod help_tests {
     /// selection-dependent keys have something to select. Without this
     /// the completeness test below would pass vacuously on an empty
     /// company.
-    fn app() -> App {
+    /// Shared fixture: a company with an engine, a reactor, a rocket
+    /// design built from that engine, and one finished rocket in
+    /// inventory. Used by the retire tests too.
+    pub(super) fn app() -> App {
         let mut game = crate::game_state::GameState::new(
             "Help Test".into(), 200_000_000.0, 7,
         );
@@ -5491,5 +5623,163 @@ mod ready_rocket_order_tests {
         let mut seen: Vec<u64> = ordered.iter().map(|r| r.item_id.0).collect();
         seen.sort_unstable();
         assert_eq!(seen, vec![1, 2, 3]);
+    }
+}
+
+/// The retire confirmation: `X` only asks, `Esc` backs out, `Y`
+/// commits. The whole point of the prompt is that the first two
+/// change nothing.
+#[cfg(test)]
+mod retire_confirmation_tests {
+    use super::*;
+    use super::help_tests::{app, render};
+
+    fn rockets_app() -> App {
+        let mut a = app();
+        a.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Rockets).unwrap();
+        a.focused_pane = FocusedPane::Content;
+        a.selected_item = 0;
+        a
+    }
+
+    #[test]
+    fn x_only_asks() {
+        let mut a = rockets_app();
+        let before = a.game.player_company.visible_rocket_projects().count();
+        assert!(before > 0, "fixture should have a rocket to retire");
+
+        a.handle_key(KeyCode::Char('x'));
+
+        assert!(matches!(a.input_mode, InputMode::ConfirmRetire { .. }),
+            "X should open the prompt, got {:?}", a.input_mode);
+        assert_eq!(a.game.player_company.visible_rocket_projects().count(), before,
+            "asking must not retire anything");
+    }
+
+    #[test]
+    fn esc_backs_out_without_retiring() {
+        let mut a = rockets_app();
+        let before = a.game.player_company.visible_rocket_projects().count();
+        a.handle_key(KeyCode::Char('x'));
+        a.handle_key(KeyCode::Esc);
+
+        assert!(matches!(a.input_mode, InputMode::Normal));
+        assert_eq!(a.game.player_company.visible_rocket_projects().count(), before);
+        assert!(a.game.player_company.rocket_projects.iter().all(|rp| !rp.retired));
+    }
+
+    /// Enter confirms in half the other modals, so it deliberately
+    /// does *not* here — muscle memory shouldn't retire a design.
+    #[test]
+    fn enter_does_not_confirm() {
+        let mut a = rockets_app();
+        a.handle_key(KeyCode::Char('x'));
+        a.handle_key(KeyCode::Enter);
+
+        assert!(matches!(a.input_mode, InputMode::Normal));
+        assert!(a.game.player_company.rocket_projects.iter().all(|rp| !rp.retired),
+            "Enter must not be a confirm here");
+    }
+
+    #[test]
+    fn y_retires_and_the_row_disappears() {
+        let mut a = rockets_app();
+        let before = a.game.player_company.visible_rocket_projects().count();
+        a.handle_key(KeyCode::Char('x'));
+        a.handle_key(KeyCode::Char('y'));
+
+        assert!(matches!(a.input_mode, InputMode::Normal));
+        assert_eq!(a.game.player_company.visible_rocket_projects().count(), before - 1);
+        assert!(a.game.player_company.rocket_projects.iter().any(|rp| rp.retired));
+    }
+
+    /// The prompt holds an id, not a row. A day ticking past while
+    /// it is open must not redirect it at a different design.
+    #[test]
+    fn the_prompt_acts_on_the_design_it_named() {
+        let mut a = rockets_app();
+        let target = a.game.player_company.rocket_projects[0].project_id;
+        a.handle_key(KeyCode::Char('x'));
+
+        // Something else lands at the top of the list underneath the
+        // open prompt.
+        let mut other = a.game.player_company.rocket_projects[0].clone();
+        other.project_id = crate::rocket_project::RocketProjectId(9999);
+        other.design.name = "Interloper".into();
+        a.game.player_company.rocket_projects.insert(0, other);
+
+        a.handle_key(KeyCode::Char('y'));
+
+        let retired: Vec<_> = a.game.player_company.rocket_projects.iter()
+            .filter(|rp| rp.retired).map(|rp| rp.project_id).collect();
+        assert_eq!(retired, vec![target],
+            "the prompt should retire what it named, not whatever row moved into place");
+    }
+
+    /// A refusal explains itself in the status line rather than
+    /// opening a prompt that would lie about what it is going to do.
+    #[test]
+    fn a_blocked_engine_explains_itself_instead_of_asking() {
+        let mut a = app();
+        a.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Engines).unwrap();
+        a.focused_pane = FocusedPane::Content;
+        a.selected_item = 0;
+
+        a.handle_key(KeyCode::Char('x'));
+
+        assert!(matches!(a.input_mode, InputMode::Normal),
+            "a refusal shouldn't open the prompt, got {:?}", a.input_mode);
+        let msg = a.status_message.clone().unwrap_or_default();
+        assert!(msg.contains("Fixture-1"),
+            "the message should name the rocket that blocks it, got {msg:?}");
+        assert!(a.game.player_company.engine_projects.iter().all(|ep| !ep.retired));
+    }
+
+    /// The modal has to say what it is about to destroy.
+    #[test]
+    fn the_prompt_spells_out_the_consequences() {
+        let mut a = rockets_app();
+        let id = a.game.player_company.rocket_projects[0].project_id;
+        // Auto-build targets only attach to a Testing design.
+        a.game.player_company.rocket_projects[0].status =
+            RocketDesignStatus::Testing { work_completed: 100.0 };
+        assert!(a.game.player_company.set_auto_build_target(id, 2));
+        a.handle_key(KeyCode::Char('x'));
+
+        let screen = render(&a, 120, 44);
+        assert!(screen.contains("Retire Fixture-1?"),
+            "the prompt should name the design:\n{screen}");
+        assert!(screen.contains("[Y] Retire"), "it should show the confirm key");
+        assert!(screen.contains("Esc"), "it should show the way out");
+        assert!(screen.contains("Auto-build will be switched off"),
+            "a standing auto-build target is a consequence worth naming:\n{screen}");
+    }
+
+    /// Retiring the top row of several shouldn't move the cursor;
+    /// retiring the last row has to pull it back inside the list.
+    #[test]
+    fn the_cursor_stays_inside_the_shortened_list() {
+        let mut a = rockets_app();
+        // Two more designs so there is somewhere to sit.
+        for i in 0..2 {
+            let mut extra = a.game.player_company.rocket_projects[0].clone();
+            extra.project_id = crate::rocket_project::RocketProjectId(500 + i);
+            a.game.player_company.rocket_projects.push(extra);
+        }
+        let count = a.game.player_company.visible_rocket_projects().count();
+        assert_eq!(count, 3);
+
+        a.selected_item = 0;
+        a.handle_key(KeyCode::Char('x'));
+        a.handle_key(KeyCode::Char('y'));
+        assert_eq!(a.selected_item, 0, "retiring the top row shouldn't move the cursor");
+
+        a.selected_item = 1;
+        a.handle_key(KeyCode::Char('x'));
+        a.handle_key(KeyCode::Char('y'));
+        assert_eq!(a.selected_item, 0,
+            "the cursor must not be left past the end of the list");
+        assert!(a.rocket_pane_real_index().is_some(),
+            "and it should still resolve to a real project");
     }
 }

@@ -253,8 +253,12 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) 
         Line::from(""),
         Line::from(format!("  Eng. teams:      {}", game.player_company.team_count())),
         Line::from(format!("  Mfg. teams:      {}", game.player_company.manufacturing_teams.len())),
-        Line::from(format!("  Engine projects: {}", game.player_company.engine_projects.len())),
-        Line::from(format!("  Rocket projects: {}", game.player_company.rocket_projects.len())),
+        // Visible counts, not raw vec lengths: these are "what am I
+        // working on", and a retired design is not that.
+        Line::from(format!("  Engine projects: {}",
+            game.player_company.visible_engine_projects().count())),
+        Line::from(format!("  Rocket projects: {}",
+            game.player_company.visible_rocket_projects().count())),
         Line::from(format!("  Mfg. orders:     {}", game.player_company.manufacturing.orders.len())),
         Line::from(format!("  Rockets built:   {}", game.player_company.manufacturing.inventory.rockets.len())),
         Line::from(format!("  Contracts:       {} available, {} accepted",
@@ -761,17 +765,22 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
 
 fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
     let company = &app.game.player_company;
+    // Retired designs are hidden here, so the count, the empty message
+    // and the selection all have to work off the visible list — the
+    // selection indexes *this*, not `rocket_projects`.
+    let visible: Vec<(usize, &rocket_project::RocketProject)> =
+        company.visible_rocket_projects().collect();
     let mut lines = vec![
-        Line::from(format!("  Rocket Projects ({})", company.rocket_projects.len())),
+        Line::from(format!("  Rocket Projects ({})", visible.len())),
         Line::from("  ─────────────────────────────────────────────"),
     ];
     let mut gauges: Vec<GaugeInfo> = Vec::new();
 
-    if company.rocket_projects.is_empty() {
+    if visible.is_empty() {
         lines.push(Line::from("  No rocket projects yet. Press [N] to start a new design."));
     }
 
-    for (i, project) in company.rocket_projects.iter().enumerate() {
+    for (i, (_, project)) in visible.iter().enumerate() {
         let selected = i == app.selected_item;
         let marker = if selected { "▶" } else { " " };
 
@@ -961,7 +970,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     lines.push(Line::from(Span::styled(
         hint_line_for(
             crate::ui::keys::for_tab(Tab::Rockets),
-            !company.rocket_projects.is_empty(),
+            !visible.is_empty(),
             area,
         ),
         Style::default().fg(Color::Cyan),
@@ -2702,6 +2711,9 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             draw_help_modal(frame, scope, area);
         }
         InputMode::Intro => draw_intro_modal(frame, app, area),
+        InputMode::ConfirmRetire { effects, .. } => {
+            draw_confirm_retire_modal(frame, effects, area);
+        }
         InputMode::EngineEditor { project_id, cursor, state } => {
             draw_engine_editor_modal(frame, app, *project_id, *cursor, None, state.is_none(), modal_area);
         }
@@ -3915,6 +3927,87 @@ fn draw_rocket_pick_engine_modal(
         .style(Style::default().fg(Color::Yellow));
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
+}
+
+/// "Are you sure?" before retiring a design.
+///
+/// Spells out every consequence the player can't otherwise see — teams
+/// coming back, orders being scrapped with no refund — and says plainly
+/// what *isn't* affected, because "retire" next to a list of cancelled
+/// builds reads more destructive than it is.
+fn draw_confirm_retire_modal(
+    frame: &mut Frame, effects: &crate::company::RetirementEffects, area: Rect,
+) {
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Retire {}?", effects.design_name),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    let mut consequences: Vec<String> = Vec::new();
+    if effects.teams_released > 0 {
+        consequences.push(format!(
+            "{} engineering team(s) will be released.", effects.teams_released));
+    }
+    if effects.auto_build_cleared {
+        consequences.push("Auto-build will be switched off.".to_string());
+    }
+    if !effects.cancelled.is_empty() {
+        consequences.push(format!(
+            "{} build order(s) will be cancelled — no refund.",
+            effects.cancelled.len(),
+        ));
+    }
+    if !effects.reassigned_engine_orders.is_empty() {
+        consequences.push(format!(
+            "{} engine build(s) carry on — other designs use them.",
+            effects.reassigned_engine_orders.len(),
+        ));
+    }
+    for c in &consequences {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", c),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if !consequences.is_empty() {
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(Span::styled(
+        "  Rockets already built keep flying, and it stays",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        "  on past launch records. This can't be undone.",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [Y] Retire    [Esc] Cancel",
+        Style::default().fg(Color::Cyan),
+    )));
+
+    // Sized to the content rather than a fixed percentage: the prompt is
+    // between six and twelve lines depending on what it has to warn
+    // about, and a half-screen box for two of them looks alarming.
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let width = 56.min(area.width);
+    let modal_area = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, modal_area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(" Retire design ");
+    frame.render_widget(Paragraph::new(lines).block(block), modal_area);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

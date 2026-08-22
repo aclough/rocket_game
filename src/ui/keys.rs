@@ -97,6 +97,7 @@ const ENGINES: &[KeyBinding] = &[
     on_item("O", Some("[O] Order"), "Order a standalone engine build"),
     on_item("A", Some("[A] Auto"), "Toggle auto-revise (on by default)"),
     on_item("E", Some("[E] Hire"), "Hire a new engineering team"),
+    on_item("X", Some("[X] Retire"), "Retire this design (asks first)"),
 ];
 
 const REACTORS: &[KeyBinding] = &[
@@ -107,6 +108,7 @@ const REACTORS: &[KeyBinding] = &[
         "Revise discovered flaws and pending improvements"),
     on_item("E", Some("[E] Edit"), "Edit the design (In Design only)"),
     on_item("A", Some("[A] Auto"), "Toggle auto-revise (on by default)"),
+    on_item("X", Some("[X] Retire"), "Retire this design (asks first)"),
 ];
 
 const ROCKETS: &[KeyBinding] = &[
@@ -126,6 +128,7 @@ const ROCKETS: &[KeyBinding] = &[
     // Engines pane already advertises, and the rocket-specific keys
     // are worth more of a line this narrow.
     on_item("E", None, "Hire a new engineering team"),
+    on_item("X", Some("[X] Retire"), "Retire this design (asks first)"),
 ];
 
 const MANUFACTURING: &[KeyBinding] = &[

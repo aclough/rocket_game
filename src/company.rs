@@ -63,15 +63,73 @@ fn stage_engine_need(
     };
     let rp = rocket_projects.iter().find(|rp| rp.project_id == *rocket_project_id)?;
     let stage = rp.design.stage_groups.get(*group_index)?.get(*stage_index)?;
-    let source = if let Some(ep) = engine_projects.iter()
-        .find(|ep| ep.design.id == stage.engine.id)
-    {
-        EngineSource::PlayerDesign(ep.project_id)
+    let source = stage_engine_source(stage, engine_projects, contracted_engines)?;
+    Some((source, stage.engine_count))
+}
+
+/// Which engine a stage's cloned `EngineDesign` came from.
+///
+/// A stage carries a *copy* of the design rather than a reference to its
+/// project, so the only way back is to match on `EngineDesign::id`.
+/// Shared by `stage_engine_need` (what a queued stage is waiting for) and
+/// by retirement (whether anything the player still flies depends on an
+/// engine they're about to retire) so the two can't disagree about what
+/// "this stage uses that engine" means.
+fn stage_engine_source(
+    stage: &crate::stage::Stage,
+    engine_projects: &[EngineProject],
+    contracted_engines: &[ContractedEngine],
+) -> Option<EngineSource> {
+    if let Some(ep) = engine_projects.iter().find(|ep| ep.design.id == stage.engine.id) {
+        Some(EngineSource::PlayerDesign(ep.project_id))
     } else {
         let ce = contracted_engines.iter().find(|ce| ce.design.id == stage.engine.id)?;
-        EngineSource::Contracted(ce.id)
-    };
-    Some((source, stage.engine_count))
+        Some(EngineSource::Contracted(ce.id))
+    }
+}
+
+/// Which design a retirement acts on.
+///
+/// Carries the project's id rather than its pane index so a confirmation
+/// prompt left open across a day tick can't act on whatever row slid
+/// into that slot underneath it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetireTarget {
+    Engine(EngineProjectId),
+    Rocket(RocketProjectId),
+    Reactor(crate::reactor_project::ReactorProjectId),
+}
+
+/// Why a design can't be retired.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetireRefusal {
+    /// No such project, or it is already retired.
+    NotFound,
+    /// An engine that non-retired rocket designs still fly. Retiring it
+    /// would strand their stage orders waiting on an engine nothing will
+    /// ever build again, so the rockets have to go first.
+    EngineInUse { rockets: Vec<String> },
+}
+
+/// What retiring a design does, worked out before anything is mutated so
+/// the confirmation prompt can describe the consequences and the same
+/// decisions can then be applied verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RetirementEffects {
+    pub design_name: String,
+    /// Engineering teams that go back in the pool.
+    pub teams_released: u32,
+    /// Orders to drop from the queue, freeing their floor space. No
+    /// refund — the materials were paid for when the order was placed.
+    pub cancelled: Vec<crate::manufacturing::ManufacturingOrderId>,
+    /// Engine orders tagged to a retiring rocket that survive because a
+    /// design the player still flies needs that engine. Components are
+    /// pooled, so cancelling these would destroy work a live build is
+    /// about to eat; they lose their rocket tag and become ordinary
+    /// pooled builds instead.
+    pub reassigned_engine_orders: Vec<crate::manufacturing::ManufacturingOrderId>,
+    /// Whether a standing auto-build target was switched off.
+    pub auto_build_cleared: bool,
 }
 
 /// One row of the manufacturing queue as drawn: which order, how deep it
@@ -439,11 +497,13 @@ impl Company {
 
     /// Iterator over engine projects that should be visible in the
     /// engines pane — everything except `Proposed`, which belongs to an
-    /// in-progress rocket designer session.
+    /// in-progress rocket designer session, and everything the player
+    /// has retired.
     pub fn visible_engine_projects(&self) -> impl Iterator<Item = (usize, &EngineProject)> {
         self.engine_projects.iter()
             .enumerate()
             .filter(|(_, ep)| !matches!(ep.status, EngineDesignStatus::Proposed { .. }))
+            .filter(|(_, ep)| !ep.retired)
     }
 
     /// Look up an engine project by id.
@@ -519,13 +579,14 @@ impl Company {
         self.reactor_projects.iter_mut().find(|rp| rp.project_id == id)
     }
 
-    /// Visible reactor projects (everything not Proposed). Mirrors
-    /// `visible_engine_projects`.
+    /// Visible reactor projects (everything not Proposed and not
+    /// retired). Mirrors `visible_engine_projects`.
     pub fn visible_reactor_projects(
         &self,
     ) -> impl Iterator<Item = (usize, &crate::reactor_project::ReactorProject)> {
         self.reactor_projects.iter().enumerate().filter(|(_, rp)|
             !matches!(rp.status, crate::reactor_project::ReactorDesignStatus::Proposed { .. })
+                && !rp.retired
         )
     }
 
@@ -565,7 +626,7 @@ impl Company {
     pub fn installable_reactor_projects(
         &self,
     ) -> impl Iterator<Item = &crate::reactor_project::ReactorProject> {
-        self.reactor_projects.iter().filter(|rp| matches!(
+        self.reactor_projects.iter().filter(|rp| !rp.retired && matches!(
             rp.status,
             crate::reactor_project::ReactorDesignStatus::Testing { .. }
             | crate::reactor_project::ReactorDesignStatus::Revising { .. },
@@ -626,6 +687,181 @@ impl Company {
         let project = RocketProject::new(project_id, design, balance_cfg);
         self.rocket_projects.push(project);
         Some(GameEvent::RocketDesignStarted { rocket_name: name })
+    }
+
+    /// Rocket projects that should be visible in the Rockets pane —
+    /// everything the player hasn't retired. Mirrors
+    /// `visible_engine_projects`; rocket projects have no `Proposed`
+    /// status, so retirement is the only thing it hides.
+    pub fn visible_rocket_projects(&self) -> impl Iterator<Item = (usize, &RocketProject)> {
+        self.rocket_projects.iter().enumerate().filter(|(_, rp)| !rp.retired)
+    }
+
+    // ── Retiring a design ──
+    //
+    // Retiring hides a design and stops any further work going into it.
+    // It never deletes: manufacturing orders, inventory, spacecraft in
+    // flight, launch history and the stages of other rocket designs all
+    // hold project ids, and a `Vec::remove` would dangle every one of
+    // them. See `retire_designs_plan.md`.
+
+    /// Names of the non-retired rocket designs whose stages use `source`.
+    ///
+    /// `except` skips one project — the rocket currently being retired,
+    /// which mustn't count as a reason to keep its own engines going.
+    fn rockets_using_engine(
+        &self, source: EngineSource, except: Option<RocketProjectId>,
+    ) -> Vec<String> {
+        self.rocket_projects.iter()
+            .filter(|rp| !rp.retired && Some(rp.project_id) != except)
+            .filter(|rp| rp.design.stage_groups.iter().flatten().any(|stage|
+                stage_engine_source(stage, &self.engine_projects, &self.contracted_engines)
+                    == Some(source)))
+            .map(|rp| rp.design.name.clone())
+            .collect()
+    }
+
+    /// Work out what retiring `target` would do, without doing it.
+    ///
+    /// The confirmation prompt shows this; `retire` then applies exactly
+    /// these decisions, so what the player is told is what happens.
+    pub fn retirement_plan(
+        &self, target: RetireTarget,
+    ) -> Result<RetirementEffects, RetireRefusal> {
+        match target {
+            RetireTarget::Reactor(id) => {
+                let rp = self.reactor_projects.iter()
+                    .find(|rp| rp.project_id == id && !rp.retired)
+                    .ok_or(RetireRefusal::NotFound)?;
+                // Nothing to cancel: reactors have no order type, and a
+                // stage carries a cloned `ReactorDesign` rather than a
+                // reference to the project.
+                Ok(RetirementEffects {
+                    design_name: rp.design.name.clone(),
+                    teams_released: rp.teams_assigned,
+                    ..Default::default()
+                })
+            }
+            RetireTarget::Engine(id) => {
+                let ep = self.engine_projects.iter()
+                    .find(|ep| ep.project_id == id && !ep.retired)
+                    .ok_or(RetireRefusal::NotFound)?;
+                let source = EngineSource::PlayerDesign(id);
+                let rockets = self.rockets_using_engine(source, None);
+                if !rockets.is_empty() {
+                    return Err(RetireRefusal::EngineInUse { rockets });
+                }
+                // Nothing live needs this engine any more, so every
+                // outstanding build of it is work with no destination.
+                let cancelled = self.manufacturing.orders.iter()
+                    .filter(|o| matches!(&o.order_type,
+                        ManufacturingOrderType::Engine { source: s, .. } if *s == source))
+                    .map(|o| o.id)
+                    .collect();
+                Ok(RetirementEffects {
+                    design_name: ep.design.name.clone(),
+                    teams_released: ep.teams_assigned,
+                    cancelled,
+                    ..Default::default()
+                })
+            }
+            RetireTarget::Rocket(id) => {
+                let rp = self.rocket_projects.iter()
+                    .find(|rp| rp.project_id == id && !rp.retired)
+                    .ok_or(RetireRefusal::NotFound)?;
+                let mut cancelled = Vec::new();
+                let mut reassigned_engine_orders = Vec::new();
+                for order in &self.manufacturing.orders {
+                    match &order.order_type {
+                        // Integration and stages are specific to this
+                        // design and worthless without it.
+                        ManufacturingOrderType::RocketIntegration {
+                            rocket_project_id, ..
+                        } if *rocket_project_id == id => cancelled.push(order.id),
+                        ManufacturingOrderType::Stage {
+                            rocket_project_id, ..
+                        } if *rocket_project_id == id => cancelled.push(order.id),
+                        // Engines are pooled. One ordered for this rocket
+                        // is still worth finishing if any design the
+                        // player still flies uses it.
+                        ManufacturingOrderType::Engine {
+                            source, rocket_project_id: Some(owner), ..
+                        } if *owner == id => {
+                            if self.rockets_using_engine(*source, Some(id)).is_empty() {
+                                cancelled.push(order.id);
+                            } else {
+                                reassigned_engine_orders.push(order.id);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(RetirementEffects {
+                    design_name: rp.design.name.clone(),
+                    teams_released: rp.teams_assigned,
+                    cancelled,
+                    reassigned_engine_orders,
+                    auto_build_cleared: self.auto_build_targets.contains_key(&id),
+                })
+            }
+        }
+    }
+
+    /// Retire a design: hide it, release its teams, and stop further work
+    /// going into it. Returns what it did, or why it wouldn't.
+    pub fn retire(
+        &mut self, target: RetireTarget,
+    ) -> Result<RetirementEffects, RetireRefusal> {
+        let effects = self.retirement_plan(target)?;
+
+        match target {
+            RetireTarget::Engine(id) => {
+                if let Some(ep) = self.engine_projects.iter_mut()
+                    .find(|ep| ep.project_id == id)
+                {
+                    ep.retired = true;
+                    ep.teams_assigned = 0;
+                }
+            }
+            RetireTarget::Reactor(id) => {
+                if let Some(rp) = self.reactor_projects.iter_mut()
+                    .find(|rp| rp.project_id == id)
+                {
+                    rp.retired = true;
+                    rp.teams_assigned = 0;
+                }
+            }
+            RetireTarget::Rocket(id) => {
+                if let Some(rp) = self.rocket_projects.iter_mut()
+                    .find(|rp| rp.project_id == id)
+                {
+                    rp.retired = true;
+                    rp.teams_assigned = 0;
+                }
+                // Both would otherwise keep feeding the queue orders for
+                // a design the player can no longer see.
+                self.auto_build_targets.remove(&id);
+                self.rush_projects.remove(&id);
+            }
+        }
+
+        // Surviving engine orders lose their rocket tag: the rocket they
+        // were placed for is gone, and the tag only drives rush-priority
+        // inheritance, which would now point at nothing.
+        for order in &mut self.manufacturing.orders {
+            if effects.reassigned_engine_orders.contains(&order.id) {
+                if let ManufacturingOrderType::Engine { rocket_project_id, .. } =
+                    &mut order.order_type
+                {
+                    *rocket_project_id = None;
+                }
+            }
+        }
+        // Dropping the orders frees their floor space, since floor space
+        // is derived from the live queue rather than tracked separately.
+        self.manufacturing.orders.retain(|o| !effects.cancelled.contains(&o.id));
+
+        Ok(effects)
     }
 
     /// Add an engineering team to a rocket project. Returns true if successful.
@@ -706,6 +942,12 @@ impl Company {
         }
         let rp = &self.rocket_projects[rocket_project_index];
         if !matches!(rp.status, crate::rocket_project::RocketDesignStatus::Testing { .. }) {
+            return None;
+        }
+        // The single gate every build goes through — the [O] key, the
+        // auto-build sweep, and the sim policy alike — so a retired
+        // design can't be built by any route.
+        if rp.retired {
             return None;
         }
 
@@ -868,6 +1110,9 @@ impl Company {
         }
         let ep = &self.engine_projects[engine_project_index];
         if !matches!(ep.status, crate::engine_project::EngineDesignStatus::Testing { .. }) {
+            return None;
+        }
+        if ep.retired {
             return None;
         }
 
