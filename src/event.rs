@@ -49,7 +49,6 @@ pub enum GameEvent {
     EngineBuilt { engine_name: String },
     StageBuilt { stage_name: String },
     RocketIntegrated { rocket_name: String },
-    FloorSpaceComplete { units: u32 },
     RocketBuildOrdered { rocket_name: String, total_cost: f64 },
     ManufacturingIdle,
     // Phase 4: Contracts & launches
@@ -220,8 +219,6 @@ impl fmt::Display for GameEvent {
                 write!(f, "Stage built: {}", stage_name),
             GameEvent::RocketIntegrated { rocket_name } =>
                 write!(f, "Rocket ready: {}", rocket_name),
-            GameEvent::FloorSpaceComplete { units } =>
-                write!(f, "Floor space +{} units", units),
             GameEvent::RocketBuildOrdered { rocket_name, total_cost } =>
                 write!(f, "Ordered build: {} ({})", rocket_name, crate::resources::format_money(*total_cost)),
             GameEvent::ManufacturingIdle =>
@@ -380,7 +377,6 @@ impl GameEvent {
             | GameEvent::EngineBuilt { .. }
             | GameEvent::StageBuilt { .. }
             | GameEvent::RocketIntegrated { .. }
-            | GameEvent::FloorSpaceComplete { .. }
             | GameEvent::RocketBuildOrdered { .. }
             | GameEvent::ManufacturingIdle
             | GameEvent::ContractsRefreshed { .. }

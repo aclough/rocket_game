@@ -517,13 +517,11 @@ impl GameState {
                         .push(build_cost);
                     // A rush job is over the moment its rocket exists — not
                     // when the project's whole queue drains, or a second
-                    // build behind the urgent one would keep the floor
+                    // build behind the urgent one would keep the teams
                     // hostage after the deadline was already met.
                     self.player_company.rush_projects.remove(&rocket_project_id);
                     GameEvent::RocketIntegrated { rocket_name }
                 }
-                crate::manufacturing::ManufacturingEvent::FloorSpaceComplete { units } =>
-                    GameEvent::FloorSpaceComplete { units },
             };
             self.event_log.push(self.date, evt.clone());
             events.push(evt);

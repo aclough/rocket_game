@@ -19,8 +19,8 @@ A snapshot of what exists, for orientation — not a task list.
   Revising with flaws, improvements, seed-driven tech deficiencies,
   NRE tracking, and team assignment (incl. cross-pool steal).
   Third-party engines with unfixable flaws.
-- **Manufacturing:** teams, floor space, build orders, learning +
-  forgetting curves, inventory.
+- **Manufacturing:** teams, build orders, learning + forgetting
+  curves, inventory.
 - **Contracts & launches:** market-driven contract generation (data-
   driven `Market` tables, incl. event-activated markets), launch sim
   with flaw activation, delta-v feasibility, partial failures,

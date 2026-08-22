@@ -119,8 +119,8 @@ pub struct RetirementEffects {
     pub design_name: String,
     /// Engineering teams that go back in the pool.
     pub teams_released: u32,
-    /// Orders to drop from the queue, freeing their floor space. No
-    /// refund — the materials were paid for when the order was placed.
+    /// Orders to drop from the queue. No refund — the materials were
+    /// paid for when the order was placed.
     pub cancelled: Vec<crate::manufacturing::ManufacturingOrderId>,
     /// Engine orders tagged to a retiring rocket that survive because a
     /// design the player still flies needs that engine. Components are
@@ -277,7 +277,7 @@ impl Company {
             third_party_catalog: catalog,
             contracted_engines: Vec::new(),
             rocket_designs: Vec::new(),
-            manufacturing: Manufacturing::new(&balance_cfg.costs),
+            manufacturing: Manufacturing::new(),
             notified_manufacturing_idle: false,
             active_contracts: Vec::new(),
             reputation: Reputation::new(),
@@ -348,13 +348,6 @@ impl Company {
         let team = ManufacturingTeam::new(id, name.clone(), balance_cfg.costs.manufacturing_monthly_salary);
         self.manufacturing_teams.push(team);
         Some(GameEvent::ManufacturingTeamHired { name })
-    }
-
-    /// Order a floor-space expansion and pay for it. Returns the cost.
-    pub fn buy_floor_space(&mut self, units: u32, balance_cfg: &BalanceConfig) -> f64 {
-        let cost = self.manufacturing.floor_space.order_expansion(units, &balance_cfg.costs);
-        self.money -= cost;
-        cost
     }
 
     /// Start a revision on the engine project at `index`. Returns the
@@ -857,8 +850,6 @@ impl Company {
                 }
             }
         }
-        // Dropping the orders frees their floor space, since floor space
-        // is derived from the live queue rather than tracked separately.
         self.manufacturing.orders.retain(|o| !effects.cancelled.contains(&o.id));
 
         Ok(effects)
@@ -1534,8 +1525,8 @@ impl Company {
     /// what the *next* one would cost rather than what the first did.
     /// Contracted engines contribute nothing: they arrive on order.
     ///
-    /// Deliberately ignores how many teams you actually have, floor space,
-    /// and anything already in stock — it is a property of the design, for
+    /// Deliberately ignores how many teams you actually have and anything
+    /// already in stock — it is a property of the design, for
     /// comparing one against another.
     pub fn nominal_build_days(
         &self, project: &RocketProject, balance: &BalanceConfig,

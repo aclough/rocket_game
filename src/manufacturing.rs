@@ -15,58 +15,6 @@ pub struct ManufacturingOrderId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InventoryItemId(pub u64);
 
-// ── Floor space ──
-// (Costs and build times live in `balance_config::CostsConfig`.)
-
-/// A floor space expansion order.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FloorSpaceOrder {
-    pub units: u32,
-    pub days_remaining: u32,
-}
-
-/// Floor space management.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FloorSpace {
-    pub total_units: u32,
-    pub under_construction: Vec<FloorSpaceOrder>,
-}
-
-impl FloorSpace {
-    pub fn new(costs: &crate::balance_config::CostsConfig) -> Self {
-        FloorSpace {
-            total_units: costs.starting_floor_space,
-            under_construction: Vec::new(),
-        }
-    }
-
-    /// Start building more floor space. Returns cost.
-    pub fn order_expansion(&mut self, units: u32, costs: &crate::balance_config::CostsConfig) -> f64 {
-        let cost = units as f64 * costs.floor_space_cost;
-        self.under_construction.push(FloorSpaceOrder {
-            units,
-            days_remaining: costs.floor_space_build_days,
-        });
-        cost
-    }
-
-    /// Advance one day. Returns number of units completed.
-    pub fn advance_day(&mut self) -> u32 {
-        let mut completed = 0;
-        self.under_construction.retain_mut(|order| {
-            order.days_remaining = order.days_remaining.saturating_sub(1);
-            if order.days_remaining == 0 {
-                completed += order.units;
-                false
-            } else {
-                true
-            }
-        });
-        self.total_units += completed;
-        completed
-    }
-}
-
 // ── Manufacturing orders ──
 
 /// What type of item is being manufactured.
@@ -141,7 +89,6 @@ pub struct ManufacturingOrder {
     #[serde(default)]
     pub labor_cost: f64,
     pub teams_assigned: u32,
-    pub floor_space_used: u32,
     /// If true, this order is waiting for prerequisite items in inventory.
     pub waiting_for_prerequisites: bool,
     /// How many of this design have been built before (for learning curve).
@@ -169,9 +116,6 @@ pub enum ManufacturingEvent {
         design_id: RocketDesignId,
         rocket_name: String,
         build_cost: f64,
-    },
-    FloorSpaceComplete {
-        units: u32,
     },
 }
 
@@ -217,7 +161,6 @@ impl ManufacturingOrder {
             material_cost,
             labor_cost: 0.0,
             teams_assigned: 0,
-            floor_space_used: 1,
             waiting_for_prerequisites: false,
             prior_builds,
         }
@@ -276,7 +219,6 @@ impl ManufacturingOrder {
             material_cost,
             labor_cost: 0.0,
             teams_assigned: 0,
-            floor_space_used: 1,
             waiting_for_prerequisites: true, // wait for engines
             prior_builds,
         }
@@ -314,7 +256,6 @@ impl ManufacturingOrder {
             material_cost,
             labor_cost: 0.0,
             teams_assigned: 0,
-            floor_space_used: total_stages, // scales with rocket size
             waiting_for_prerequisites: true, // wait for all stages
             prior_builds,
         }
@@ -489,17 +430,21 @@ impl Inventory {
 /// Top-level manufacturing state for a company.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manufacturing {
-    pub floor_space: FloorSpace,
     pub orders: Vec<ManufacturingOrder>,
     pub inventory: Inventory,
     pub next_order_id: u64,
     pub next_inventory_id: u64,
 }
 
+impl Default for Manufacturing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Manufacturing {
-    pub fn new(costs: &crate::balance_config::CostsConfig) -> Self {
+    pub fn new() -> Self {
         Manufacturing {
-            floor_space: FloorSpace::new(costs),
             orders: Vec::new(),
             inventory: Inventory::new(),
             next_order_id: 1,
@@ -519,19 +464,6 @@ impl Manufacturing {
         let id = InventoryItemId(self.next_inventory_id);
         self.next_inventory_id += 1;
         id
-    }
-
-    /// Floor space currently in use by active (non-waiting) orders.
-    pub fn floor_space_in_use(&self) -> u32 {
-        self.orders.iter()
-            .filter(|o| !o.waiting_for_prerequisites)
-            .map(|o| o.floor_space_used)
-            .sum()
-    }
-
-    /// Floor space available.
-    pub fn floor_space_available(&self) -> u32 {
-        self.floor_space.total_units.saturating_sub(self.floor_space_in_use())
     }
 
     /// Total manufacturing teams assigned across all orders.
@@ -568,12 +500,6 @@ impl Manufacturing {
     /// Process one day of manufacturing work. Returns events.
     pub fn advance_day(&mut self, costs: &crate::balance_config::CostsConfig) -> Vec<ManufacturingEvent> {
         let mut events = Vec::new();
-
-        // Process floor space construction
-        let floor_completed = self.floor_space.advance_day();
-        if floor_completed > 0 {
-            events.push(ManufacturingEvent::FloorSpaceComplete { units: floor_completed });
-        }
 
         // Process manufacturing orders
         let mut completed_indices = Vec::new();
@@ -726,30 +652,6 @@ mod tests {
     }
 
     #[test]
-    fn test_floor_space_new() {
-        let fs = FloorSpace::new(&costs());
-        assert_eq!(fs.total_units, costs().starting_floor_space);
-        assert!(fs.under_construction.is_empty());
-    }
-
-    #[test]
-    fn test_floor_space_expansion() {
-        let mut fs = FloorSpace::new(&costs());
-        let cost = fs.order_expansion(2, &costs());
-        assert_eq!(cost, 2.0 * costs().floor_space_cost);
-
-        // Advance 29 days — not done yet
-        for _ in 0..29 {
-            assert_eq!(fs.advance_day(), 0);
-        }
-        assert_eq!(fs.total_units, costs().starting_floor_space);
-
-        // Day 30 — complete
-        assert_eq!(fs.advance_day(), 2);
-        assert_eq!(fs.total_units, costs().starting_floor_space + 2);
-    }
-
-    #[test]
     fn test_manufacturing_order_engine() {
         let order = ManufacturingOrder::new_engine(
             ManufacturingOrderId(1),
@@ -766,7 +668,6 @@ mod tests {
         );
         assert!(order.work_required > 0.0);
         assert!(order.material_cost > 0.0);
-        assert_eq!(order.floor_space_used, 1);
         assert!(!order.waiting_for_prerequisites);
     }
 
@@ -801,7 +702,6 @@ mod tests {
         assert!(order.work_required > 0.0);
         assert!(order.material_cost > 0.0);
         assert!(order.waiting_for_prerequisites);
-        assert_eq!(order.floor_space_used, 2);
     }
 
     #[test]
@@ -830,7 +730,7 @@ mod tests {
 
     #[test]
     fn test_engine_build_completes() {
-        let mut mfg = Manufacturing::new(&costs());
+        let mut mfg = Manufacturing::new();
         let id = mfg.next_order_id();
         let mut order = ManufacturingOrder::new_engine(
             id, test_source(), EngineId(1),
@@ -884,41 +784,8 @@ mod tests {
     }
 
     #[test]
-    fn test_floor_space_tracking() {
-        let mut mfg = Manufacturing::new(&costs());
-        let id = mfg.next_order_id();
-        let mut order = ManufacturingOrder::new_engine(
-            id, test_source(), EngineId(1),
-            "Merlin".into(), 500.0, 6,
-            crate::engine_project::PropellantPreset::Kerolox,
-            crate::engine::EngineCycle::GasGenerator, 0,
-            0, Vec::new(), Vec::new(),
-            &bal(),
-        );
-        order.teams_assigned = 1;
-        mfg.orders.push(order);
-
-        assert_eq!(mfg.floor_space_in_use(), 1);
-        assert_eq!(mfg.floor_space_available(), costs().starting_floor_space - 1);
-    }
-
-    #[test]
-    fn test_waiting_orders_dont_use_floor_space() {
-        let mut mfg = Manufacturing::new(&costs());
-        let id = mfg.next_order_id();
-        let order = ManufacturingOrder::new_stage(
-            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0, &bal(),
-        );
-        mfg.orders.push(order);
-
-        // Waiting orders don't use floor space
-        assert_eq!(mfg.floor_space_in_use(), 0);
-        assert_eq!(mfg.floor_space_available(), costs().starting_floor_space);
-    }
-
-    #[test]
     fn test_waiting_orders_dont_progress() {
-        let mut mfg = Manufacturing::new(&costs());
+        let mut mfg = Manufacturing::new();
         let id = mfg.next_order_id();
         let mut order = ManufacturingOrder::new_stage(
             id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0, &bal(),
@@ -937,7 +804,7 @@ mod tests {
 
     #[test]
     fn test_unblocked_orders_progress() {
-        let mut mfg = Manufacturing::new(&costs());
+        let mut mfg = Manufacturing::new();
         let id = mfg.next_order_id();
         let mut order = ManufacturingOrder::new_stage(
             id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0, &bal(),

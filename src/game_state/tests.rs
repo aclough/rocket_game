@@ -1959,16 +1959,6 @@ fn test_build_launch_payloads_validates_before_consuming() {
 }
 
 #[test]
-fn test_buy_floor_space_debits_money() {
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
-    let before = gs.player_company.money;
-    let cost = gs.player_company.buy_floor_space(2, &gs.balance.clone());
-    assert_eq!(cost, 2.0 * gs.balance.costs.floor_space_cost);
-    assert_eq!(gs.player_company.money, before - cost);
-    assert_eq!(gs.player_company.manufacturing.floor_space.under_construction.len(), 1);
-}
-
-#[test]
 fn test_cycle_auto_build_target_requires_testing_and_wraps() {
     let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
     let (design, engine_projects) = make_three_stage_design();
@@ -3171,8 +3161,6 @@ fn retiring_a_rocket_cancels_its_integration_and_stage_orders() {
 
     let before = gs.player_company.manufacturing.orders.len();
     assert!(before > 0, "the build should have queued orders");
-    let floor_before = gs.player_company.manufacturing.floor_space_in_use();
-
     gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
 
     let design_specific = gs.player_company.manufacturing.orders.iter().any(|o| matches!(
@@ -3182,8 +3170,8 @@ fn retiring_a_rocket_cancels_its_integration_and_stage_orders() {
             if *rocket_project_id == rp_id));
     assert!(!design_specific,
         "stages and integration are worthless without the design");
-    assert!(gs.player_company.manufacturing.floor_space_in_use() <= floor_before,
-        "cancelled orders should give their floor space back");
+    assert!(gs.player_company.manufacturing.orders.len() < before,
+        "the cancelled orders should have left the queue");
 }
 
 /// Components are pooled, so an engine ordered for a retiring rocket is

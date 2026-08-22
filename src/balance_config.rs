@@ -123,12 +123,6 @@ pub struct CostsConfig {
     pub manufacturing_monthly_salary: f64,
     /// One-time hiring cost for a manufacturing team.
     pub manufacturing_hiring_cost: f64,
-    /// Cost per unit of manufacturing floor space.
-    pub floor_space_cost: f64,
-    /// Days to build one floor-space expansion order.
-    pub floor_space_build_days: u32,
-    /// Floor space units a new company starts with.
-    pub starting_floor_space: u32,
     /// Material cost of a scale-1.0 reference reactor.
     pub reactor_ref_material_cost: f64,
     /// Price per kilogram for each manufacturing resource.
@@ -143,9 +137,6 @@ impl Default for CostsConfig {
             engineering_hiring_cost: 150_000.0,
             manufacturing_monthly_salary: 300_000.0,
             manufacturing_hiring_cost: 900_000.0,
-            floor_space_cost: 5_000_000.0,
-            floor_space_build_days: 30,
-            starting_floor_space: 12,
             reactor_ref_material_cost: 30_000_000.0,
             resource_prices: ResourcePrices::default(),
         }
@@ -861,9 +852,6 @@ pub struct CompetitorConfig {
     /// that keeps a won campaign's 3-mission cadence on schedule (the
     /// compensation agreed in the Task 4 plan's Q4c).
     pub production_lines: u32,
-    /// Floor space units at realization (must comfortably fit
-    /// simultaneous stage + integration orders for the catalog vehicle).
-    pub floor_space: u32,
     pub starting_money: f64,
     /// Integrated rockets on the shelf at game start.
     pub initial_stock: u32,
@@ -929,7 +917,6 @@ impl Default for CompetitorConfig {
             enabled: true,
             name: "DinoSoar".into(),
             production_lines: 12,
-            floor_space: 40,
             starting_money: 3_000_000_000.0,
             initial_stock: 3,
             auto_build_target: 4,

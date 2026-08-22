@@ -1698,11 +1698,6 @@ impl App {
         // selected" lets the company-side bounds checks reject it.
         let order_index = self.selected_manufacturing_order().unwrap_or(usize::MAX);
         match key {
-            KeyCode::Char('b') | KeyCode::Char('B') => {
-                // Buy floor space
-                let cost = self.game.player_company.buy_floor_space(1, &self.game.balance);
-                self.status_message = Some(format!("Ordered 1 floor space unit ({})", crate::ui::draw::format_money(cost)));
-            }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 if self.game.player_company.add_team_to_manufacturing_order(order_index) {
                     self.status_message = Some("Mfg team assigned".into());

@@ -992,30 +992,12 @@ fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style
         Line::from("  Manufacturing"),
         Line::from("  ─────────────────────────────────────────────"),
         Line::from(format!(
-            "  Floor space: {}/{} used    Mfg teams: {} ({} unassigned)",
-            mfg.floor_space_in_use(),
-            mfg.floor_space.total_units,
+            "  Mfg teams: {} ({} unassigned)",
             company.manufacturing_teams.len(),
             company.unassigned_manufacturing_team_count(),
         )),
     ];
     let mut gauges: Vec<GaugeInfo> = Vec::new();
-
-    // Show floor space construction
-    for order in &mfg.floor_space.under_construction {
-        let line_text = format!("    Building {} unit(s)", order.units);
-        let text_width = line_text.chars().count() as u16;
-        let line_idx = lines.len();
-        let build_days = app.game.balance.costs.floor_space_build_days;
-        let ratio = build_days.saturating_sub(order.days_remaining) as f64
-            / build_days.max(1) as f64;
-        gauges.push(GaugeInfo {
-            line_index: line_idx, ratio,
-            label: format!("{}d left", order.days_remaining),
-            fill_color: Color::Green, text_width, right_aligned: true,
-        });
-        lines.push(Line::from(line_text));
-    }
 
     let rows = company.manufacturing_display_order();
 

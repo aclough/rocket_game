@@ -2,8 +2,8 @@
 //!
 //! A competitor is a real [`Company`] — its rockets come off the same
 //! `Manufacturing::advance_day` the player's do, with real orders,
-//! floor space, teams, learning curves, and cost history. What's
-//! scripted is everything *around* the company: a fixed catalog with
+//! teams, learning curves, and cost history. What's scripted is
+//! everything *around* the company: a fixed catalog with
 //! no R&D, a margin rule instead of a decision-making player, and
 //! abstract launches (consume a real inventory rocket, roll the one
 //! seeded flaw, no flight sim).
@@ -168,7 +168,6 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
     for i in 0..cfg.production_lines {
         company.hire_manufacturing_team(format!("Line {}", i + 1), balance);
     }
-    company.manufacturing.floor_space.total_units = cfg.floor_space;
 
     // Catalog engines: injected directly in Testing, no flaws of
     // their own (the vehicle's whole failure story is the one rocket
@@ -362,7 +361,6 @@ mod tests {
             d.company.manufacturing_teams.len() as u32,
             cfg.competitor.production_lines,
         );
-        assert_eq!(d.company.manufacturing.floor_space.total_units, cfg.competitor.floor_space);
         assert_eq!(d.company.engine_projects.len(), 2);
         assert_eq!(d.company.rocket_projects.len(), 1);
         let rp = &d.company.rocket_projects[0];
