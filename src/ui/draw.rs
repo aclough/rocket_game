@@ -1916,7 +1916,7 @@ fn draw_finance_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             let month_name = crate::calendar::GameDate::new(f.year, f.month, 1);
             lines.push(Line::from(vec![
                 Span::raw(format!("  {:<14} {:>12} {:>12} ",
-                    format!("{}", month_name.month_name()),
+                    month_name.month_name(),
                     format_money(f.income),
                     format_money(f.expenses),
                 )),
