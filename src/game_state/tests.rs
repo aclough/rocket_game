@@ -13,8 +13,9 @@ fn test_new_game_state() {
     let gs = GameState::new("SpaceCorp".into(), 200_000_000.0, 42);
     assert_eq!(gs.date, GameDate::default_start());
     assert_eq!(gs.player_company.name, "SpaceCorp");
-    // Starting money minus one engineering team hiring cost ($150K)
-    assert_eq!(gs.player_company.money, 200_000_000.0 - gs.balance.costs.engineering_hiring_cost);
+    // The founding team is free, so the player starts with the full
+    // amount the welcome screen quotes them.
+    assert_eq!(gs.player_company.money, 200_000_000.0);
     assert_eq!(gs.speed, GameSpeed::Paused);
     assert_eq!(gs.elapsed_days(), 0);
     // Should have GameStarted event
@@ -119,8 +120,8 @@ fn test_hire_team() {
     assert_eq!(gs.player_company.team_count(), 1);
     gs.player_company.hire_team("Alpha".into(), &gs.balance);
     assert_eq!(gs.player_company.team_count(), 2);
-    // Starting money minus 2 hiring costs (initial team + Alpha)
-    assert_eq!(gs.player_company.money, 1_000_000.0 - 2.0 * gs.balance.costs.engineering_hiring_cost);
+    // Only Alpha was billed; the founding team came with the company
+    assert_eq!(gs.player_company.money, 1_000_000.0 - gs.balance.costs.engineering_hiring_cost);
 }
 
 /// Build a 3-stage rocket design with two different engines.
@@ -460,30 +461,30 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
 fn test_salary_deduction() {
     let mut gs = GameState::new("Test".into(), 1_000_000.0, 1);
     gs.player_company.hire_team("Alpha".into(), &gs.balance);
-    // Now has 2 teams (1 initial + Alpha), paid 2 hiring costs
+    // Now has 2 teams (1 free founding team + Alpha, who was billed)
 
     // Advance to Feb 1 (31 days)
     for _ in 0..31 {
         gs.advance_day();
     }
-    // Should have paid 2 hiring costs + 2 team salaries for 1 month
-    let expected = 1_000_000.0 - 2.0 * gs.balance.costs.engineering_hiring_cost - 2.0 * gs.balance.costs.engineering_monthly_salary;
+    // Should have paid Alpha's hiring cost + 2 team salaries for 1 month
+    let expected = 1_000_000.0 - gs.balance.costs.engineering_hiring_cost - 2.0 * gs.balance.costs.engineering_monthly_salary;
     assert!((gs.player_company.money - expected).abs() < 0.01);
 }
 
 #[test]
 fn test_negative_money_allowed() {
     let mut gs = GameState::new("Test".into(), 100_000.0, 1);
-    // Starts with 1 team (hiring cost $150K), money = 100K - 150K = -50K
+    // Starts with 1 free founding team, money = 100K
+    assert_eq!(gs.player_company.money, 100_000.0);
+    gs.player_company.hire_team("Alpha".into(), &gs.balance); // -150K
     assert!(gs.player_company.money < 0.0);
-    gs.player_company.hire_team("Alpha".into(), &gs.balance); // another -150K
-    assert!(gs.player_company.money < -150_000.0);
     // Should still work, just go negative
     for _ in 0..31 {
         gs.advance_day();
     }
     // Should have deducted 2 salaries on top
-    assert!(gs.player_company.money < -200_000.0);
+    assert!(gs.player_company.money < -300_000.0);
 }
 
 #[test]

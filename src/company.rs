@@ -293,18 +293,27 @@ impl Company {
             bid_rules: HashMap::new(),
             rush_projects: std::collections::HashSet::new(),
         };
-        // Start with one engineering team
-        company.hire_team("Team 1".into(), balance_cfg);
+        // The founding team came with the company: no hiring fee for
+        // the people who were already there on day one, so the player
+        // starts with exactly `starting_money`. Their salary still
+        // comes due at the end of the first month like anyone else's.
+        company.add_team("Team 1".into(), balance_cfg);
         company
     }
 
-    /// Hire a new engineering team. Returns the event if successful.
-    pub fn hire_team(&mut self, name: String, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
-        self.money -= balance_cfg.costs.engineering_hiring_cost;
+    /// Put an engineering team on the roster without charging for it.
+    fn add_team(&mut self, name: String, balance_cfg: &BalanceConfig) {
         let id = TeamId(self.next_team_id);
         self.next_team_id += 1;
-        let team = EngineeringTeam::new(id, name.clone(), balance_cfg.costs.engineering_monthly_salary);
+        let team = EngineeringTeam::new(id, name, balance_cfg.costs.engineering_monthly_salary);
         self.teams.push(team);
+    }
+
+    /// Hire a new engineering team, paying the hiring fee. Returns the
+    /// event if successful.
+    pub fn hire_team(&mut self, name: String, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
+        self.money -= balance_cfg.costs.engineering_hiring_cost;
+        self.add_team(name.clone(), balance_cfg);
         Some(GameEvent::TeamHired { name })
     }
 
