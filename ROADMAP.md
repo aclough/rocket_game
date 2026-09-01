@@ -1,10 +1,11 @@
 # Rocket Tycoon Roadmap
 
-> Living document: **Shipped → MVP milestones → Later**, with vertical,
-> individually-playable milestones instead of horizontal system phases.
-> Replaced the original phase-based roadmap in July 2026 after the
-> Minimum Playable Loop (old Phases 1–4), flight ops (Phase 5), and
-> research (Phase 6, in a different shape than written) shipped.
+> Living document: **Shipped → Later**. Work is organised as vertical,
+> individually-playable milestones rather than horizontal system
+> phases. The MVP milestones (M1–M5) are done; their task-level
+> breakdowns are archived in
+> [`docs/plans/roadmap_mvp.md`](docs/plans/roadmap_mvp.md), and how
+> each one was actually built is in [`docs/plans/`](docs/plans/).
 
 ---
 
@@ -18,13 +19,25 @@ A snapshot of what exists, for orientation — not a task list.
   rockets, and reactors all run Proposed → InDesign → Testing →
   Revising with flaws, improvements, seed-driven tech deficiencies,
   NRE tracking, and team assignment (incl. cross-pool steal).
-  Third-party engines with unfixable flaws.
+  Third-party engines with unfixable flaws. Engine projects design a
+  *family* — the nozzle variant is chosen per stage. Rush jobs, and
+  retirement for designs you're done with.
 - **Manufacturing:** teams, build orders, learning + forgetting
   curves, inventory.
 - **Contracts & launches:** market-driven contract generation (data-
   driven `Market` tables, incl. event-activated markets), launch sim
   with flaw activation, delta-v feasibility, partial failures,
   reputation, financial tracking.
+- **Seeded markets:** archetype realization per world — presence,
+  emergence dates, volume and growth, destination tilts, cadence
+  personality (steady / lumpy / burst), and anchor-customer campaigns
+  emitting correlated contract series. Year-1 variance is strictly
+  additive: no seed thins the opening contract floor, enforced at
+  config load and by a 200-seed property test.
+- **Competitive bidding:** you name the price. Sealed bids scored on
+  cost against reputation, weighted per market, against DinoSoar — an
+  incumbent with a cost model, a launch record, and a moving
+  reputation. Standing bid rules automate the routine cases.
 - **Flight ops:** multi-leg routes, per-stage propellant, power model
   (solar/RTG/battery/fuel-cell/reactor with brownout stranding and
   electric-thrust derating), spacecraft persistence, payload
@@ -34,7 +47,22 @@ A snapshot of what exists, for orientation — not a task list.
   fission reactor), yearly unlock rolls, deficiency-fix flow through
   revisions. (The old Phase 6 "tech tree + research teams" design is
   superseded by this — research happens *through* projects.)
-- **Test suite:** ~380 tests including headless render tests.
+- **A world that moves:** economic conditions, and a geopolitical arc
+  rolled each new year — great-power war opens the NRO market and
+  closes others.
+- **First fifteen minutes:** intro screen, a Next Steps panel driven by
+  the same opening the scripted bot is *tested* to survive, `?` help
+  for every key on every tab, idle-team auto-assignment, and
+  auto-revise on by default.
+- **Robustness:** month-start and on-quit autosave across three
+  rotating slots, versioned saves with a compatibility corpus of real
+  saves from past versions, a panic handler that gives the terminal
+  back and rescues the game, and `F12` bug reports.
+- **Tuning infrastructure:** balance constants in loadable TOML, a
+  headless sim harness that plays the game with scripted policies, and
+  metric bands over 200 seeds as tests.
+- **Test suite:** ~615 tests including headless render tests. CI builds
+  and tests on Linux, Windows, and macOS with clippy as a gate.
 
 ---
 
@@ -47,143 +75,23 @@ aren't obviously broken (harness-driven tuning), and a survivable
 first 15 minutes. It explicitly does **not** require stations, mining,
 crew, tourism, or deep competitor simulation.
 
-**1.0/MVP cut: current loop + M1–M5 below.** One competitor (DinoSoar)
-is necessary and sufficient for 1.0; more rivals are post-MVP texture.
+One competitor (DinoSoar) is necessary and sufficient for 1.0; more
+rivals are post-MVP texture.
 
 Rollout plan: friends first, then a few medium-sized Discords (e.g.
 the Hard SF server) or subreddits, then something like itch.io.
 
----
-
-## MVP milestones
-
-Ordered, but M1 and M2 are independent of each other and can be
-swapped or interleaved. M3 depends on M2 (both touch contract
-generation/award) and benefits from M1. M4 depends on M1+M3.
-
-### M1 — Simulation & tuning infrastructure  (~1–2 weeks)
-
-The force multiplier for everything after it; also the first half of
-the competitor work (bot policy = competitor brain).
-
-1. **`BalanceConfig` refactor** — convert `balance.rs` constants into a
-   struct with defaults = current values, loadable from TOML. No
-   behavior change; enables sweeps without recompiling.
-2. **Headless sim binary** — `cargo run --bin simulate -- --seed N
-   --years Y --policy basic` → CSV/summary (money, launches,
-   reputation, failures per month). Pure `advance_day()` loop, no UI.
-3. **`CompanyPolicy` abstraction** — a scripted "plays the game"
-   policy: pick contracts, design/build a rocket, assign teams, launch.
-   Start with one honest-but-naive policy; add archetypes (conservative
-   / aggressive-R&D) later. *This same trait later drives DinoSoar.*
-4. **Metric bands as tests** — e.g. "basic policy profitable by year 3
-   in >70% of seeds", "bankruptcy rate < X", "no panics across 200
-   seeds". Balance gets regression protection like correctness has.
-5. **Seed-fairness floor** — across N seeds, assert viable early-game
-   contract volume. (Becomes critical once M2 adds market variance.)
-
-### M2 — Seeded markets & contract character  ✅ shipped 2026-07
-
-Makes contract streams differ from each other and run to run. The
-`Market` architecture already exists; this adds the seed layer and
-character axes. (As built: `MarketArchetype` realization layer with
-pinned Rideshare/GEO mainstays, seeded volume growth, per-market
-deadlines + failure severity, steady/lumpy/burst cadence, and
-anchor-customer campaigns. The additive-only year-1 rule is enforced
-at config load and by a 200-seed property test. Details in
-docs/plans/m2_plan.md.)
-
-1. **Seed-perturbed market table** — at game start, `world_query`
-   per market archetype draws: exists?, emergence date/trigger, volume
-   multiplier, growth rate, rate multiplier, destination-weight tilt.
-   Keep one bread-and-butter LEO market stable across all seeds.
-   **Year-1 variance is strictly additive:** every seed guarantees the
-   baseline opening contract stream; seeds may add extra early options
-   (bonus markets, opportunities) but never thin the floor.
-2. **Contract character axes** — reputation gates, deadline tightness +
-   penalty structure per market (gov't lenient/gated, commercial
-   tight/price-sensitive).
-3. **Anchor customers / campaigns** — seeded named programs emitting
-   correlated contract series (same payload class + destination,
-   recurring cadence, block-buy discount). Pairs with the existing
-   production learning curves.
-4. **Cadence personality** — steady vs. lumpy vs. burst markets.
-5. **Discovery rule:** UI shows only realized contracts / observed
-   history, never seeded parameters.
-
-### M3 — Competitive bidding + DinoSoar  (~2 weeks)
-
-Absorbs two TODO items (player-chosen pricing, auto-bid at margin).
-
-1. **Award mechanic** — player names a price per bid; sealed bid with
-   per-source weighting of cost vs. reputation (different mission
-   sources prioritize them to different extents — gov't reputation-
-   heavy, commercial cost-heavy). *Follow-on, possibly post-M3:*
-   COTS-style sources that deliberately distribute awards across more
-   than one company.
-2. **DinoSoar (market-presence competitor)** — a `CompanyPolicy` with a
-   cost model that generates competing bids, occasionally launches with
-   canned success rates, and has a moving reputation. **No simulated
-   R&D or manufacturing** — that's post-MVP.
-3. **Bid automation** — standing rule: auto-bid on contracts above
-   marginal cost + chosen margin (the existing TODO item).
-4. **Elasticity-as-discovery** — with player pricing live, probing
-   demand by bidding becomes the discovery mechanic for free.
-
-### M4 — Balance pass  (~1–2 weeks, interleaved)
-
-Using M1's harness against the M2+M3 economy:
-
-1. Parameter sweeps (dumb random/grid search — no LLM in the inner
-   loop) to eliminate degenerate/broken regions: build delays, costs,
-   NRE, contract rates, learning-curve slopes.
-2. **Degenerate-strategy hunting** — bots that discover "never test
-   engines" or "spam cheapest rocket" are design holes; fix mechanics,
-   not just numbers.
-3. Hand-tune pacing from inside the surviving region (bots can't feel
-   boredom; the last mile is human).
-4. Clears the TODO "Later tuning" items: construction time, design
-   time, profitability.
-
-Findings from the M1 harness to revisit here:
-
-- **Reputation death-spiral:** a failure before the first success
-  drives reputation negative; every market gates at
-  `min_reputation >= 0` and only launches restore reputation, so a
-  company with no contract income is permanently locked out. The
-  basic bot works around it with test-mass flights; a player may not.
-- **Too forgiving once the loop runs:** with the test/revise loop the
-  naive bot hits ~98.6% launch success and 200/200 seeds profitable —
-  little tension after year 2.
-- **10x year-1 seed disparity:** achievable year-1 contract value
-  ranges $6M–$62M across seeds (recession years suppress rideshare
-  volume). All seeds survive today, but M2 variance stacks on top of
-  this — the fairness-floor test guards the bottom edge.
-
-### M5 — First 15 minutes & release readiness  (~1–2 weeks)
-
-1. **Onboarding** — suggested-first-steps panel or lightly guided first
-   contract; a help pane with keybindings per tab.
-2. **Save robustness** — checked-in save corpus + load-compat test;
-   panic handler that preserves the save and dumps a report.
-3. **Session/bug report dump** — one keypress writes event log + game
-   state summary to a file (players will hit things you can't repro).
-4. **Windows support** — must build and run on Windows (crossterm
-   should mostly carry this, but verify: paths, terminal behavior,
-   save locations); add a Windows build check to the workflow.
-5. **Packaging** — GitHub releases initially; README; feedback via
-   friends + Hard SF Discord. Long-term intent (beyond this planning
-   horizon): open source, with maybe a cheap Steam release — possibly
-   with a GUI — if reception warrants it.
-
-**→ MVP release. Collect feedback before committing to Later scope.**
+**Where that stands:** M1–M5 are done and the MVP cut is built. Next
+is putting it in front of players and fixing what that turns up —
+which is what the `F12` key exists for. The list below is deliberately
+not committed to until then.
 
 ---
 
 ## Later (post-MVP, in rough order)
 
-Vertical loops, each individually shippable — replacing old Phases
-7–10. Order should be revisited against player feedback.
+Vertical loops, each individually shippable. Order should be revisited
+against player feedback.
 
 - **Propellant depot loop** — depot module, fuel-delivery contracts,
   refuel in orbit. Smallest in-space-economy step; reuses flight
@@ -197,7 +105,8 @@ Vertical loops, each individually shippable — replacing old Phases
   crew-adjacent content.
 - **Competitor depth** — more rivals; competitors with real
   R&D/manufacturing simulation, tech-copying visibility, reputation
-  races. (Also: COTS-style split awards if not done in M3.)
+  races. Also COTS-style sources that deliberately split awards across
+  more than one company.
 - **Stations & outposts** — modular construction, labs, in-space
   manufacturing, mining (each of these is its own sub-loop; do not
   attempt as one milestone).
@@ -217,12 +126,6 @@ Vertical loops, each individually shippable — replacing old Phases
 
 ## Ongoing engineering hygiene (no milestone; do opportunistically)
 
-- Split `game_state.rs` (~4,900 lines) into submodules (flights,
-  launches, projects, economy) before it gets worse.
-- Fix the pre-existing clippy error (`location.rs:55`, literal `3.14`)
-  so clippy can become a green gate.
-- Archive completed plan .md files (phase1–5b, reactor plans) into
-  `docs/plans/`; repo root keeps only living docs.
 - Engine flaw that adds power draw (small TODO item — slot into any
   milestone touching flaws).
 
@@ -230,6 +133,5 @@ Vertical loops, each individually shippable — replacing old Phases
 
 ## TODO.txt policy
 
-Every TODO item as of July 2026 lives in a milestone or Later (mapped
-above). TODO.txt holds short-lived bugs/notes only; this file is the
-planning source of truth.
+Planning lives here and in `docs/plans/`; TODO.txt holds short-lived
+bugs and notes only.
