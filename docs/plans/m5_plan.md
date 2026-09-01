@@ -677,4 +677,10 @@ bite before Task 3, so there's time to reverse any of them:
 - [x] Task 6 — Windows support + CI
 - [ ] → friends round on Discord
 - [ ] Task 7 — feedback fixes
-- [ ] Task 8 — packaging
+- [x] Task 8 — packaging
+
+Task 8 landed out of order, ahead of the friends round rather than
+after it: without a README a stranger with the repo has no way to
+learn that `?` exists or that `F12` is how they send a bug report,
+which makes the round much less useful. See `m5_audit.md` for the
+end-to-end check of Tasks 0–7a that prompted it.

@@ -2,6 +2,10 @@
 name = "rocket_tycoon"
 version = "0.1.0"
 edition = "2021"
+description = "A terminal game about running a rocket company"
+repository = "https://github.com/aclough/rocket_game"
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 rand = "0.8"

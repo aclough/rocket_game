@@ -1,0 +1,111 @@
+# Build the game on tag and attach binaries to a GitHub release.
+#
+# Linux and Windows only. macOS is in the CI matrix as build-and-test,
+# but nobody has run the interface on it — shipping a binary would be a
+# claim the project can't back. Add it here once someone has.
+#
+# Only `rocket_tycoon` ships. `simulate` is a balance-work tool that
+# needs the repo (and a reason) to be useful.
+#
+# Every action here is first-party, and `gh` is preinstalled on the
+# runners. The release is created in a separate job after both builds
+# succeed, so a Windows failure can't leave a half-populated release
+# tagged as done.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Lets a release be re-cut without moving the tag, e.g. after fixing
+  # the workflow itself.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and release
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-linux
+            bin: rocket_tycoon
+          - os: windows-latest
+            target: x86_64-windows
+            bin: rocket_tycoon.exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # build.rs stamps the binary with the commit hash, which is the
+      # first line of every bug report. A build without a git dir would
+      # ship binaries nobody can trace back to a commit.
+      - name: Build
+        run: cargo build --release --bin rocket_tycoon
+
+      # Ship the license and README alongside the binary: a player who
+      # downloads a tarball and never visits the repo should still have
+      # the keys, the save paths, and the terms.
+      - name: Stage
+        shell: bash
+        run: |
+          mkdir -p dist/rocket-tycoon
+          cp target/release/${{ matrix.bin }} dist/rocket-tycoon/
+          cp README.md LICENSE dist/rocket-tycoon/
+
+      - name: Package (tar.gz)
+        if: runner.os != 'Windows'
+        run: tar -C dist -czf rocket-tycoon-${{ matrix.target }}.tar.gz rocket-tycoon
+
+      - name: Package (zip)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/rocket-tycoon -DestinationPath rocket-tycoon-${{ matrix.target }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rocket-tycoon-${{ matrix.target }}
+          path: rocket-tycoon-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  release:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # Draft, not published. A release is the one thing here that
+      # can't be taken back once strangers have the link, so the last
+      # step stays a human pressing a button.
+      - name: Create or update the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" artifacts/* \
+              --draft \
+              --title "Rocket Tycoon $TAG" \
+              --generate-notes
+          fi
