@@ -9,3 +9,12 @@ use serde::{Deserialize, Serialize};
 /// project that discovered it, so the id only has to be unique there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ImprovementId(pub u64);
+
+/// Whether a technology deficiency's stat effect is being put onto a
+/// design (at design completion) or taken back off it (when a revision
+/// solves the deficiency). The two are exact inverses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Apply,
+    Revert,
+}

@@ -116,7 +116,7 @@ impl RocketProject {
             RocketDesignStatus::InDesign { work_completed, work_required } => {
                 *work_completed += work;
                 if *work_completed >= *work_required {
-                    self.flaws = flaw::generate_rocket_flaws(self.complexity, rng, next_flaw_id, &balance_cfg.flaws);
+                    self.flaws = flaw::generate_flaws(flaw::FlawDomain::Rocket, self.complexity, rng, next_flaw_id, &balance_cfg.flaws);
                     self.status = RocketDesignStatus::Testing { work_completed: 0.0 };
                     events.push(RocketWorkEvent::DesignComplete);
                 }

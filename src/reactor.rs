@@ -17,6 +17,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::project::Direction;
+use crate::technology::TechDeficiencyKind;
+
 use crate::power::{Radiator, RadiatorKind};
 
 /// Unique identifier for a reactor design. Distinct from `EngineId` so a
@@ -143,6 +146,29 @@ pub const SCALE_STEP: f64 = 0.05;
 pub const DEFAULT_SCALE: f64 = 1.0;
 
 impl ReactorDesign {
+    /// Apply or revert the stat effect of one technology deficiency. A
+    /// mass penalty hits the reactor structure, not the bundled
+    /// radiator, and keeps `mass_kg = reactor + radiator` true.
+    /// Complexity penalties land on the project; engine-domain kinds
+    /// never reach a reactor.
+    pub fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction) {
+        use Direction::{Apply, Revert};
+        use TechDeficiencyKind as K;
+        match (kind, dir) {
+            (K::PowerPenalty(f), Apply) => self.steady_w *= 1.0 - f,
+            (K::PowerPenalty(f), Revert) => self.steady_w /= 1.0 - f,
+            (K::MassPenalty(f), Apply) => {
+                self.reactor_mass_kg *= 1.0 + f;
+                self.mass_kg = self.reactor_mass_kg + self.radiator.mass_kg;
+            }
+            (K::MassPenalty(f), Revert) => {
+                self.reactor_mass_kg /= 1.0 + f;
+                self.mass_kg = self.reactor_mass_kg + self.radiator.mass_kg;
+            }
+            (K::ComplexityPenalty(_) | K::IspPenalty(_) | K::ThrustPenalty(_), _) => {}
+        }
+    }
+
     /// Build a reactor design from a scale + enrichment knob. Re-derives
     /// every physical field from the scaling curves above; callers that
     /// later mutate the design should go through `apply_edit` so the

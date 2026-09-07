@@ -282,7 +282,7 @@ impl ReactorProject {
                     // Design complete — generate flaws. Uses the current
                     // complexity (tech-deficiency complexity penalties are
                     // applied afterwards by game_state, matching engines).
-                    self.flaws = flaw::generate_reactor_flaws(self.complexity, rng, next_flaw_id, &balance_cfg.flaws);
+                    self.flaws = flaw::generate_flaws(flaw::FlawDomain::Reactor, self.complexity, rng, next_flaw_id, &balance_cfg.flaws);
                     self.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
                     events.push(ReactorWorkEvent::DesignComplete);
                 }

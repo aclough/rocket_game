@@ -30,213 +30,34 @@ impl GameState {
         // Company method so competitors can eventually run the same
         // loop; tech-deficiency resolution stays here (it needs the
         // world's technology table).
-        let research = self.player_company.tick_daily_research(
+        let crate::company::ResearchTick {
+            events: research_events,
+            newly_designed_engines,
+            tech_def_attempts,
+            newly_designed_reactors,
+            reactor_tech_def_attempts,
+        } = self.player_company.tick_daily_research(
             &mut self.seed.contingent_rng, &self.balance,
         );
-        for evt in &research.events {
-            self.event_log.push(self.date, evt.clone());
-        }
-        events.extend(research.events);
-        let tech_def_attempts = research.tech_def_attempts;
-        let newly_designed_engines = research.newly_designed_engines;
-        let newly_designed_reactors = research.newly_designed_reactors;
-        let reactor_tech_def_attempts = research.reactor_tech_def_attempts;
+        self.emit_all(&mut events, research_events);
 
-        // Process tech deficiency revision attempts
-        for (pi, def_id) in tech_def_attempts {
-            let project = &mut self.player_company.engine_projects[pi];
-            let tech_id = match project.technology_id {
-                Some(id) => id,
-                None => continue,
-            };
-            if let Some(tech) = self.technologies.iter_mut().find(|t| t.id == tech_id) {
-                if let Some(def) = tech.deficiencies.iter_mut().find(|d| d.id == def_id) {
-                    let already_solved = def.solved;
-                    let engine_name = project.design.name.clone();
-                    let def_desc = format!("{}: {}", def.description, def.kind);
-
-                    if crate::technology::attempt_solve(def, already_solved, &mut self.seed.contingent_rng) {
-                        // Success — remove from engine and restore stats
-                        project.tech_deficiency_ids.retain(|id| *id != def_id);
-                        match &def.kind {
-                            crate::technology::TechDeficiencyKind::IspPenalty(frac) => {
-                                project.design.isp_s /= 1.0 - frac;
-                            }
-                            crate::technology::TechDeficiencyKind::MassPenalty(frac) => {
-                                project.design.mass_kg /= 1.0 + frac;
-                            }
-                            crate::technology::TechDeficiencyKind::ThrustPenalty(frac) => {
-                                project.design.thrust_n /= 1.0 - frac;
-                            }
-                            crate::technology::TechDeficiencyKind::ComplexityPenalty(n) => {
-                                project.complexity = project.complexity.saturating_sub(*n);
-                            }
-                            // Engine techs never generate PowerPenalty
-                            // (that's reactor-domain, handled separately).
-                            crate::technology::TechDeficiencyKind::PowerPenalty(_) => {}
-                        }
-                        let evt = GameEvent::RevisionComplete { engine_name: engine_name.clone() };
-                        self.emit(&mut events, evt);
-                    } else {
-                        // Failed — report attempt count
-                        let hint = crate::technology::failure_hint(def.total_attempts);
-                        let msg = if let Some(h) = hint {
-                            format!("Failed to resolve {}: {}. {}", engine_name, def_desc, h)
-                        } else {
-                            format!("Failed to resolve {} deficiency: {}", engine_name, def_desc)
-                        };
-                        let evt = GameEvent::FlawDiscovered {
-                            engine_name,
-                            flaw_description: msg,
-                        };
-                        self.emit(&mut events, evt);
-                    }
-                }
-            }
-        }
-
-        // Apply tech deficiencies to newly completed engine designs
-        for pi in newly_designed_engines {
-            let project = &mut self.player_company.engine_projects[pi];
-            if let Some(tech_id) = project.technology_id {
-                if let Some(tech) = self.technologies.iter().find(|t| t.id == tech_id) {
-                    let deficiency_ids: Vec<crate::technology::TechDeficiencyId> =
-                        tech.deficiencies.iter().map(|d| d.id).collect();
-                    // Apply stat penalties from unsolved deficiencies
-                    for def in &tech.deficiencies {
-                        match &def.kind {
-                            crate::technology::TechDeficiencyKind::IspPenalty(frac) => {
-                                project.design.isp_s *= 1.0 - frac;
-                            }
-                            crate::technology::TechDeficiencyKind::MassPenalty(frac) => {
-                                project.design.mass_kg *= 1.0 + frac;
-                            }
-                            crate::technology::TechDeficiencyKind::ThrustPenalty(frac) => {
-                                project.design.thrust_n *= 1.0 - frac;
-                            }
-                            crate::technology::TechDeficiencyKind::ComplexityPenalty(n) => {
-                                project.complexity += n;
-                            }
-                            // Engine techs never generate PowerPenalty
-                            // (that's reactor-domain, handled separately).
-                            crate::technology::TechDeficiencyKind::PowerPenalty(_) => {}
-                        }
-                    }
-                    project.tech_deficiency_ids = deficiency_ids;
-                    let engine_name = project.design.name.clone();
-                    let tech_name = tech.name.clone();
-                    let desc: Vec<String> = tech.deficiencies.iter()
-                        .map(|d| format!("{}: {}", d.description, d.kind))
-                        .collect();
-                    if !desc.is_empty() {
-                        let evt = GameEvent::TechDeficienciesFound {
-                            engine_name: engine_name.clone(),
-                            tech_name: tech_name.clone(),
-                            deficiencies: desc.join(", "),
-                        };
-                        self.emit(&mut events, evt);
-                    }
-                }
-            }
-        }
-
-        // Process reactor tech-deficiency revision attempts (mirrors the
-        // engine flow above, applied to reactor stats).
-        for (pi, def_id) in reactor_tech_def_attempts {
-            let project = &mut self.player_company.reactor_projects[pi];
-            let tech_id = match project.technology_id {
-                Some(id) => id,
-                None => continue,
-            };
-            if let Some(tech) = self.technologies.iter_mut().find(|t| t.id == tech_id) {
-                if let Some(def) = tech.deficiencies.iter_mut().find(|d| d.id == def_id) {
-                    let already_solved = def.solved;
-                    let reactor_name = project.design.name.clone();
-                    let def_desc = format!("{}: {}", def.description, def.kind);
-
-                    if crate::technology::attempt_solve(def, already_solved, &mut self.seed.contingent_rng) {
-                        // Success — remove from reactor and restore stats.
-                        project.tech_deficiency_ids.retain(|id| *id != def_id);
-                        match &def.kind {
-                            crate::technology::TechDeficiencyKind::PowerPenalty(frac) => {
-                                project.design.steady_w /= 1.0 - frac;
-                            }
-                            crate::technology::TechDeficiencyKind::MassPenalty(frac) => {
-                                project.design.reactor_mass_kg /= 1.0 + frac;
-                                project.design.mass_kg =
-                                    project.design.reactor_mass_kg + project.design.radiator.mass_kg;
-                            }
-                            crate::technology::TechDeficiencyKind::ComplexityPenalty(n) => {
-                                project.complexity = project.complexity.saturating_sub(*n);
-                            }
-                            // Reactor techs never generate Isp/Thrust penalties.
-                            crate::technology::TechDeficiencyKind::IspPenalty(_)
-                            | crate::technology::TechDeficiencyKind::ThrustPenalty(_) => {}
-                        }
-                        let evt = GameEvent::ReactorRevisionComplete { reactor_name };
-                        self.emit(&mut events, evt);
-                    } else {
-                        // Failed — report attempt count.
-                        let hint = crate::technology::failure_hint(def.total_attempts);
-                        let msg = if let Some(h) = hint {
-                            format!("Failed to resolve {}: {}. {}", reactor_name, def_desc, h)
-                        } else {
-                            format!("Failed to resolve {} deficiency: {}", reactor_name, def_desc)
-                        };
-                        let evt = GameEvent::ReactorFlawDiscovered {
-                            reactor_name,
-                            flaw_description: msg,
-                        };
-                        self.emit(&mut events, evt);
-                    }
-                }
-            }
-        }
-
-        // Apply tech deficiencies to newly completed reactor designs
-        // (Option 2 gating — deficiencies roll on every reactor project,
-        // no create-time tech gate).
-        for pi in newly_designed_reactors {
-            let project = &mut self.player_company.reactor_projects[pi];
-            if let Some(tech_id) = project.technology_id {
-                if let Some(tech) = self.technologies.iter().find(|t| t.id == tech_id) {
-                    let deficiency_ids: Vec<crate::technology::TechDeficiencyId> =
-                        tech.deficiencies.iter().map(|d| d.id).collect();
-                    for def in &tech.deficiencies {
-                        match &def.kind {
-                            crate::technology::TechDeficiencyKind::PowerPenalty(frac) => {
-                                project.design.steady_w *= 1.0 - frac;
-                            }
-                            crate::technology::TechDeficiencyKind::MassPenalty(frac) => {
-                                project.design.reactor_mass_kg *= 1.0 + frac;
-                                project.design.mass_kg =
-                                    project.design.reactor_mass_kg + project.design.radiator.mass_kg;
-                            }
-                            crate::technology::TechDeficiencyKind::ComplexityPenalty(n) => {
-                                project.complexity += n;
-                            }
-                            // Reactor techs never generate Isp/Thrust penalties.
-                            crate::technology::TechDeficiencyKind::IspPenalty(_)
-                            | crate::technology::TechDeficiencyKind::ThrustPenalty(_) => {}
-                        }
-                    }
-                    project.tech_deficiency_ids = deficiency_ids;
-                    let reactor_name = project.design.name.clone();
-                    let tech_name = tech.name.clone();
-                    let desc: Vec<String> = tech.deficiencies.iter()
-                        .map(|d| format!("{}: {}", d.description, d.kind))
-                        .collect();
-                    if !desc.is_empty() {
-                        let evt = GameEvent::ReactorTechDeficienciesFound {
-                            reactor_name,
-                            tech_name,
-                            deficiencies: desc.join(", "),
-                        };
-                        self.emit(&mut events, evt);
-                    }
-                }
-            }
-        }
+        // Tech-deficiency resolution needs the world's technology table,
+        // so it lives on the game state (`tech_ops`) rather than in the
+        // company's research tick. Engine attempts, engine completions,
+        // reactor attempts, reactor completions: the order the RNG has
+        // always been drawn in.
+        self.resolve_tech_attempts::<crate::engine_project::EngineProject>(
+            tech_def_attempts, &mut events,
+        );
+        self.apply_new_design_deficiencies::<crate::engine_project::EngineProject>(
+            newly_designed_engines, &mut events,
+        );
+        self.resolve_tech_attempts::<crate::reactor_project::ReactorProject>(
+            reactor_tech_def_attempts, &mut events,
+        );
+        self.apply_new_design_deficiencies::<crate::reactor_project::ReactorProject>(
+            newly_designed_reactors, &mut events,
+        );
 
         if self.date.is_first_of_month() {
             let evt = GameEvent::MonthStart;

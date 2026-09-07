@@ -1,5 +1,8 @@
 use serde::{Serialize, Deserialize};
 
+use crate::project::Direction;
+use crate::technology::TechDeficiencyKind;
+
 use crate::propellant::Propellant;
 
 /// Standard gravity (m/s²), used for Isp <-> exhaust velocity conversion.
@@ -75,6 +78,23 @@ pub struct EngineDesign {
 }
 
 impl EngineDesign {
+    /// Apply or revert the stat effect of one technology deficiency.
+    /// Complexity penalties land on the project, not the design, and
+    /// reactor-domain kinds never reach an engine; both are no-ops here.
+    pub fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction) {
+        use Direction::{Apply, Revert};
+        use TechDeficiencyKind as K;
+        match (kind, dir) {
+            (K::IspPenalty(f), Apply) => self.isp_s *= 1.0 - f,
+            (K::IspPenalty(f), Revert) => self.isp_s /= 1.0 - f,
+            (K::MassPenalty(f), Apply) => self.mass_kg *= 1.0 + f,
+            (K::MassPenalty(f), Revert) => self.mass_kg /= 1.0 + f,
+            (K::ThrustPenalty(f), Apply) => self.thrust_n *= 1.0 - f,
+            (K::ThrustPenalty(f), Revert) => self.thrust_n /= 1.0 - f,
+            (K::ComplexityPenalty(_) | K::PowerPenalty(_), _) => {}
+        }
+    }
+
     /// Whether this unit carries the vacuum nozzle. The choice is made
     /// per stage in the rocket designer; both variants come from one
     /// engine project.

@@ -17,6 +17,7 @@ pub use crate::company::{Company, BidRule, MonthlyFinancials};
 mod advance;
 mod flight_ops;
 mod market_ops;
+mod tech_ops;
 
 /// Game simulation speed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -386,8 +387,9 @@ impl GameState {
             } else {
                 crate::flaw::FlawTrigger::PerFlight
             };
-            let flaw = crate::flaw::generate_single_rocket_flaw(
-                id, trigger, &mut self.seed.contingent_rng, &self.balance.flaws,
+            let flaw = crate::flaw::generate_single_flaw(
+                crate::flaw::FlawDomain::Rocket, id, trigger,
+                &mut self.seed.contingent_rng, &self.balance.flaws,
             );
             // Re-borrow project (it was released across the rng calls).
             let project = self.player_company.rocket_projects.iter_mut()

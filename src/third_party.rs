@@ -120,7 +120,7 @@ pub fn generate_third_party_flaws(
 ) -> Vec<Flaw> {
     let effective = (complexity / 8).max(1);
     let mut rng = seed.world_query(&format!("3p_flaws_{}", engine_name));
-    flaw::generate_flaws(effective, &mut rng, next_flaw_id, flaws_cfg)
+    flaw::generate_flaws(flaw::FlawDomain::Engine(None), effective, &mut rng, next_flaw_id, flaws_cfg)
 }
 
 #[cfg(test)]

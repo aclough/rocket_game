@@ -244,14 +244,14 @@ impl Default for BidRule {
 /// What one day of R&D produced — see [`Company::tick_daily_research`].
 pub struct ResearchTick {
     pub events: Vec<GameEvent>,
-    /// Indices into `engine_projects` whose design completed today.
-    pub newly_designed_engines: Vec<usize>,
-    /// (engine_project_index, deficiency_id) revision attempts.
-    pub tech_def_attempts: Vec<(usize, crate::technology::TechDeficiencyId)>,
-    /// Indices into `reactor_projects` whose design completed today.
-    pub newly_designed_reactors: Vec<usize>,
-    /// (reactor_project_index, deficiency_id) revision attempts.
-    pub reactor_tech_def_attempts: Vec<(usize, crate::technology::TechDeficiencyId)>,
+    /// Engine projects whose design completed today.
+    pub newly_designed_engines: Vec<EngineProjectId>,
+    /// (engine project, deficiency) revision attempts to resolve.
+    pub tech_def_attempts: Vec<(EngineProjectId, crate::technology::TechDeficiencyId)>,
+    /// Reactor projects whose design completed today.
+    pub newly_designed_reactors: Vec<crate::reactor_project::ReactorProjectId>,
+    /// (reactor project, deficiency) revision attempts to resolve.
+    pub reactor_tech_def_attempts: Vec<(crate::reactor_project::ReactorProjectId, crate::technology::TechDeficiencyId)>,
 }
 
 impl Company {
@@ -1772,22 +1772,20 @@ impl Company {
         balance_cfg: &BalanceConfig,
     ) -> ResearchTick {
         let mut events: Vec<GameEvent> = Vec::new();
-        let mut newly_designed_engines: Vec<usize> = Vec::new();
-        // (engine_project_index, deficiency_id)
-        let mut tech_def_attempts: Vec<(usize, crate::technology::TechDeficiencyId)> = Vec::new();
+        let mut newly_designed_engines = Vec::new();
+        let mut tech_def_attempts = Vec::new();
         // Reactor equivalents (mirror the engine tech-deficiency flow).
-        let mut newly_designed_reactors: Vec<usize> = Vec::new();
-        let mut reactor_tech_def_attempts: Vec<(usize, crate::technology::TechDeficiencyId)> = Vec::new();
+        let mut newly_designed_reactors = Vec::new();
+        let mut reactor_tech_def_attempts = Vec::new();
         let next_flaw_id = &mut self.next_flaw_id;
-        
 
-        for (pi, project) in self.engine_projects.iter_mut().enumerate() {
+        for project in self.engine_projects.iter_mut() {
             let engine_name = project.design.name.clone();
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
             for we in work_events {
                 let evt = match we {
                     WorkEvent::DesignComplete => {
-                        newly_designed_engines.push(pi);
+                        newly_designed_engines.push(project.project_id);
                         GameEvent::EngineDesignComplete { engine_name: engine_name.clone() }
                     }
                     WorkEvent::TestingCycleComplete => continue,
@@ -1800,11 +1798,11 @@ impl Company {
                     WorkEvent::ImprovementActualized { description } =>
                         GameEvent::ImprovementActualized { engine_name: engine_name.clone(), description },
                     WorkEvent::TechDeficiencyAttempted { deficiency_id } => {
-                        tech_def_attempts.push((pi, deficiency_id));
+                        tech_def_attempts.push((project.project_id, deficiency_id));
                         continue;
                     }
                 };
-                                    events.push(evt);
+                events.push(evt);
             }
         }
 
@@ -1821,18 +1819,18 @@ impl Company {
                     RocketWorkEvent::RevisionComplete =>
                         GameEvent::RocketRevisionComplete { rocket_name: rocket_name.clone() },
                 };
-                                    events.push(evt);
+                events.push(evt);
             }
         }
 
         // Reactor projects accrue daily work just like engine projects.
-        for (pi, project) in self.reactor_projects.iter_mut().enumerate() {
+        for project in self.reactor_projects.iter_mut() {
             let reactor_name = project.design.name.clone();
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
             for we in work_events {
                 let evt = match we {
                     crate::reactor_project::ReactorWorkEvent::DesignComplete => {
-                        newly_designed_reactors.push(pi);
+                        newly_designed_reactors.push(project.project_id);
                         GameEvent::ReactorDesignComplete { reactor_name: reactor_name.clone() }
                     }
                     crate::reactor_project::ReactorWorkEvent::TestingCycleComplete => continue,
@@ -1845,11 +1843,11 @@ impl Company {
                     crate::reactor_project::ReactorWorkEvent::RevisionComplete =>
                         GameEvent::ReactorRevisionComplete { reactor_name: reactor_name.clone() },
                     crate::reactor_project::ReactorWorkEvent::TechDeficiencyAttempted { deficiency_id } => {
-                        reactor_tech_def_attempts.push((pi, deficiency_id));
+                        reactor_tech_def_attempts.push((project.project_id, deficiency_id));
                         continue;
                     }
                 };
-                                    events.push(evt);
+                events.push(evt);
             }
         }
 

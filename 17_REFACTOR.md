@@ -166,7 +166,7 @@ opportunity in the codebase.
 - **Size/risk:** medium / medium. `tick_daily_research` drops from
   116 lines to ~40.
 
-### B4. Tech-deficiency apply/revert is four copies of one ~50-line block
+### ✅ B4. Tech-deficiency apply/revert is four copies of one ~50-line block
 - **Where:** `advance.rs:45-98, 100-144, 146-199, 201-245` — engine
   revert, engine apply, reactor revert, reactor apply. Apply and revert
   are exact inverses; engine vs reactor differ only in which design
