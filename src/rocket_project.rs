@@ -7,7 +7,7 @@ use crate::balance;
 use crate::balance_config::{BalanceConfig, FlawsConfig};
 use crate::flaw::FlawDomain;
 use crate::location::DELTA_V_MAP;
-use crate::project::{DesignProject, DesignStatus, Designable, Direction, Improvement, ImprovementId, Never, NoSpec, ProjectKind};
+use crate::project::{DesignProject, DesignStatus, Designable, Direction, Improvement, ImprovementId, Never, NoSpec, ProjectKind, ProjectRef};
 use crate::rocket::RocketDesign;
 use crate::technology::TechDeficiencyKind;
 
@@ -24,6 +24,9 @@ pub type RocketProject = DesignProject<RocketDesign>;
 
 impl Designable for RocketDesign {
     type Id = RocketProjectId;
+    fn project_ref(id: Self::Id) -> ProjectRef {
+        ProjectRef::Rocket(id)
+    }
     type Spec = NoSpec;
     /// Rockets have no improvements: the vehicle is tankage and
     /// structure sized by the player, not a device with a stat curve.

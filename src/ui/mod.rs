@@ -17,6 +17,7 @@ use crate::engine::{EngineCycle, EngineDesign};
 use crate::engine_project::{EngineDesignStatus, EngineSource, PropellantPreset};
 use crate::game_state::{GameSpeed, GameState};
 use crate::location::DELTA_V_MAP;
+use crate::project::{ProjectKind, ProjectRef};
 use crate::rocket_project::RocketDesignStatus;
 use crate::save;
 use crate::stage::{Stage, StageId};
@@ -835,7 +836,7 @@ pub enum InputMode {
     /// decisions `Company::retire` will apply, so what the player reads
     /// is what they get.
     ConfirmRetire {
-        target: crate::company::RetireTarget,
+        target: crate::company::ProjectRef,
         effects: crate::company::RetirementEffects,
     },
 }
@@ -1320,9 +1321,9 @@ impl App {
 
     fn handle_tab_key(&mut self, key: KeyCode) {
         match self.current_tab() {
-            Tab::Engines => self.handle_engines_key(key),
-            Tab::Reactors => self.handle_reactors_key(key),
-            Tab::Rockets => self.handle_rockets_key(key),
+            Tab::Engines => self.handle_project_pane_key(ProjectKind::Engine, key),
+            Tab::Reactors => self.handle_project_pane_key(ProjectKind::Reactor, key),
+            Tab::Rockets => self.handle_project_pane_key(ProjectKind::Rocket, key),
             Tab::Manufacturing => self.handle_manufacturing_key(key),
             Tab::Contracts => self.handle_contracts_key(key),
             Tab::Launches => self.handle_launches_key(key),
@@ -1330,128 +1331,78 @@ impl App {
         }
     }
 
-    /// Map the reactor-pane's visible selection (which hides Proposed
-    /// drafts) back to the underlying `reactor_projects` index.
-    fn reactor_pane_real_index(&self) -> Option<usize> {
-        self.game.player_company.visible_reactor_projects()
+    /// The project the pane's cursor is on. Selections index the visible
+    /// list (drafts and retired designs hidden), and every action wants
+    /// the id — a row can slide under the cursor across a day tick.
+    fn selected_project(&self, kind: ProjectKind) -> Option<ProjectRef> {
+        self.game.player_company.visible_projects(kind)
             .nth(self.selected_item)
-            .map(|(real_idx, _)| real_idx)
+            .map(|p| p.project_ref())
     }
 
-    fn handle_reactors_key(&mut self, key: KeyCode) {
-        use crate::reactor::{EnrichmentLevel, DEFAULT_SCALE};
-        use crate::reactor_project::ReactorDesignStatus;
-
-        let real_idx = self.reactor_pane_real_index();
+    /// The Engines, Rockets and Reactors panes: the keys all three share
+    /// first, then the few each pane has of its own.
+    fn handle_project_pane_key(&mut self, kind: ProjectKind, key: KeyCode) {
+        let selected = self.selected_project(kind);
+        let noun = kind.noun();
+        let company = &mut self.game.player_company;
         match key {
             KeyCode::Char('a') | KeyCode::Char('A') => {
-                match real_idx.and_then(|i| self.game.player_company.reactor_projects.get_mut(i)) {
-                    Some(p) => {
-                        p.auto_revise = !p.auto_revise;
-                        self.status_message = Some(format!(
-                            "{}: auto-revise {}", p.design.name,
-                            if p.auto_revise { "on" } else { "off" },
-                        ));
-                    }
-                    None => {
-                        self.status_message = Some("No reactor selected".into());
-                    }
-                }
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') => {
-                // Pick a fresh default name based on how many projects
-                // exist; the player can rename inside the editor.
-                let n = self.game.player_company.reactor_projects.len() + 1;
-                let name = format!("Reactor Mk{}", n);
-                let pid = self.game.player_company.start_proposed_reactor(
-                    name, DEFAULT_SCALE, EnrichmentLevel::Leu, &self.game.balance,
-                );
-                self.enter_modal(InputMode::ReactorEditor { project_id: pid, cursor: 0 });
+                self.status_message = Some(match selected.and_then(|r| company.toggle_auto_revise(r)) {
+                    Some((name, on)) =>
+                        format!("{}: auto-revise {}", name, if on { "on" } else { "off" }),
+                    None => format!("No {} selected", noun),
+                });
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
-                let idx = real_idx.unwrap_or(usize::MAX);
-                if self.game.player_company.add_team_to_reactor_project(idx) {
-                    self.status_message = Some("Team assigned".into());
-                } else if let Some(from) = self.game.player_company
-                    .steal_engineering_team_to_reactor_project(idx)
-                {
-                    self.status_message = Some(format!("Team reassigned from {}", from));
+                // Add an idle team, or steal one from the busiest project.
+                self.status_message = Some(if selected.is_some_and(|r| company.add_team(r)) {
+                    "Team assigned".into()
+                } else if let Some(from) = selected.and_then(|r| company.steal_team_to(r)) {
+                    format!("Team reassigned from {}", from)
                 } else {
-                    self.status_message = Some("No teams to reassign".into());
-                }
+                    "No teams to reassign".into()
+                });
             }
             KeyCode::Char('-') => {
-                let idx = real_idx.unwrap_or(usize::MAX);
-                if self.game.player_company.remove_team_from_reactor_project(idx) {
+                if selected.is_some_and(|r| company.remove_team(r)) {
                     self.status_message = Some("Team removed".into());
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
-                // Revise all discovered flaws, actualize pending
-                // improvements, and attempt tech-deficiency fixes.
-                // Testing-only (mirrors the engine pane).
-                if let Some(idx) = real_idx {
-                    if let Some((fc, ic, dc)) = self.game.player_company.start_reactor_revision(idx) {
-                        self.status_message = Some(format!(
-                            "Revising {} flaw(s), {} improvement(s), {} deficiency(ies)",
-                            fc, ic, dc,
-                        ));
-                    } else {
-                        self.status_message = Some(
-                            "Nothing to revise (needs a Testing reactor with discovered flaws, improvements, or deficiencies)".into());
-                    }
-                }
-            }
-            KeyCode::Char('e') | KeyCode::Char('E') => {
-                // Re-open the editor on an InDesign reactor. Testing /
-                // Revising / Proposed don't make sense here:
-                // Testing is read-only; Revising is handled by [R]; the
-                // pane hides Proposed.
-                let idx = match real_idx { Some(i) => i, None => return };
-                let project = &self.game.player_company.reactor_projects[idx];
-                let pid = project.project_id;
-                if matches!(project.status, ReactorDesignStatus::InDesign { .. }) {
-                    self.enter_modal(InputMode::ReactorEditor { project_id: pid, cursor: 0 });
-                } else {
-                    self.status_message = Some(
-                        "Editor only available on In Design reactors".into());
-                }
+                // Revise every discovered flaw, pending improvement and
+                // unsolved deficiency. Testing-only.
+                self.status_message = Some(match selected.and_then(|r| company.start_revision(r)) {
+                    Some(plan) => plan.describe(),
+                    None => format!(
+                        "Nothing to revise (needs a Testing {} with discovered flaws, \
+                         improvements, or deficiencies)", noun),
+                });
             }
             KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
-                let Some(i) = real_idx else {
-                    self.status_message = Some("No reactor selected".into());
-                    return;
-                };
-                let id = self.game.player_company.reactor_projects[i].project_id;
-                self.confirm_retire(crate::company::RetireTarget::Reactor(id));
+                match selected {
+                    Some(r) => self.confirm_retire(r),
+                    None => self.status_message = Some(format!("No {} selected", noun)),
+                }
             }
-            _ => {}
+            _ => self.handle_project_pane_specific_key(kind, key, selected),
         }
     }
 
-    /// Map the engine-pane's visible selection (which hides Proposed
-    /// projects) back to the underlying `engine_projects` index used by
-    /// every project-action API.
-    fn engine_pane_real_index(&self) -> Option<usize> {
-        self.game.player_company.visible_engine_projects()
-            .nth(self.selected_item)
-            .map(|(real_idx, _)| real_idx)
-    }
-
-    fn handle_engines_key(&mut self, key: KeyCode) {
-        // All engine-pane actions operate on the visible selection, so
-        // resolve it to a real index up front. None = no engines, the
-        // selection points past the end, or all hits are Proposed.
-        let real_idx = self.engine_pane_real_index();
-        match key {
-            KeyCode::Char('n') | KeyCode::Char('N') => {
+    /// The keys that genuinely differ between the three project panes.
+    fn handle_project_pane_specific_key(
+        &mut self, kind: ProjectKind, key: KeyCode, selected: Option<ProjectRef>,
+    ) {
+        let index = selected.and_then(|r| self.game.player_company.list_index(r));
+        match (kind, key) {
+            // ── Engines ──
+            (ProjectKind::Engine, KeyCode::Char('n') | KeyCode::Char('N')) => {
                 // Design a new engine standalone (parity with the Reactors
                 // pane). Seeds a Proposed engine with sensible defaults and
                 // opens the editor with no designer state; 'd' commits it
                 // to InDesign, Esc discards the draft. Engines can also
                 // still be designed inside the rocket designer.
-                use crate::engine::EngineCycle;
-                use crate::engine_project::{PropellantPreset, DEFAULT_SCALE};
+                use crate::engine_project::DEFAULT_SCALE;
                 let n = self.game.player_company.engine_projects.len() + 1;
                 let name = format!("Engine Mk{}", n);
                 let preset = PropellantPreset::Kerolox;
@@ -1470,21 +1421,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('a') | KeyCode::Char('A') => {
-                match real_idx.and_then(|i| self.game.player_company.engine_projects.get_mut(i)) {
-                    Some(p) => {
-                        p.auto_revise = !p.auto_revise;
-                        self.status_message = Some(format!(
-                            "{}: auto-revise {}", p.design.name,
-                            if p.auto_revise { "on" } else { "off" },
-                        ));
-                    }
-                    None => {
-                        self.status_message = Some("No engine selected".into());
-                    }
-                }
-            }
-            KeyCode::Char('b') | KeyCode::Char('B') => {
+            (ProjectKind::Engine, KeyCode::Char('b') | KeyCode::Char('B')) => {
                 // Buy third-party engine
                 if self.game.player_company.third_party_catalog.is_empty() {
                     self.status_message = Some(
@@ -1493,27 +1430,9 @@ impl App {
                     self.enter_modal(InputMode::SelectThirdParty { selected: 0 });
                 }
             }
-            KeyCode::Char('+') | KeyCode::Char('=') => {
-                // Add team to selected project, or steal from busiest
-                let idx = real_idx.unwrap_or(usize::MAX);
-                if self.game.player_company.add_team_to_project(idx) {
-                    self.status_message = Some("Team assigned".into());
-                } else if let Some(from) = self.game.player_company.steal_engineering_team_to_engine_project(idx) {
-                    self.status_message = Some(format!("Team reassigned from {}", from));
-                } else {
-                    self.status_message = Some("No teams to reassign".into());
-                }
-            }
-            KeyCode::Char('-') => {
-                // Remove team from selected project
-                let idx = real_idx.unwrap_or(usize::MAX);
-                if self.game.player_company.remove_team_from_project(idx) {
-                    self.status_message = Some("Team removed".into());
-                }
-            }
-            KeyCode::Char('o') | KeyCode::Char('O') => {
+            (ProjectKind::Engine, KeyCode::Char('o') | KeyCode::Char('O')) => {
                 // Order standalone engine build
-                let idx = real_idx.unwrap_or(usize::MAX);
+                let idx = index.unwrap_or(usize::MAX);
                 if let Some((cost, evt)) = self.game.player_company.order_engine_build(idx, &self.game.balance) {
                     self.game.log(evt);
                     self.status_message = Some(format!("Engine build ordered ({})", crate::resources::format_money(cost)));
@@ -1521,26 +1440,8 @@ impl App {
                     self.status_message = Some("Must be in Testing to order build".into());
                 }
             }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
-                // Revise all discovered flaws and actualize pending improvements
-                match real_idx.and_then(|idx|
-                    self.game.player_company.start_engine_revision(idx))
-                {
-                    Some((fc, ic)) if ic > 0 => {
-                        self.status_message = Some(format!(
-                            "Revising {} flaw(s), {} improvement(s)", fc, ic));
-                    }
-                    Some((fc, _)) => {
-                        self.status_message = Some(format!("Revising {} flaw(s)", fc));
-                    }
-                    None => {
-                        self.status_message = Some(
-                            "Nothing to revise (needs a Testing engine with \
-                             discovered flaws, improvements, or deficiencies)".into());
-                    }
-                }
-            }
-            KeyCode::Char('e') | KeyCode::Char('E') => {
+            // ── Engines and Rockets: hire ──
+            (ProjectKind::Engine | ProjectKind::Rocket, KeyCode::Char('e') | KeyCode::Char('E')) => {
                 let team_num = self.game.player_company.team_count() + 1;
                 let name = format!("Team {}", team_num);
                 if let Some(evt) = self.game.player_company.hire_team(name.clone(), &self.game.balance) {
@@ -1548,13 +1449,71 @@ impl App {
                     self.status_message = Some(format!("Hired {}", name));
                 }
             }
-            KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
-                let Some(i) = real_idx else {
-                    self.status_message = Some("No engine selected".into());
+            // ── Reactors ──
+            (ProjectKind::Reactor, KeyCode::Char('n') | KeyCode::Char('N')) => {
+                use crate::reactor::{EnrichmentLevel, DEFAULT_SCALE};
+                // Pick a fresh default name based on how many projects
+                // exist; the player can rename inside the editor.
+                let n = self.game.player_company.reactor_projects.len() + 1;
+                let name = format!("Reactor Mk{}", n);
+                let pid = self.game.player_company.start_proposed_reactor(
+                    name, DEFAULT_SCALE, EnrichmentLevel::Leu, &self.game.balance,
+                );
+                self.enter_modal(InputMode::ReactorEditor { project_id: pid, cursor: 0 });
+            }
+            (ProjectKind::Reactor, KeyCode::Char('e') | KeyCode::Char('E')) => {
+                // Re-open the editor on an InDesign reactor. Testing is
+                // read-only; Revising is handled by [R]; the pane hides
+                // Proposed.
+                let Some(ProjectRef::Reactor(pid)) = selected else { return };
+                let Some(project) = self.game.player_company.find_reactor_project(pid) else { return };
+                if matches!(project.status, crate::project::DesignStatus::InDesign { .. }) {
+                    self.enter_modal(InputMode::ReactorEditor { project_id: pid, cursor: 0 });
+                } else {
+                    self.status_message = Some(
+                        "Editor only available on In Design reactors".into());
+                }
+            }
+            // ── Rockets ──
+            (ProjectKind::Rocket, KeyCode::Char('n') | KeyCode::Char('N')) => {
+                // Start new rocket design flow
+                self.enter_modal(InputMode::RocketName { buffer: String::new() });
+            }
+            (ProjectKind::Rocket, KeyCode::Char('o') | KeyCode::Char('O')) => {
+                // Order rocket build
+                let idx = index.unwrap_or(usize::MAX);
+                if let Some((cost, evt)) = self.game.player_company.order_rocket_build(idx, &self.game.balance) {
+                    self.game.log(evt);
+                    self.status_message = Some(format!("Build ordered ({})", crate::resources::format_money(cost)));
+                } else {
+                    self.status_message = Some("Must be in Testing to order build".into());
+                }
+            }
+            (ProjectKind::Rocket, KeyCode::Char('M')) => {
+                // Modify the selected rocket project — opens the rocket
+                // designer in Modify mode (only propellant + power
+                // editable). Only allowed for InDesign / Testing.
+                let Some(ProjectRef::Rocket(pid)) = selected else { return };
+                let Some(project) = self.game.player_company.rocket_projects.iter()
+                    .find(|p| p.project_id == pid) else { return };
+                if let RocketDesignStatus::Revising { .. } = &project.status {
+                    self.status_message = Some(
+                        "Can't modify while revising — finish flaws first".into());
                     return;
-                };
-                let id = self.game.player_company.engine_projects[i].project_id;
-                self.confirm_retire(crate::company::RetireTarget::Engine(id));
+                }
+                let state = Box::new(RocketDesignerState::from_existing(
+                    project, &self.game.player_company,
+                ));
+                self.enter_modal(InputMode::RocketDesigner { state });
+            }
+            (ProjectKind::Rocket, KeyCode::Char('m')) if index.is_some() => {
+                // Cycle auto-build target: 0 → 1 → 2 → 3 → 0
+                match self.game.player_company.cycle_auto_build_target(index.unwrap_or(usize::MAX)) {
+                    Some(0) => self.status_message = Some("Auto-build: off".into()),
+                    Some(n) => self.status_message = Some(format!("Auto-build: {}", n)),
+                    None => self.status_message =
+                        Some("Must be in Testing to set auto-build".into()),
+                }
             }
             _ => {}
         }
@@ -1563,7 +1522,7 @@ impl App {
     /// Open the retire confirmation for `target`, or explain why it
     /// can't be retired. Shared by all three design panes so the prompt
     /// and the refusal messages read the same wherever you press `X`.
-    fn confirm_retire(&mut self, target: crate::company::RetireTarget) {
+    fn confirm_retire(&mut self, target: ProjectRef) {
         use crate::company::RetireRefusal;
         match self.game.player_company.retirement_plan(target) {
             Ok(effects) => {
@@ -1581,124 +1540,6 @@ impl App {
             Err(RetireRefusal::NotFound) => {
                 self.status_message = Some("Nothing selected".into());
             }
-        }
-    }
-
-    /// Map the rocket-pane's visible selection (which hides retired
-    /// designs) back to the underlying `rocket_projects` index every
-    /// project-action API takes. Mirrors `engine_pane_real_index`.
-    fn rocket_pane_real_index(&self) -> Option<usize> {
-        self.game.player_company.visible_rocket_projects()
-            .nth(self.selected_item)
-            .map(|(real_idx, _)| real_idx)
-    }
-
-    fn handle_rockets_key(&mut self, key: KeyCode) {
-        // Every action below wants the queue index its visible row
-        // stands for. `usize::MAX` for "nothing selected" lets the
-        // company-side bounds checks reject it, as on the other panes.
-        let real_idx = self.rocket_pane_real_index();
-        let idx = real_idx.unwrap_or(usize::MAX);
-        match key {
-            KeyCode::Char('a') | KeyCode::Char('A') => {
-                match real_idx.and_then(|i|
-                    self.game.player_company.rocket_projects.get_mut(i))
-                {
-                    Some(p) => {
-                        p.auto_revise = !p.auto_revise;
-                        self.status_message = Some(format!(
-                            "{}: auto-revise {}", p.design.name,
-                            if p.auto_revise { "on" } else { "off" },
-                        ));
-                    }
-                    None => {
-                        self.status_message = Some("No rocket selected".into());
-                    }
-                }
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') => {
-                // Start new rocket design flow
-                self.enter_modal(InputMode::RocketName { buffer: String::new() });
-            }
-            KeyCode::Char('+') | KeyCode::Char('=') => {
-                if self.game.player_company.add_team_to_rocket_project(idx) {
-                    self.status_message = Some("Team assigned".into());
-                } else if let Some(from) = self.game.player_company.steal_engineering_team_to_rocket_project(idx) {
-                    self.status_message = Some(format!("Team reassigned from {}", from));
-                } else {
-                    self.status_message = Some("No teams to reassign".into());
-                }
-            }
-            KeyCode::Char('-') => {
-                if self.game.player_company.remove_team_from_rocket_project(idx) {
-                    self.status_message = Some("Team removed".into());
-                }
-            }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
-                match self.game.player_company
-                    .start_rocket_revision(idx)
-                {
-                    Some(count) => {
-                        self.status_message = Some(format!("Revising {} flaw(s)", count));
-                    }
-                    None => {
-                        self.status_message = Some(
-                            "Nothing to revise (needs a Testing rocket with \
-                             discovered flaws)".into());
-                    }
-                }
-            }
-            KeyCode::Char('e') | KeyCode::Char('E') => {
-                let team_num = self.game.player_company.team_count() + 1;
-                let name = format!("Team {}", team_num);
-                if let Some(evt) = self.game.player_company.hire_team(name.clone(), &self.game.balance) {
-                    self.game.log(evt);
-                    self.status_message = Some(format!("Hired {}", name));
-                }
-            }
-            KeyCode::Char('o') | KeyCode::Char('O') => {
-                // Order rocket build
-                if let Some((cost, evt)) = self.game.player_company.order_rocket_build(idx, &self.game.balance) {
-                    self.game.log(evt);
-                    self.status_message = Some(format!("Build ordered ({})", crate::resources::format_money(cost)));
-                } else {
-                    self.status_message = Some("Must be in Testing to order build".into());
-                }
-            }
-            KeyCode::Char('M') => {
-                // Modify the selected rocket project — opens the rocket
-                // designer in Modify mode (only propellant + power
-                // editable). Only allowed for InDesign / Testing.
-                let Some(i) = real_idx else { return };
-                let project = &self.game.player_company.rocket_projects[i];
-                if let RocketDesignStatus::Revising { .. } = &project.status {
-                    self.status_message = Some(
-                        "Can't modify while revising — finish flaws first".into());
-                    return;
-                }
-                let state = Box::new(RocketDesignerState::from_existing(
-                    project, &self.game.player_company,
-                ));
-                self.enter_modal(InputMode::RocketDesigner { state });
-            }
-            KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
-                let Some(i) = real_idx else {
-                    self.status_message = Some("No rocket selected".into());
-                    return;
-                };
-                let id = self.game.player_company.rocket_projects[i].project_id;
-                self.confirm_retire(crate::company::RetireTarget::Rocket(id));
-            }
-            KeyCode::Char('m') if real_idx.is_some() => {
-                // Cycle auto-build target: 0 → 1 → 2 → 3 → 0
-                match self.game.player_company.cycle_auto_build_target(idx) {
-                    Some(0) => self.status_message = Some("Auto-build: off".into()),
-                    Some(n) => self.status_message = Some(format!("Auto-build: {}", n)),
-                    None => self.status_message =
-                        Some("Must be in Testing to set auto-build".into()),
-                }
-            }
-            _ => {}
         }
     }
 
@@ -1960,14 +1801,8 @@ impl App {
                         // The row is gone. Only pull the cursor back if
                         // it now points past the end — retiring row 0 of
                         // three shouldn't move the selection at all.
-                        let remaining = match target {
-                            crate::company::RetireTarget::Engine(_) =>
-                                self.game.player_company.visible_engine_projects().count(),
-                            crate::company::RetireTarget::Rocket(_) =>
-                                self.game.player_company.visible_rocket_projects().count(),
-                            crate::company::RetireTarget::Reactor(_) =>
-                                self.game.player_company.visible_reactor_projects().count(),
-                        };
+                        let remaining = self.game.player_company
+                            .visible_projects(target.kind()).count();
                         if self.selected_item >= remaining {
                             self.selected_item = remaining.saturating_sub(1);
                         }
@@ -3143,7 +2978,7 @@ impl App {
                     for id in &created {
                         if referenced.contains(id) {
                             if let Some(engine_name) = self.game.player_company
-                                .promote_proposed_engine(*id)
+                                .promote_proposed(ProjectRef::Engine(*id))
                             {
                                 self.game.log(crate::event::GameEvent::project(
                                     crate::project::ProjectKind::Engine, engine_name,
@@ -3151,7 +2986,7 @@ impl App {
                                 ));
                             }
                         } else {
-                            self.game.player_company.delete_proposed_engine(*id);
+                            self.game.player_company.delete_proposed(ProjectRef::Engine(*id));
                         }
                     }
                     self.create_rocket_project(name, stage_groups);
@@ -3162,7 +2997,7 @@ impl App {
                 let created = state.created_engine_projects.clone();
                 self.exit_modal();
                 for id in created {
-                    self.game.player_company.delete_proposed_engine(id);
+                    self.game.player_company.delete_proposed(ProjectRef::Engine(id));
                 }
                 self.status_message = Some("Rocket design cancelled".into());
             }
@@ -3500,7 +3335,7 @@ impl App {
                 // alone. Proposed reactors only ever exist for the
                 // lifetime of the editor session that birthed them.
                 if is_proposed {
-                    self.game.player_company.delete_proposed_reactor(project_id);
+                    self.game.player_company.delete_proposed(ProjectRef::Reactor(project_id));
                 }
                 self.exit_modal();
             }
@@ -3508,7 +3343,7 @@ impl App {
                 // Done: promote Proposed → InDesign and log the event,
                 // then close. No-op for projects already past Proposed
                 // (they only land here via the "edit existing" path).
-                if let Some(rname) = self.game.player_company.promote_proposed_reactor(project_id) {
+                if let Some(rname) = self.game.player_company.promote_proposed(ProjectRef::Reactor(project_id)) {
                     self.game.log(crate::event::GameEvent::project(
                         crate::project::ProjectKind::Reactor, rname,
                         crate::event::ProjectEvent::DesignStarted,
@@ -3609,14 +3444,14 @@ impl App {
                     Some(s) => self.input_mode = InputMode::RocketDesigner { state: s },
                     // Standalone: cancel the draft we created.
                     None => {
-                        self.game.player_company.delete_proposed_engine(project_id);
+                        self.game.player_company.delete_proposed(ProjectRef::Engine(project_id));
                         self.exit_modal();
                     }
                 }
             }
             // Standalone only: commit the draft to InDesign.
             KeyCode::Char('d') | KeyCode::Char('D') if state.is_none() => {
-                if let Some(name) = self.game.player_company.promote_proposed_engine(project_id) {
+                if let Some(name) = self.game.player_company.promote_proposed(ProjectRef::Engine(project_id)) {
                     self.game.log(crate::event::GameEvent::project(
                         crate::project::ProjectKind::Engine, name,
                         crate::event::ProjectEvent::DesignStarted,
@@ -5145,9 +4980,7 @@ mod help_tests {
         company.start_proposed_reactor(
             "R1".into(), 1.0, crate::reactor::EnrichmentLevel::Leu, &bal,
         );
-        company.promote_proposed_reactor(
-            company.reactor_projects[0].project_id,
-        );
+        company.promote_proposed(ProjectRef::Reactor(company.reactor_projects[0].project_id,));
 
         // A rocket project built from the engine above, plus one
         // finished rocket sitting in inventory for the Launches tab.
@@ -5180,9 +5013,9 @@ mod help_tests {
 
         // Staff each project so the "release a team" keys have a team
         // to release.
-        company.add_team_to_project(0);
-        company.add_team_to_reactor_project(0);
-        company.add_team_to_rocket_project(0);
+        company.add_team(ProjectRef::Engine(company.engine_projects[0].project_id));
+        company.add_team(ProjectRef::Reactor(company.reactor_projects[0].project_id));
+        company.add_team(ProjectRef::Rocket(company.rocket_projects[0].project_id));
 
         // One contract to bid on.
         game.available_contracts.push(crate::contract::Contract {
@@ -5789,7 +5622,7 @@ mod retire_confirmation_tests {
         a.handle_key(KeyCode::Char('y'));
         assert_eq!(a.selected_item, 0,
             "the cursor must not be left past the end of the list");
-        assert!(a.rocket_pane_real_index().is_some(),
+        assert!(a.selected_project(ProjectKind::Rocket).is_some(),
             "and it should still resolve to a real project");
     }
 }

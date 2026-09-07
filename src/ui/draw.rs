@@ -3,9 +3,10 @@ use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph};
 
 use crate::calendar::GameDate;
 use crate::contract::{self, Contract};
-use crate::engine_project::{EngineDesignStatus, EngineSource};
+use crate::engine_project::EngineSource;
 use crate::game_state::GameState;
 use crate::manufacturing::ManufacturingOrderType;
+use crate::project::{DesignProject, DesignStatus, Designable, Improvement, ProjectKind};
 use crate::rocket_project;
 use crate::event::EventImportance;
 use crate::flaw::{Flaw, FlawTrigger};
@@ -305,195 +306,224 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style) 
     frame.render_widget(paragraph, area);
 }
 
+// ── Project panes ────────────────────────────────────────────────────
+//
+// The Engines, Reactors and Rockets tabs are one list layout with a
+// kind-specific detail block under the selected row. Everything that
+// isn't the detail block is shared below.
+
+/// One row of a project pane: marker, name, revision, status, plus a
+/// progress gauge for the phase the project is in. `extra` goes after
+/// the status (rockets: build time and the auto-build tag).
+fn push_project_row<D: Designable>(
+    lines: &mut Vec<Line<'static>>,
+    gauges: &mut Vec<GaugeInfo>,
+    project: &DesignProject<D>,
+    selected: bool,
+    balance: &crate::balance_config::BalanceConfig,
+    extra: &str,
+) {
+    let marker = if selected { "▶" } else { " " };
+    let status_str = match &project.status {
+        DesignStatus::Proposed { .. } => unreachable!("panes hide Proposed drafts"),
+        DesignStatus::InDesign { .. } => "In Design".to_string(),
+        DesignStatus::Testing { .. } => format!("Testing  {}", project.testing_level(balance)),
+        DesignStatus::Revising { .. } => project.revision_plan()
+            .map(|plan| plan.describe())
+            .unwrap_or_default(),
+    };
+    let line_text = format!(
+        "  {} {} (Rev {})  {}{}",
+        marker, project.design.name(), project.revision, status_str, extra,
+    );
+    let text_width = line_text.chars().count() as u16;
+
+    // Teal for design work, green for the current testing cycle, amber
+    // for revision work.
+    let (done, total, fill_color) = match &project.status {
+        DesignStatus::Proposed { .. } => unreachable!("panes hide Proposed drafts"),
+        DesignStatus::InDesign { work_completed, work_required } =>
+            (*work_completed, *work_required, Color::Rgb(0, 140, 140)),
+        DesignStatus::Testing { work_completed } =>
+            (*work_completed, balance.work.testing_cycle_work, Color::Green),
+        DesignStatus::Revising { work_completed, .. } =>
+            (*work_completed, balance.work.flaw_revision_work, Color::Rgb(180, 130, 0)),
+    };
+    gauges.push(GaugeInfo {
+        line_index: lines.len(), ratio: done / total,
+        label: format!("{:.0}/{:.0}", done, total),
+        fill_color, text_width, right_aligned: false,
+    });
+
+    let style = if selected {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    lines.push(Line::from(Span::styled(line_text, style)));
+}
+
+/// One discovered flaw, worded for its kind: a reactor's "engine loss"
+/// is a shutdown and its degradation is lost power.
+fn flaw_line(flaw: &Flaw, kind: ProjectKind) -> Line<'static> {
+    let consequence = match kind {
+        ProjectKind::Reactor => flaw.consequence.reactor_short_label(),
+        _ => flaw.consequence.short_label(),
+    };
+    Line::from(Span::styled(
+        format!("        ▲ {}: {} ({})", flaw.description, consequence, format_flaw_rate(flaw)),
+        Style::default().fg(Color::Red),
+    ))
+}
+
+/// The discovered flaws of a project, under a count header. Nothing
+/// when none are discovered — hidden flaws stay hidden.
+fn push_flaw_lines(lines: &mut Vec<Line<'static>>, flaws: &[Flaw], kind: ProjectKind) {
+    let discovered = flaws.iter().filter(|f| f.discovered).count();
+    if discovered == 0 {
+        return;
+    }
+    lines.push(Line::from(format!("      Flaws: {} discovered", discovered)));
+    for flaw in flaws.iter().filter(|f| f.discovered) {
+        lines.push(flaw_line(flaw, kind));
+    }
+}
+
+/// Improvements: actualised ✓ in green first, then pending ★ in cyan.
+fn push_improvement_lines<K: std::fmt::Display>(lines: &mut Vec<Line<'static>>, improvements: &[Improvement<K>]) {
+    for imp in improvements.iter().filter(|i| i.actualized) {
+        lines.push(Line::from(Span::styled(
+            format!("        ✓ {}: {}", imp.description, imp.kind),
+            Style::default().fg(Color::Green),
+        )));
+    }
+    for imp in improvements.iter().filter(|i| !i.actualized) {
+        lines.push(Line::from(Span::styled(
+            format!("        ★ {}: {} (pending revision)", imp.description, imp.kind),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
+}
+
+/// The technology deficiencies still on a project, with how the fight
+/// against each is going.
+fn push_tech_deficiency_lines<D: Designable>(
+    lines: &mut Vec<Line<'static>>,
+    project: &DesignProject<D>,
+    technologies: &[crate::technology::Technology],
+) {
+    if project.tech_deficiency_ids.is_empty() {
+        return;
+    }
+    let Some(tech) = project.technology_id
+        .and_then(|id| technologies.iter().find(|t| t.id == id))
+    else {
+        return;
+    };
+    lines.push(Line::from(format!("      Tech deficiencies ({}):", tech.name)));
+    for def_id in &project.tech_deficiency_ids {
+        let Some(def) = tech.deficiencies.iter().find(|d| d.id == *def_id) else { continue };
+        let status = if def.solved {
+            "(solved elsewhere — easy fix)".to_string()
+        } else if def.total_attempts > 0 {
+            format!("({} failed attempt{})",
+                def.total_attempts,
+                if def.total_attempts == 1 { "" } else { "s" })
+        } else {
+            String::new()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("        ◆ {}: {} {}", def.description, def.kind, status),
+            Style::default().fg(Color::Magenta),
+        )));
+    }
+}
+
+/// The tail every project pane ends with: the key hints, the bordered
+/// block, and the gauges drawn over the rows.
+fn render_project_pane(
+    frame: &mut Frame, area: Rect, border_style: Style, tab: Tab,
+    has_selection: bool, mut lines: Vec<Line<'static>>, gauges: Vec<GaugeInfo>,
+) {
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        hint_line_for(crate::ui::keys::for_tab(tab), has_selection, area),
+        Style::default().fg(Color::Cyan),
+    )));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(format!(" {} ", tab.name()));
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+    render_gauges(frame, area, &gauges);
+}
+
 fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
     let company = &app.game.player_company;
-    let visible_engines: Vec<(usize, &crate::engine_project::EngineProject)> =
-        company.visible_engine_projects().collect();
+    let visible: Vec<&crate::engine_project::EngineProject> =
+        company.visible_engine_projects().map(|(_, p)| p).collect();
 
-    let mut lines = vec![
-        Line::from(format!("  Engine Projects ({})", visible_engines.len())),
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(format!("  Engine Projects ({})", visible.len())),
         Line::from("  ─────────────────────────────────────────────"),
     ];
     let mut gauges: Vec<GaugeInfo> = Vec::new();
 
-    if visible_engines.is_empty() {
+    if visible.is_empty() {
         lines.push(Line::from("  No engine projects yet. Design one inside a rocket."));
     }
 
-    for (i, (_orig_idx, project)) in visible_engines.iter().enumerate() {
+    for (i, project) in visible.iter().enumerate() {
         let selected = i == app.selected_item;
-        let marker = if selected { "▶" } else { " " };
-
-        let status_str = match &project.status {
-            EngineDesignStatus::Proposed { .. } => unreachable!("filtered above"),
-            EngineDesignStatus::InDesign { .. } => "In Design".to_string(),
-            EngineDesignStatus::Testing { .. } =>
-                format!("Testing  {}", project.testing_level(&app.game.balance)),
-            EngineDesignStatus::Revising { remaining_flaw_ids, remaining_improvement_ids, .. } =>
-                format!("Revising {} flaw(s), {} improvement(s)",
-                    remaining_flaw_ids.len(), remaining_improvement_ids.len()),
-        };
-
-        let line_text = format!(
-            "  {} {} (Rev {})  {}",
-            marker, project.design.name, project.revision, status_str,
-        );
-        let text_width = line_text.chars().count() as u16;
-
-        // Track gauge data for this line
-        let line_idx = lines.len();
-        match &project.status {
-            EngineDesignStatus::Proposed { .. } => unreachable!("filtered above"),
-            EngineDesignStatus::InDesign { work_completed, work_required } => {
-                let ratio = work_completed / work_required;
-                gauges.push(GaugeInfo {
-                    line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, work_required),
-                    fill_color: Color::Rgb(0, 140, 140), text_width, right_aligned: false,
-                });
-            }
-            EngineDesignStatus::Testing { work_completed } => {
-                let cycle_work = app.game.balance.work.testing_cycle_work;
-                let ratio = work_completed / cycle_work;
-                gauges.push(GaugeInfo {
-                    line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, cycle_work),
-                    fill_color: Color::Green, text_width, right_aligned: false,
-                });
-            }
-            EngineDesignStatus::Revising { work_completed, .. } => {
-                let revision_work = app.game.balance.work.flaw_revision_work;
-                let ratio = work_completed / revision_work;
-                gauges.push(GaugeInfo {
-                    line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, revision_work),
-                    fill_color: Color::Rgb(180, 130, 0), text_width, right_aligned: false,
-                });
-            }
+        push_project_row(&mut lines, &mut gauges, project, selected, &app.game.balance, "");
+        if !selected {
+            continue;
         }
 
-        let style = if selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        // Propellant display with 2 sig figs
+        let prop_str: Vec<String> = project.design.propellant_mix.iter()
+            .map(|f| format!("{} {:.0}%", f.propellant.display_name(), f.mass_fraction * 100.0))
+            .collect();
+        // One project, two bells: show both so the player can see
+        // what an upper stage would gain before committing a design.
+        let isp_str = if project.has_nozzle_choice() {
+            format!("{:.0}s SL / {:.0}s vac",
+                project.design_variant(false).isp_s,
+                project.design_variant(true).isp_s)
         } else {
-            Style::default()
+            format!("{:.0}s vac", project.design.isp_s)
         };
+        lines.push(Line::from(format!(
+            "      {}  {}  {}  {}",
+            project.design.cycle.display_name(),
+            prop_str.join(" / "),
+            format_thrust_n(project.design.thrust_n),
+            isp_str,
+        )));
+        let power_str = if project.design.power_draw_w > 0.0 {
+            format!("    Power: {}", format_power_w(project.design.power_draw_w))
+        } else {
+            String::new()
+        };
+        lines.push(Line::from(format!(
+            "      Mass: {}    Teams: {}    Scale: {:.2}x    Auto-revise: {}{}",
+            format_kg(project.design.mass_kg),
+            project.teams_assigned,
+            project.spec.scale,
+            if project.auto_revise { "on" } else { "off" },
+            power_str,
+        )));
 
-        lines.push(Line::from(Span::styled(line_text, style)));
-
-        // Show details for selected project
-        if selected {
-            let cycle_name = project.design.cycle.display_name();
-
-            // Propellant display with 2 sig figs
-            let prop_str: Vec<String> = project.design.propellant_mix.iter()
-                .map(|f| format!("{} {:.0}%", f.propellant.display_name(), f.mass_fraction * 100.0))
-                .collect();
-
-            // One project, two bells: show both so the player can see
-            // what an upper stage would gain before committing a design.
-            let isp_str = if project.has_nozzle_choice() {
-                format!("{:.0}s SL / {:.0}s vac",
-                    project.design_variant(false).isp_s,
-                    project.design_variant(true).isp_s)
-            } else {
-                format!("{:.0}s vac", project.design.isp_s)
-            };
-            lines.push(Line::from(format!(
-                "      {}  {}  {}  {}",
-                cycle_name,
-                prop_str.join(" / "),
-                format_thrust_n(project.design.thrust_n),
-                isp_str,
-            )));
-            let power_str = if project.design.power_draw_w > 0.0 {
-                format!("    Power: {}",
-                    format_power_w(project.design.power_draw_w))
-            } else {
-                String::new()
-            };
-            lines.push(Line::from(format!(
-                "      Mass: {}    Teams: {}    Scale: {:.2}x    Auto-revise: {}{}",
-                format_kg(project.design.mass_kg),
-                project.teams_assigned,
-                project.spec.scale,
-                if project.auto_revise { "on" } else { "off" },
-                power_str,
-            )));
-
-            // Show inventory count for engines in Testing or later
-            if matches!(project.status, EngineDesignStatus::Testing { .. }) {
-                let source = EngineSource::PlayerDesign(project.project_id);
-                let count = company.manufacturing.inventory.engine_count(source);
-                lines.push(Line::from(format!("      Built engines: {}", count)));
-            }
-
-            // Show flaws if any discovered
-            let discovered = project.discovered_flaw_count();
-            if discovered > 0 {
-                lines.push(Line::from(format!(
-                    "      Flaws: {} discovered",
-                    discovered,
-                )));
-                for flaw in &project.flaws {
-                    if flaw.discovered {
-                        let consequence_str = flaw.consequence.short_label();
-                        lines.push(Line::from(Span::styled(
-                            format!(
-                                "        ▲ {}: {} ({})",
-                                flaw.description, consequence_str, format_flaw_rate(flaw),
-                            ),
-                            Style::default().fg(Color::Red),
-                        )));
-                    }
-                }
-            }
-
-            // Show improvements
-            let pending: Vec<_> = project.improvements.iter().filter(|i| !i.actualized).collect();
-            let actualized: Vec<_> = project.improvements.iter().filter(|i| i.actualized).collect();
-            if !pending.is_empty() || !actualized.is_empty() {
-                for imp in &actualized {
-                    lines.push(Line::from(Span::styled(
-                        format!("        ✓ {}: {}", imp.description, imp.kind),
-                        Style::default().fg(Color::Green),
-                    )));
-                }
-                for imp in &pending {
-                    lines.push(Line::from(Span::styled(
-                        format!("        ★ {}: {} (pending revision)", imp.description, imp.kind),
-                        Style::default().fg(Color::Cyan),
-                    )));
-                }
-            }
-
-            // Show tech deficiencies
-            if !project.tech_deficiency_ids.is_empty() {
-                if let Some(tech_id) = project.technology_id {
-                    if let Some(tech) = app.game.technologies.iter().find(|t| t.id == tech_id) {
-                        lines.push(Line::from(format!(
-                            "      Tech deficiencies ({}):", tech.name,
-                        )));
-                        for def_id in &project.tech_deficiency_ids {
-                            if let Some(def) = tech.deficiencies.iter().find(|d| d.id == *def_id) {
-                                let status = if def.solved {
-                                    "(solved elsewhere — easy fix)".to_string()
-                                } else if def.total_attempts > 0 {
-                                    format!("({} failed attempt{})",
-                                        def.total_attempts,
-                                        if def.total_attempts == 1 { "" } else { "s" })
-                                } else {
-                                    String::new()
-                                };
-                                lines.push(Line::from(Span::styled(
-                                    format!("        ◆ {}: {} {}", def.description, def.kind, status),
-                                    Style::default().fg(Color::Magenta),
-                                )));
-                            }
-                        }
-                    }
-                }
-            }
+        // Show inventory count for engines in Testing or later
+        if matches!(project.status, DesignStatus::Testing { .. }) {
+            let source = EngineSource::PlayerDesign(project.project_id);
+            let count = company.manufacturing.inventory.engine_count(source);
+            lines.push(Line::from(format!("      Built engines: {}", count)));
         }
+
+        push_flaw_lines(&mut lines, &project.flaws, ProjectKind::Engine);
+        push_improvement_lines(&mut lines, &project.improvements);
+        push_tech_deficiency_lines(&mut lines, project, &app.game.technologies);
     }
 
     // Contracted engines section
@@ -509,48 +539,23 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 ce.design.isp_s,
                 format_money(ce.purchase_cost_per_unit),
             )));
-            // Show discovered flaws
-            for flaw in &ce.flaws {
-                if flaw.discovered {
-                    let consequence_str = flaw.consequence.short_label();
-                    lines.push(Line::from(Span::styled(
-                        format!(
-                            "        ▲ {}: {} ({})",
-                            flaw.description, consequence_str, format_flaw_rate(flaw),
-                        ),
-                        Style::default().fg(Color::Red),
-                    )));
-                }
+            for flaw in ce.flaws.iter().filter(|f| f.discovered) {
+                lines.push(flaw_line(flaw, ProjectKind::Engine));
             }
         }
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        hint_line_for(
-            crate::ui::keys::for_tab(Tab::Engines),
-            !company.engine_projects.is_empty(),
-            area,
-        ),
-        Style::default().fg(Color::Cyan),
-    )));
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(" Engines ");
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
-    render_gauges(frame, area, &gauges);
+    render_project_pane(
+        frame, area, border_style, Tab::Engines, !visible.is_empty(), lines, gauges,
+    );
 }
 
 fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
-    use crate::reactor_project::{ReactorDesignStatus, ReactorProject};
-
     let company = &app.game.player_company;
-    let visible: Vec<(usize, &ReactorProject)> = company.visible_reactor_projects().collect();
+    let visible: Vec<&crate::reactor_project::ReactorProject> =
+        company.visible_reactor_projects().map(|(_, p)| p).collect();
 
-    let mut lines = vec![
+    let mut lines: Vec<Line<'static>> = vec![
         Line::from(format!("  Reactor Projects ({})", visible.len())),
         Line::from("  ─────────────────────────────────────────────"),
     ];
@@ -565,180 +570,45 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
         )));
     }
 
-    for (i, (_real_idx, project)) in visible.iter().enumerate() {
+    for (i, project) in visible.iter().enumerate() {
         let selected = i == app.selected_item;
-        let marker = if selected { "▶" } else { " " };
-
-        let status_str = match &project.status {
-            ReactorDesignStatus::Proposed { .. } => unreachable!("filtered above"),
-            ReactorDesignStatus::InDesign { .. } => "In Design".to_string(),
-            ReactorDesignStatus::Testing { .. } =>
-                format!("Testing  {}", project.testing_level(&app.game.balance)),
-            ReactorDesignStatus::Revising {
-                remaining_flaw_ids,
-                remaining_improvement_ids,
-                remaining_tech_deficiency_ids,
-                ..
-            } =>
-                format!("Revising {} flaw(s), {} improvement(s), {} deficiency(ies)",
-                    remaining_flaw_ids.len(),
-                    remaining_improvement_ids.len(),
-                    remaining_tech_deficiency_ids.len()),
-        };
-
-        let line_text = format!(
-            "  {} {} (Rev {})  {}",
-            marker, project.design.name, project.revision, status_str,
-        );
-        let text_width = line_text.chars().count() as u16;
-
-        // Progress gauge, matching the engine pane: teal for design work,
-        // green for the current testing cycle, amber for revision work.
-        let line_idx = lines.len();
-        match &project.status {
-            ReactorDesignStatus::Proposed { .. } => unreachable!("filtered above"),
-            ReactorDesignStatus::InDesign { work_completed, work_required } => {
-                let ratio = work_completed / work_required;
-                gauges.push(GaugeInfo {
-                    line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, work_required),
-                    fill_color: Color::Rgb(0, 140, 140), text_width, right_aligned: false,
-                });
-            }
-            ReactorDesignStatus::Testing { work_completed } => {
-                let cycle_work = app.game.balance.work.testing_cycle_work;
-                let ratio = work_completed / cycle_work;
-                gauges.push(GaugeInfo {
-                    line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, cycle_work),
-                    fill_color: Color::Green, text_width, right_aligned: false,
-                });
-            }
-            ReactorDesignStatus::Revising { work_completed, .. } => {
-                let revision_work = app.game.balance.work.flaw_revision_work;
-                let ratio = work_completed / revision_work;
-                gauges.push(GaugeInfo {
-                    line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, revision_work),
-                    fill_color: Color::Rgb(180, 130, 0), text_width, right_aligned: false,
-                });
-            }
+        push_project_row(&mut lines, &mut gauges, project, selected, &app.game.balance, "");
+        if !selected {
+            continue;
         }
 
-        let style = if selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        lines.push(Line::from(Span::styled(line_text, style)));
-
-        if selected {
-            let d = &project.design;
-            lines.push(Line::from(format!(
-                "      {} • scale {:.2} • {} • {:.0} K",
-                d.enrichment.display_name(),
-                d.scale,
-                format_power_w(d.steady_w),
-                d.temperature_k,
-            )));
-            lines.push(Line::from(format!(
-                "      mass {} (reactor {} + radiator {}) • ${:.1}M",
-                format_kg(d.mass_kg),
-                format_kg(d.reactor_mass_kg),
-                format_kg(d.radiator.mass_kg),
-                d.material_cost / 1_000_000.0,
-            )));
-            lines.push(Line::from(format!(
-                "      Teams: {}  NRE: {}",
-                project.teams_assigned, format_money(project.nre_cost),
-            )));
-
-            // Testing progress (once past design).
-            if matches!(project.status,
-                ReactorDesignStatus::Testing { .. } | ReactorDesignStatus::Revising { .. })
-            {
-                lines.push(Line::from(format!("      Testing: {}", project.testing_level(&app.game.balance))));
-            }
-
-            // Discovered flaws — reactor-flavored consequence reading.
-            let discovered = project.discovered_flaw_count();
-            if discovered > 0 {
-                lines.push(Line::from(format!("      Flaws: {} discovered", discovered)));
-                for flaw in &project.flaws {
-                    if flaw.discovered {
-                        let consequence_str = flaw.consequence.reactor_short_label();
-                        lines.push(Line::from(Span::styled(
-                            format!(
-                                "        ▲ {}: {} ({})",
-                                flaw.description, consequence_str, format_flaw_rate(flaw),
-                            ),
-                            Style::default().fg(Color::Red),
-                        )));
-                    }
-                }
-            }
-
-            // Improvements (actualized ✓ / pending ★).
-            let pending: Vec<_> = project.improvements.iter().filter(|i| !i.actualized).collect();
-            let actualized: Vec<_> = project.improvements.iter().filter(|i| i.actualized).collect();
-            for imp in &actualized {
-                lines.push(Line::from(Span::styled(
-                    format!("        ✓ {}: {}", imp.description, imp.kind),
-                    Style::default().fg(Color::Green),
-                )));
-            }
-            for imp in &pending {
-                lines.push(Line::from(Span::styled(
-                    format!("        ★ {}: {} (pending revision)", imp.description, imp.kind),
-                    Style::default().fg(Color::Cyan),
-                )));
-            }
-
-            // Tech deficiencies (fission-reactor tech).
-            if !project.tech_deficiency_ids.is_empty() {
-                if let Some(tech_id) = project.technology_id {
-                    if let Some(tech) = app.game.technologies.iter().find(|t| t.id == tech_id) {
-                        lines.push(Line::from(format!(
-                            "      Tech deficiencies ({}):", tech.name,
-                        )));
-                        for def_id in &project.tech_deficiency_ids {
-                            if let Some(def) = tech.deficiencies.iter().find(|d| d.id == *def_id) {
-                                let status = if def.solved {
-                                    "(solved elsewhere — easy fix)".to_string()
-                                } else if def.total_attempts > 0 {
-                                    format!("({} failed attempt{})",
-                                        def.total_attempts,
-                                        if def.total_attempts == 1 { "" } else { "s" })
-                                } else {
-                                    String::new()
-                                };
-                                lines.push(Line::from(Span::styled(
-                                    format!("        ◆ {}: {} {}", def.description, def.kind, status),
-                                    Style::default().fg(Color::Magenta),
-                                )));
-                            }
-                        }
-                    }
-                }
-            }
+        let d = &project.design;
+        lines.push(Line::from(format!(
+            "      {} • scale {:.2} • {} • {:.0} K",
+            d.enrichment.display_name(),
+            d.scale,
+            format_power_w(d.steady_w),
+            d.temperature_k,
+        )));
+        lines.push(Line::from(format!(
+            "      mass {} (reactor {} + radiator {}) • ${:.1}M",
+            format_kg(d.mass_kg),
+            format_kg(d.reactor_mass_kg),
+            format_kg(d.radiator.mass_kg),
+            d.material_cost / 1_000_000.0,
+        )));
+        lines.push(Line::from(format!(
+            "      Teams: {}  NRE: {}",
+            project.teams_assigned, format_money(project.nre_cost),
+        )));
+        // Testing progress (once past design).
+        if matches!(project.status, DesignStatus::Testing { .. } | DesignStatus::Revising { .. }) {
+            lines.push(Line::from(format!("      Testing: {}", project.testing_level(&app.game.balance))));
         }
+
+        push_flaw_lines(&mut lines, &project.flaws, ProjectKind::Reactor);
+        push_improvement_lines(&mut lines, &project.improvements);
+        push_tech_deficiency_lines(&mut lines, project, &app.game.technologies);
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        hint_line_for(
-            crate::ui::keys::for_tab(Tab::Reactors), !visible.is_empty(), area,
-        ),
-        Style::default().fg(Color::Cyan),
-    )));
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(" Reactors ");
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
-    render_gauges(frame, area, &gauges);
+    render_project_pane(
+        frame, area, border_style, Tab::Reactors, !visible.is_empty(), lines, gauges,
+    );
 }
 
 fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
@@ -746,9 +616,9 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
     // Retired designs are hidden here, so the count, the empty message
     // and the selection all have to work off the visible list — the
     // selection indexes *this*, not `rocket_projects`.
-    let visible: Vec<(usize, &rocket_project::RocketProject)> =
-        company.visible_rocket_projects().collect();
-    let mut lines = vec![
+    let visible: Vec<&rocket_project::RocketProject> =
+        company.visible_rocket_projects().map(|(_, p)| p).collect();
+    let mut lines: Vec<Line<'static>> = vec![
         Line::from(format!("  Rocket Projects ({})", visible.len())),
         Line::from("  ─────────────────────────────────────────────"),
     ];
@@ -758,19 +628,8 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         lines.push(Line::from("  No rocket projects yet. Press [N] to start a new design."));
     }
 
-    for (i, (_, project)) in visible.iter().enumerate() {
+    for (i, project) in visible.iter().enumerate() {
         let selected = i == app.selected_item;
-        let marker = if selected { "▶" } else { " " };
-
-        let status_str = match &project.status {
-            rocket_project::RocketDesignStatus::Proposed { .. } => unreachable!("filtered above"),
-            rocket_project::RocketDesignStatus::InDesign { .. } =>
-                "In Design".to_string(),
-            rocket_project::RocketDesignStatus::Testing { .. } =>
-                format!("Testing  {}", project.testing_level(&app.game.balance)),
-            rocket_project::RocketDesignStatus::Revising { remaining_flaw_ids, .. } =>
-                format!("Revising {} flaw(s)", remaining_flaw_ids.len()),
-        };
 
         let auto_target = company.auto_build_targets.get(&project.project_id).copied().unwrap_or(0);
         let auto_suffix = if !selected && auto_target > 0 {
@@ -782,43 +641,10 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         // every part, so two designs can be compared without reference to
         // how busy the floor happens to be.
         let build_days = company.nominal_build_days(project, &app.game.balance);
-        let line_text = format!(
-            "  {} {} (Rev {})  {}  build ~{:.0}d{}",
-            marker, project.design.name, project.revision, status_str,
-            build_days, auto_suffix,
-        );
-        let text_width = line_text.chars().count() as u16;
-
-        // Track gauge data for this line
-        let line_idx = lines.len();
-        match &project.status {
-            rocket_project::RocketDesignStatus::Proposed { .. } => unreachable!("filtered above"),
-            rocket_project::RocketDesignStatus::InDesign { work_completed, work_required } => {
-                let ratio = work_completed / work_required;
-                gauges.push(GaugeInfo {
-                    line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, work_required),
-                    fill_color: Color::Rgb(0, 140, 140), text_width, right_aligned: false,
-                });
-            }
-            rocket_project::RocketDesignStatus::Testing { work_completed } => {
-                let cycle_work = app.game.balance.work.testing_cycle_work;
-                let ratio = work_completed / cycle_work;
-                gauges.push(GaugeInfo {
-                    line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, cycle_work),
-                    fill_color: Color::Green, text_width, right_aligned: false,
-                });
-            }
-            rocket_project::RocketDesignStatus::Revising { work_completed, .. } => {
-                let revision_work = app.game.balance.work.flaw_revision_work;
-                let ratio = work_completed / revision_work;
-                gauges.push(GaugeInfo {
-                    line_index: line_idx, ratio,
-                    label: format!("{:.0}/{:.0}", work_completed, revision_work),
-                    fill_color: Color::Rgb(180, 130, 0), text_width, right_aligned: false,
-                });
-            }
+        let extra = format!("  build ~{:.0}d{}", build_days, auto_suffix);
+        push_project_row(&mut lines, &mut gauges, project, selected, &app.game.balance, &extra);
+        if !selected {
+            continue;
         }
 
         let total_stages: u32 = project.design.stage_groups.iter()
@@ -827,139 +653,89 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             .flat_map(|g| g.iter())
             .map(|s| s.engine_count)
             .sum();
+        lines.push(Line::from(format!(
+            "      {} stages, {} engines    Teams: {}    Complexity: {}",
+            total_stages, total_engines, project.teams_assigned, project.complexity,
+        )));
 
-        let style = if selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        // Show engines used per stage group
+        let mut seen_engines: Vec<(String, u32)> = Vec::new();
+        for group in &project.design.stage_groups {
+            for stage in group {
+                let rev = company.engine_projects.iter()
+                    .find(|ep| ep.design.id == stage.engine.id)
+                    .map(|ep| ep.revision)
+                    .or_else(|| company.contracted_engines.iter()
+                        .find(|ce| ce.design.id == stage.engine.id)
+                        .map(|_| 0))
+                    .unwrap_or(0);
+                let key = format!("{} Rev {}", stage.engine.name, rev);
+                if let Some(entry) = seen_engines.iter_mut().find(|(k, _)| k == &key) {
+                    entry.1 += stage.engine_count;
+                } else {
+                    seen_engines.push((key, stage.engine_count));
+                }
+            }
+        }
+        let engine_list: Vec<String> = seen_engines.iter()
+            .map(|(name, count)| format!("{}x{}", count, name))
+            .collect();
+        lines.push(Line::from(format!("      Engines: {}", engine_list.join(", "))));
+
+        // Initial acceleration at takeoff: stage 0, full propellant,
+        // 0 payload, 1 AU.
+        let avail_power = project.design.power_for_engines_w(1.0);
+        let initial_thrust = project.design.group_effective_thrust_n(0, avail_power);
+        let initial_mass = project.design.total_mass_kg();
+        let initial_accel = if initial_mass > 0.0 { initial_thrust / initial_mass } else { 0.0 };
+        lines.push(Line::from(format!(
+            "      Total mass: {:.0} kg    dV: {:.0} m/s (0 payload)    Initial accel: {}",
+            project.design.total_mass_kg(),
+            project.design.total_delta_v(0.0),
+            format_accel(initial_accel),
+        )));
+
+        // Show payload table for destinations served by active markets
+        // (or the LEO/MEO/GTO/GEO fallback when none are active yet).
+        let dests = relevant_destinations(&app.game);
+        let table = app.game.payload_table(&project.design, "earth_surface", &dests);
+        if !table.is_empty() {
+            lines.push(Line::from("      Max payload:"));
+            for row in &table {
+                let (note, style) = if row.survives {
+                    ("", Style::default())
+                } else {
+                    ("  ▲ no power to reach it", Style::default().fg(Color::Red))
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("        {:20} {:>8}{}", row.destination, format_mass(row.max_payload_kg), note),
+                    style,
+                )));
+            }
+        }
+
+        push_flaw_lines(&mut lines, &project.flaws, ProjectKind::Rocket);
+
+        // Inventory count
+        let built = company.manufacturing.inventory.rocket_count(project.project_id);
+        if built > 0 {
+            lines.push(Line::from(format!("      Built rockets: {}", built)));
+        }
+
+        // Auto-build target
+        let auto_revise = if project.auto_revise { "on" } else { "off" };
+        if auto_target > 0 {
+            lines.push(Line::from(format!(
+                "      Auto-build: {}    Auto-revise: {}", auto_target, auto_revise)));
         } else {
-            Style::default()
-        };
-
-        lines.push(Line::from(Span::styled(line_text, style)));
-
-        if selected {
             lines.push(Line::from(format!(
-                "      {} stages, {} engines    Teams: {}    Complexity: {}",
-                total_stages, total_engines, project.teams_assigned, project.complexity,
-            )));
-
-            // Show engines used per stage group
-            let mut seen_engines: Vec<(String, u32)> = Vec::new();
-            for group in &project.design.stage_groups {
-                for stage in group {
-                    let rev = company.engine_projects.iter()
-                        .find(|ep| ep.design.id == stage.engine.id)
-                        .map(|ep| ep.revision)
-                        .or_else(|| company.contracted_engines.iter()
-                            .find(|ce| ce.design.id == stage.engine.id)
-                            .map(|_| 0))
-                        .unwrap_or(0);
-                    let key = format!("{} Rev {}", stage.engine.name, rev);
-                    if !seen_engines.iter().any(|(k, _)| k == &key) {
-                        seen_engines.push((key, stage.engine_count));
-                    } else if let Some(entry) = seen_engines.iter_mut().find(|(k, _)| k == &key) {
-                        entry.1 += stage.engine_count;
-                    }
-                }
-            }
-            let engine_list: Vec<String> = seen_engines.iter()
-                .map(|(name, count)| format!("{}x{}", count, name))
-                .collect();
-            lines.push(Line::from(format!(
-                "      Engines: {}",
-                engine_list.join(", "),
-            )));
-
-            // Initial acceleration at takeoff: stage 0, full propellant,
-            // 0 payload, 1 AU.
-            let avail_power = project.design.power_for_engines_w(1.0);
-            let initial_thrust = project.design.group_effective_thrust_n(0, avail_power);
-            let initial_mass = project.design.total_mass_kg();
-            let initial_accel = if initial_mass > 0.0 {
-                initial_thrust / initial_mass
-            } else { 0.0 };
-            lines.push(Line::from(format!(
-                "      Total mass: {:.0} kg    dV: {:.0} m/s (0 payload)    Initial accel: {}",
-                project.design.total_mass_kg(),
-                project.design.total_delta_v(0.0),
-                format_accel(initial_accel),
-            )));
-
-            // Show payload table for destinations served by active markets
-            // (or the LEO/MEO/GTO/GEO fallback when none are active yet).
-            let dests = relevant_destinations(&app.game);
-            let table = app.game.payload_table(&project.design, "earth_surface", &dests);
-            if !table.is_empty() {
-                lines.push(Line::from("      Max payload:"));
-                for row in &table {
-                    let (note, style) = if row.survives {
-                        ("", Style::default())
-                    } else {
-                        ("  ▲ no power to reach it", Style::default().fg(Color::Red))
-                    };
-                    lines.push(Line::from(Span::styled(
-                        format!(
-                            "        {:20} {:>8}{}",
-                            row.destination, format_mass(row.max_payload_kg), note,
-                        ),
-                        style,
-                    )));
-                }
-            }
-
-            // Show flaws
-            let discovered = project.discovered_flaw_count();
-            if discovered > 0 {
-                lines.push(Line::from(format!("      Flaws: {} discovered", discovered)));
-                for flaw in &project.flaws {
-                    if flaw.discovered {
-                        let consequence_str = flaw.consequence.short_label();
-                        lines.push(Line::from(Span::styled(
-                            format!(
-                                "        ▲ {}: {} ({})",
-                                flaw.description, consequence_str, format_flaw_rate(flaw),
-                            ),
-                            Style::default().fg(Color::Red),
-                        )));
-                    }
-                }
-            }
-
-            // Inventory count
-            let built = company.manufacturing.inventory.rocket_count(project.project_id);
-            if built > 0 {
-                lines.push(Line::from(format!("      Built rockets: {}", built)));
-            }
-
-            // Auto-build target
-            let auto_target = company.auto_build_targets.get(&project.project_id).copied().unwrap_or(0);
-            let auto_revise = if project.auto_revise { "on" } else { "off" };
-            if auto_target > 0 {
-                lines.push(Line::from(format!(
-                    "      Auto-build: {}    Auto-revise: {}", auto_target, auto_revise)));
-            } else {
-                lines.push(Line::from(format!(
-                    "      Auto-build: off    Auto-revise: {}", auto_revise)));
-            }
+                "      Auto-build: off    Auto-revise: {}", auto_revise)));
         }
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        hint_line_for(
-            crate::ui::keys::for_tab(Tab::Rockets),
-            !visible.is_empty(),
-            area,
-        ),
-        Style::default().fg(Color::Cyan),
-    )));
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(" Rockets ");
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
-    render_gauges(frame, area, &gauges);
+    render_project_pane(
+        frame, area, border_style, Tab::Rockets, !visible.is_empty(), lines, gauges,
+    );
 }
 
 fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {

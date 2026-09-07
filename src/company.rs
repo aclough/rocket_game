@@ -19,6 +19,8 @@ use crate::launch::LaunchRecord;
 use crate::reputation::Reputation;
 use crate::rocket::{RocketDesign, RocketDesignId};
 use crate::project::{Designable, DesignProject, WorkEvent};
+
+pub use crate::project::{ProjectCore, ProjectKind, ProjectRef, RevisionPlan};
 use crate::rocket_project::{RocketProject, RocketProjectId};
 use crate::seed::GameSeed;
 use crate::balance_config::BalanceConfig;
@@ -32,16 +34,6 @@ pub struct MonthlyFinancials {
     pub month: u32,
     pub income: f64,
     pub expenses: f64,
-}
-
-/// Which engineering pool a project lives in. Used by the
-/// donor-search helpers to identify a specific project across the
-/// three lists (engines / rockets / reactors).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProjectKind {
-    Engine(usize),
-    Rocket(usize),
-    Reactor(usize),
 }
 
 /// What a stage build order is waiting on: which engine it needs, and how
@@ -87,18 +79,6 @@ fn stage_engine_source(
         let ce = contracted_engines.iter().find(|ce| ce.design.id == stage.engine.id)?;
         Some(EngineSource::Contracted(ce.id))
     }
-}
-
-/// Which design a retirement acts on.
-///
-/// Carries the project's id rather than its pane index so a confirmation
-/// prompt left open across a day tick can't act on whatever row slid
-/// into that slot underneath it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RetireTarget {
-    Engine(EngineProjectId),
-    Rocket(RocketProjectId),
-    Reactor(crate::reactor_project::ReactorProjectId),
 }
 
 /// Why a design can't be retired.
@@ -331,12 +311,12 @@ impl Company {
         // the people who were already there on day one, so the player
         // starts with exactly `starting_money`. Their salary still
         // comes due at the end of the first month like anyone else's.
-        company.add_team("Team 1".into(), balance_cfg);
+        company.enroll_team("Team 1".into(), balance_cfg);
         company
     }
 
     /// Put an engineering team on the roster without charging for it.
-    fn add_team(&mut self, name: String, balance_cfg: &BalanceConfig) {
+    fn enroll_team(&mut self, name: String, balance_cfg: &BalanceConfig) {
         let id = TeamId(self.next_team_id);
         self.next_team_id += 1;
         let team = EngineeringTeam::new(id, name, balance_cfg.costs.engineering_monthly_salary);
@@ -347,7 +327,7 @@ impl Company {
     /// event if successful.
     pub fn hire_team(&mut self, name: String, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
         self.money -= balance_cfg.costs.engineering_hiring_cost;
-        self.add_team(name.clone(), balance_cfg);
+        self.enroll_team(name.clone(), balance_cfg);
         Some(GameEvent::TeamHired { name })
     }
 
@@ -358,15 +338,7 @@ impl Company {
 
     /// Number of engineering teams not assigned to any project.
     pub fn unassigned_team_count(&self) -> u32 {
-        let assigned: u32 = self.engine_projects.iter()
-            .map(|p| p.teams_assigned)
-            .sum::<u32>()
-            + self.rocket_projects.iter()
-                .map(|p| p.teams_assigned)
-                .sum::<u32>()
-            + self.reactor_projects.iter()
-                .map(|p| p.teams_assigned)
-                .sum::<u32>();
+        let assigned: u32 = self.projects().map(|p| p.teams_assigned()).sum();
         (self.teams.len() as u32).saturating_sub(assigned)
     }
 
@@ -391,58 +363,6 @@ impl Company {
         let team = ManufacturingTeam::new(id, name.clone(), balance_cfg.costs.manufacturing_monthly_salary);
         self.manufacturing_teams.push(team);
         Some(GameEvent::ManufacturingTeamHired { name })
-    }
-
-    /// Start a revision on the engine project at `index`. Returns the
-    /// (flaw, improvement) counts queued for revision, or None if the
-    /// index is invalid or there is nothing to revise / not Testing.
-    pub fn start_engine_revision(&mut self, index: usize) -> Option<(usize, usize)> {
-        let project = self.engine_projects.get_mut(index)?;
-        if !project.start_revision() {
-            return None;
-        }
-        match &project.status {
-            EngineDesignStatus::Revising { remaining_flaw_ids, remaining_improvement_ids, .. } =>
-                Some((remaining_flaw_ids.len(), remaining_improvement_ids.len())),
-            _ => Some((0, 0)),
-        }
-    }
-
-    /// Start a revision on the rocket project at `index`. Returns the
-    /// flaw count queued for revision, or None if invalid / nothing to do.
-    pub fn start_rocket_revision(&mut self, index: usize) -> Option<usize> {
-        let project = self.rocket_projects.get_mut(index)?;
-        if !project.start_revision() {
-            return None;
-        }
-        match &project.status {
-            crate::rocket_project::RocketDesignStatus::Revising { remaining_flaw_ids, .. } =>
-                Some(remaining_flaw_ids.len()),
-            _ => Some(0),
-        }
-    }
-
-    /// Start a revision on the reactor project at `index`. Returns the
-    /// (flaw, improvement, deficiency) counts queued for revision, or
-    /// None if invalid / nothing to do.
-    pub fn start_reactor_revision(&mut self, index: usize) -> Option<(usize, usize, usize)> {
-        let project = self.reactor_projects.get_mut(index)?;
-        if !project.start_revision() {
-            return None;
-        }
-        match &project.status {
-            crate::reactor_project::ReactorDesignStatus::Revising {
-                remaining_flaw_ids,
-                remaining_improvement_ids,
-                remaining_tech_deficiency_ids,
-                ..
-            } => Some((
-                remaining_flaw_ids.len(),
-                remaining_improvement_ids.len(),
-                remaining_tech_deficiency_ids.len(),
-            )),
-            _ => Some((0, 0, 0)),
-        }
     }
 
     /// Set the auto-build inventory target for a rocket project
@@ -552,31 +472,6 @@ impl Company {
         self.engine_projects.iter_mut().find(|ep| ep.project_id == id)
     }
 
-    /// Promote a `Proposed` engine project to `InDesign`. Returns the
-    /// engine name on success (for logging). No-op if the id isn't found
-    /// or the engine isn't in Proposed status.
-    pub fn promote_proposed_engine(&mut self, id: EngineProjectId) -> Option<String> {
-        let ep = self.engine_projects.iter_mut().find(|ep| ep.project_id == id)?;
-        if !matches!(ep.status, EngineDesignStatus::Proposed { .. }) {
-            return None;
-        }
-        ep.promote_to_in_design();
-        Some(ep.design.name.clone())
-    }
-
-    /// Delete a `Proposed` engine project. Used to clean up when the
-    /// rocket designer is cancelled. Silently no-ops if the id is missing
-    /// or the project isn't Proposed (defensive — we never want to
-    /// accidentally delete real work).
-    pub fn delete_proposed_engine(&mut self, id: EngineProjectId) {
-        if let Some(pos) = self.engine_projects.iter().position(|ep|
-            ep.project_id == id
-            && matches!(ep.status, EngineDesignStatus::Proposed { .. }))
-        {
-            self.engine_projects.remove(pos);
-        }
-    }
-
     // ── Reactor project lifecycle (mirrors the engine helpers above) ──
 
     /// Spawn a `Proposed` reactor project the editor can iterate on
@@ -626,35 +521,6 @@ impl Company {
         )
     }
 
-    /// Promote a `Proposed` reactor to `InDesign`. Returns the reactor
-    /// name on success (for logging). No-op if the id isn't found or
-    /// the reactor isn't Proposed.
-    pub fn promote_proposed_reactor(
-        &mut self,
-        id: crate::reactor_project::ReactorProjectId,
-    ) -> Option<String> {
-        let rp = self.reactor_projects.iter_mut().find(|rp| rp.project_id == id)?;
-        if !matches!(rp.status, crate::reactor_project::ReactorDesignStatus::Proposed { .. }) {
-            return None;
-        }
-        rp.promote_to_in_design();
-        Some(rp.design.name.clone())
-    }
-
-    /// Delete a `Proposed` reactor. Defensive — silently no-ops on
-    /// non-Proposed ids so we never lose real work.
-    pub fn delete_proposed_reactor(
-        &mut self,
-        id: crate::reactor_project::ReactorProjectId,
-    ) {
-        if let Some(pos) = self.reactor_projects.iter().position(|rp|
-            rp.project_id == id
-            && matches!(rp.status, crate::reactor_project::ReactorDesignStatus::Proposed { .. }))
-        {
-            self.reactor_projects.remove(pos);
-        }
-    }
-
     /// Reactor projects that are usable in a rocket — anything past
     /// design, i.e. Testing or Revising. Discovered un-revised flaws
     /// don't block installation; they fly with the reactor.
@@ -666,52 +532,6 @@ impl Company {
             crate::reactor_project::ReactorDesignStatus::Testing { .. }
             | crate::reactor_project::ReactorDesignStatus::Revising { .. },
         ))
-    }
-
-    /// Add a team to the reactor project at `project_index`. True on
-    /// success.
-    pub fn add_team_to_reactor_project(&mut self, project_index: usize) -> bool {
-        if self.unassigned_team_count() == 0 || project_index >= self.reactor_projects.len() {
-            return false;
-        }
-        self.reactor_projects[project_index].teams_assigned += 1;
-        true
-    }
-
-    /// Remove a team from the reactor project at `project_index`. True
-    /// on success.
-    pub fn remove_team_from_reactor_project(&mut self, project_index: usize) -> bool {
-        if project_index >= self.reactor_projects.len() {
-            return false;
-        }
-        let p = &mut self.reactor_projects[project_index];
-        if p.teams_assigned == 0 {
-            return false;
-        }
-        p.teams_assigned -= 1;
-        true
-    }
-
-    /// Add a team to a project. Returns true if successful.
-    pub fn add_team_to_project(&mut self, project_index: usize) -> bool {
-        if self.unassigned_team_count() == 0 || project_index >= self.engine_projects.len() {
-            return false;
-        }
-        self.engine_projects[project_index].teams_assigned += 1;
-        true
-    }
-
-    /// Remove a team from a project. Returns true if successful.
-    pub fn remove_team_from_project(&mut self, project_index: usize) -> bool {
-        if project_index >= self.engine_projects.len() {
-            return false;
-        }
-        let project = &mut self.engine_projects[project_index];
-        if project.teams_assigned == 0 {
-            return false;
-        }
-        project.teams_assigned -= 1;
-        true
     }
 
     /// Start a new rocket design project. Returns the event if successful.
@@ -762,10 +582,10 @@ impl Company {
     /// The confirmation prompt shows this; `retire` then applies exactly
     /// these decisions, so what the player is told is what happens.
     pub fn retirement_plan(
-        &self, target: RetireTarget,
+        &self, target: ProjectRef,
     ) -> Result<RetirementEffects, RetireRefusal> {
         match target {
-            RetireTarget::Reactor(id) => {
+            ProjectRef::Reactor(id) => {
                 let rp = self.reactor_projects.iter()
                     .find(|rp| rp.project_id == id && !rp.retired)
                     .ok_or(RetireRefusal::NotFound)?;
@@ -778,7 +598,7 @@ impl Company {
                     ..Default::default()
                 })
             }
-            RetireTarget::Engine(id) => {
+            ProjectRef::Engine(id) => {
                 let ep = self.engine_projects.iter()
                     .find(|ep| ep.project_id == id && !ep.retired)
                     .ok_or(RetireRefusal::NotFound)?;
@@ -801,7 +621,7 @@ impl Company {
                     ..Default::default()
                 })
             }
-            RetireTarget::Rocket(id) => {
+            ProjectRef::Rocket(id) => {
                 let rp = self.rocket_projects.iter()
                     .find(|rp| rp.project_id == id && !rp.retired)
                     .ok_or(RetireRefusal::NotFound)?;
@@ -846,12 +666,12 @@ impl Company {
     /// Retire a design: hide it, release its teams, and stop further work
     /// going into it. Returns what it did, or why it wouldn't.
     pub fn retire(
-        &mut self, target: RetireTarget,
+        &mut self, target: ProjectRef,
     ) -> Result<RetirementEffects, RetireRefusal> {
         let effects = self.retirement_plan(target)?;
 
         match target {
-            RetireTarget::Engine(id) => {
+            ProjectRef::Engine(id) => {
                 if let Some(ep) = self.engine_projects.iter_mut()
                     .find(|ep| ep.project_id == id)
                 {
@@ -859,7 +679,7 @@ impl Company {
                     ep.teams_assigned = 0;
                 }
             }
-            RetireTarget::Reactor(id) => {
+            ProjectRef::Reactor(id) => {
                 if let Some(rp) = self.reactor_projects.iter_mut()
                     .find(|rp| rp.project_id == id)
                 {
@@ -867,7 +687,7 @@ impl Company {
                     rp.teams_assigned = 0;
                 }
             }
-            RetireTarget::Rocket(id) => {
+            ProjectRef::Rocket(id) => {
                 if let Some(rp) = self.rocket_projects.iter_mut()
                     .find(|rp| rp.project_id == id)
                 {
@@ -896,27 +716,6 @@ impl Company {
         self.manufacturing.orders.retain(|o| !effects.cancelled.contains(&o.id));
 
         Ok(effects)
-    }
-
-    /// Add an engineering team to a rocket project. Returns true if successful.
-    pub fn add_team_to_rocket_project(&mut self, project_index: usize) -> bool {
-        if self.unassigned_team_count() == 0 || project_index >= self.rocket_projects.len() {
-            return false;
-        }
-        self.rocket_projects[project_index].teams_assigned += 1;
-        true
-    }
-
-    /// Remove an engineering team from a rocket project. Returns true if successful.
-    pub fn remove_team_from_rocket_project(&mut self, project_index: usize) -> bool {
-        if project_index >= self.rocket_projects.len() {
-            return false;
-        }
-        if self.rocket_projects[project_index].teams_assigned == 0 {
-            return false;
-        }
-        self.rocket_projects[project_index].teams_assigned -= 1;
-        true
     }
 
     /// Add a manufacturing team to a manufacturing order. Returns true if successful.
@@ -1619,147 +1418,6 @@ impl Company {
         });
     }
 
-    /// Auto-assign idle engineering teams to the least-staffed project
-    /// that can absorb work, mirroring
-    /// `assign_manufacturing_teams`.
-    ///
-    /// An idle engineering team is pure salary burn: there is no state
-    /// in which paying a team to do nothing beats putting it on a
-    /// project, because testing and revising consume work just as
-    /// designing does. The real strategic decision is which project to
-    /// *move* a team to, and that stays manual ([+] steals from the
-    /// busiest project).
-    ///
-    /// `Proposed` projects are skipped — they're unfinished rocket-
-    /// designer drafts, not committed work.
-    pub fn auto_assign_idle_engineering_teams(&mut self) {
-        while self.unassigned_team_count() > 0 {
-            // Committed projects across the three pools, apportioned by
-            // D'Hondt. Only rockets carry a priority; engines and reactors
-            // compete at Normal, which is what they did before priorities
-            // existed.
-            // Least-staffed committed project across the three pools.
-            // `min_by_key` keeps the first of equal minima, so ties
-            // resolve in a stable pool-then-index order.
-            let mut best: Option<(ProjectKind, u32)> = None;
-            let mut consider = |kind: ProjectKind, staffed: u32| {
-                if best.as_ref().is_none_or(|b| staffed < b.1) {
-                    best = Some((kind, staffed));
-                }
-            };
-            for (i, p) in self.engine_projects.iter().enumerate() {
-                if matches!(p.status, EngineDesignStatus::Proposed { .. }) { continue; }
-                consider(ProjectKind::Engine(i), p.teams_assigned);
-            }
-            for (i, p) in self.rocket_projects.iter().enumerate() {
-                consider(ProjectKind::Rocket(i), p.teams_assigned);
-            }
-            for (i, p) in self.reactor_projects.iter().enumerate() {
-                if matches!(
-                    p.status,
-                    crate::reactor_project::ReactorDesignStatus::Proposed { .. },
-                ) { continue; }
-                consider(ProjectKind::Reactor(i), p.teams_assigned);
-            }
-            let best = best.map(|(kind, _)| kind);
-
-            let assigned = match best {
-                Some(ProjectKind::Engine(i)) => self.add_team_to_project(i),
-                Some(ProjectKind::Rocket(i)) => self.add_team_to_rocket_project(i),
-                Some(ProjectKind::Reactor(i)) => self.add_team_to_reactor_project(i),
-                // Nothing to work on — the teams stay idle and the
-                // Overview's next-steps panel prompts for a project.
-                None => break,
-            };
-            if !assigned {
-                break;
-            }
-        }
-    }
-
-    /// Find the busiest engineering project across the three pools
-    /// (engines / rockets / reactors), excluding `exclude`. Returns the
-    /// donor's kind, index, and name; caller decrements teams_assigned
-    /// and credits the target.
-    fn busiest_engineering_donor(
-        &self,
-        exclude: ProjectKind,
-    ) -> Option<(ProjectKind, usize, String)> {
-        let mut best: Option<(ProjectKind, usize, u32, String)> = None;
-        for (i, ep) in self.engine_projects.iter().enumerate() {
-            if ep.teams_assigned == 0 { continue; }
-            if matches!(exclude, ProjectKind::Engine(j) if j == i) { continue; }
-            if best.as_ref().is_none_or(|b| ep.teams_assigned > b.2) {
-                best = Some((ProjectKind::Engine(i), i, ep.teams_assigned, ep.design.name.clone()));
-            }
-        }
-        for (i, rp) in self.rocket_projects.iter().enumerate() {
-            if rp.teams_assigned == 0 { continue; }
-            if matches!(exclude, ProjectKind::Rocket(j) if j == i) { continue; }
-            if best.as_ref().is_none_or(|b| rp.teams_assigned > b.2) {
-                best = Some((ProjectKind::Rocket(i), i, rp.teams_assigned, rp.design.name.clone()));
-            }
-        }
-        for (i, rp) in self.reactor_projects.iter().enumerate() {
-            if rp.teams_assigned == 0 { continue; }
-            if matches!(exclude, ProjectKind::Reactor(j) if j == i) { continue; }
-            if best.as_ref().is_none_or(|b| rp.teams_assigned > b.2) {
-                best = Some((ProjectKind::Reactor(i), i, rp.teams_assigned, rp.design.name.clone()));
-            }
-        }
-        best.map(|(kind, _, _, name)| (kind, 0, name))
-    }
-
-    /// Move one team from `donor` to the project at `(target_kind,
-    /// target_index)`. Callers have already confirmed the donor is
-    /// valid via `busiest_engineering_donor`.
-    fn move_engineering_team(&mut self, donor: ProjectKind, target_kind: ProjectKind) {
-        match donor {
-            ProjectKind::Engine(i) => self.engine_projects[i].teams_assigned -= 1,
-            ProjectKind::Rocket(i) => self.rocket_projects[i].teams_assigned -= 1,
-            ProjectKind::Reactor(i) => self.reactor_projects[i].teams_assigned -= 1,
-        }
-        match target_kind {
-            ProjectKind::Engine(i) => self.engine_projects[i].teams_assigned += 1,
-            ProjectKind::Rocket(i) => self.rocket_projects[i].teams_assigned += 1,
-            ProjectKind::Reactor(i) => self.reactor_projects[i].teams_assigned += 1,
-        }
-    }
-
-    /// Steal an engineering team from the busiest engineering project
-    /// (excluding the target) and assign it to the target engine
-    /// project. Returns the donor's display name on success.
-    pub fn steal_engineering_team_to_engine_project(&mut self, target: usize) -> Option<String> {
-        if target >= self.engine_projects.len() {
-            return None;
-        }
-        let (donor, _, name) = self.busiest_engineering_donor(ProjectKind::Engine(target))?;
-        self.move_engineering_team(donor, ProjectKind::Engine(target));
-        Some(name)
-    }
-
-    /// Steal an engineering team and assign to the target rocket project.
-    pub fn steal_engineering_team_to_rocket_project(&mut self, target: usize) -> Option<String> {
-        if target >= self.rocket_projects.len() {
-            return None;
-        }
-        let (donor, _, name) = self.busiest_engineering_donor(ProjectKind::Rocket(target))?;
-        self.move_engineering_team(donor, ProjectKind::Rocket(target));
-        Some(name)
-    }
-
-    /// Steal an engineering team and assign to the target reactor
-    /// project. Mirrors the engine/rocket variants so the Reactors
-    /// pane's `+` key behaves the same as the others.
-    pub fn steal_engineering_team_to_reactor_project(&mut self, target: usize) -> Option<String> {
-        if target >= self.reactor_projects.len() {
-            return None;
-        }
-        let (donor, _, name) = self.busiest_engineering_donor(ProjectKind::Reactor(target))?;
-        self.move_engineering_team(donor, ProjectKind::Reactor(target));
-        Some(name)
-    }
-
     /// Steal a manufacturing team from the busiest order and assign to the target order.
     pub fn steal_manufacturing_team_to_order(&mut self, target: usize) -> Option<String> {
         if target >= self.manufacturing.orders.len() {
@@ -1832,19 +1490,10 @@ impl Company {
 
         // Accumulate NRE (engineering salary) on active projects
         let daily_salary = balance_cfg.costs.daily_engineering_salary();
-        for project in &mut self.engine_projects {
-            if project.teams_assigned > 0 {
-                project.nre_cost += project.teams_assigned as f64 * daily_salary;
-            }
-        }
-        for project in &mut self.rocket_projects {
-            if project.teams_assigned > 0 {
-                project.nre_cost += project.teams_assigned as f64 * daily_salary;
-            }
-        }
-        for project in &mut self.reactor_projects {
-            if project.teams_assigned > 0 {
-                project.nre_cost += project.teams_assigned as f64 * daily_salary;
+        for project in self.projects_mut() {
+            let teams = project.teams_assigned();
+            if teams > 0 {
+                *project.nre_cost_mut() += teams as f64 * daily_salary;
             }
         }
 
@@ -1859,3 +1508,176 @@ impl Company {
 
 }
 
+
+// ── Projects across the three lists ──────────────────────────────────
+//
+// Engines, rockets and reactors are three `Vec`s of one generic
+// `DesignProject`. Everything that doesn't care which kind it is
+// holding goes through `ProjectRef` and the `ProjectCore` view below,
+// so adding a fourth kind means adding a list and an arm here, not a
+// fourth copy of every method.
+
+impl Company {
+    /// The project `r` points at, whichever list it lives in.
+    pub fn project(&self, r: ProjectRef) -> Option<&dyn ProjectCore> {
+        match r {
+            ProjectRef::Engine(id) => self.engine_projects.iter()
+                .find(|p| p.project_id == id).map(|p| p as &dyn ProjectCore),
+            ProjectRef::Rocket(id) => self.rocket_projects.iter()
+                .find(|p| p.project_id == id).map(|p| p as &dyn ProjectCore),
+            ProjectRef::Reactor(id) => self.reactor_projects.iter()
+                .find(|p| p.project_id == id).map(|p| p as &dyn ProjectCore),
+        }
+    }
+
+    pub fn project_mut(&mut self, r: ProjectRef) -> Option<&mut dyn ProjectCore> {
+        match r {
+            ProjectRef::Engine(id) => self.engine_projects.iter_mut()
+                .find(|p| p.project_id == id).map(|p| p as &mut dyn ProjectCore),
+            ProjectRef::Rocket(id) => self.rocket_projects.iter_mut()
+                .find(|p| p.project_id == id).map(|p| p as &mut dyn ProjectCore),
+            ProjectRef::Reactor(id) => self.reactor_projects.iter_mut()
+                .find(|p| p.project_id == id).map(|p| p as &mut dyn ProjectCore),
+        }
+    }
+
+    /// Position of `r` in its kind's list, for the few APIs still
+    /// addressed by index (build orders, auto-build targets).
+    pub fn list_index(&self, r: ProjectRef) -> Option<usize> {
+        match r {
+            ProjectRef::Engine(id) => self.engine_projects.iter().position(|p| p.project_id == id),
+            ProjectRef::Rocket(id) => self.rocket_projects.iter().position(|p| p.project_id == id),
+            ProjectRef::Reactor(id) => self.reactor_projects.iter().position(|p| p.project_id == id),
+        }
+    }
+
+    /// Every project: engines, then rockets, then reactors — the order
+    /// the daily tick and the auto-assigner have always walked them.
+    pub fn projects(&self) -> impl Iterator<Item = &dyn ProjectCore> {
+        self.engine_projects.iter().map(|p| p as &dyn ProjectCore)
+            .chain(self.rocket_projects.iter().map(|p| p as &dyn ProjectCore))
+            .chain(self.reactor_projects.iter().map(|p| p as &dyn ProjectCore))
+    }
+
+    pub fn projects_mut(&mut self) -> impl Iterator<Item = &mut dyn ProjectCore> {
+        self.engine_projects.iter_mut().map(|p| p as &mut dyn ProjectCore)
+            .chain(self.rocket_projects.iter_mut().map(|p| p as &mut dyn ProjectCore))
+            .chain(self.reactor_projects.iter_mut().map(|p| p as &mut dyn ProjectCore))
+    }
+
+    /// The projects of one kind a pane shows — not `Proposed`, not
+    /// retired — in list order. Pane selections index this.
+    pub fn visible_projects(&self, kind: ProjectKind) -> Box<dyn Iterator<Item = &dyn ProjectCore> + '_> {
+        let all: Box<dyn Iterator<Item = &dyn ProjectCore>> = match kind {
+            ProjectKind::Engine => Box::new(self.engine_projects.iter().map(|p| p as &dyn ProjectCore)),
+            ProjectKind::Rocket => Box::new(self.rocket_projects.iter().map(|p| p as &dyn ProjectCore)),
+            ProjectKind::Reactor => Box::new(self.reactor_projects.iter().map(|p| p as &dyn ProjectCore)),
+        };
+        Box::new(all.filter(|p| !p.is_proposed() && !p.retired()))
+    }
+
+    /// Put an idle engineering team on `r`. False if none is idle or
+    /// `r` is gone.
+    pub fn add_team(&mut self, r: ProjectRef) -> bool {
+        if self.unassigned_team_count() == 0 {
+            return false;
+        }
+        match self.project_mut(r) {
+            Some(p) => {
+                *p.teams_assigned_mut() += 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Take one team off `r`. False if it had none or is gone.
+    pub fn remove_team(&mut self, r: ProjectRef) -> bool {
+        match self.project_mut(r) {
+            Some(p) if p.teams_assigned() > 0 => {
+                *p.teams_assigned_mut() -= 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Move one team from the busiest *other* project onto `target`.
+    /// Returns the donor's name. Ties go to the earliest in
+    /// engines-rockets-reactors list order.
+    pub fn steal_team_to(&mut self, target: ProjectRef) -> Option<String> {
+        self.project(target)?;
+        let (donor, name) = self.projects()
+            .filter(|p| p.project_ref() != target && p.teams_assigned() > 0)
+            .fold(None::<(ProjectRef, u32, String)>, |best, p| match best {
+                Some(b) if p.teams_assigned() <= b.1 => Some(b),
+                _ => Some((p.project_ref(), p.teams_assigned(), p.name().to_string())),
+            })
+            .map(|(r, _, name)| (r, name))?;
+        *self.project_mut(donor)?.teams_assigned_mut() -= 1;
+        *self.project_mut(target)?.teams_assigned_mut() += 1;
+        Some(name)
+    }
+
+    /// Start a revision on `r`: what got queued, or `None` if `r` is
+    /// gone, not in Testing, or has nothing to revise.
+    pub fn start_revision(&mut self, r: ProjectRef) -> Option<RevisionPlan> {
+        self.project_mut(r)?.begin_revision()
+    }
+
+    /// Promote a `Proposed` draft to `InDesign`. The project's name on
+    /// success (for logging); `None` if `r` is gone or isn't a draft.
+    pub fn promote_proposed(&mut self, r: ProjectRef) -> Option<String> {
+        let p = self.project_mut(r)?;
+        if !p.is_proposed() {
+            return None;
+        }
+        p.promote_to_in_design();
+        Some(p.name().to_string())
+    }
+
+    /// Delete a `Proposed` draft. Silently no-ops on anything else —
+    /// defensive, so a stale id can never delete real work.
+    pub fn delete_proposed(&mut self, r: ProjectRef) {
+        match r {
+            ProjectRef::Engine(id) =>
+                self.engine_projects.retain(|p| !(p.project_id == id && p.is_proposed())),
+            ProjectRef::Rocket(id) =>
+                self.rocket_projects.retain(|p| !(p.project_id == id && p.is_proposed())),
+            ProjectRef::Reactor(id) =>
+                self.reactor_projects.retain(|p| !(p.project_id == id && p.is_proposed())),
+        }
+    }
+
+    /// Flip auto-revise on `r`; the project's name and the new setting.
+    pub fn toggle_auto_revise(&mut self, r: ProjectRef) -> Option<(String, bool)> {
+        let p = self.project_mut(r)?;
+        let flag = p.auto_revise_mut();
+        *flag = !*flag;
+        let on = *flag;
+        Some((p.name().to_string(), on))
+    }
+
+    /// Put every idle engineering team to work, each on the
+    /// least-staffed committed project at that moment. An idle team is
+    /// pure waste — testing and revising consume work just as designing
+    /// does — so the only real decision is which project to *move* a
+    /// team to, and that stays manual (`+` steals from the busiest).
+    ///
+    /// Drafts (`Proposed`) and retired designs are skipped. Ties resolve
+    /// to the earliest in engines-rockets-reactors list order.
+    pub fn auto_assign_idle_engineering_teams(&mut self) {
+        while self.unassigned_team_count() > 0 {
+            let target = self.projects()
+                .filter(|p| !p.is_proposed() && !p.retired())
+                .min_by_key(|p| p.teams_assigned())
+                .map(|p| p.project_ref());
+            // Nothing to work on — the teams stay idle and the
+            // Overview's next-steps panel prompts for a project.
+            let Some(target) = target else { break };
+            if !self.add_team(target) {
+                break;
+            }
+        }
+    }
+}

@@ -9,7 +9,7 @@
 
 #[test]
 fn retired_survives_a_save_round_trip() {
-    use rocket_tycoon::company::RetireTarget;
+    use rocket_tycoon::company::ProjectRef;
     use rocket_tycoon::game_state::GameState;
 
     let mut gs = GameState::new("RoundTrip".into(), 200_000_000.0, 3);
@@ -20,7 +20,7 @@ fn retired_survives_a_save_round_trip() {
         1.0, None, &gs.balance,
     );
     let id = gs.player_company.engine_projects[0].project_id;
-    gs.player_company.retire(RetireTarget::Engine(id)).expect("retires");
+    gs.player_company.retire(ProjectRef::Engine(id)).expect("retires");
 
     let json = serde_json::to_string(&gs).expect("serializes");
     let back: GameState = serde_json::from_str(&json).expect("deserializes");

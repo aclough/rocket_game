@@ -112,30 +112,13 @@ pub fn report(
     {
         out.push_str("(none)\n");
     }
-    for p in &c.engine_projects {
+    for p in c.projects() {
         out.push_str(&format!(
-            "engine  {:<24} rev {} {:<10} teams {} flaws {}/{} auto-revise {}\n",
-            truncate(&p.design.name, 24), p.revision,
-            p.status.label(), p.teams_assigned,
-            p.discovered_flaw_count(), p.flaws.len(),
-            if p.auto_revise { "on" } else { "off" },
-        ));
-    }
-    for p in &c.rocket_projects {
-        out.push_str(&format!(
-            "rocket  {:<24} rev {} {:<10} teams {} flaws {}/{} auto-revise {}\n",
-            truncate(&p.design.name, 24), p.revision,
-            p.status.label(), p.teams_assigned,
-            p.discovered_flaw_count(), p.flaws.len(),
-            if p.auto_revise { "on" } else { "off" },
-        ));
-    }
-    for p in &c.reactor_projects {
-        out.push_str(&format!(
-            "reactor {:<24} rev {} teams {} flaws {}/{} auto-revise {}\n",
-            truncate(&p.design.name, 24), p.revision, p.teams_assigned,
-            p.discovered_flaw_count(), p.flaws.len(),
-            if p.auto_revise { "on" } else { "off" },
+            "{:<7} {:<24} rev {} {:<10} teams {} flaws {}/{} auto-revise {}\n",
+            p.kind().noun(), truncate(p.name(), 24), p.revision(),
+            p.status().label(), p.teams_assigned(),
+            p.discovered_flaw_count(), p.flaws().len(),
+            if p.auto_revise() { "on" } else { "off" },
         ));
     }
 

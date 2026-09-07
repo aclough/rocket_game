@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::balance_config::{BalanceConfig, FlawsConfig};
 use crate::flaw::FlawDomain;
-use crate::project::{DesignProject, DesignStatus, Designable, Direction, Improvement, ImprovementId, NoSpec, ProjectKind};
+use crate::project::{DesignProject, DesignStatus, Designable, Direction, Improvement, ImprovementId, NoSpec, ProjectKind, ProjectRef};
 use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
 use crate::technology::TechDeficiencyKind;
 
@@ -88,6 +88,9 @@ pub type ReactorProject = DesignProject<ReactorDesign>;
 
 impl Designable for ReactorDesign {
     type Id = ReactorProjectId;
+    fn project_ref(id: Self::Id) -> ProjectRef {
+        ProjectRef::Reactor(id)
+    }
     type Spec = NoSpec;
     type ImprovementKind = ReactorImprovementKind;
     const KIND: ProjectKind = ProjectKind::Reactor;

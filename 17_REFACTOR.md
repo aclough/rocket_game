@@ -130,7 +130,7 @@ opportunity in the codebase.
   loading.
 - **Size/risk:** large / medium.
 
-### B2. Company-level dispatch: three parallel Vecs, ~15 triplicated methods
+### ✅ B2. Company-level dispatch: three parallel Vecs, ~15 triplicated methods
 - **Where:** `company.rs` — `start_*_revision` (`365-410`, three
   *different* return shapes), `add_team_to_*` / `remove_team_from_*`,
   `visible_*`, `find_*`, `promote_proposed_*` / `delete_proposed_*`,

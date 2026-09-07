@@ -4,6 +4,18 @@
 use crate::flight::Payload;
 use crate::rocket::RocketDesignId;
 use crate::rocket_project::RocketProject;
+use crate::company::ProjectRef;
+
+/// `ProjectRef`s for the tests that address projects by list position.
+fn engine_ref(gs: &GameState, i: usize) -> ProjectRef {
+    ProjectRef::Engine(gs.player_company.engine_projects[i].project_id)
+}
+fn rocket_ref(gs: &GameState, i: usize) -> ProjectRef {
+    ProjectRef::Rocket(gs.player_company.rocket_projects[i].project_id)
+}
+fn reactor_ref(gs: &GameState, i: usize) -> ProjectRef {
+    ProjectRef::Reactor(gs.player_company.reactor_projects[i].project_id)
+}
 
 use super::*;
 use crate::flaw::FlawTrigger;
@@ -513,16 +525,16 @@ fn test_team_assignment() {
     );
 
     assert_eq!(gs.player_company.unassigned_team_count(), 2);
-    assert!(gs.player_company.add_team_to_project(0));
+    assert!(gs.player_company.add_team(engine_ref(&gs, 0)));
     assert_eq!(gs.player_company.unassigned_team_count(), 1);
-    assert!(gs.player_company.add_team_to_project(0));
+    assert!(gs.player_company.add_team(engine_ref(&gs, 0)));
     assert_eq!(gs.player_company.unassigned_team_count(), 0);
 
     // Can't assign more than available
-    assert!(!gs.player_company.add_team_to_project(0));
+    assert!(!gs.player_company.add_team(engine_ref(&gs, 0)));
 
     // Can remove
-    assert!(gs.player_company.remove_team_from_project(0));
+    assert!(gs.player_company.remove_team(engine_ref(&gs, 0)));
     assert_eq!(gs.player_company.unassigned_team_count(), 1);
 }
 
@@ -559,7 +571,7 @@ fn test_design_work_progresses() {
         1.0,
         None, &gs.balance,
     );
-    gs.player_company.add_team_to_project(0);
+    gs.player_company.add_team(engine_ref(&gs, 0));
 
     // Advance 10 days
     for _ in 0..10 {
@@ -1301,18 +1313,18 @@ fn test_reactor_proposed_lifecycle() {
     assert_eq!(gs.player_company.visible_reactor_projects().count(), 0);
 
     // Promote: now in InDesign and visible.
-    let name = gs.player_company.promote_proposed_reactor(pid);
+    let name = gs.player_company.promote_proposed(ProjectRef::Reactor(pid));
     assert_eq!(name.as_deref(), Some("Draft"));
     assert_eq!(gs.player_company.visible_reactor_projects().count(), 1);
     let rp = gs.player_company.find_reactor_project(pid).unwrap();
     assert!(matches!(rp.status, ReactorDesignStatus::InDesign { .. }));
 
     // Re-promoting an already-promoted project is a no-op.
-    assert!(gs.player_company.promote_proposed_reactor(pid).is_none());
+    assert!(gs.player_company.promote_proposed(ProjectRef::Reactor(pid)).is_none());
 
     // Delete-proposed on a non-Proposed project leaves real work
     // alone (defensive).
-    gs.player_company.delete_proposed_reactor(pid);
+    gs.player_company.delete_proposed(ProjectRef::Reactor(pid));
     assert!(gs.player_company.find_reactor_project(pid).is_some());
 }
 
@@ -1325,7 +1337,7 @@ fn test_reactor_proposed_can_be_deleted() {
     let pid = gs.player_company.start_proposed_reactor(
         "Cancelled".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
     );
-    gs.player_company.delete_proposed_reactor(pid);
+    gs.player_company.delete_proposed(ProjectRef::Reactor(pid));
     assert!(gs.player_company.find_reactor_project(pid).is_none());
 }
 
@@ -1348,9 +1360,9 @@ fn test_cross_pool_engineering_team_steal() {
         crate::engine_project::PropellantPreset::Kerolox,
         1.0, None, &gs.balance,
     ).expect("create engine project");
-    gs.player_company.promote_proposed_engine(pid);
+    gs.player_company.promote_proposed(ProjectRef::Engine(pid));
     for _ in 0..3 {
-        assert!(gs.player_company.add_team_to_project(0));
+        assert!(gs.player_company.add_team(engine_ref(&gs, 0)));
     }
     assert_eq!(gs.player_company.unassigned_team_count(), 0);
 
@@ -1358,14 +1370,14 @@ fn test_cross_pool_engineering_team_steal() {
     let _ = gs.player_company.start_proposed_reactor(
         "R1".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
     );
-    gs.player_company.promote_proposed_reactor(
-        crate::reactor_project::ReactorProjectId(1));
+    gs.player_company.promote_proposed(
+        ProjectRef::Reactor(crate::reactor_project::ReactorProjectId(1)));
 
     // No free teams, so a plain add fails — then the steal helper
     // should pull one from the busy engine project.
-    assert!(!gs.player_company.add_team_to_reactor_project(0));
+    assert!(!gs.player_company.add_team(reactor_ref(&gs, 0)));
     let donor_name = gs.player_company
-        .steal_engineering_team_to_reactor_project(0);
+        .steal_team_to(reactor_ref(&gs, 0));
     assert_eq!(donor_name.as_deref(), Some("E1"));
     assert_eq!(gs.player_company.engine_projects[0].teams_assigned, 2);
     assert_eq!(gs.player_company.reactor_projects[0].teams_assigned, 1);
@@ -1376,7 +1388,7 @@ fn test_cross_pool_engineering_team_steal() {
     // has 2). So no movement.
     let before_engine = gs.player_company.engine_projects[0].teams_assigned;
     let before_reactor = gs.player_company.reactor_projects[0].teams_assigned;
-    gs.player_company.steal_engineering_team_to_engine_project(0);
+    gs.player_company.steal_team_to(engine_ref(&gs, 0));
     // Donor search includes the target's own project too if it's
     // not excluded; here the target IS the engine project so the
     // engine's own teams are excluded → steal pulls from the
@@ -1397,13 +1409,13 @@ fn test_reactor_team_helpers() {
     // Defaults: 1 engineering team (created in Company::new), all
     // unassigned. Adding once succeeds; the second add fails (no
     // free teams).
-    assert!(gs.player_company.add_team_to_reactor_project(0));
+    assert!(gs.player_company.add_team(reactor_ref(&gs, 0)));
     assert_eq!(gs.player_company.reactor_projects[0].teams_assigned, 1);
-    assert!(!gs.player_company.add_team_to_reactor_project(0));
+    assert!(!gs.player_company.add_team(reactor_ref(&gs, 0)));
 
     // Remove the team; second remove is a no-op (already at zero).
-    assert!(gs.player_company.remove_team_from_reactor_project(0));
-    assert!(!gs.player_company.remove_team_from_reactor_project(0));
+    assert!(gs.player_company.remove_team(reactor_ref(&gs, 0)));
+    assert!(!gs.player_company.remove_team(reactor_ref(&gs, 0)));
 }
 
 /// Phase 2a — completed reactors (Testing+) appear in the
@@ -1420,7 +1432,7 @@ fn test_installable_reactors_filter() {
     // Proposed: not installable.
     assert_eq!(gs.player_company.installable_reactor_projects().count(), 0);
 
-    gs.player_company.promote_proposed_reactor(pid);
+    gs.player_company.promote_proposed(ProjectRef::Reactor(pid));
     // InDesign: not yet installable (design not finished).
     assert_eq!(gs.player_company.installable_reactor_projects().count(), 0);
 
@@ -3108,13 +3120,13 @@ fn suppressing_an_orbit_removes_launches_rather_than_moving_them() {
 /// vec instead of flagged, every id below would dangle.
 #[test]
 fn retiring_hides_a_rocket_but_keeps_its_id_resolvable() {
-    use crate::company::RetireTarget;
+    use crate::company::ProjectRef;
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
 
     assert_eq!(gs.player_company.visible_rocket_projects().count(), 1);
-    gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
+    gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
     assert_eq!(gs.player_company.visible_rocket_projects().count(), 0,
         "retired design should be gone from the pane");
@@ -3126,17 +3138,17 @@ fn retiring_hides_a_rocket_but_keeps_its_id_resolvable() {
 
 #[test]
 fn retiring_a_rocket_releases_teams_and_clears_auto_build() {
-    use crate::company::RetireTarget;
+    use crate::company::ProjectRef;
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     gs.player_company.hire_team("T1".into(), &gs.balance);
     gs.player_company.hire_team("T2".into(), &gs.balance);
-    assert!(gs.player_company.add_team_to_rocket_project(0));
-    assert!(gs.player_company.add_team_to_rocket_project(0));
+    assert!(gs.player_company.add_team(rocket_ref(&gs, 0)));
+    assert!(gs.player_company.add_team(rocket_ref(&gs, 0)));
     assert!(gs.player_company.set_auto_build_target(rp_id, 2));
 
-    let effects = gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
+    let effects = gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
     assert_eq!(effects.teams_released, 2);
     assert!(effects.auto_build_cleared);
@@ -3151,7 +3163,7 @@ fn retiring_a_rocket_releases_teams_and_clears_auto_build() {
 
 #[test]
 fn retiring_a_rocket_cancels_its_integration_and_stage_orders() {
-    use crate::company::RetireTarget;
+    use crate::company::ProjectRef;
     use crate::manufacturing::ManufacturingOrderType;
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
@@ -3160,7 +3172,7 @@ fn retiring_a_rocket_cancels_its_integration_and_stage_orders() {
 
     let before = gs.player_company.manufacturing.orders.len();
     assert!(before > 0, "the build should have queued orders");
-    gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
+    gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
     let design_specific = gs.player_company.manufacturing.orders.iter().any(|o| matches!(
         &o.order_type,
@@ -3178,7 +3190,7 @@ fn retiring_a_rocket_cancels_its_integration_and_stage_orders() {
 /// Cancelling it would destroy work that live build is about to eat.
 #[test]
 fn an_engine_order_shared_with_a_live_rocket_survives_its_retirement() {
-    use crate::company::RetireTarget;
+    use crate::company::ProjectRef;
     use crate::manufacturing::ManufacturingOrderType;
     use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
 
@@ -3198,7 +3210,7 @@ fn an_engine_order_shared_with_a_live_rocket_survives_its_retirement() {
         .count();
     assert!(engine_orders_before > 0, "the build should have queued engines");
 
-    let effects = gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
+    let effects = gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
     assert_eq!(effects.reassigned_engine_orders.len(), engine_orders_before,
         "every engine order should survive — the twin still needs them");
@@ -3219,7 +3231,7 @@ fn an_engine_order_shared_with_a_live_rocket_survives_its_retirement() {
 /// orders are work with no destination.
 #[test]
 fn engine_orders_needed_by_nothing_live_are_cancelled_with_their_rocket() {
-    use crate::company::RetireTarget;
+    use crate::company::ProjectRef;
     use crate::manufacturing::ManufacturingOrderType;
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
@@ -3228,7 +3240,7 @@ fn engine_orders_needed_by_nothing_live_are_cancelled_with_their_rocket() {
     assert!(gs.player_company.manufacturing.orders.iter()
         .any(|o| matches!(o.order_type, ManufacturingOrderType::Engine { .. })));
 
-    let effects = gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
+    let effects = gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
     assert!(effects.reassigned_engine_orders.is_empty(),
         "nothing else uses these engines, so none should be kept");
@@ -3242,14 +3254,14 @@ fn engine_orders_needed_by_nothing_live_are_cancelled_with_their_rocket() {
 /// stage orders on an engine nothing will ever build again.
 #[test]
 fn retiring_an_engine_a_live_rocket_uses_is_refused_and_names_it() {
-    use crate::company::{RetireRefusal, RetireTarget};
+    use crate::company::{RetireRefusal, ProjectRef};
     use crate::engine_project::EngineProjectId;
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     let rocket_name = gs.player_company.rocket_projects[0].design.name.clone();
 
-    match gs.player_company.retire(RetireTarget::Engine(EngineProjectId(1))) {
+    match gs.player_company.retire(ProjectRef::Engine(EngineProjectId(1))) {
         Err(RetireRefusal::EngineInUse { rockets }) => {
             assert_eq!(rockets, vec![rocket_name],
                 "the refusal should name the rocket blocking it");
@@ -3260,8 +3272,8 @@ fn retiring_an_engine_a_live_rocket_uses_is_refused_and_names_it() {
 
     // Retire the rocket and the engine goes quietly — so working
     // oldest-first through a stack of obsolete designs just works.
-    gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("rocket retires");
-    gs.player_company.retire(RetireTarget::Engine(EngineProjectId(1)))
+    gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("rocket retires");
+    gs.player_company.retire(ProjectRef::Engine(EngineProjectId(1)))
         .expect("engine retires once nothing live uses it");
     assert!(gs.player_company.engine_projects[0].retired);
 }
@@ -3271,7 +3283,7 @@ fn retiring_an_engine_a_live_rocket_uses_is_refused_and_names_it() {
 /// bid rules share.
 #[test]
 fn a_retired_design_stops_being_bid_capable() {
-    use crate::company::RetireTarget;
+    use crate::company::ProjectRef;
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
@@ -3279,7 +3291,7 @@ fn a_retired_design_stops_being_bid_capable() {
     let before = gs.capable_projects_for("leo", 1000.0);
     assert!(before.contains(&rp_id), "design should start out bid-capable");
 
-    gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
+    gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
     assert!(!gs.capable_projects_for("leo", 1000.0).contains(&rp_id),
         "retiring says you don't intend to fly it again");
@@ -3287,11 +3299,11 @@ fn a_retired_design_stops_being_bid_capable() {
 
 #[test]
 fn a_retired_rocket_is_never_built_again() {
-    use crate::company::RetireTarget;
+    use crate::company::ProjectRef;
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
-    gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
+    gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
     assert!(gs.player_company.order_rocket_build(0, &gs.balance).is_none(),
         "the shared build gate should reject a retired design");
@@ -3306,16 +3318,16 @@ fn a_retired_rocket_is_never_built_again() {
 /// so retiring one is purely a matter of getting it off the list.
 #[test]
 fn retiring_a_reactor_hides_it_without_touching_stages() {
-    use crate::company::RetireTarget;
+    use crate::company::ProjectRef;
     use crate::reactor::{EnrichmentLevel, DEFAULT_SCALE};
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
     let pid = gs.player_company.start_proposed_reactor(
         "Pebble".into(), DEFAULT_SCALE, EnrichmentLevel::Leu, &gs.balance);
-    gs.player_company.promote_proposed_reactor(pid).expect("promotes");
+    gs.player_company.promote_proposed(ProjectRef::Reactor(pid)).expect("promotes");
     assert_eq!(gs.player_company.visible_reactor_projects().count(), 1);
 
-    let effects = gs.player_company.retire(RetireTarget::Reactor(pid)).expect("retires");
+    let effects = gs.player_company.retire(ProjectRef::Reactor(pid)).expect("retires");
 
     assert!(effects.cancelled.is_empty(), "reactors have no order type");
     assert_eq!(gs.player_company.visible_reactor_projects().count(), 0);
@@ -3325,30 +3337,30 @@ fn retiring_a_reactor_hides_it_without_touching_stages() {
 /// Retiring twice is a no-op rather than a second round of cancellations.
 #[test]
 fn a_design_can_only_be_retired_once() {
-    use crate::company::{RetireRefusal, RetireTarget};
+    use crate::company::{RetireRefusal, ProjectRef};
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
-    gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
+    gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
-    assert_eq!(gs.player_company.retire(RetireTarget::Rocket(rp_id)),
+    assert_eq!(gs.player_company.retire(ProjectRef::Rocket(rp_id)),
         Err(RetireRefusal::NotFound));
 }
 
 /// The prompt promises what `retire` will do, so the two must agree.
 #[test]
 fn the_plan_shown_matches_what_retiring_does() {
-    use crate::company::RetireTarget;
+    use crate::company::ProjectRef;
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     gs.player_company.hire_team("T1".into(), &gs.balance);
-    assert!(gs.player_company.add_team_to_rocket_project(0));
+    assert!(gs.player_company.add_team(rocket_ref(&gs, 0)));
     gs.player_company.order_rocket_build(0, &gs.balance).expect("orders a build");
 
-    let planned = gs.player_company.retirement_plan(RetireTarget::Rocket(rp_id))
+    let planned = gs.player_company.retirement_plan(ProjectRef::Rocket(rp_id))
         .expect("plans");
-    let applied = gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
+    let applied = gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
     assert_eq!(planned, applied);
 }
 
@@ -3357,7 +3369,7 @@ fn the_plan_shown_matches_what_retiring_does() {
 /// own. A rocket on the shelf when its design retires still flies.
 #[test]
 fn a_rocket_already_built_still_flies_after_its_design_retires() {
-    use crate::company::RetireTarget;
+    use crate::company::ProjectRef;
 
     let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
@@ -3367,7 +3379,7 @@ fn a_rocket_already_built_still_flies_after_its_design_retires() {
         "fixture should have put a rocket on the shelf");
     let item_id = gs.player_company.manufacturing.inventory.rockets[0].item_id;
 
-    gs.player_company.retire(RetireTarget::Rocket(rp_id)).expect("retires");
+    gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
     assert_eq!(gs.player_company.manufacturing.inventory.rockets.len(), 1,
         "retiring must not scrap hardware that already exists");

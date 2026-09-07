@@ -6,7 +6,7 @@ use crate::balance;
 use crate::engine::{EngineDesign, EngineCycle, EngineId, PropellantFraction, G0};
 use crate::balance_config::{BalanceConfig, FlawsConfig};
 use crate::flaw::FlawDomain;
-use crate::project::{DesignProject, DesignStatus, Designable, Direction, Improvement, ImprovementId, ProjectKind};
+use crate::project::{DesignProject, DesignStatus, Designable, Direction, Improvement, ImprovementId, ProjectKind, ProjectRef};
 use crate::propellant::Propellant;
 use crate::technology::TechDeficiencyKind;
 use crate::third_party::ContractedEngineId;
@@ -357,6 +357,9 @@ pub type EngineProject = DesignProject<EngineDesign>;
 
 impl Designable for EngineDesign {
     type Id = EngineProjectId;
+    fn project_ref(id: Self::Id) -> ProjectRef {
+        ProjectRef::Engine(id)
+    }
     type Spec = EngineSpec;
     type ImprovementKind = EngineImprovementKind;
     const KIND: ProjectKind = ProjectKind::Engine;

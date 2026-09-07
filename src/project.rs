@@ -24,7 +24,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::balance_config::{BalanceConfig, FlawsConfig};
+use crate::engine_project::EngineProjectId;
 use crate::flaw::{self, Flaw, FlawDomain, FlawId};
+use crate::reactor_project::ReactorProjectId;
+use crate::rocket_project::RocketProjectId;
 use crate::technology::{TechDeficiencyId, TechDeficiencyKind, TechnologyId};
 
 /// Identity of an improvement within its project. Allocated from the
@@ -67,6 +70,51 @@ impl ProjectKind {
             ProjectKind::Rocket => "rocket",
             ProjectKind::Reactor => "reactor",
         }
+    }
+}
+
+/// Which project, across a company's three lists, by id.
+///
+/// Ids rather than list positions, so a reference held across a day
+/// tick — a confirmation prompt left open, a queued action — can't act
+/// on whatever row slid into that slot underneath it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProjectRef {
+    Engine(EngineProjectId),
+    Rocket(RocketProjectId),
+    Reactor(ReactorProjectId),
+}
+
+impl ProjectRef {
+    pub fn kind(&self) -> ProjectKind {
+        match self {
+            ProjectRef::Engine(_) => ProjectKind::Engine,
+            ProjectRef::Rocket(_) => ProjectKind::Rocket,
+            ProjectRef::Reactor(_) => ProjectKind::Reactor,
+        }
+    }
+}
+
+/// What a revision has queued up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RevisionPlan {
+    pub flaws: usize,
+    pub improvements: usize,
+    pub deficiencies: usize,
+}
+
+impl RevisionPlan {
+    /// "Revising 2 flaw(s), 1 improvement(s)": flaws always, the other
+    /// queues only when they hold something.
+    pub fn describe(&self) -> String {
+        let mut parts = vec![format!("{} flaw(s)", self.flaws)];
+        if self.improvements > 0 {
+            parts.push(format!("{} improvement(s)", self.improvements));
+        }
+        if self.deficiencies > 0 {
+            parts.push(format!("{} deficiency(ies)", self.deficiencies));
+        }
+        format!("Revising {}", parts.join(", "))
     }
 }
 
@@ -164,6 +212,9 @@ pub trait Designable: Clone + fmt::Debug {
     type ImprovementKind: Clone + fmt::Debug + fmt::Display + Serialize + DeserializeOwned;
 
     const KIND: ProjectKind;
+
+    /// Wrap this kind's id as a `ProjectRef`.
+    fn project_ref(id: Self::Id) -> ProjectRef;
 
     fn name(&self) -> &str;
 
@@ -446,6 +497,20 @@ impl<D: Designable> DesignProject<D> {
         true
     }
 
+    /// What the current revision still has queued, if revising.
+    pub fn revision_plan(&self) -> Option<RevisionPlan> {
+        match &self.status {
+            DesignStatus::Revising {
+                remaining_flaw_ids, remaining_improvement_ids, remaining_tech_deficiency_ids, ..
+            } => Some(RevisionPlan {
+                flaws: remaining_flaw_ids.len(),
+                improvements: remaining_improvement_ids.len(),
+                deficiencies: remaining_tech_deficiency_ids.len(),
+            }),
+            _ => None,
+        }
+    }
+
     /// Number of discovered flaws.
     pub fn discovered_flaw_count(&self) -> usize {
         self.flaws.iter().filter(|f| f.discovered).count()
@@ -471,5 +536,56 @@ impl<D: Designable> DesignProject<D> {
             6..=9 => "Well Tested",
             _ => "Thoroughly Tested",
         }
+    }
+}
+
+/// The part of a project every kind shares, as a trait object, so a
+/// company can hand out "the project this ref points at" without the
+/// caller knowing which list it came from. Kind-specific state (the
+/// design itself, the spec, improvements) stays behind the typed
+/// aliases.
+pub trait ProjectCore {
+    fn project_ref(&self) -> ProjectRef;
+    fn kind(&self) -> ProjectKind;
+    fn name(&self) -> &str;
+    fn status(&self) -> &DesignStatus;
+    fn flaws(&self) -> &[Flaw];
+    fn revision(&self) -> u32;
+    fn complexity(&self) -> u32;
+    fn teams_assigned(&self) -> u32;
+    fn teams_assigned_mut(&mut self) -> &mut u32;
+    fn nre_cost(&self) -> f64;
+    fn nre_cost_mut(&mut self) -> &mut f64;
+    fn auto_revise(&self) -> bool;
+    fn auto_revise_mut(&mut self) -> &mut bool;
+    fn retired(&self) -> bool;
+    fn is_proposed(&self) -> bool;
+    fn discovered_flaw_count(&self) -> usize;
+    fn promote_to_in_design(&mut self);
+    /// Start a revision. What got queued, or `None` when not in Testing
+    /// or there was nothing to revise.
+    fn begin_revision(&mut self) -> Option<RevisionPlan>;
+}
+
+impl<D: Designable> ProjectCore for DesignProject<D> {
+    fn project_ref(&self) -> ProjectRef { D::project_ref(self.project_id) }
+    fn kind(&self) -> ProjectKind { D::KIND }
+    fn name(&self) -> &str { self.design.name() }
+    fn status(&self) -> &DesignStatus { &self.status }
+    fn flaws(&self) -> &[Flaw] { &self.flaws }
+    fn revision(&self) -> u32 { self.revision }
+    fn complexity(&self) -> u32 { self.complexity }
+    fn teams_assigned(&self) -> u32 { self.teams_assigned }
+    fn teams_assigned_mut(&mut self) -> &mut u32 { &mut self.teams_assigned }
+    fn nre_cost(&self) -> f64 { self.nre_cost }
+    fn nre_cost_mut(&mut self) -> &mut f64 { &mut self.nre_cost }
+    fn auto_revise(&self) -> bool { self.auto_revise }
+    fn auto_revise_mut(&mut self) -> &mut bool { &mut self.auto_revise }
+    fn retired(&self) -> bool { self.retired }
+    fn is_proposed(&self) -> bool { DesignProject::is_proposed(self) }
+    fn discovered_flaw_count(&self) -> usize { DesignProject::discovered_flaw_count(self) }
+    fn promote_to_in_design(&mut self) { DesignProject::promote_to_in_design(self) }
+    fn begin_revision(&mut self) -> Option<RevisionPlan> {
+        if self.start_revision() { self.revision_plan() } else { None }
     }
 }

@@ -498,30 +498,14 @@ impl GameState {
     /// curve. A player mid-production run may prefer to keep flying a
     /// known-flawed design.
     fn auto_revise_projects(&mut self, events: &mut Vec<GameEvent>) {
+        let due: Vec<(crate::project::ProjectRef, String)> = self.player_company.projects()
+            .filter(|p| p.auto_revise() && p.discovered_flaw_count() > 0)
+            .map(|p| (p.project_ref(), p.name().to_string()))
+            .collect();
         let mut started: Vec<(String, usize)> = Vec::new();
-
-        for i in 0..self.player_company.engine_projects.len() {
-            let p = &self.player_company.engine_projects[i];
-            if !p.auto_revise || p.discovered_flaw_count() == 0 { continue; }
-            let name = p.design.name.clone();
-            if let Some((fc, _)) = self.player_company.start_engine_revision(i) {
-                started.push((name, fc));
-            }
-        }
-        for i in 0..self.player_company.rocket_projects.len() {
-            let p = &self.player_company.rocket_projects[i];
-            if !p.auto_revise || p.discovered_flaw_count() == 0 { continue; }
-            let name = p.design.name.clone();
-            if let Some(fc) = self.player_company.start_rocket_revision(i) {
-                started.push((name, fc));
-            }
-        }
-        for i in 0..self.player_company.reactor_projects.len() {
-            let p = &self.player_company.reactor_projects[i];
-            if !p.auto_revise || p.discovered_flaw_count() == 0 { continue; }
-            let name = p.design.name.clone();
-            if let Some((fc, _, _)) = self.player_company.start_reactor_revision(i) {
-                started.push((name, fc));
+        for (r, name) in due {
+            if let Some(plan) = self.player_company.start_revision(r) {
+                started.push((name, plan.flaws));
             }
         }
 

@@ -17,6 +17,7 @@ use crate::engine_project::{EngineDesignStatus, EngineProjectId, PropellantPrese
 use crate::flight::Payload;
 use crate::game_state::GameState;
 use crate::rocket::{RocketDesign, RocketDesignId};
+use crate::project::{ProjectKind, ProjectRef};
 use crate::rocket_project::{RocketDesignStatus, RocketProjectId};
 use crate::stage::{Stage, StageId};
 
@@ -94,21 +95,15 @@ impl BasicPolicy {
     /// (or pending improvements / tech deficiencies for engines).
     fn revise_discovered_flaws(game: &mut GameState) {
         let company = &mut game.player_company;
-        for i in 0..company.engine_projects.len() {
-            let p = &company.engine_projects[i];
-            if matches!(p.status, EngineDesignStatus::Testing { .. })
-                && p.discovered_flaw_count() > 0
-            {
-                company.start_engine_revision(i);
-            }
-        }
-        for i in 0..company.rocket_projects.len() {
-            let p = &company.rocket_projects[i];
-            if matches!(p.status, RocketDesignStatus::Testing { .. })
-                && p.discovered_flaw_count() > 0
-            {
-                company.start_rocket_revision(i);
-            }
+        // Engines and rockets only; the bot doesn't run reactors.
+        let due: Vec<ProjectRef> = company.projects()
+            .filter(|p| matches!(p.kind(), ProjectKind::Engine | ProjectKind::Rocket))
+            .filter(|p| matches!(p.status(), EngineDesignStatus::Testing { .. })
+                && p.discovered_flaw_count() > 0)
+            .map(|p| p.project_ref())
+            .collect();
+        for r in due {
+            company.start_revision(r);
         }
     }
 }
@@ -258,26 +253,27 @@ impl BasicPolicy {
     /// keeps discovering flaws and revisions actually progress.
     fn assign_idle_engineers(&self, game: &mut GameState) {
         let company = &mut game.player_company;
-        if let Some(ri) = self.rocket.and_then(|rid|
-            company.rocket_projects.iter().position(|p| p.project_id == rid))
-        {
-            let want = match company.rocket_projects[ri].status {
+        let rocket = self.rocket.map(ProjectRef::Rocket);
+        if let Some((r, status)) = rocket.and_then(|r| company.project(r).map(|p| (r, p.status().clone()))) {
+            let want = match status {
                 RocketDesignStatus::InDesign { .. }
                 | RocketDesignStatus::Revising { .. } => 2,
                 RocketDesignStatus::Testing { .. } => 1,
                 RocketDesignStatus::Proposed { .. } => 0,
             };
-            while company.rocket_projects[ri].teams_assigned < want
-                && company.add_team_to_rocket_project(ri) {}
+            let staffed = |c: &crate::company::Company| c.project(r).map_or(0, |p| p.teams_assigned());
+            while staffed(company) < want && company.add_team(r) {}
             // Pull a team off an engine if the rocket is starved.
-            if company.rocket_projects[ri].teams_assigned == 0 {
-                company.steal_engineering_team_to_rocket_project(ri);
+            if staffed(company) == 0 {
+                company.steal_team_to(r);
             }
         }
-        for i in 0..company.engine_projects.len() {
-            if company.engine_projects[i].teams_assigned == 0 {
-                company.add_team_to_project(i);
-            }
+        let idle_engines: Vec<ProjectRef> = company.engine_projects.iter()
+            .filter(|p| p.teams_assigned == 0)
+            .map(|p| ProjectRef::Engine(p.project_id))
+            .collect();
+        for r in idle_engines {
+            company.add_team(r);
         }
     }
 
