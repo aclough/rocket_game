@@ -7,7 +7,9 @@ See 'Rocket_Tycoon.md' for what the final game will be like.
 Ask clarifying questions when the architecture or parameters are unclear.
 
 For plans always save them as markdown files in the main directory for me to go over offline.  I will make comments as
-USER:.  You can ask or them answer questions as CLAUDE until everything is worked out.
+USER:.  You can ask or them answer questions as CLAUDE until everything is
+worked out.  Use version number names, with 2_REFACTOR.md as a top level plan
+then 2_1_BUILD_SYSTEM.md for a subsidiary plan.
 
 # Implementation Approach
 
