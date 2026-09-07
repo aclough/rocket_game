@@ -169,28 +169,8 @@ pub fn generate_flaws(
 pub fn generate_single_flaw(
     domain: FlawDomain, id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cfg: &FlawsConfig,
 ) -> Flaw {
-    use crate::engine::EngineCycle;
     let (consequence, activation_chance, discovery_probability) = roll_flaw_core(rng, cfg);
-    let description = match (domain, trigger) {
-        (FlawDomain::Rocket, FlawTrigger::PerDay) =>
-            generate_rocket_endurance_flaw_description(&consequence, rng),
-        (FlawDomain::Rocket, FlawTrigger::PerFlight) =>
-            generate_rocket_flaw_description(&consequence, rng),
-        (FlawDomain::Reactor, FlawTrigger::PerDay) =>
-            generate_reactor_endurance_flaw_description(&consequence, rng),
-        (FlawDomain::Reactor, FlawTrigger::PerFlight) =>
-            generate_reactor_flaw_description(&consequence, rng),
-        (FlawDomain::Engine(Some(EngineCycle::SolarSail)), FlawTrigger::PerFlight) =>
-            generate_solar_sail_flaw_description(&consequence, rng),
-        (FlawDomain::Engine(Some(EngineCycle::ElectricPropulsion)), FlawTrigger::PerFlight) =>
-            generate_electric_flaw_description(&consequence, rng),
-        (FlawDomain::Engine(Some(EngineCycle::NuclearThermal)), FlawTrigger::PerFlight) =>
-            generate_nuclear_flaw_description(&consequence, rng),
-        (FlawDomain::Engine(_), FlawTrigger::PerFlight) =>
-            generate_flaw_description(&consequence, rng),
-        (FlawDomain::Engine(_), FlawTrigger::PerDay) =>
-            generate_endurance_flaw_description(&consequence, rng),
-    };
+    let description = FlawPool::for_flaw(domain, trigger).pick(&consequence, rng);
     Flaw {
         id,
         description,
@@ -229,314 +209,309 @@ fn roll_flaw_core(rng: &mut StdRng, cfg: &FlawsConfig) -> (FlawConsequence, f64,
     (consequence, activation_chance, discovery_probability)
 }
 
-fn generate_reactor_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
-    let descriptions = match consequence {
-        // Reads as a power-output loss on a reactor.
-        FlawConsequence::PerformanceDegradation(_) => &[
-            "Coolant loop flow restriction",
-            "Radiator fin degradation reduces heat rejection",
-            "Control drum drift derates output",
-            "Fuel element swelling reduces thermal transfer",
-            "Thermoelectric converter efficiency loss",
-            "Partial coolant channel blockage",
-        ][..],
-        // Reads as a reactor shutdown (the "part" is lost, not the stage).
-        FlawConsequence::EngineLoss => &[
-            "Control drum actuator seizure triggers SCRAM",
-            "Coolant pump failure forces reactor shutdown",
-            "Fuel element cladding breach",
-            "Reactor overheats and trips offline",
-            "Neutron poison buildup stalls the core",
-            "Primary coolant loop leak",
-        ][..],
-        FlawConsequence::StageLoss => &[
-            "Reactor pressure vessel rupture",
-            "Uncontrolled criticality excursion",
-            "Radiation shielding structural failure",
-            "Coolant flash-boil breaches the stage",
-            "Thermal runaway destroys the stage",
-            "Reactor debris severs stage structure",
-        ][..],
-    };
-
-    let idx = rng.gen_range(0..descriptions.len());
-    descriptions[idx].to_string()
-}
-
-/// Endurance (`PerDay`) reactor flaw text — gradual, cumulative failure
-/// modes that develop over a long mission rather than at ignition.
-fn generate_reactor_endurance_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
-    let descriptions = match consequence {
-        // Gradual power loss over the mission.
-        FlawConsequence::PerformanceDegradation(_) => &[
-            "Radiator coating erosion degrades heat rejection",
-            "Fuel burnup lowers reactivity over time",
-            "Neutron embrittlement of core structure",
-            "Coolant loop fouling accumulates",
-            "Thermoelectric junction degradation",
-            "Control drum bearing wear derates output",
-        ][..],
-        // Reactor trips offline after prolonged operation.
-        FlawConsequence::EngineLoss => &[
-            "Fuel cladding creep-ruptures after prolonged heat",
-            "Coolant pump bearing wears out and seizes",
-            "Cumulative xenon poisoning stalls the core",
-            "Control-drum actuator fails from thermal cycling",
-            "Primary loop develops a slow coolant leak",
-            "Reactor trips offline on degraded shielding sensors",
-        ][..],
-        FlawConsequence::StageLoss => &[
-            "Coolant embrittlement leads to pressure-vessel failure",
-            "Long-term radiation damage collapses the structure",
-            "Cumulative thermal fatigue cracks the reactor mount",
-            "Shielding degradation triggers a runaway excursion",
-            "Radiator manifold fatigue ruptures the coolant loop",
-            "Structural creep severs the stage under load",
-        ][..],
-    };
-
-    let idx = rng.gen_range(0..descriptions.len());
-    descriptions[idx].to_string()
-}
-
-fn generate_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
-    let descriptions = match consequence {
-        FlawConsequence::PerformanceDegradation(_) => &[
-            "Turbopump seal leak",
-            "Injector pattern inefficiency",
-            "Nozzle cooling channel restriction",
-            "Valve response lag",
-            "Combustion instability at partial throttle",
-            "Propellant feed pressure oscillation",
-        ][..],
-        FlawConsequence::EngineLoss => &[
-            "Turbopump bearing fatigue",
-            "Combustion chamber hot spot",
-            "Igniter reliability issue",
-            "Oxidizer-rich preburner instability",
-            "Thermal stress cracking in nozzle",
-            "Main injector face erosion",
-        ][..],
-        FlawConsequence::StageLoss => &[
-            "Propellant feed line vibration failure",
-            "Stage separation bolt stress fracture",
-            "Thrust structure resonance mode",
-            "Ullage gas contamination risk",
-            "Inter-stage electrical harness fault",
-            "Catastrophic combustion instability",
-        ][..],
-    };
-
-    let idx = rng.gen_range(0..descriptions.len());
-    descriptions[idx].to_string()
-}
-
-fn generate_endurance_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
-    let descriptions = match consequence {
-        FlawConsequence::PerformanceDegradation(_) => &[
-            "Thermal cycling degradation",
-            "Sensor drift accumulation",
-            "Propellant line seal wear",
-            "Attitude control thruster fouling",
-            "Radiator coating degradation",
-            "Reaction wheel bearing wear",
-        ][..],
-        FlawConsequence::EngineLoss => &[
-            "Turbopump bearing wear",
-            "Igniter electrode erosion",
-            "Fuel valve seat degradation",
-            "Oxidizer seal embrittlement",
-            "Engine controller memory corruption",
-            "Regenerative cooling tube fatigue",
-        ][..],
-        FlawConsequence::StageLoss => &[
-            "Avionics thermal failure",
-            "Battery capacity degradation",
-            "Structural fatigue crack propagation",
-            "Guidance computer memory fault",
-            "Wiring harness insulation breakdown",
-            "Pressurization system leak",
-        ][..],
-    };
-
-    let idx = rng.gen_range(0..descriptions.len());
-    descriptions[idx].to_string()
-}
-
-/// Flaws in the vehicle rather than its engines: tankage, structure,
-/// separation, avionics, plumbing. An engine project already owns
-/// injectors and turbopumps, so a rocket project that borrowed those
-/// descriptions read as if you were revising somebody else's work.
-fn generate_rocket_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
-    let descriptions = match consequence {
-        FlawConsequence::PerformanceDegradation(_) => &[
-            "Tank baffle slosh damping insufficient",
-            "Aerodynamic fairing drag higher than modelled",
-            "Guidance loop overcorrects in high winds",
-            "Stage mass over budget after assembly",
-            "Thrust vector alignment out of tolerance",
-            "Residual propellant trapped at tank sump",
-        ][..],
-        FlawConsequence::EngineLoss => &[
-            "Propellant feed starves the outboard engine",
-            "Engine bay overheats without purge flow",
-            "Gimbal actuator mount flexes under load",
-            "Pogo suppressor undersized for this stage",
-            "Engine mount bolt preload inconsistent",
-            "Feed line collapses under transient pressure",
-        ][..],
-        FlawConsequence::StageLoss => &[
-            "Interstage buckles under max-Q loading",
-            "Separation pyrotechnics fire out of sequence",
-            "Common bulkhead weld porosity",
-            "Payload fairing fails to jettison cleanly",
-            "Tank pressurisation regulator runs away",
-            "Flight computer resets during staging transient",
-        ][..],
-    };
-
-    let idx = rng.gen_range(0..descriptions.len());
-    descriptions[idx].to_string()
-}
-
-/// The same, for flaws that bite gradually in transit rather than during
-/// a burn — wear and drift in the airframe and its systems.
+/// The words a flaw is described with: six per consequence, drawn
+/// uniformly. One pool per (domain, trigger) — and per engine cycle for
+/// the cycles whose failure modes are nothing like a chemical engine's.
 ///
-/// These are latent defects, built in and carried until revised, so each
-/// one has to name a *property of the design* rather than an event that
-/// has already happened: "no micrometeoroid shielding", not
-/// "micrometeoroid pitting weakened a tank wall". The `PerDay` trigger
-/// then reads correctly — the longer the craft is out there, the more
-/// likely the weakness is what gets it.
-fn generate_rocket_endurance_flaw_description(
-    consequence: &FlawConsequence, rng: &mut StdRng,
-) -> String {
-    let descriptions = match consequence {
-        FlawConsequence::PerformanceDegradation(_) => &[
-            "Tank insulation degrades, boiloff climbs",
-            "Star tracker alignment drifts with thermal cycling",
-            "Attitude control propellant leaks past a seat",
-            "Solar array hinge stiffens, pointing lags",
-            "Thermal coating erodes under UV",
-            "Reaction wheel imbalance grows with hours",
-        ][..],
-        FlawConsequence::EngineLoss => &[
-            "Restart accumulator loses pressure over days",
-            "Engine bay heater fails, propellant lines chill",
-            "Ullage motor propellant slowly vents",
-            "Gimbal actuator lubricant migrates in vacuum",
-            "Feed line bellows fatigues on each thermal cycle",
-            "Engine controller watchdog trips intermittently",
-        ][..],
-        FlawConsequence::StageLoss => &[
-            "No micrometeoroid shielding over the tank wall",
-            "Battery cell imbalance goes uncorrected",
-            "Harness insulation embrittles and shorts",
-            "Pressurant slowly leaks past a check valve",
-            "Structural adhesive creeps under sustained load",
-            "Flight computer accumulates uncorrected bit flips",
-        ][..],
-    };
-
-    let idx = rng.gen_range(0..descriptions.len());
-    descriptions[idx].to_string()
+/// Every entry names a *property of the design*, not an event: a flaw is
+/// latent, built in and carried until revised, and the trigger decides
+/// when it bites. Endurance (`PerDay`) pools read as wear and drift; the
+/// rest as things that go wrong during a burn.
+#[derive(Debug, Clone, Copy)]
+pub struct FlawPool {
+    /// `PerformanceDegradation`: the part works worse.
+    pub degradation: [&'static str; 6],
+    /// `EngineLoss`: the part is lost (an engine shuts down, a reactor
+    /// SCRAMs) but the stage survives.
+    pub part_loss: [&'static str; 6],
+    /// `StageLoss`: the whole stage is lost.
+    pub stage_loss: [&'static str; 6],
 }
 
-fn generate_electric_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
-    let descriptions = match consequence {
-        FlawConsequence::PerformanceDegradation(_) => &[
-            "Ion grid erosion rate higher than expected",
-            "Beam neutralizer current drift",
-            "Discharge chamber magnetic field asymmetry",
-            "Xenon flow controller calibration offset",
-            "Thruster plume divergence angle excessive",
-            "Power processing unit efficiency loss",
-        ][..],
-        FlawConsequence::EngineLoss => &[
-            "Grid short circuit from sputtered material",
-            "Cathode heater element failure",
-            "Xenon isolator valve seizure",
-            "High-voltage breakdown in PPU",
-            "Discharge chamber wall sputter-through",
-            "Neutralizer keeper electrode erosion",
-        ][..],
-        FlawConsequence::StageLoss => &[
-            "Xenon tank pressure regulator failure",
-            "Solar array connection arc fault",
-            "Thruster gimbal mechanism binding",
-            "Power bus overcurrent shutdown",
-            "Propellant management unit leak",
-            "Electromagnetic interference with avionics",
-        ][..],
-    };
+impl FlawPool {
+    /// One description for `consequence`, drawn uniformly.
+    fn pick(&self, consequence: &FlawConsequence, rng: &mut StdRng) -> String {
+        let descriptions = match consequence {
+            FlawConsequence::PerformanceDegradation(_) => &self.degradation,
+            FlawConsequence::EngineLoss => &self.part_loss,
+            FlawConsequence::StageLoss => &self.stage_loss,
+        };
+        descriptions[rng.gen_range(0..descriptions.len())].to_string()
+    }
 
-    let idx = rng.gen_range(0..descriptions.len());
-    descriptions[idx].to_string()
+    /// The pool a flaw of `domain` with `trigger` is worded from.
+    fn for_flaw(domain: FlawDomain, trigger: FlawTrigger) -> &'static FlawPool {
+        use crate::engine::EngineCycle;
+        match (domain, trigger) {
+            (FlawDomain::Rocket, FlawTrigger::PerDay) => &ROCKET_ENDURANCE_FLAWS,
+            (FlawDomain::Rocket, FlawTrigger::PerFlight) => &ROCKET_FLAWS,
+            (FlawDomain::Reactor, FlawTrigger::PerDay) => &REACTOR_ENDURANCE_FLAWS,
+            (FlawDomain::Reactor, FlawTrigger::PerFlight) => &REACTOR_FLAWS,
+            (FlawDomain::Engine(Some(EngineCycle::SolarSail)), FlawTrigger::PerFlight) => &SOLAR_SAIL_FLAWS,
+            (FlawDomain::Engine(Some(EngineCycle::ElectricPropulsion)), FlawTrigger::PerFlight) => &ELECTRIC_FLAWS,
+            (FlawDomain::Engine(Some(EngineCycle::NuclearThermal)), FlawTrigger::PerFlight) => &NUCLEAR_FLAWS,
+            (FlawDomain::Engine(_), FlawTrigger::PerFlight) => &ENGINE_FLAWS,
+            (FlawDomain::Engine(_), FlawTrigger::PerDay) => &ENGINE_ENDURANCE_FLAWS,
+        }
+    }
 }
 
-fn generate_nuclear_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
-    let descriptions = match consequence {
-        FlawConsequence::PerformanceDegradation(_) => &[
-            "Fuel element hydrogen corrosion",
-            "Reactor power distribution imbalance",
-            "Turbopump hydrogen bearing wear",
-            "Nozzle skirt hydrogen embrittlement",
-            "Moderator element swelling",
-            "Reflector drum actuator lag",
-        ][..],
-        FlawConsequence::EngineLoss => &[
-            "Fuel element mid-section break",
-            "Control drum servo mechanism failure",
-            "Reactor thermal runaway risk",
-            "Hydrogen leak in reactor pressure vessel",
-            "Neutron poison buildup in fuel elements",
-            "Turbopump seal failure from radiation damage",
-        ][..],
-        FlawConsequence::StageLoss => &[
-            "Radiation shielding structural failure",
-            "Reactor SCRAM system false trigger",
-            "Hydrogen tank embrittlement fracture",
-            "Reactor coolant channel blockage",
-            "Uncontrolled criticality excursion risk",
-            "Nozzle detachment from thermal cycling",
-        ][..],
-    };
+/// Chemical engines during a burn.
+pub const ENGINE_FLAWS: FlawPool = FlawPool {
+    degradation: [
+        "Turbopump seal leak",
+        "Injector pattern inefficiency",
+        "Nozzle cooling channel restriction",
+        "Valve response lag",
+        "Combustion instability at partial throttle",
+        "Propellant feed pressure oscillation",
+    ],
+    part_loss: [
+        "Turbopump bearing fatigue",
+        "Combustion chamber hot spot",
+        "Igniter reliability issue",
+        "Oxidizer-rich preburner instability",
+        "Thermal stress cracking in nozzle",
+        "Main injector face erosion",
+    ],
+    stage_loss: [
+        "Propellant feed line vibration failure",
+        "Stage separation bolt stress fracture",
+        "Thrust structure resonance mode",
+        "Ullage gas contamination risk",
+        "Inter-stage electrical harness fault",
+        "Catastrophic combustion instability",
+    ],
+};
 
-    let idx = rng.gen_range(0..descriptions.len());
-    descriptions[idx].to_string()
-}
+/// Engines and their plumbing over a long mission.
+pub const ENGINE_ENDURANCE_FLAWS: FlawPool = FlawPool {
+    degradation: [
+        "Thermal cycling degradation",
+        "Sensor drift accumulation",
+        "Propellant line seal wear",
+        "Attitude control thruster fouling",
+        "Radiator coating degradation",
+        "Reaction wheel bearing wear",
+    ],
+    part_loss: [
+        "Turbopump bearing wear",
+        "Igniter electrode erosion",
+        "Fuel valve seat degradation",
+        "Oxidizer seal embrittlement",
+        "Engine controller memory corruption",
+        "Regenerative cooling tube fatigue",
+    ],
+    stage_loss: [
+        "Avionics thermal failure",
+        "Battery capacity degradation",
+        "Structural fatigue crack propagation",
+        "Guidance computer memory fault",
+        "Wiring harness insulation breakdown",
+        "Pressurization system leak",
+    ],
+};
 
-fn generate_solar_sail_flaw_description(consequence: &FlawConsequence, rng: &mut StdRng) -> String {
-    let descriptions = match consequence {
-        FlawConsequence::PerformanceDegradation(_) => &[
-            "Sail reflectivity degradation",
-            "Micrometeorite puncture damage",
-            "Sail deployment mechanism binding",
-            "Attitude control vane misalignment",
-            "Sail surface wrinkling",
-            "Solar radiation pressure modeling error",
-        ][..],
-        FlawConsequence::EngineLoss => &[
-            "Sail boom structural failure",
-            "Complete sail deployment failure",
-            "Sail tearing from thermal stress",
-            "Attitude control system failure",
-            "Sail furling mechanism jam",
-            "Boom hinge seizure",
-        ][..],
-        FlawConsequence::StageLoss => &[
-            "Sail catastrophic tear propagation",
-            "Boom collapse from impact",
-            "Sail jettison mechanism malfunction",
-            "Thermal deformation beyond recovery",
-            "Complete attitude loss from sail asymmetry",
-            "Sail connection point failure",
-        ][..],
-    };
+/// Ion and Hall thrusters: grids, cathodes, xenon feed, the PPU.
+pub const ELECTRIC_FLAWS: FlawPool = FlawPool {
+    degradation: [
+        "Ion grid erosion rate higher than expected",
+        "Beam neutralizer current drift",
+        "Discharge chamber magnetic field asymmetry",
+        "Xenon flow controller calibration offset",
+        "Thruster plume divergence angle excessive",
+        "Power processing unit efficiency loss",
+    ],
+    part_loss: [
+        "Grid short circuit from sputtered material",
+        "Cathode heater element failure",
+        "Xenon isolator valve seizure",
+        "High-voltage breakdown in PPU",
+        "Discharge chamber wall sputter-through",
+        "Neutralizer keeper electrode erosion",
+    ],
+    stage_loss: [
+        "Xenon tank pressure regulator failure",
+        "Solar array connection arc fault",
+        "Thruster gimbal mechanism binding",
+        "Power bus overcurrent shutdown",
+        "Propellant management unit leak",
+        "Electromagnetic interference with avionics",
+    ],
+};
 
-    let idx = rng.gen_range(0..descriptions.len());
-    descriptions[idx].to_string()
-}
+/// Nuclear-thermal engines: fuel elements, drums, hydrogen everywhere.
+pub const NUCLEAR_FLAWS: FlawPool = FlawPool {
+    degradation: [
+        "Fuel element hydrogen corrosion",
+        "Reactor power distribution imbalance",
+        "Turbopump hydrogen bearing wear",
+        "Nozzle skirt hydrogen embrittlement",
+        "Moderator element swelling",
+        "Reflector drum actuator lag",
+    ],
+    part_loss: [
+        "Fuel element mid-section break",
+        "Control drum servo mechanism failure",
+        "Reactor thermal runaway risk",
+        "Hydrogen leak in reactor pressure vessel",
+        "Neutron poison buildup in fuel elements",
+        "Turbopump seal failure from radiation damage",
+    ],
+    stage_loss: [
+        "Radiation shielding structural failure",
+        "Reactor SCRAM system false trigger",
+        "Hydrogen tank embrittlement fracture",
+        "Reactor coolant channel blockage",
+        "Uncontrolled criticality excursion risk",
+        "Nozzle detachment from thermal cycling",
+    ],
+};
+
+/// Solar sails: film, booms, deployment.
+pub const SOLAR_SAIL_FLAWS: FlawPool = FlawPool {
+    degradation: [
+        "Sail reflectivity degradation",
+        "Micrometeorite puncture damage",
+        "Sail deployment mechanism binding",
+        "Attitude control vane misalignment",
+        "Sail surface wrinkling",
+        "Solar radiation pressure modeling error",
+    ],
+    part_loss: [
+        "Sail boom structural failure",
+        "Complete sail deployment failure",
+        "Sail tearing from thermal stress",
+        "Attitude control system failure",
+        "Sail furling mechanism jam",
+        "Boom hinge seizure",
+    ],
+    stage_loss: [
+        "Sail catastrophic tear propagation",
+        "Boom collapse from impact",
+        "Sail jettison mechanism malfunction",
+        "Thermal deformation beyond recovery",
+        "Complete attitude loss from sail asymmetry",
+        "Sail connection point failure",
+    ],
+};
+
+/// The vehicle rather than its engines: tankage, structure, separation,
+/// avionics, plumbing. An engine project already owns injectors and
+/// turbopumps, so a rocket project that borrowed those words read as if
+/// you were revising somebody else's work.
+pub const ROCKET_FLAWS: FlawPool = FlawPool {
+    degradation: [
+        "Tank baffle slosh damping insufficient",
+        "Aerodynamic fairing drag higher than modelled",
+        "Guidance loop overcorrects in high winds",
+        "Stage mass over budget after assembly",
+        "Thrust vector alignment out of tolerance",
+        "Residual propellant trapped at tank sump",
+    ],
+    part_loss: [
+        "Propellant feed starves the outboard engine",
+        "Engine bay overheats without purge flow",
+        "Gimbal actuator mount flexes under load",
+        "Pogo suppressor undersized for this stage",
+        "Engine mount bolt preload inconsistent",
+        "Feed line collapses under transient pressure",
+    ],
+    stage_loss: [
+        "Interstage buckles under max-Q loading",
+        "Separation pyrotechnics fire out of sequence",
+        "Common bulkhead weld porosity",
+        "Payload fairing fails to jettison cleanly",
+        "Tank pressurisation regulator runs away",
+        "Flight computer resets during staging transient",
+    ],
+};
+
+/// The airframe and its systems wearing and drifting in transit —
+/// "no micrometeoroid shielding", not "pitting weakened a tank wall".
+pub const ROCKET_ENDURANCE_FLAWS: FlawPool = FlawPool {
+    degradation: [
+        "Tank insulation degrades, boiloff climbs",
+        "Star tracker alignment drifts with thermal cycling",
+        "Attitude control propellant leaks past a seat",
+        "Solar array hinge stiffens, pointing lags",
+        "Thermal coating erodes under UV",
+        "Reaction wheel imbalance grows with hours",
+    ],
+    part_loss: [
+        "Restart accumulator loses pressure over days",
+        "Engine bay heater fails, propellant lines chill",
+        "Ullage motor propellant slowly vents",
+        "Gimbal actuator lubricant migrates in vacuum",
+        "Feed line bellows fatigues on each thermal cycle",
+        "Engine controller watchdog trips intermittently",
+    ],
+    stage_loss: [
+        "No micrometeoroid shielding over the tank wall",
+        "Battery cell imbalance goes uncorrected",
+        "Harness insulation embrittles and shorts",
+        "Pressurant slowly leaks past a check valve",
+        "Structural adhesive creeps under sustained load",
+        "Flight computer accumulates uncorrected bit flips",
+    ],
+};
+
+/// Reactors at power. Degradation reads as lost output; part loss as a
+/// shutdown (the reactor trips, not the stage).
+pub const REACTOR_FLAWS: FlawPool = FlawPool {
+    degradation: [
+        "Coolant loop flow restriction",
+        "Radiator fin degradation reduces heat rejection",
+        "Control drum drift derates output",
+        "Fuel element swelling reduces thermal transfer",
+        "Thermoelectric converter efficiency loss",
+        "Partial coolant channel blockage",
+    ],
+    part_loss: [
+        "Control drum actuator seizure triggers SCRAM",
+        "Coolant pump failure forces reactor shutdown",
+        "Fuel element cladding breach",
+        "Reactor overheats and trips offline",
+        "Neutron poison buildup stalls the core",
+        "Primary coolant loop leak",
+    ],
+    stage_loss: [
+        "Reactor pressure vessel rupture",
+        "Uncontrolled criticality excursion",
+        "Radiation shielding structural failure",
+        "Coolant flash-boil breaches the stage",
+        "Thermal runaway destroys the stage",
+        "Reactor debris severs stage structure",
+    ],
+};
+
+/// Reactors over a long mission: burnup, fouling, embrittlement, creep.
+pub const REACTOR_ENDURANCE_FLAWS: FlawPool = FlawPool {
+    degradation: [
+        "Radiator coating erosion degrades heat rejection",
+        "Fuel burnup lowers reactivity over time",
+        "Neutron embrittlement of core structure",
+        "Coolant loop fouling accumulates",
+        "Thermoelectric junction degradation",
+        "Control drum bearing wear derates output",
+    ],
+    part_loss: [
+        "Fuel cladding creep-ruptures after prolonged heat",
+        "Coolant pump bearing wears out and seizes",
+        "Cumulative xenon poisoning stalls the core",
+        "Control-drum actuator fails from thermal cycling",
+        "Primary loop develops a slow coolant leak",
+        "Reactor trips offline on degraded shielding sensors",
+    ],
+    stage_loss: [
+        "Coolant embrittlement leads to pressure-vessel failure",
+        "Long-term radiation damage collapses the structure",
+        "Cumulative thermal fatigue cracks the reactor mount",
+        "Shielding degradation triggers a runaway excursion",
+        "Radiator manifold fatigue ruptures the coolant loop",
+        "Structural creep severs the stage under load",
+    ],
+};
 
 /// Roll for flaw discovery during a testing cycle.
 /// Returns indices of newly discovered flaws.
