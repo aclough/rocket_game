@@ -1,1 +1,3 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
+
+[] Show temas on unexapnded engine, reactor, rocket views
