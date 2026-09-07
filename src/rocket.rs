@@ -98,6 +98,10 @@ impl RocketDesign {
             for stage in group {
                 let e = &stage.engine;
                 e.id.0.hash(&mut h);
+                // The planner classes edges by `is_low_thrust`, which
+                // reads the cycle; a degraded clone keeps its id, so the
+                // id alone would not tell two cycles apart.
+                e.cycle.hash(&mut h);
                 e.thrust_n.to_bits().hash(&mut h);
                 e.mass_kg.to_bits().hash(&mut h);
                 e.isp_s.to_bits().hash(&mut h);

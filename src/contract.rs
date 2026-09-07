@@ -21,6 +21,12 @@ pub enum ContractStatus {
     Accepted,
 }
 
+/// Prices on the launch market are quoted to the nearest $10k —
+/// payments, bids, and the scripted competitor's prices alike.
+pub fn round_price(amount: f64) -> f64 {
+    (amount / 10_000.0).round() * 10_000.0
+}
+
 /// Unique identifier for an anchor-customer campaign.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct CampaignId(pub u64);
@@ -513,7 +519,7 @@ fn generate_single_contract(
 
     let base_payment = payload_kg * dest.rate_per_kg;
     let variance = rng.gen_range(markets_cfg.payment_variance_min..=markets_cfg.payment_variance_max);
-    let payment = (base_payment * variance * rate_mult / 10_000.0).round() * 10_000.0;
+    let payment = round_price(base_payment * variance * rate_mult);
 
     let (deadline_min, deadline_max) = market.deadline_days
         .unwrap_or((markets_cfg.deadline_min_days, markets_cfg.deadline_max_days));
@@ -660,8 +666,7 @@ pub fn spawn_campaign(
     let discount = rng.gen_range(spec.discount_range.0..=spec.discount_range.1);
     let rate_mult = market.rate_multiplier(economy_modifier);
     let payment_per_mission =
-        (payload_kg * dest.rate_per_kg * rate_mult * (1.0 - discount) / 10_000.0).round()
-            * 10_000.0;
+        round_price(payload_kg * dest.rate_per_kg * rate_mult * (1.0 - discount));
     let missions_total =
         rng.gen_range(spec.mission_count_range.0..=spec.mission_count_range.1);
     let interval_days =

@@ -255,7 +255,7 @@ opportunity in the codebase.
   geopolitics and market emergence (`market_ops.rs:853, 875, 897, 990`)
   with a stringly-typed `condition`.
 
-### C3. Parked spacecraft duplicate the in-flight per-day tick
+### ✅ C3. Parked spacecraft duplicate the in-flight per-day tick
 - **Where:** `advance.rs:573-663` (parked power tick + PerDay flaw roll
   with a local `ScFlawRef`) vs `flight_ops.rs:388-403, 452-500,
   756-770` (same on `Flight` with `RocketFlawRef`). They have already
@@ -266,7 +266,7 @@ opportunity in the codebase.
   as `tick_parked_spacecraft`.
 - **Size/risk:** medium / low.
 
-### C4. `advance_flights` is 565 lines; launch and mid-flight duplicate flaw rolls
+### ✅ C4. `advance_flights` is 565 lines; launch and mid-flight duplicate flaw rolls
 - **Where:** `flight_ops.rs:334-899`. Overexpansion roll:
   `launch.rs:217-267` vs `flight_ops.rs:589-636` (the flight copy
   records no `FlawActivation` and never applies the Isp penalty).
@@ -283,7 +283,7 @@ opportunity in the codebase.
   (`launch.rs:352-442`) belong in `flaw.rs`.
 - **Size/risk:** medium / medium.
 
-### C5. Sealed-bid resolution duplicated between single contracts and campaign blocks
+### ✅ C5. Sealed-bid resolution duplicated between single contracts and campaign blocks
 - **Where:** `market_ops.rs:228-380` (`resolve_campaign_bids`) and
   `:496-627` (`resolve_bids`): same score closure, same "player first,
   strict `>`" tie rule, same ceiling gate, same three-way winner match,
@@ -294,7 +294,7 @@ opportunity in the codebase.
   competitor_bid_fn) -> AuctionResult`; `schedule_competitor_launch`.
 - **Size/risk:** medium / low.
 
-### C6. `BasicPolicy` re-implements the bid engine's stock gate and rounding
+### ✅ C6. `BasicPolicy` re-implements the bid engine's stock gate and rounding
 - **Where:** `policy.rs:156-186` vs `market_ops.rs:462-487` and
   `game_state/mod.rs:529-536`. The bot's gate ignores outstanding
   sealed bids (the engine's doesn't), so the bot can over-commit where
@@ -306,7 +306,7 @@ opportunity in the codebase.
 - **Size/risk:** small / low. The tuning harness should exercise the
   same code path players do.
 
-### C7. Fingerprint hand-enumerates physics fields and misses `cycle`
+### ✅ C7. Fingerprint hand-enumerates physics fields and misses `cycle`
 - **Where:** `RocketDesign::fingerprint` (`rocket.rs:93-141`) hashes
   engine thrust/mass/isp/etc. but not `cycle`, while `is_low_thrust()`
   depends on it. Safe today via engine id; fragile for any new physics

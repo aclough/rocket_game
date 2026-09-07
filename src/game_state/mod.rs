@@ -113,6 +113,26 @@ pub struct PayloadReach {
     pub survives: bool,
 }
 
+/// Look `key` up in a route-planning memo, computing and storing the
+/// answer on a miss. Every keystroke in the designer is a new
+/// fingerprint, so the memo grows without a bound of its own; dropping
+/// the lot at `CAPABILITY_CACHE_LIMIT` costs one cold frame and is
+/// simpler than tracking recency.
+fn memo<K: std::hash::Hash + Eq, V: Copy>(
+    cache: &RefCell<HashMap<K, V>>, key: K, compute: impl FnOnce() -> V,
+) -> V {
+    if let Some(v) = cache.borrow().get(&key) {
+        return *v;
+    }
+    let v = compute();
+    let mut cache = cache.borrow_mut();
+    if cache.len() >= CAPABILITY_CACHE_LIMIT {
+        cache.clear();
+    }
+    cache.insert(key, v);
+    v
+}
+
 /// Why a launch manifest couldn't be assembled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestError {
@@ -433,19 +453,9 @@ impl GameState {
         &self, design: &RocketDesign, from: &str, to: &str,
     ) -> f64 {
         let key = (design.fingerprint(), from.to_string(), to.to_string());
-        if let Some(cap) = self.payload_capability_cache.borrow().get(&key) {
-            return *cap;
-        }
-        let cap = crate::rocket_project::max_payload_to(design, from, to);
-        let mut cache = self.payload_capability_cache.borrow_mut();
-        // Every keystroke in the designer is a new fingerprint, so this
-        // grows without a bound of its own. Dropping the lot on overflow
-        // costs one cold frame and is simpler than tracking recency.
-        if cache.len() >= CAPABILITY_CACHE_LIMIT {
-            cache.clear();
-        }
-        cache.insert(key, cap);
-        cap
+        memo(&self.payload_capability_cache, key, || {
+            crate::rocket_project::max_payload_to(design, from, to)
+        })
     }
 
     /// Memoized `survives_trip`.
@@ -455,16 +465,9 @@ impl GameState {
         let key = (
             design.fingerprint(), from.to_string(), to.to_string(), payload_kg.to_bits(),
         );
-        if let Some(ok) = self.trip_survival_cache.borrow().get(&key) {
-            return *ok;
-        }
-        let ok = crate::rocket_project::survives_trip(design, from, to, payload_kg);
-        let mut cache = self.trip_survival_cache.borrow_mut();
-        if cache.len() >= CAPABILITY_CACHE_LIMIT {
-            cache.clear();
-        }
-        cache.insert(key, ok);
-        ok
+        memo(&self.trip_survival_cache, key, || {
+            crate::rocket_project::survives_trip(design, from, to, payload_kg)
+        })
     }
 
     /// `payload_table_for`, memoized per destination.

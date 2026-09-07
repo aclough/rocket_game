@@ -9,7 +9,6 @@
 //! wall-clock, no HashMap-iteration-order dependence. A fixed seed +
 //! a fixed policy must always produce an identical run.
 
-use std::collections::BTreeMap;
 
 use crate::contract::ContractStatus;
 use crate::engine::EngineCycle;
@@ -74,9 +73,6 @@ pub struct BasicPolicy {
     bid_rules_set: bool,
     /// Markup the policy's standing rules use: bid = cost × (1 + margin).
     bid_margin: f64,
-    /// Max payload (kg) to a destination for the fixed template.
-    /// BTreeMap for deterministic iteration.
-    capability: BTreeMap<String, f64>,
 }
 
 impl BasicPolicy {
@@ -112,7 +108,6 @@ impl BasicPolicy {
 const MONEY_FLOOR: f64 = 5_000_000.0;
 /// Fraction of computed max payload the bot is willing to book —
 /// shared with the game's rule engine.
-const PAYLOAD_MARGIN: f64 = crate::game_state::BID_PAYLOAD_MARGIN;
 /// Default markup for the policy's standing bid rules. After the M4
 /// cost retune (material prices ×4) a vehicle costs ~40-60% of a
 /// winning bid, so cost × 2 is market-rate pricing: the 2026-07 M4
@@ -138,7 +133,6 @@ impl BasicPolicy {
             auto_build_set: false,
             bid_rules_set: false,
             bid_margin,
-            capability: BTreeMap::new(),
         }
     }
 
@@ -160,17 +154,14 @@ impl BasicPolicy {
         if soliciting.is_empty() {
             return;
         }
-        let accepted_unflown = game.player_accepted_unflown();
         for (id, dest, payload_kg) in soliciting {
             let (capable_projects, best_cost) = game.player_capable_cost(&dest, payload_kg);
             let Some(cost) = best_cost else { continue };
-            let capable_stock = game.player_company.manufacturing.inventory.rockets.iter()
-                .filter(|r| capable_projects.contains(&r.rocket_project_id))
-                .count();
-            if capable_stock <= accepted_unflown {
+            // The same readiness gate the player's standing rules use.
+            if game.free_capable_stock(&capable_projects) == 0 {
                 continue;
             }
-            let bid = ((cost * (1.0 + self.bid_margin)) / 10_000.0).round() * 10_000.0;
+            let bid = crate::contract::round_price(cost * (1.0 + self.bid_margin));
             if bid <= 0.0 {
                 continue;
             }
@@ -365,20 +356,13 @@ impl BasicPolicy {
         }
     }
 
-    /// Max payload the template lifts from Earth to `dest`, cached.
-    /// The template is fixed, so the answer never changes.
-    fn capability_to(&mut self, game: &GameState, dest: &str) -> f64 {
-        if let Some(&kg) = self.capability.get(dest) {
-            return kg;
-        }
-        let kg = self.rocket
+    /// Whether the template can serve a delivery, by the game's own
+    /// rule — the one the bid engine and the contract colours use.
+    fn template_can_serve(&self, game: &GameState, dest: &str, payload_kg: f64) -> bool {
+        self.rocket
             .and_then(|rid| game.player_company.rocket_projects.iter()
                 .find(|p| p.project_id == rid))
-            .map(|p| crate::rocket_project::max_payload_to(
-                &p.design, "earth_surface", dest))
-            .unwrap_or(0.0);
-        self.capability.insert(dest.to_string(), kg);
-        kg
+            .is_some_and(|p| game.project_can_serve(p, dest, payload_kg))
     }
 
     /// Contract ids currently being carried by a flight in transit.
@@ -440,7 +424,7 @@ impl BasicPolicy {
                     .map(|(i, c)| (i, c.destination.clone(), c.payload_kg, c.payment))
                     .collect();
                 for (i, dest, payload_kg, payment) in candidates {
-                    if payload_kg > self.capability_to(game, &dest) * PAYLOAD_MARGIN {
+                    if !self.template_can_serve(game, &dest, payload_kg) {
                         continue;
                     }
                     if best.is_none_or(|(_, p)| payment > p) {
@@ -558,10 +542,9 @@ mod tests {
 
     #[test]
     fn test_basic_policy_template_lifts_smallsats_to_leo() {
-        let (gs, mut policy) = run(42, 730);
-        let cap = policy.capability_to(&gs, "leo");
-        assert!(cap >= 500.0,
-            "template should lift at least 500 kg to LEO, got {cap:.0}");
+        let (gs, policy) = run(42, 730);
+        assert!(policy.template_can_serve(&gs, "leo", 500.0),
+            "template should serve a 500 kg smallsat to LEO by the game's own rule");
     }
 
     #[test]

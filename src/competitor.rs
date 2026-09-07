@@ -115,7 +115,7 @@ impl Competitor {
         let u: f64 = rng.gen();
         bid *= 1.0 + cfg.bid_jitter * (2.0 * u - 1.0);
         bid = bid.max(cfg.bid_floor);
-        Some((bid / 10_000.0).round() * 10_000.0)
+        Some(crate::contract::round_price(bid))
     }
 
     /// The scripted sealed bid for a single solicitation.

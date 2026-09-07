@@ -9,6 +9,20 @@ use crate::rocket_project::RocketProjectId;
 
 use super::*;
 
+/// Who a sealed auction went to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bidder {
+    Player,
+    Competitor(usize),
+}
+
+/// The outcome of one sealed auction.
+struct Auction {
+    winner: Option<(Bidder, f64)>,
+    /// The player bid, and bid more than the customer would pay.
+    player_over_ceiling: bool,
+}
+
 impl GameState {
     /// Issue mission contracts for won campaigns whose next issue date
     /// has arrived, and retire campaigns that have issued their last
@@ -70,16 +84,7 @@ impl GameState {
                         // launches like any competitor award; the
                         // block award was the news, the launches will
                         // be the rest.
-                        let launch_date = {
-                            let d = self.date.add_days(self.balance.competitor.launch_lead_days);
-                            if d > c.deadline { c.deadline } else { d }
-                        };
-                        let comp = &mut self.competitors[ci];
-                        comp.scheduled_launches.push(crate::competitor::ScheduledLaunch {
-                            contract_id: c.id,
-                            launch_date,
-                        });
-                        comp.company.active_contracts.push(c);
+                        self.schedule_competitor_launch(ci, c);
                     }
                 }
 
@@ -243,42 +248,11 @@ impl GameState {
                 continue;
             }
 
-            let market = self.markets.iter()
-                .find(|m| m.id == self.active_campaigns[i].market_id)
-                .cloned();
-            let rep_scale = self.balance.markets.rep_scale;
-            let score = |bid: f64, rep: f64| {
-                market.as_ref().map_or(0.0, |m| {
-                    contract::bid_score(bid, ceiling, rep, m, rep_scale)
-                })
-            };
-
-            // (bidder, bid): bidder None = player, Some(ci) = competitor.
-            // Player first + strict `>` replacement = ties break toward
-            // the player, exactly like resolve_bids.
-            let mut winner: Option<(Option<usize>, f64)> = None;
-            let mut best_score = f64::NEG_INFINITY;
-            let mut consider = |who: Option<usize>, bid: f64, s: f64| {
-                if s > best_score {
-                    best_score = s;
-                    winner = Some((who, bid));
-                }
-            };
-            if let Some(bid) = player_bid {
-                if bid <= ceiling {
-                    consider(None, bid, score(bid, self.player_company.reputation.total()));
-                }
-            }
-            {
-                let campaign = &self.active_campaigns[i];
-                for (ci, comp) in self.competitors.iter().enumerate() {
-                    if let Some(bid) = comp.compute_block_bid(campaign, &self.balance, &self.seed) {
-                        if bid <= ceiling {
-                            consider(Some(ci), bid, score(bid, comp.company.reputation.total()));
-                        }
-                    }
-                }
-            }
+            let campaign = self.active_campaigns[i].clone();
+            let auction = self.run_sealed_auction(
+                campaign.market_id, ceiling, player_bid,
+                |comp| comp.compute_block_bid(&campaign, &self.balance, &self.seed),
+            );
 
             // Block awards land in the same price-discovery history
             // as single solicitations, tagged with the mission count
@@ -296,8 +270,8 @@ impl GameState {
                         outcome,
                     }
                 };
-            match winner {
-                Some((None, bid)) => {
+            match auction.winner {
+                Some((Bidder::Player, bid)) => {
                     let name = self.player_company.name.clone();
                     let campaign = &mut self.active_campaigns[i];
                     campaign.payment_per_mission = bid;
@@ -324,7 +298,7 @@ impl GameState {
                     self.speed = GameSpeed::Paused;
                     i += 1;
                 }
-                Some((Some(ci), bid)) => {
+                Some((Bidder::Competitor(ci), bid)) => {
                     let company_name = self.competitors[ci].company.name.clone();
                     let campaign = &mut self.active_campaigns[i];
                     campaign.payment_per_mission = bid;
@@ -354,11 +328,13 @@ impl GameState {
                 }
                 None => {
                     let campaign = self.active_campaigns.remove(i);
-                    if let Some(bid) = player_bid {
+                    if auction.player_over_ceiling {
                         // Over budget: no award, and the customer
                         // doesn't say what the budget was.
                         let record = record_outcome(
-                            contract::AwardOutcome::PlayerRejected { bid },
+                            contract::AwardOutcome::PlayerRejected {
+                                bid: player_bid.unwrap_or(0.0),
+                            },
                             &campaign,
                         );
                         self.push_award_record(record);
@@ -475,7 +451,7 @@ impl GameState {
                 continue;
             }
 
-            let bid = ((cost * (1.0 + margin)) / 10_000.0).round() * 10_000.0;
+            let bid = contract::round_price(cost * (1.0 + margin));
             if bid <= 0.0 {
                 continue;
             }
@@ -498,42 +474,10 @@ impl GameState {
             }
             let mut c = self.available_contracts.remove(i);
 
-            let market = self.markets.iter().find(|m| m.id == c.market_id).cloned();
-            let rep_scale = self.balance.markets.rep_scale;
-            let score = |bid: f64, rep: f64| {
-                market.as_ref().map_or(0.0, |m| {
-                    contract::bid_score(bid, c.budget_ceiling, rep, m, rep_scale)
-                })
-            };
-
-            // Gather sealed bids: the player first, then each
-            // competitor's scripted price. Over-ceiling bids never
-            // score. Ties break toward the earlier entry, so an
-            // exactly-matched player never loses to a coin flip.
-            // (bidder, bid): bidder None = player, Some(ci) = competitor.
-            let mut winner: Option<(Option<usize>, f64)> = None;
-            let mut best_score = f64::NEG_INFINITY;
-            let mut consider = |who: Option<usize>, bid: f64, s: f64| {
-                if s > best_score {
-                    best_score = s;
-                    winner = Some((who, bid));
-                }
-            };
-            let mut player_over_ceiling = false;
-            if let Some(bid) = c.player_bid {
-                if bid <= c.budget_ceiling {
-                    consider(None, bid, score(bid, self.player_company.reputation.total()));
-                } else {
-                    player_over_ceiling = true;
-                }
-            }
-            for (ci, comp) in self.competitors.iter().enumerate() {
-                if let Some(bid) = comp.compute_bid(&c, &self.balance, &self.seed) {
-                    if bid <= c.budget_ceiling {
-                        consider(Some(ci), bid, score(bid, comp.company.reputation.total()));
-                    }
-                }
-            }
+            let auction = self.run_sealed_auction(
+                c.market_id, c.budget_ceiling, c.player_bid,
+                |comp| comp.compute_bid(&c, &self.balance, &self.seed),
+            );
 
             let record_date = self.date;
             let record_outcome = move |outcome: contract::AwardOutcome, c: &contract::Contract| {
@@ -547,8 +491,8 @@ impl GameState {
                     outcome,
                 }
             };
-            match winner {
-                Some((None, bid)) => {
+            match auction.winner {
+                Some((Bidder::Player, bid)) => {
                     let record = record_outcome(
                         contract::AwardOutcome::PlayerWon { amount: bid }, &c,
                     );
@@ -565,11 +509,11 @@ impl GameState {
                     // the launch, adjust rules) — stop the clock.
                     self.speed = GameSpeed::Paused;
                 }
-                Some((Some(ci), bid)) => {
-                    let losing_player_bid = c.player_bid;
+                Some((Bidder::Competitor(ci), bid)) => {
+                    let company_name = self.competitors[ci].company.name.clone();
                     let record = record_outcome(
                         contract::AwardOutcome::CompetitorWon {
-                            company: self.competitors[ci].company.name.clone(),
+                            company: company_name.clone(),
                             amount: bid,
                             player_bid: c.player_bid,
                         },
@@ -578,25 +522,16 @@ impl GameState {
                     self.push_award_record(record);
                     c.payment = bid;
                     c.status = contract::ContractStatus::Accepted;
-                    let launch_date = {
-                        let d = self.date.add_days(self.balance.competitor.launch_lead_days);
-                        if d > c.deadline { c.deadline } else { d }
-                    };
-                    let comp = &mut self.competitors[ci];
-                    comp.scheduled_launches.push(crate::competitor::ScheduledLaunch {
-                        contract_id: c.id,
-                        launch_date,
-                    });
                     let evt = GameEvent::ContractAwardedToCompetitor {
                         contract_name: c.name.clone(),
-                        company: comp.company.name.clone(),
+                        company: company_name,
                         amount: bid,
-                        player_bid: losing_player_bid,
+                        player_bid: c.player_bid,
                     };
-                    comp.company.active_contracts.push(c);
+                    self.schedule_competitor_launch(ci, c);
                     self.emit(events, evt);
                 }
-                None if player_over_ceiling => {
+                None if auction.player_over_ceiling => {
                     // Over budget: no award, and the customer doesn't
                     // say what the budget was.
                     let record = record_outcome(
@@ -614,6 +549,66 @@ impl GameState {
                 None => {} // No valid bids: lapses without ceremony.
             }
         }
+    }
+
+    /// Score the sealed bids on one solicitation or program block. The
+    /// player's price is considered first, then each competitor's, all
+    /// against the customer's hidden `ceiling`; the highest
+    /// `contract::bid_score` wins, and ties go to the earlier entry, so
+    /// an exactly-matched player never loses to a coin flip. Bids over
+    /// the ceiling never score; the player's is remembered as rejected.
+    fn run_sealed_auction(
+        &self,
+        market_id: contract::MarketId,
+        ceiling: f64,
+        player_bid: Option<f64>,
+        competitor_bid: impl Fn(&crate::competitor::Competitor) -> Option<f64>,
+    ) -> Auction {
+        let market = self.markets.iter().find(|m| m.id == market_id);
+        let rep_scale = self.balance.markets.rep_scale;
+        let score = |bid: f64, rep: f64| {
+            market.map_or(0.0, |m| contract::bid_score(bid, ceiling, rep, m, rep_scale))
+        };
+
+        let mut auction = Auction { winner: None, player_over_ceiling: false };
+        let mut best_score = f64::NEG_INFINITY;
+        let mut consider = |who: Bidder, bid: f64, s: f64| {
+            if s > best_score {
+                best_score = s;
+                auction.winner = Some((who, bid));
+            }
+        };
+        if let Some(bid) = player_bid {
+            if bid <= ceiling {
+                consider(Bidder::Player, bid, score(bid, self.player_company.reputation.total()));
+            } else {
+                auction.player_over_ceiling = true;
+            }
+        }
+        for (ci, comp) in self.competitors.iter().enumerate() {
+            if let Some(bid) = competitor_bid(comp) {
+                if bid <= ceiling {
+                    consider(Bidder::Competitor(ci), bid, score(bid, comp.company.reputation.total()));
+                }
+            }
+        }
+        auction
+    }
+
+    /// Book an awarded contract to competitor `ci` and schedule its
+    /// abstract launch: the configured lead time out, or the deadline
+    /// if that comes first.
+    fn schedule_competitor_launch(&mut self, ci: usize, contract: contract::Contract) {
+        let launch_date = {
+            let d = self.date.add_days(self.balance.competitor.launch_lead_days);
+            if d > contract.deadline { contract.deadline } else { d }
+        };
+        let comp = &mut self.competitors[ci];
+        comp.scheduled_launches.push(crate::competitor::ScheduledLaunch {
+            contract_id: contract.id,
+            launch_date,
+        });
+        comp.company.active_contracts.push(contract);
     }
 
     /// Append to the award-history record, dropping the oldest entries
