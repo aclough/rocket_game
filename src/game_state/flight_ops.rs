@@ -1223,3 +1223,112 @@ impl GameState {
         true
     }
 }
+
+// ── Parked spacecraft ────────────────────────────────────────────────
+
+impl GameState {
+    /// The daily tick for spacecraft sitting at a location: the same
+    /// power balance flights run — brownout kills the craft (loss of
+    /// attitude/comms, the same lethal outcome as a flight stranding),
+    /// and anything aboard is lost with it — then the endurance flaws of
+    /// its rocket design roll, as they do in transit.
+    ///
+    /// No "had charge before" guard on the brownout: a fuel-cell-only
+    /// craft never has battery charge yet still dies on the day its
+    /// propellant runs out, and removing-on-brownout is self-debouncing
+    /// (the spacecraft is gone after one event).
+    pub(super) fn tick_parked_spacecraft(&mut self, events: &mut Vec<GameEvent>) {
+        use rand::Rng;
+        use crate::flaw::FlawTrigger;
+        use crate::rocket_project::RocketProjectId;
+
+        let mut browned_out: Vec<usize> = Vec::new();
+        for (i, sc) in self.spacecraft.iter_mut().enumerate() {
+            let sun_au = crate::location::DELTA_V_MAP
+                .location(&sc.location)
+                .map_or(1.0, |l| l.sun_distance_au());
+            if sc.rocket.run_daily_power_tick(&sc.design, sun_au) {
+                browned_out.push(i);
+            }
+        }
+        for &i in browned_out.iter().rev() {
+            let sc = self.spacecraft.remove(i);
+            let evt = GameEvent::PowerLost {
+                rocket_name: sc.name,
+                location: crate::contract::destination_display_name(&sc.location)
+                    .to_string(),
+            };
+            self.emit(events, evt);
+        }
+
+        // Snapshot PerDay flaws from rocket projects.
+        struct ScFlawRef {
+            project_id: RocketProjectId,
+            flaw_index: usize,
+            daily_rate: f64,
+            consequence: crate::flaw::FlawConsequence,
+            description: String,
+        }
+        let mut sc_flaw_table: Vec<ScFlawRef> = Vec::new();
+        for rp in &self.player_company.rocket_projects {
+            for (fi, flaw) in rp.flaws.iter().enumerate() {
+                if flaw.trigger == FlawTrigger::PerDay {
+                    sc_flaw_table.push(ScFlawRef {
+                        project_id: rp.project_id,
+                        flaw_index: fi,
+                        daily_rate: flaw.daily_rate(),
+                        consequence: flaw.consequence.clone(),
+                        description: flaw.description.clone(),
+                    });
+                }
+            }
+        }
+        let mut sc_flaw_discoveries: Vec<(RocketProjectId, usize)> = Vec::new();
+        let mut sc_news = Vec::new();
+        for sc in &mut self.spacecraft {
+            for rf in &sc_flaw_table {
+                if rf.project_id != sc.rocket_project_id {
+                    continue;
+                }
+                if self.seed.contingent_rng.gen::<f64>() < rf.daily_rate {
+                    // Pick a random attached stage
+                    let attached: Vec<(usize, usize)> = sc.design.stage_groups.iter()
+                        .enumerate()
+                        .flat_map(|(gi, group)| {
+                            let stage_states = &sc.rocket.stage_states;
+                            group.iter().enumerate()
+                                .filter(move |(si, _)| {
+                                    stage_states.get(gi)
+                                        .and_then(|g| g.get(*si))
+                                        .is_some_and(|ss| ss.attached)
+                                })
+                                .map(move |(si, _)| (gi, si))
+                        })
+                        .collect();
+                    if attached.is_empty() { continue; }
+                    let (gi, si) = attached[self.seed.contingent_rng.gen_range(0..attached.len())];
+                    crate::launch::apply_consequence_to_stage(
+                        &mut sc.design, &rf.consequence, gi, si,
+                    );
+                    sc_news.push(GameEvent::MidFlightFlawActivated {
+                        rocket_name: sc.name.clone(),
+                        flaw_description: rf.description.clone(),
+                        consequence: rf.consequence.to_string(),
+                    });
+                    sc_flaw_discoveries.push((rf.project_id, rf.flaw_index));
+                }
+            }
+        }
+        self.emit_all(events, sc_news);
+        // Discover activated flaws on rocket projects
+        for (project_id, flaw_index) in &sc_flaw_discoveries {
+            if let Some(rp) = self.player_company.rocket_projects.iter_mut()
+                .find(|rp| rp.project_id == *project_id)
+            {
+                if *flaw_index < rp.flaws.len() && !rp.flaws[*flaw_index].discovered {
+                    rp.flaws[*flaw_index].discovered = true;
+                }
+            }
+        }
+    }
+}

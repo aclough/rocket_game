@@ -191,7 +191,7 @@ opportunity in the codebase.
   mid-revision saves.
 - **Size/risk:** medium / medium. Simplifies B1 if done first.
 
-### B6. Flaw description pools: nine ~35-line functions with one shape
+### ✅ B6. Flaw description pools: nine ~35-line functions with one shape
 - **Where:** `flaw.rs:247-583` (~280 lines of `match consequence {
   three arrays of six }; pick`), plus three identical count loops at
   `flaw.rs:104-144, 205-225`, and an inline re-implementation of the
@@ -215,7 +215,7 @@ opportunity in the codebase.
 
 ## C. The daily tick and flight simulation
 
-### C1. `advance_day` is a 686-line script
+### ✅ C1. `advance_day` is a 686-line script
 - **Where:** `advance.rs:16-700`. Month-start work is one `if` block
   (`:246-449`) covering salaries, economy, geopolitics, market
   modifiers, events, tech unlocks, contract generation, campaigns,
