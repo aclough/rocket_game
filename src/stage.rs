@@ -86,6 +86,16 @@ impl Stage {
         self.engine.thrust_n * self.engine_count as f64
     }
 
+    /// Take the stage out of the vehicle: no engines, no thrust, no
+    /// propellant. It stays in its group so stage indices keep lining
+    /// up with a flying `Rocket`'s per-stage state.
+    pub fn disable(&mut self) {
+        self.engine_count = 0;
+        self.engine.thrust_n = 0.0;
+        self.engine.isp_s = 0.0;
+        self.propellant_mass_kg = 0.0;
+    }
+
     /// Burn time in seconds (all propellant, all engines firing).
     pub fn burn_time_s(&self) -> f64 {
         let flow_rate = self.engine.mass_flow_rate() * self.engine_count as f64;

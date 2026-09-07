@@ -7,7 +7,7 @@ use crate::engine_project::EngineSource;
 use crate::flight::{Flight, FlightId, FlightStatus, Payload};
 use crate::event::{GameEvent, ProjectEvent};
 use crate::project::ProjectKind;
-use crate::launch::{self, LaunchRecord, LaunchOutcome};
+use crate::launch::{self, FlawOwner, FlawRoll, FlawTables, LaunchRecord, LaunchOutcome};
 use crate::rocket::RocketId;
 
 use super::*;
@@ -138,55 +138,16 @@ impl GameState {
 
         let mut events = Vec::new();
 
-        // Mark activated flaws as discovered on engine projects
+        // Mark what fired as discovered on the projects that own it.
+        let discoveries = FlawDiscoveries {
+            engines: sim.engine_discoveries.clone(),
+            rockets: sim.rocket_flaw_discoveries.iter()
+                .map(|&fi| (inv_rocket.rocket_project_id, fi))
+                .collect(),
+            reactors: Vec::new(),
+        };
         let mut discovered = Vec::new();
-        for (engine_id, indices) in &sim.engine_flaw_discoveries {
-            if let Some(ep) = self.player_company.engine_projects.iter_mut()
-                .find(|ep| ep.design.id == *engine_id)
-            {
-                for &idx in indices {
-                    if idx < ep.flaws.len() {
-                        ep.flaws[idx].discovered = true;
-                        discovered.push(GameEvent::project(
-                            ProjectKind::Engine, ep.design.name.clone(),
-                            ProjectEvent::FlawDiscovered { description: ep.flaws[idx].description.clone() },
-                        ));
-                    }
-                }
-            }
-        }
-        self.emit_all(&mut events, discovered);
-
-        // Mark activated flaws as discovered on contracted engines
-        for (source, indices) in &sim.contracted_flaw_discoveries {
-            if let EngineSource::Contracted(ce_id) = source {
-                if let Some(ce) = self.player_company.contracted_engines.iter_mut()
-                    .find(|ce| ce.id == *ce_id)
-                {
-                    for &idx in indices {
-                        if idx < ce.flaws.len() {
-                            ce.flaws[idx].discovered = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Mark activated flaws as discovered on rocket project
-        let mut discovered = Vec::new();
-        if let Some(rp_mut) = self.player_company.rocket_projects.iter_mut()
-            .find(|rp| rp.project_id == inv_rocket.rocket_project_id)
-        {
-            for &idx in &sim.rocket_flaw_discoveries {
-                if idx < rp_mut.flaws.len() {
-                    rp_mut.flaws[idx].discovered = true;
-                    discovered.push(GameEvent::project(
-                        ProjectKind::Rocket, rp_mut.design.name.clone(),
-                        ProjectEvent::FlawDiscovered { description: rp_mut.flaws[idx].description.clone() },
-                    ));
-                }
-            }
-        }
+        self.apply_flaw_discoveries(discoveries, &mut discovered);
         self.emit_all(&mut events, discovered);
 
 
@@ -331,533 +292,29 @@ impl GameState {
 
     /// Process daily flight advancement. Returns events generated.
     pub(super) fn advance_flights(&mut self) -> Vec<GameEvent> {
-        use rand::Rng;
-        use crate::engine::EngineId;
-        use crate::flaw::{FlawConsequence, FlawTrigger};
-        use crate::engine_project::EngineSource;
-        use crate::rocket_project::RocketProjectId;
-
         let mut events = Vec::new();
-        let mut arrived_indices = Vec::new();
-        let mut stranded_indices = Vec::new();
-        // Flights destroyed mid-flight by a catastrophic stage loss.
-        let mut lost_indices: Vec<usize> = Vec::new();
-
-        // Snapshot engine flaws keyed by engine_id for lookup during flight iteration.
-        // Each entry: (engine_id, engine_name, flaw_index_in_project, flaw_data, source)
-        struct FlawRef {
-            engine_id: EngineId,
-            engine_name: String,
-            activation_chance: f64,
-            consequence: FlawConsequence,
-            description: String,
-            source: EngineSource,
-            flaw_index: usize,
-        }
-        let mut flaw_table: Vec<FlawRef> = Vec::new();
-        for ep in &self.player_company.engine_projects {
-            let source = EngineSource::PlayerDesign(ep.project_id);
-            for (fi, flaw) in ep.flaws.iter().enumerate() {
-                flaw_table.push(FlawRef {
-                    engine_id: ep.design.id,
-                    engine_name: ep.design.name.clone(),
-                    activation_chance: flaw.activation_chance,
-                    consequence: flaw.consequence.clone(),
-                    description: flaw.description.clone(),
-                    source,
-                    flaw_index: fi,
-                });
-            }
-        }
-        for ce in &self.player_company.contracted_engines {
-            let source = EngineSource::Contracted(ce.id);
-            for (fi, flaw) in ce.flaws.iter().enumerate() {
-                flaw_table.push(FlawRef {
-                    engine_id: ce.design.id,
-                    engine_name: ce.design.name.clone(),
-                    activation_chance: flaw.activation_chance,
-                    consequence: flaw.consequence.clone(),
-                    description: flaw.description.clone(),
-                    source,
-                    flaw_index: fi,
-                });
-            }
-        }
-
-        // Snapshot rocket project PerDay flaws for endurance checking.
-        struct RocketFlawRef {
-            project_id: RocketProjectId,
-            flaw_index: usize,
-            daily_rate: f64,
-            consequence: FlawConsequence,
-            description: String,
-        }
-        let mut rocket_flaw_table: Vec<RocketFlawRef> = Vec::new();
-        for rp in &self.player_company.rocket_projects {
-            for (fi, flaw) in rp.flaws.iter().enumerate() {
-                if flaw.trigger == FlawTrigger::PerDay {
-                    rocket_flaw_table.push(RocketFlawRef {
-                        project_id: rp.project_id,
-                        flaw_index: fi,
-                        daily_rate: flaw.daily_rate(),
-                        consequence: flaw.consequence.clone(),
-                        description: flaw.description.clone(),
-                    });
-                }
-            }
-        }
-
-        // Snapshot reactor flaws keyed by reactor design id. PerFlight
-        // flaws roll when a reactor's stage group fires; PerDay endurance
-        // flaws roll each day in transit.
-        struct ReactorFlawRef {
-            reactor_id: crate::reactor::ReactorId,
-            flaw_index: usize,
-            trigger: FlawTrigger,
-            activation_chance: f64,
-            daily_rate: f64,
-            consequence: FlawConsequence,
-            description: String,
-        }
-        let mut reactor_flaw_table: Vec<ReactorFlawRef> = Vec::new();
-        for rp in &self.player_company.reactor_projects {
-            for (fi, flaw) in rp.flaws.iter().enumerate() {
-                reactor_flaw_table.push(ReactorFlawRef {
-                    reactor_id: rp.design.id,
-                    flaw_index: fi,
-                    trigger: flaw.trigger,
-                    activation_chance: flaw.activation_chance,
-                    daily_rate: flaw.daily_rate(),
-                    consequence: flaw.consequence.clone(),
-                    description: flaw.description.clone(),
-                });
-            }
-        }
-
-        // Track flaw discoveries to apply after the flight loop
-        let mut flaw_discoveries: Vec<(EngineSource, usize, String)> = Vec::new();
-        // Track rocket project flaw discoveries (project_id, flaw_index)
-        let mut rocket_flaw_discoveries: Vec<(RocketProjectId, usize)> = Vec::new();
-        // Track reactor project flaw discoveries (reactor_id, flaw_index)
-        let mut reactor_flaw_discoveries: Vec<(crate::reactor::ReactorId, usize)> = Vec::new();
+        let tables = FlawTables::snapshot(&self.player_company);
+        let mut discoveries = FlawDiscoveries::default();
+        let mut ended: Vec<(usize, FlightEnd)> = Vec::new();
 
         for (i, flight) in self.active_flights.iter_mut().enumerate() {
             if !matches!(flight.status, FlightStatus::InTransit) {
                 continue;
             }
-
-            // Set to the flaw description if a catastrophic StageLoss
-            // activates this tick — the vehicle is destroyed (broke apart)
-            // rather than merely stranded.
-            let mut flight_lost: Option<String> = None;
-
-            if flight.leg_days_remaining > 0 {
-                flight.leg_days_remaining -= 1;
-            }
-
-            // Roll endurance (PerDay) flaws for this flight's rocket project
-            for rf in &rocket_flaw_table {
-                if rf.project_id != flight.rocket_project_id {
-                    continue;
-                }
-                if self.seed.contingent_rng.gen::<f64>() < rf.daily_rate {
-                    // Pick a random attached stage group and stage
-                    let attached: Vec<(usize, usize)> = flight.design.stage_groups.iter()
-                        .enumerate()
-                        .flat_map(|(gi, group)| {
-                            let stage_states = &flight.rocket.stage_states;
-                            group.iter().enumerate()
-                                .filter(move |(si, _)| {
-                                    stage_states.get(gi)
-                                        .and_then(|g| g.get(*si))
-                                        .is_some_and(|ss| ss.attached)
-                                })
-                                .map(move |(si, _)| (gi, si))
-                        })
-                        .collect();
-                    if attached.is_empty() {
-                        continue;
-                    }
-                    let (gi, si) = attached[self.seed.contingent_rng.gen_range(0..attached.len())];
-
-                    crate::launch::apply_consequence_to_stage(
-                        &mut flight.design,
-                        &rf.consequence,
-                        gi, si,
-                    );
-                    if matches!(rf.consequence, FlawConsequence::StageLoss) {
-                        flight_lost = Some(rf.description.clone());
-                    }
-
-                    let evt = GameEvent::MidFlightFlawActivated {
-                        rocket_name: flight.rocket_name.clone(),
-                        flaw_description: rf.description.clone(),
-                        consequence: rf.consequence.to_string(),
-                    };
-                    events.push(evt);
-
-                    rocket_flaw_discoveries.push((rf.project_id, rf.flaw_index));
-                    // The vehicle is gone — nothing after the loss can
-                    // be observed, so stop rolling remaining flaws (at
-                    // most one rocket-destroying discovery per flight).
-                    if flight_lost.is_some() {
-                        break;
-                    }
-                }
-            }
-
-            // Roll reactor flaws for reactors on attached stages. A
-            // reactor runs from flight start, so its one-shot PerFlight
-            // flaws roll once — on the flight's first in-transit tick —
-            // while PerDay endurance flaws roll every day. Each installed
-            // reactor rolls independently.
-            if !reactor_flaw_table.is_empty() {
-                let roll_perflight = !flight.reactor_flaws_rolled;
-                let mut reactor_instances: Vec<(usize, usize, crate::reactor::ReactorId)> = Vec::new();
-                for (gi, group) in flight.design.stage_groups.iter().enumerate() {
-                    for (si, stage) in group.iter().enumerate() {
-                        let attached = flight.rocket.stage_states.get(gi)
-                            .and_then(|g| g.get(si))
-                            .is_some_and(|ss| ss.attached);
-                        if !attached {
-                            continue;
-                        }
-                        for src in &stage.power_sources {
-                            if let crate::power::PowerSourceKind::Reactor { design: rd } = &src.kind {
-                                reactor_instances.push((gi, si, rd.id));
-                            }
-                        }
-                    }
-                }
-                'reactors: for (gi, si, reactor_id) in reactor_instances {
-                    for rf in &reactor_flaw_table {
-                        if rf.reactor_id != reactor_id {
-                            continue;
-                        }
-                        if flight_lost.is_some() {
-                            break 'reactors;
-                        }
-                        let fires = match rf.trigger {
-                            FlawTrigger::PerDay =>
-                                self.seed.contingent_rng.gen::<f64>() < rf.daily_rate,
-                            FlawTrigger::PerFlight =>
-                                roll_perflight
-                                    && self.seed.contingent_rng.gen::<f64>() < rf.activation_chance,
-                        };
-                        if fires {
-                            crate::launch::apply_reactor_consequence_to_stage(
-                                &mut flight.design,
-                                &rf.consequence,
-                                gi, si, reactor_id,
-                            );
-                            if matches!(rf.consequence, FlawConsequence::StageLoss) {
-                                flight_lost = Some(rf.description.clone());
-                            }
-                            let evt = GameEvent::MidFlightFlawActivated {
-                                rocket_name: flight.rocket_name.clone(),
-                                flaw_description: rf.description.clone(),
-                                consequence: rf.consequence.to_string(),
-                            };
-                            events.push(evt);
-                            reactor_flaw_discoveries.push((reactor_id, rf.flaw_index));
-                        }
-                    }
-                }
-                flight.reactor_flaws_rolled = true;
-            }
-
-            // A catastrophic stage loss during the daily rolls destroys
-            // the vehicle — fail it now rather than letting the downstream
-            // dv check report it as merely stranded.
-            if let Some(reason) = flight_lost.take() {
-                flight.status = FlightStatus::Failed { reason };
-                lost_indices.push(i);
-                continue;
-            }
-
-            if flight.leg_days_remaining == 0 {
-                // Leg complete — consume propellant for this leg
-                if let Some(leg) = flight.route.get(flight.current_leg) {
-                    let dv_cost = leg.delta_v_cost;
-                    let ambient = leg.ambient_pressure_pa;
-                    let burn_result = flight.rocket.burn_sequential(&flight.design, dv_cost, ambient);
-
-                    flight.current_location = leg.to.clone();
-                    flight.rocket.location = leg.to.clone();
-
-                    // Check overexpansion destruction for atmospheric legs.
-                    // Only the first burned group is at sea level; upper groups
-                    // fire at high altitude. Also skip groups already checked at launch.
-                    if ambient > 0.0 {
-                        let first_burned = burn_result.groups_burned.first().copied();
-                        for &gi in &burn_result.groups_burned {
-                            // Only the first burned group faces atmospheric pressure
-                            if Some(gi) != first_burned {
-                                continue;
-                            }
-                            if flight.flaw_rolled_groups.contains(&gi) {
-                                continue; // already checked during launch sim
-                            }
-                            if let Some(group) = flight.design.stage_groups.get_mut(gi) {
-                                for stage in group.iter_mut() {
-                                    let risk = stage.engine.overexpansion_destruction_risk(ambient);
-                                    if risk <= 0.0 { continue; }
-                                    let mut engines_lost = 0u32;
-                                    for _ in 0..stage.engine_count {
-                                        if self.seed.contingent_rng.gen::<f64>() < risk {
-                                            engines_lost += 1;
-                                        }
-                                    }
-                                    if engines_lost > 0 {
-                                        if engines_lost >= stage.engine_count {
-                                            stage.engine_count = 0;
-                                            stage.engine.thrust_n = 0.0;
-                                            stage.engine.isp_s = 0.0;
-                                            stage.propellant_mass_kg = 0.0;
-                                        } else {
-                                            stage.engine_count -= engines_lost;
-                                        }
-                                        let evt = GameEvent::MidFlightFlawActivated {
-                                            rocket_name: flight.rocket_name.clone(),
-                                            flaw_description: format!(
-                                                "{} engine(s) destroyed by flow separation",
-                                                engines_lost,
-                                            ),
-                                            consequence: "Engine destruction".to_string(),
-                                        };
-                                        events.push(evt);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Roll mid-flight flaws for groups that burned propellant
-                    // (must happen before stranding check — stage was used even if burn fell short)
-                    // Filter to groups not yet rolled for flaws
-                    let new_burned: Vec<usize> = burn_result.groups_burned.iter()
-                        .copied()
-                        .filter(|gi| !flight.flaw_rolled_groups.contains(gi))
-                        .collect();
-                    if !new_burned.is_empty() {
-                        for &gi in &new_burned {
-                            flight.flaw_rolled_groups.insert(gi);
-                        }
-                        // Collect (group_index, stage_index, engine_id, engine_count) from newly-burned stages
-                        let mut burned_stages: Vec<(usize, usize, EngineId, u32)> = Vec::new();
-                        for &gi in &new_burned {
-                            if let Some(group) = flight.design.stage_groups.get(gi) {
-                                for (si, stage) in group.iter().enumerate() {
-                                    burned_stages.push((gi, si, stage.engine.id, stage.engine_count));
-                                }
-                            }
-                        }
-
-                        // Roll flaws for each engine used in burned groups.
-                        // Stop at the first StageLoss — the vehicle is
-                        // gone and nothing after it can be observed, so
-                        // a flight discovers at most one
-                        // rocket-destroying flaw.
-                        'burned: for &(gi, si, engine_id, engine_count) in &burned_stages {
-                            for flaw_ref in &flaw_table {
-                                if flaw_ref.engine_id != engine_id {
-                                    continue;
-                                }
-                                if flight_lost.is_some() {
-                                    break 'burned;
-                                }
-                                let effective_p = 1.0 - (1.0 - flaw_ref.activation_chance)
-                                    .powi(engine_count as i32);
-                                if self.seed.contingent_rng.gen::<f64>() < effective_p {
-                                    flight.flaws_activated.push(crate::launch::FlawActivation {
-                                        flaw_description: flaw_ref.description.clone(),
-                                        consequence: flaw_ref.consequence.clone(),
-                                        engine_name: flaw_ref.engine_name.clone(),
-                                    });
-
-                                    // Apply consequence to the stage that has the flaw
-                                    crate::launch::apply_consequence_to_stage(
-                                        &mut flight.design,
-                                        &flaw_ref.consequence,
-                                        gi,
-                                        si,
-                                    );
-                                    if matches!(flaw_ref.consequence, FlawConsequence::StageLoss) {
-                                        flight_lost = Some(flaw_ref.description.clone());
-                                    }
-
-                                    let evt = GameEvent::MidFlightFlawActivated {
-                                        rocket_name: flight.rocket_name.clone(),
-                                        flaw_description: flaw_ref.description.clone(),
-                                        consequence: flaw_ref.consequence.to_string(),
-                                    };
-                                    events.push(evt);
-
-                                    flaw_discoveries.push((
-                                        flaw_ref.source,
-                                        flaw_ref.flaw_index,
-                                        flaw_ref.engine_name.clone(),
-                                    ));
-                                }
-                            }
-                        }
-
-                        // A stage loss during the burn destroys the vehicle.
-                        if let Some(reason) = flight_lost.take() {
-                            flight.status = FlightStatus::Failed { reason };
-                            lost_indices.push(i);
-                            continue;
-                        }
-
-                        // After flaw application, recheck remaining dv for stranding
-                        let remaining_dv = flight.rocket.remaining_delta_v(&flight.design);
-                        let remaining_route_dv: f64 = flight.route.iter()
-                            .skip(flight.current_leg + 1)
-                            .map(|leg| leg.delta_v_cost)
-                            .sum();
-                        if remaining_route_dv > 0.0 && remaining_dv < remaining_route_dv * 0.5 {
-                            flight.status = FlightStatus::Stranded;
-                            stranded_indices.push(i);
-                            continue;
-                        }
-                    }
-
-                    // Check if burn fell significantly short — strand the flight
-                    if burn_result.dv_achieved < dv_cost * 0.95 {
-                        flight.status = FlightStatus::Stranded;
-                        stranded_indices.push(i);
-                        continue;
-                    }
-                }
-
-                // Advance to next leg
-                flight.current_leg += 1;
-                if flight.current_leg < flight.route.len() {
-                    flight.leg_days_remaining = flight.route[flight.current_leg].total_days();
-                } else {
-                    // All legs complete
-                    flight.status = FlightStatus::Arrived;
-                    arrived_indices.push(i);
-                }
-            }
-
-            // Power tick: drain or recharge batteries from supply vs.
-            // housekeeping demand at the current location's solar distance.
-            // Brownout strands the flight (housekeeping lost → loss of
-            // control). Runs on every design: a stage with a bare power rack
-            // still carries its default battery, so nothing is exempt.
-            //
-            // Runs last, so a leg completed this tick is charged at the
-            // location it *reached* rather than the one it left. A flight
-            // that arrived is skipped entirely: it is about to become a
-            // Spacecraft, and the parked-fleet loop in `advance_day` ticks
-            // it there — after its payload is delivered, and exactly once.
-            // Ticking here as well was the arrival-day double drain.
-            // Stranded and destroyed flights `continue` above and never
-            // reach this point.
-            if !matches!(flight.status, FlightStatus::Arrived) {
-                let sun_au = crate::location::DELTA_V_MAP
-                    .location(&flight.current_location)
-                    .map_or(1.0, |l| l.sun_distance_au());
-                let brownout = flight.rocket.run_daily_power_tick(&flight.design, sun_au);
-                if brownout {
-                    flight.status = FlightStatus::Stranded;
-                    stranded_indices.push(i);
-                    let evt = GameEvent::PowerLost {
-                        rocket_name: flight.rocket_name.clone(),
-                        location: crate::contract::destination_display_name(
-                            &flight.current_location).to_string(),
-                    };
-                    events.push(evt);
-                    continue;
-                }
+            let end = tick_flight(
+                flight, &tables, &mut self.seed.contingent_rng, &mut events, &mut discoveries,
+            );
+            if let Some(end) = end {
+                ended.push((i, end));
             }
         }
 
-        // Apply flaw discoveries to engine/rocket projects
-        for (source, flaw_index, _engine_name) in &flaw_discoveries {
-            match source {
-                EngineSource::PlayerDesign(project_id) => {
-                    if let Some(ep) = self.player_company.engine_projects.iter_mut()
-                        .find(|ep| ep.project_id == *project_id)
-                    {
-                        if *flaw_index < ep.flaws.len() && !ep.flaws[*flaw_index].discovered {
-                            ep.flaws[*flaw_index].discovered = true;
-                            let evt = GameEvent::project(
-                                ProjectKind::Engine, ep.design.name.clone(),
-                                ProjectEvent::FlawDiscovered {
-                                    description: ep.flaws[*flaw_index].description.clone(),
-                                },
-                            );
-                            events.push(evt);
-                        }
-                    }
-                }
-                EngineSource::Contracted(ce_id) => {
-                    if let Some(ce) = self.player_company.contracted_engines.iter_mut()
-                        .find(|ce| ce.id == *ce_id)
-                    {
-                        if *flaw_index < ce.flaws.len() {
-                            ce.flaws[*flaw_index].discovered = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Apply rocket project endurance flaw discoveries
-        for (project_id, flaw_index) in &rocket_flaw_discoveries {
-            if let Some(rp) = self.player_company.rocket_projects.iter_mut()
-                .find(|rp| rp.project_id == *project_id)
-            {
-                if *flaw_index < rp.flaws.len() && !rp.flaws[*flaw_index].discovered {
-                    rp.flaws[*flaw_index].discovered = true;
-                    // A rocket flaw: this used to be reported as an engine flaw.
-                    let evt = GameEvent::project(
-                        ProjectKind::Rocket, rp.design.name.clone(),
-                        ProjectEvent::FlawDiscovered {
-                            description: rp.flaws[*flaw_index].description.clone(),
-                        },
-                    );
-                    events.push(evt);
-                }
-            }
-        }
-
-        // Apply reactor project flaw discoveries (keyed by reactor id).
-        for (reactor_id, flaw_index) in &reactor_flaw_discoveries {
-            if let Some(rp) = self.player_company.reactor_projects.iter_mut()
-                .find(|rp| rp.design.id == *reactor_id)
-            {
-                if *flaw_index < rp.flaws.len() && !rp.flaws[*flaw_index].discovered {
-                    rp.flaws[*flaw_index].discovered = true;
-                    let evt = GameEvent::project(
-                        ProjectKind::Reactor, rp.design.name.clone(),
-                        ProjectEvent::FlawDiscovered {
-                            description: rp.flaws[*flaw_index].description.clone(),
-                        },
-                    );
-                    events.push(evt);
-                }
-            }
-        }
+        self.apply_flaw_discoveries(discoveries, &mut events);
 
         // Resolve arrived / stranded / lost flights. Process in reverse
         // index order so removals don't shift the indices still to remove.
-        enum FlightEnd { Arrived, Stranded, Lost }
-        let mut remove_indices: Vec<(usize, FlightEnd)> = Vec::new();
-        for &i in &arrived_indices {
-            remove_indices.push((i, FlightEnd::Arrived));
-        }
-        for &i in &stranded_indices {
-            remove_indices.push((i, FlightEnd::Stranded));
-        }
-        for &i in &lost_indices {
-            remove_indices.push((i, FlightEnd::Lost));
-        }
-        remove_indices.sort_by_key(|&(i, _)| std::cmp::Reverse(i));
-
-        for (i, end) in remove_indices {
+        ended.sort_by_key(|&(i, _)| std::cmp::Reverse(i));
+        for (i, end) in ended {
             let flight = self.active_flights.remove(i);
             let location = crate::contract::destination_display_name(&flight.current_location)
                 .to_string();
@@ -867,11 +324,10 @@ impl GameState {
                     events.extend(arrival_events);
                 }
                 FlightEnd::Stranded => {
-                    let evt = GameEvent::SpacecraftStranded {
+                    events.push(GameEvent::SpacecraftStranded {
                         rocket_name: flight.rocket_name.clone(),
                         location,
-                    };
-                    events.push(evt);
+                    });
                 }
                 FlightEnd::Lost => {
                     // Vehicle destroyed mid-flight — the mission (and any
@@ -889,17 +345,84 @@ impl GameState {
                         .collect();
                     let severity = self.manifest_failure_severity(&manifest);
                     self.player_company.reputation.on_launch_failure(&self.balance.reputation, severity);
-                    let evt = GameEvent::SpacecraftLost {
+                    events.push(GameEvent::SpacecraftLost {
                         rocket_name: flight.rocket_name.clone(),
                         location,
                         reason,
-                    };
-                    events.push(evt);
+                    });
                 }
             }
         }
 
         events
+    }
+
+    /// Mark the flaws that fired today as discovered on the projects
+    /// that own them, with a discovery event for each newly revealed
+    /// one. Contracted engines' flaws are marked but not announced —
+    /// they are someone else's design.
+    fn apply_flaw_discoveries(&mut self, discoveries: FlawDiscoveries, events: &mut Vec<GameEvent>) {
+        let mut news = Vec::new();
+        for (owner, flaw_index) in &discoveries.engines {
+            match owner {
+                FlawOwner::Engine { source: EngineSource::PlayerDesign(project_id), .. } => {
+                    if let Some(ep) = self.player_company.engine_projects.iter_mut()
+                        .find(|ep| ep.project_id == *project_id)
+                    {
+                        if *flaw_index < ep.flaws.len() && !ep.flaws[*flaw_index].discovered {
+                            ep.flaws[*flaw_index].discovered = true;
+                            news.push(GameEvent::project(
+                                ProjectKind::Engine, ep.design.name.clone(),
+                                ProjectEvent::FlawDiscovered {
+                                    description: ep.flaws[*flaw_index].description.clone(),
+                                },
+                            ));
+                        }
+                    }
+                }
+                FlawOwner::Engine { source: EngineSource::Contracted(ce_id), .. } => {
+                    if let Some(ce) = self.player_company.contracted_engines.iter_mut()
+                        .find(|ce| ce.id == *ce_id)
+                    {
+                        if *flaw_index < ce.flaws.len() {
+                            ce.flaws[*flaw_index].discovered = true;
+                        }
+                    }
+                }
+                FlawOwner::Rocket(_) | FlawOwner::Reactor(_) => {}
+            }
+        }
+        for (project_id, flaw_index) in &discoveries.rockets {
+            if let Some(rp) = self.player_company.rocket_projects.iter_mut()
+                .find(|rp| rp.project_id == *project_id)
+            {
+                if *flaw_index < rp.flaws.len() && !rp.flaws[*flaw_index].discovered {
+                    rp.flaws[*flaw_index].discovered = true;
+                    news.push(GameEvent::project(
+                        ProjectKind::Rocket, rp.design.name.clone(),
+                        ProjectEvent::FlawDiscovered {
+                            description: rp.flaws[*flaw_index].description.clone(),
+                        },
+                    ));
+                }
+            }
+        }
+        for (reactor_id, flaw_index) in &discoveries.reactors {
+            if let Some(rp) = self.player_company.reactor_projects.iter_mut()
+                .find(|rp| rp.design.id == *reactor_id)
+            {
+                if *flaw_index < rp.flaws.len() && !rp.flaws[*flaw_index].discovered {
+                    rp.flaws[*flaw_index].discovered = true;
+                    news.push(GameEvent::project(
+                        ProjectKind::Reactor, rp.design.name.clone(),
+                        ProjectEvent::FlawDiscovered {
+                            description: rp.flaws[*flaw_index].description.clone(),
+                        },
+                    ));
+                }
+            }
+        }
+        events.extend(news);
     }
 
     /// Resolve a flight that has arrived at its destination.
@@ -1237,10 +760,6 @@ impl GameState {
     /// propellant runs out, and removing-on-brownout is self-debouncing
     /// (the spacecraft is gone after one event).
     pub(super) fn tick_parked_spacecraft(&mut self, events: &mut Vec<GameEvent>) {
-        use rand::Rng;
-        use crate::flaw::FlawTrigger;
-        use crate::rocket_project::RocketProjectId;
-
         let mut browned_out: Vec<usize> = Vec::new();
         for (i, sc) in self.spacecraft.iter_mut().enumerate() {
             let sun_au = crate::location::DELTA_V_MAP
@@ -1260,74 +779,288 @@ impl GameState {
             self.emit(events, evt);
         }
 
-        // Snapshot PerDay flaws from rocket projects.
-        struct ScFlawRef {
-            project_id: RocketProjectId,
-            flaw_index: usize,
-            daily_rate: f64,
-            consequence: crate::flaw::FlawConsequence,
-            description: String,
-        }
-        let mut sc_flaw_table: Vec<ScFlawRef> = Vec::new();
-        for rp in &self.player_company.rocket_projects {
-            for (fi, flaw) in rp.flaws.iter().enumerate() {
-                if flaw.trigger == FlawTrigger::PerDay {
-                    sc_flaw_table.push(ScFlawRef {
-                        project_id: rp.project_id,
-                        flaw_index: fi,
-                        daily_rate: flaw.daily_rate(),
-                        consequence: flaw.consequence.clone(),
-                        description: flaw.description.clone(),
-                    });
-                }
-            }
-        }
-        let mut sc_flaw_discoveries: Vec<(RocketProjectId, usize)> = Vec::new();
-        let mut sc_news = Vec::new();
+        // Endurance flaws age a parked vehicle the same way they age a
+        // flight. A StageLoss disables the stage but the parked craft
+        // stays — there is no mission to lose.
+        let tables = FlawTables::snapshot(&self.player_company);
+        let mut discoveries = FlawDiscoveries::default();
+        let mut news = Vec::new();
         for sc in &mut self.spacecraft {
-            for rf in &sc_flaw_table {
-                if rf.project_id != sc.rocket_project_id {
-                    continue;
-                }
-                if self.seed.contingent_rng.gen::<f64>() < rf.daily_rate {
-                    // Pick a random attached stage
-                    let attached: Vec<(usize, usize)> = sc.design.stage_groups.iter()
-                        .enumerate()
-                        .flat_map(|(gi, group)| {
-                            let stage_states = &sc.rocket.stage_states;
-                            group.iter().enumerate()
-                                .filter(move |(si, _)| {
-                                    stage_states.get(gi)
-                                        .and_then(|g| g.get(*si))
-                                        .is_some_and(|ss| ss.attached)
-                                })
-                                .map(move |(si, _)| (gi, si))
-                        })
-                        .collect();
-                    if attached.is_empty() { continue; }
-                    let (gi, si) = attached[self.seed.contingent_rng.gen_range(0..attached.len())];
-                    crate::launch::apply_consequence_to_stage(
-                        &mut sc.design, &rf.consequence, gi, si,
-                    );
-                    sc_news.push(GameEvent::MidFlightFlawActivated {
-                        rocket_name: sc.name.clone(),
-                        flaw_description: rf.description.clone(),
-                        consequence: rf.consequence.to_string(),
-                    });
-                    sc_flaw_discoveries.push((rf.project_id, rf.flaw_index));
-                }
+            let roll = crate::launch::roll_endurance_flaws(
+                &mut self.seed.contingent_rng, &mut sc.design, &sc.rocket,
+                sc.rocket_project_id, &tables.rockets,
+            );
+            for activation in &roll.activations {
+                news.push(GameEvent::MidFlightFlawActivated {
+                    rocket_name: sc.name.clone(),
+                    flaw_description: activation.flaw_description.clone(),
+                    consequence: activation.consequence.to_string(),
+                });
+            }
+            discoveries.record(&roll);
+        }
+        self.emit_all(events, news);
+        // Parked craft don't announce discoveries (they never did); the
+        // project just learns the flaw is real.
+        let mut quiet = Vec::new();
+        self.apply_flaw_discoveries(discoveries, &mut quiet);
+    }
+}
+
+// ── One flight, one day ──────────────────────────────────────────────
+
+/// Why a flight left the active list this tick.
+enum FlightEnd {
+    Arrived,
+    Stranded,
+    Lost,
+}
+
+/// Flaws that fired today, to be marked discovered on their owners once
+/// the vehicles they were snapshotted for have all been ticked.
+#[derive(Default)]
+struct FlawDiscoveries {
+    engines: Vec<(FlawOwner, usize)>,
+    rockets: Vec<(crate::rocket_project::RocketProjectId, usize)>,
+    reactors: Vec<(crate::reactor::ReactorId, usize)>,
+}
+
+impl FlawDiscoveries {
+    fn record(&mut self, roll: &FlawRoll) {
+        for &(owner, fi) in &roll.discoveries {
+            match owner {
+                FlawOwner::Engine { .. } => self.engines.push((owner, fi)),
+                FlawOwner::Rocket(id) => self.rockets.push((id, fi)),
+                FlawOwner::Reactor(id) => self.reactors.push((id, fi)),
             }
         }
-        self.emit_all(events, sc_news);
-        // Discover activated flaws on rocket projects
-        for (project_id, flaw_index) in &sc_flaw_discoveries {
-            if let Some(rp) = self.player_company.rocket_projects.iter_mut()
-                .find(|rp| rp.project_id == *project_id)
-            {
-                if *flaw_index < rp.flaws.len() && !rp.flaws[*flaw_index].discovered {
-                    rp.flaws[*flaw_index].discovered = true;
+    }
+}
+
+/// The news for each flaw a roll set off.
+fn push_activation_events(events: &mut Vec<GameEvent>, rocket_name: &str, roll: &FlawRoll) {
+    for a in &roll.activations {
+        events.push(GameEvent::MidFlightFlawActivated {
+            rocket_name: rocket_name.to_string(),
+            flaw_description: a.flaw_description.clone(),
+            consequence: a.consequence.to_string(),
+        });
+    }
+}
+
+/// Roll the flaws of every reactor on an attached stage. A reactor runs
+/// from flight start, so its one-shot `PerFlight` flaws roll once — on
+/// the flight's first in-transit tick — while `PerDay` endurance flaws
+/// roll every day. Each installed reactor rolls independently; a
+/// `StageLoss` stops everything.
+fn roll_reactor_flaws(
+    rng: &mut rand::rngs::StdRng,
+    design: &mut crate::rocket::RocketDesign,
+    rocket: &crate::rocket::Rocket,
+    roll_perflight: bool,
+    table: &[crate::launch::FlawRef],
+) -> FlawRoll {
+    use rand::Rng;
+    use crate::flaw::{FlawConsequence, FlawTrigger};
+
+    let mut roll = FlawRoll::default();
+    let mut instances: Vec<(usize, usize, crate::reactor::ReactorId)> = Vec::new();
+    for (gi, group) in design.stage_groups.iter().enumerate() {
+        for (si, stage) in group.iter().enumerate() {
+            let attached = rocket.stage_states.get(gi)
+                .and_then(|g| g.get(si))
+                .is_some_and(|ss| ss.attached);
+            if !attached {
+                continue;
+            }
+            for src in &stage.power_sources {
+                if let crate::power::PowerSourceKind::Reactor { design: rd } = &src.kind {
+                    instances.push((gi, si, rd.id));
                 }
             }
         }
     }
+    'reactors: for (gi, si, reactor_id) in instances {
+        for rf in table.iter().filter(|f| f.owner == FlawOwner::Reactor(reactor_id)) {
+            if roll.lost.is_some() {
+                break 'reactors;
+            }
+            let fires = match rf.trigger {
+                FlawTrigger::PerDay => rng.gen::<f64>() < rf.daily_rate,
+                FlawTrigger::PerFlight =>
+                    roll_perflight && rng.gen::<f64>() < rf.activation_chance,
+            };
+            if fires {
+                launch::apply_reactor_consequence_to_stage(
+                    design, &rf.consequence, gi, si, reactor_id,
+                );
+                roll.activations.push(launch::FlawActivation {
+                    flaw_description: rf.description.clone(),
+                    consequence: rf.consequence.clone(),
+                    engine_name: String::new(),
+                });
+                roll.discoveries.push((rf.owner, rf.flaw_index));
+                if matches!(rf.consequence, FlawConsequence::StageLoss) {
+                    roll.lost = Some(rf.description.clone());
+                }
+            }
+        }
+    }
+    roll
+}
+
+/// One day for one flight in transit: the vehicle ages (endurance and
+/// reactor flaws), a leg that completes today is flown (burn, then the
+/// flaws and flow separation of the stages that just fired, then the
+/// stranding checks), and the batteries are balanced at wherever it
+/// now is. Events go to `events` unlogged — the tick's caller logs
+/// them — and discoveries are applied after every flight has been
+/// ticked, since they touch the company the tables were snapshotted
+/// from.
+fn tick_flight(
+    flight: &mut Flight,
+    tables: &FlawTables,
+    rng: &mut rand::rngs::StdRng,
+    events: &mut Vec<GameEvent>,
+    discoveries: &mut FlawDiscoveries,
+) -> Option<FlightEnd> {
+    if flight.leg_days_remaining > 0 {
+        flight.leg_days_remaining -= 1;
+    }
+
+    // Endurance flaws of the rocket design.
+    let roll = launch::roll_endurance_flaws(
+        rng, &mut flight.design, &flight.rocket, flight.rocket_project_id, &tables.rockets,
+    );
+    push_activation_events(events, &flight.rocket_name, &roll);
+    discoveries.record(&roll);
+    let mut flight_lost = roll.lost;
+
+    if !tables.reactors.is_empty() {
+        if flight_lost.is_none() {
+            let roll = roll_reactor_flaws(
+                rng, &mut flight.design, &flight.rocket,
+                !flight.reactor_flaws_rolled, &tables.reactors,
+            );
+            push_activation_events(events, &flight.rocket_name, &roll);
+            discoveries.record(&roll);
+            flight_lost = roll.lost;
+        }
+        flight.reactor_flaws_rolled = true;
+    }
+
+    // A catastrophic stage loss during the daily rolls destroys the
+    // vehicle — fail it now rather than letting the downstream dv check
+    // report it as merely stranded.
+    if let Some(reason) = flight_lost.take() {
+        flight.status = FlightStatus::Failed { reason };
+        return Some(FlightEnd::Lost);
+    }
+
+    if flight.leg_days_remaining == 0 {
+        let leg = flight.route.get(flight.current_leg)
+            .map(|l| (l.delta_v_cost, l.ambient_pressure_pa, l.to.clone()));
+        if let Some((dv_cost, ambient, to)) = leg {
+            // Leg complete — consume propellant for this leg.
+            let burn_result = flight.rocket.burn_sequential(&flight.design, dv_cost, ambient);
+            flight.current_location = to.clone();
+            flight.rocket.location = to;
+
+            // Flow separation on an atmospheric leg: only the first burned
+            // group faces the pressure; upper groups fire at altitude, and
+            // a group already checked on the pad isn't checked again.
+            if ambient > 0.0 {
+                if let Some(&gi) = burn_result.groups_burned.first() {
+                    if !flight.flaw_rolled_groups.contains(&gi) {
+                        if let Some(group) = flight.design.stage_groups.get_mut(gi) {
+                            for stage in group.iter_mut() {
+                                if let Some(loss) = launch::roll_overexpansion(rng, stage, ambient) {
+                                    events.push(GameEvent::MidFlightFlawActivated {
+                                        rocket_name: flight.rocket_name.clone(),
+                                        flaw_description: format!(
+                                            "{} engine(s) destroyed by flow separation",
+                                            loss.engines_lost,
+                                        ),
+                                        consequence: "Engine destruction".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Engine flaws for the groups that fired for the first time
+            // (before the stranding check — the stage was used even if the
+            // burn fell short).
+            let new_burned: Vec<usize> = burn_result.groups_burned.iter()
+                .copied()
+                .filter(|gi| !flight.flaw_rolled_groups.contains(gi))
+                .collect();
+            if !new_burned.is_empty() {
+                flight.flaw_rolled_groups.extend(new_burned.iter().copied());
+                let stages: Vec<(usize, usize)> = new_burned.iter()
+                    .flat_map(|&gi| {
+                        let n = flight.design.stage_groups.get(gi).map_or(0, |g| g.len());
+                        (0..n).map(move |si| (gi, si))
+                    })
+                    .collect();
+                let roll = launch::roll_engine_flaws(rng, &mut flight.design, &stages, &tables.engines);
+                flight.flaws_activated.extend(roll.activations.iter().cloned());
+                push_activation_events(events, &flight.rocket_name, &roll);
+                discoveries.record(&roll);
+                if let Some(reason) = roll.lost {
+                    flight.status = FlightStatus::Failed { reason };
+                    return Some(FlightEnd::Lost);
+                }
+
+                // After flaw application, recheck remaining dv for stranding.
+                let remaining_dv = flight.rocket.remaining_delta_v(&flight.design);
+                let remaining_route_dv: f64 = flight.route.iter()
+                    .skip(flight.current_leg + 1)
+                    .map(|leg| leg.delta_v_cost)
+                    .sum();
+                if remaining_route_dv > 0.0 && remaining_dv < remaining_route_dv * 0.5 {
+                    flight.status = FlightStatus::Stranded;
+                    return Some(FlightEnd::Stranded);
+                }
+            }
+
+            // A burn that fell significantly short strands the flight.
+            if burn_result.dv_achieved < dv_cost * 0.95 {
+                flight.status = FlightStatus::Stranded;
+                return Some(FlightEnd::Stranded);
+            }
+        }
+
+        flight.current_leg += 1;
+        if flight.current_leg < flight.route.len() {
+            flight.leg_days_remaining = flight.route[flight.current_leg].total_days();
+        } else {
+            // All legs complete. No power tick: the flight is about to
+            // become a Spacecraft, and the parked-fleet tick charges it
+            // there — after its payload is delivered, and exactly once.
+            flight.status = FlightStatus::Arrived;
+            return Some(FlightEnd::Arrived);
+        }
+    }
+
+    // Power tick: drain or recharge batteries from supply vs.
+    // housekeeping demand at the current location's solar distance.
+    // Brownout strands the flight (housekeeping lost → loss of control).
+    // Runs on every design: a stage with a bare power rack still carries
+    // its default battery, so nothing is exempt. Runs last, so a leg
+    // completed this tick is charged at the location it *reached*.
+    let sun_au = crate::location::DELTA_V_MAP
+        .location(&flight.current_location)
+        .map_or(1.0, |l| l.sun_distance_au());
+    if flight.rocket.run_daily_power_tick(&flight.design, sun_au) {
+        flight.status = FlightStatus::Stranded;
+        events.push(GameEvent::PowerLost {
+            rocket_name: flight.rocket_name.clone(),
+            location: crate::contract::destination_display_name(&flight.current_location).to_string(),
+        });
+        return Some(FlightEnd::Stranded);
+    }
+    None
 }
