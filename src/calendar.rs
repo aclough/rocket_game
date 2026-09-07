@@ -2,6 +2,15 @@ use std::fmt;
 
 use serde::{Serialize, Deserialize};
 
+/// Nominal month length used wherever a monthly amount is accrued
+/// day-by-day (salary → NRE, salary → labor cost). The monthly charge
+/// itself lands on the 1st regardless of month length, so the
+/// approximation only affects attribution, not cash.
+pub const DAYS_PER_MONTH_APPROX: f64 = 30.0;
+
+/// Mean calendar year in days, for annualised rates (growth compounding).
+pub const DAYS_PER_YEAR: f64 = 365.25;
+
 /// A game date with real-world calendar (year/month/day).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct GameDate {
@@ -39,6 +48,11 @@ impl GameDate {
         self.day == 1
     }
 
+    /// True on January 1st.
+    pub fn is_first_of_year(&self) -> bool {
+        self.month == 1 && self.day == 1
+    }
+
     /// Days in the current month.
     pub fn days_in_month(&self) -> u32 {
         days_in_month(self.year, self.month)
@@ -74,9 +88,31 @@ impl GameDate {
         d
     }
 
+    /// Add N months, landing on the 1st of the target month.
+    pub fn add_months(self, months: u32) -> Self {
+        let total_months = (self.year * 12 + self.month - 1) + months;
+        let year = total_months / 12;
+        let month = total_months % 12 + 1;
+        GameDate::new(year, month, 1)
+    }
+
+    /// Fractional months elapsed since `start` (which must be <= self):
+    /// whole calendar months, plus the partial month as a fraction of
+    /// the current month's length.
+    pub fn months_since(&self, start: &GameDate) -> f64 {
+        let whole = (self.year as i64 - start.year as i64) * 12
+            + (self.month as i64 - start.month as i64);
+        whole as f64 + (self.day as f64 - start.day as f64) / self.days_in_month() as f64
+    }
+
     /// Short month name.
     pub fn month_name(&self) -> &'static str {
         MONTH_NAMES[(self.month - 1) as usize]
+    }
+
+    /// `YYYY-MM-DD`, for file names, CSV rows, and compact tables.
+    pub fn iso(&self) -> String {
+        format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
     }
 }
 
@@ -219,6 +255,37 @@ mod tests {
         assert!(a < b);
         assert!(b < c);
         assert!(c < d);
+    }
+
+    #[test]
+    fn test_add_months() {
+        assert_eq!(GameDate::new(2001, 1, 15).add_months(3), GameDate::new(2001, 4, 1));
+        assert_eq!(GameDate::new(2001, 11, 1).add_months(3), GameDate::new(2002, 2, 1));
+        assert_eq!(GameDate::new(2001, 1, 1).add_months(12), GameDate::new(2002, 1, 1));
+        assert_eq!(GameDate::new(2001, 1, 1).add_months(24), GameDate::new(2003, 1, 1));
+    }
+
+    #[test]
+    fn test_months_since() {
+        let start = GameDate::new(2001, 1, 1);
+        assert_eq!(start.months_since(&start), 0.0);
+        assert_eq!(GameDate::new(2001, 4, 1).months_since(&start), 3.0);
+        assert_eq!(GameDate::new(2002, 1, 1).months_since(&start), 12.0);
+        // Partial month: Jan 16 is 15/31 of the way through January.
+        let half = GameDate::new(2001, 1, 16).months_since(&start);
+        assert!((half - 15.0 / 31.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_is_first_of_year() {
+        assert!(GameDate::new(2001, 1, 1).is_first_of_year());
+        assert!(!GameDate::new(2001, 2, 1).is_first_of_year());
+        assert!(!GameDate::new(2001, 1, 2).is_first_of_year());
+    }
+
+    #[test]
+    fn test_iso() {
+        assert_eq!(GameDate::new(2001, 3, 7).iso(), "2001-03-07");
     }
 
     #[test]

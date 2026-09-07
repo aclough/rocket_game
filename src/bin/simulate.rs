@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use rocket_tycoon::balance_config::BalanceConfig;
+use rocket_tycoon::calendar::GameDate;
 use rocket_tycoon::policy::{policy_by_name, POLICY_NAMES};
 use rocket_tycoon::sim::{run_seed, CSV_HEADER};
 
@@ -182,7 +183,7 @@ fn main() -> ExitCode {
         let avg_of = |vals: Vec<f64>| (!vals.is_empty())
             .then(|| vals.iter().sum::<f64>() / vals.len() as f64);
         let months = avg_of(summaries.iter().filter_map(|s| s.first_launch_date.map(|d|
-            ((d.year - s.start_year) * 12 + d.month) as f64 - 1.0 + (d.day as f64 - 1.0) / 30.0
+            d.months_since(&GameDate::new(s.start_year, 1, 1))
         )).collect());
         let spend = avg_of(summaries.iter().filter_map(|s| s.dev_spend_at_first_launch).collect());
         let hidden = avg_of(summaries.iter().filter_map(|s| s.undiscovered_flaws_at_first_launch.map(f64::from)).collect());

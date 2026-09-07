@@ -286,9 +286,8 @@ impl ManufacturingOrder {
         }
         let work = team::manufacturing_work_rate(self.teams_assigned);
         self.work_completed += work;
-        // Attribute one team-day of salary per assigned team. 30 days/month
-        // is the same approximation used by the salary-deduction path.
-        let daily_salary = costs.manufacturing_monthly_salary / 30.0;
+        // Attribute one team-day of salary per assigned team.
+        let daily_salary = costs.daily_manufacturing_salary();
         self.labor_cost += self.teams_assigned as f64 * daily_salary;
         self.work_completed >= self.work_required
     }

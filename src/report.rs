@@ -257,7 +257,7 @@ pub fn report_path_in(
 ) -> std::path::PathBuf {
     let safe = sanitize(company_name);
     data_dir.join("reports").join(format!(
-        "{safe}-{tag}-{:04}-{:02}-{:02}.txt", date.year, date.month, date.day,
+        "{safe}-{tag}-{}.txt", date.iso(),
     ))
 }
 

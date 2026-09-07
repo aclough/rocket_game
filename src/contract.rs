@@ -3,7 +3,7 @@ use rand::rngs::StdRng;
 use serde::{Serialize, Deserialize};
 
 use crate::balance_config::MarketsConfig;
-use crate::calendar::GameDate;
+use crate::calendar::{GameDate, DAYS_PER_YEAR};
 use crate::seed::GameSeed;
 
 /// Unique identifier for a contract.
@@ -356,7 +356,7 @@ impl Market {
     pub fn growth_factor(&self, current_date: GameDate) -> f64 {
         match self.activation_date {
             Some(activated) if current_date > activated => {
-                let years = activated.days_until(&current_date) as f64 / 365.25;
+                let years = activated.days_until(&current_date) as f64 / DAYS_PER_YEAR;
                 (1.0 + self.annual_growth).powf(years)
             }
             _ => 1.0,

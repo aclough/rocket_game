@@ -52,8 +52,8 @@ rocket_projects,reactor_projects,eng_teams,mfg_teams,rockets_inventory,flights_a
 pub fn metric_row(seed: u64, gs: &GameState, tally: &Tally) -> String {
     let c = &gs.player_company;
     format!(
-        "{seed},{:04}-{:02}-{:02},{:.0},{:.1},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-        gs.date.year, gs.date.month, gs.date.day,
+        "{seed},{},{:.0},{:.1},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        gs.date.iso(),
         c.money,
         c.reputation.total(),
         gs.available_contracts.len(),
@@ -117,8 +117,8 @@ impl RunSummary {
             .unwrap_or_else(|| "-".into());
         let first = match self.first_launch_date {
             Some(d) => format!(
-                "{:04}-{:02}-{:02} (spend {}, {} hidden flaws)",
-                d.year, d.month, d.day,
+                "{} (spend {}, {} hidden flaws)",
+                d.iso(),
                 m(self.dev_spend_at_first_launch),
                 self.undiscovered_flaws_at_first_launch.unwrap_or(0),
             ),

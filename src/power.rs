@@ -86,11 +86,6 @@ pub struct PowerSource {
     /// pipeline as part of the stage's build.
     #[serde(default)]
     pub material_cost: f64,
-    /// Battery-only: stored energy in kilowatt-days. Source-instantiation
-    /// time fills this to capacity for batteries; per-day flight ticks
-    /// drain or recharge it from the demand/supply balance.
-    #[serde(default)]
-    pub stored_kwd: f64,
     /// Battery-only: maximum stored energy.
     #[serde(default)]
     pub capacity_kwd: f64,
@@ -138,7 +133,6 @@ impl PowerSource {
             kind: PowerSourceKind::Battery,
             mass_kg,
             material_cost: 0.0,
-            stored_kwd: capacity_kwd,
             capacity_kwd,
         }
     }
@@ -155,7 +149,6 @@ impl PowerSource {
             kind: PowerSourceKind::Battery,
             mass_kg,
             material_cost,
-            stored_kwd: capacity_kwd,
             capacity_kwd,
         }
     }
@@ -193,7 +186,6 @@ impl PowerSource {
             kind: PowerSourceKind::SolarPanel { peak_w_at_1au },
             mass_kg,
             material_cost,
-            stored_kwd: 0.0,
             capacity_kwd: 0.0,
         }
     }
@@ -223,7 +215,6 @@ impl PowerSource {
             kind: PowerSourceKind::Reactor { design },
             mass_kg,
             material_cost,
-            stored_kwd: 0.0,
             capacity_kwd: 0.0,
         }
     }
@@ -237,7 +228,6 @@ impl PowerSource {
             kind: PowerSourceKind::Reactor { design },
             mass_kg,
             material_cost,
-            stored_kwd: 0.0,
             capacity_kwd: 0.0,
         }
     }
@@ -257,7 +247,6 @@ impl PowerSource {
             },
             mass_kg,
             material_cost,
-            stored_kwd: 0.0,
             capacity_kwd: 0.0,
         }
     }
@@ -274,7 +263,6 @@ impl PowerSource {
             kind: PowerSourceKind::Rtg { steady_w },
             mass_kg,
             material_cost,
-            stored_kwd: 0.0,
             capacity_kwd: 0.0,
         }
     }
@@ -464,7 +452,6 @@ mod tests {
         let b = PowerSource::new_battery(2.0); // 2 kWd
         assert_eq!(b.steady_output_w(1.0), 0.0);
         assert!((b.capacity_kwd - 2.0).abs() < 1e-9);
-        assert!((b.stored_kwd - 2.0).abs() < 1e-9);
     }
 
     /// The conversion this file once got wrong by a factor of 576, by

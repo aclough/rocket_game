@@ -124,7 +124,7 @@ pub fn initial_state(seed: &GameSeed, start_date: GameDate) -> EconomicState {
     let mut rng = seed.world_query("economy_event_0");
     let (dur_lo, dur_hi) = EconomicCondition::Normal.duration_range();
     let duration_months = rng.gen_range(dur_lo..=dur_hi);
-    let end_date = add_months(start_date, duration_months);
+    let end_date = start_date.add_months(duration_months);
 
     EconomicState {
         condition: EconomicCondition::Normal,
@@ -163,7 +163,7 @@ pub fn advance_economy(
 
     let (dur_lo, dur_hi) = next_condition.duration_range();
     let duration_months = rng.gen_range(dur_lo..=dur_hi);
-    let end_date = add_months(current_date, duration_months);
+    let end_date = current_date.add_months(duration_months);
 
     let (mod_lo, mod_hi) = next_condition.modifier_range();
     let modifier = if mod_lo < mod_hi {
@@ -195,14 +195,6 @@ fn roll_next_condition(
     }
     // Fallback (shouldn't happen if probabilities sum to 1.0)
     transitions.last().unwrap().0
-}
-
-/// Add N months to a date (lands on the 1st of the target month).
-fn add_months(date: GameDate, months: u32) -> GameDate {
-    let total_months = (date.year * 12 + date.month - 1) + months;
-    let year = total_months / 12;
-    let month = total_months % 12 + 1;
-    GameDate::new(year, month, 1)
 }
 
 #[cfg(test)]
@@ -299,14 +291,6 @@ mod tests {
                 "Recession led to {:?} which is not in its transition table", next
             );
         }
-    }
-
-    #[test]
-    fn test_add_months() {
-        assert_eq!(add_months(GameDate::new(2001, 1, 15), 3), GameDate::new(2001, 4, 1));
-        assert_eq!(add_months(GameDate::new(2001, 11, 1), 3), GameDate::new(2002, 2, 1));
-        assert_eq!(add_months(GameDate::new(2001, 1, 1), 12), GameDate::new(2002, 1, 1));
-        assert_eq!(add_months(GameDate::new(2001, 1, 1), 24), GameDate::new(2003, 1, 1));
     }
 
     #[test]

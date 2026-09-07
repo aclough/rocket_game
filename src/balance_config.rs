@@ -129,6 +129,18 @@ pub struct CostsConfig {
     pub resource_prices: ResourcePrices,
 }
 
+impl CostsConfig {
+    /// One team-day of engineering salary, for accruing NRE onto projects.
+    pub fn daily_engineering_salary(&self) -> f64 {
+        self.engineering_monthly_salary / crate::calendar::DAYS_PER_MONTH_APPROX
+    }
+
+    /// One team-day of manufacturing salary, for accruing labor onto orders.
+    pub fn daily_manufacturing_salary(&self) -> f64 {
+        self.manufacturing_monthly_salary / crate::calendar::DAYS_PER_MONTH_APPROX
+    }
+}
+
 impl Default for CostsConfig {
     fn default() -> Self {
         CostsConfig {

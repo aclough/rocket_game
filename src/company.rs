@@ -1859,7 +1859,7 @@ impl Company {
         }
 
         // Accumulate NRE (engineering salary) on active projects
-        let daily_salary = balance_cfg.costs.engineering_monthly_salary / 30.0;
+        let daily_salary = balance_cfg.costs.daily_engineering_salary();
         for project in &mut self.engine_projects {
             if project.teams_assigned > 0 {
                 project.nre_cost += project.teams_assigned as f64 * daily_salary;

@@ -475,7 +475,7 @@ impl GameState {
         self.process_competitor_launches(&mut events);
 
         // Track launch drought (yearly check)
-        if self.date.is_first_of_month() && self.date.month == 1 && self.date.day == 1 {
+        if self.date.is_first_of_year() {
             if let Some(last) = self.player_company.last_launch_date {
                 let days_since = last.days_until(&self.date);
                 if days_since >= 365 {

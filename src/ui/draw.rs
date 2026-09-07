@@ -353,18 +353,20 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 });
             }
             EngineDesignStatus::Testing { work_completed } => {
-                let ratio = work_completed / 30.0;
+                let cycle_work = app.game.balance.work.testing_cycle_work;
+                let ratio = work_completed / cycle_work;
                 gauges.push(GaugeInfo {
                     line_index: line_idx, ratio,
-                    label: format!("{:.0}/30", work_completed),
+                    label: format!("{:.0}/{:.0}", work_completed, cycle_work),
                     fill_color: Color::Green, text_width, right_aligned: false,
                 });
             }
             EngineDesignStatus::Revising { work_completed, .. } => {
-                let ratio = work_completed / 30.0;
+                let revision_work = app.game.balance.work.flaw_revision_work;
+                let ratio = work_completed / revision_work;
                 gauges.push(GaugeInfo {
                     line_index: line_idx, ratio,
-                    label: format!("{:.0}/30", work_completed),
+                    label: format!("{:.0}/{:.0}", work_completed, revision_work),
                     fill_color: Color::Rgb(180, 130, 0), text_width, right_aligned: false,
                 });
             }
@@ -822,18 +824,20 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 });
             }
             rocket_project::RocketDesignStatus::Testing { work_completed } => {
-                let ratio = work_completed / 30.0;
+                let cycle_work = app.game.balance.work.testing_cycle_work;
+                let ratio = work_completed / cycle_work;
                 gauges.push(GaugeInfo {
                     line_index: line_idx, ratio,
-                    label: format!("{:.0}/30", work_completed),
+                    label: format!("{:.0}/{:.0}", work_completed, cycle_work),
                     fill_color: Color::Green, text_width, right_aligned: false,
                 });
             }
             rocket_project::RocketDesignStatus::Revising { work_completed, .. } => {
-                let ratio = work_completed / 30.0;
+                let revision_work = app.game.balance.work.flaw_revision_work;
+                let ratio = work_completed / revision_work;
                 gauges.push(GaugeInfo {
                     line_index: line_idx, ratio,
-                    label: format!("{:.0}/30", work_completed),
+                    label: format!("{:.0}/{:.0}", work_completed, revision_work),
                     fill_color: Color::Rgb(180, 130, 0), text_width, right_aligned: false,
                 });
             }
@@ -2868,8 +2872,8 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     .map(|n| format!(" x{n}"))
                     .unwrap_or_default();
                 lines.push(Line::from(format!(
-                    "  {:04}-{:02}-{:02}  {:<18} {:>6.0} kg →{:<4} {}{}",
-                    r.date.year, r.date.month, r.date.day,
+                    "  {}  {:<18} {:>6.0} kg →{:<4} {}{}",
+                    r.date.iso(),
                     market, r.payload_kg, dest, outcome, block_tag,
                 )).style(Style::default().fg(color)));
             }
@@ -2906,8 +2910,8 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                             .map(|b| format!("  your bid {}/ea", format_money(b)))
                             .unwrap_or_default();
                         (format!(
-                            "bids close {:04}-{:02}-{:02}{}",
-                            bid_deadline.year, bid_deadline.month, bid_deadline.day, bid,
+                            "bids close {}{}",
+                            bid_deadline.iso(), bid,
                         ), Color::Yellow)
                     }
                     crate::contract::CampaignStatus::Won { by_player, company } => {
