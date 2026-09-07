@@ -13,12 +13,12 @@ use crate::contract::{self, Contract};
 use crate::engine::{EngineCycle, EngineId};
 use crate::engine_project::{EngineDesignStatus, EngineProject, EngineProjectId, EngineSource, PropellantPreset};
 use crate::calendar::GameDate;
-use crate::event::GameEvent;
+use crate::event::{GameEvent, ProjectEvent};
 use crate::manufacturing::{Manufacturing, ManufacturingOrder, ManufacturingOrderType, InventoryEngine};
 use crate::launch::LaunchRecord;
 use crate::reputation::Reputation;
 use crate::rocket::{RocketDesign, RocketDesignId};
-use crate::project::WorkEvent;
+use crate::project::{Designable, DesignProject, WorkEvent};
 use crate::rocket_project::{RocketProject, RocketProjectId};
 use crate::seed::GameSeed;
 use crate::balance_config::BalanceConfig;
@@ -255,6 +255,41 @@ pub struct ResearchTick {
     pub reactor_tech_def_attempts: Vec<(crate::reactor_project::ReactorProjectId, crate::technology::TechDeficiencyId)>,
 }
 
+/// Turn one day's work on a project into game events, and set aside
+/// the two outcomes the game state has to finish: designs that just
+/// completed (they inherit their technology's deficiencies) and
+/// deficiency revision attempts (they roll against the technology
+/// table). Testing cycles completing are bookkeeping, not news.
+fn report_work<D: Designable>(
+    project: &DesignProject<D>,
+    work_events: Vec<WorkEvent>,
+    events: &mut Vec<GameEvent>,
+    newly_designed: &mut Vec<D::Id>,
+    tech_def_attempts: &mut Vec<(D::Id, crate::technology::TechDeficiencyId)>,
+) {
+    for we in work_events {
+        let event = match we {
+            WorkEvent::DesignComplete => {
+                newly_designed.push(project.project_id);
+                ProjectEvent::DesignComplete
+            }
+            WorkEvent::TestingCycleComplete => continue,
+            WorkEvent::FlawDiscovered { flaw_description } =>
+                ProjectEvent::FlawDiscovered { description: flaw_description },
+            WorkEvent::RevisionComplete => ProjectEvent::RevisionComplete,
+            WorkEvent::ImprovementDiscovered { description } =>
+                ProjectEvent::ImprovementDiscovered { description },
+            WorkEvent::ImprovementActualized { description } =>
+                ProjectEvent::ImprovementActualized { description },
+            WorkEvent::TechDeficiencyAttempted { deficiency_id } => {
+                tech_def_attempts.push((project.project_id, deficiency_id));
+                continue;
+            }
+        };
+        events.push(GameEvent::project(D::KIND, project.design.name(), event));
+    }
+}
+
 impl Company {
     pub fn new(name: String, starting_money: f64, seed: &GameSeed, balance_cfg: &BalanceConfig) -> Self {
         let catalog = third_party::generate_starter_engines(seed);
@@ -465,7 +500,7 @@ impl Company {
         )?;
         project.technology_id = technology_id;
         self.engine_projects.push(project);
-        Some(GameEvent::EngineDesignStarted { engine_name: name })
+        Some(GameEvent::project(crate::project::ProjectKind::Engine, name, ProjectEvent::DesignStarted))
     }
 
     /// Start a tentative engine design in `Proposed` status. Used by the
@@ -686,7 +721,7 @@ impl Company {
         let name = design.name.clone();
         let project = RocketProject::new(project_id, design, balance_cfg);
         self.rocket_projects.push(project);
-        Some(GameEvent::RocketDesignStarted { rocket_name: name })
+        Some(GameEvent::project(crate::project::ProjectKind::Rocket, name, ProjectEvent::DesignStarted))
     }
 
     /// Rocket projects that should be visible in the Rockets pane —
@@ -1782,80 +1817,17 @@ impl Company {
         let next_flaw_id = &mut self.next_flaw_id;
 
         for project in self.engine_projects.iter_mut() {
-            let engine_name = project.design.name.clone();
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
-            for we in work_events {
-                let evt = match we {
-                    WorkEvent::DesignComplete => {
-                        newly_designed_engines.push(project.project_id);
-                        GameEvent::EngineDesignComplete { engine_name: engine_name.clone() }
-                    }
-                    WorkEvent::TestingCycleComplete => continue,
-                    WorkEvent::FlawDiscovered { flaw_description } =>
-                        GameEvent::FlawDiscovered { engine_name: engine_name.clone(), flaw_description },
-                    WorkEvent::RevisionComplete =>
-                        GameEvent::RevisionComplete { engine_name: engine_name.clone() },
-                    WorkEvent::ImprovementDiscovered { description } =>
-                        GameEvent::ImprovementDiscovered { engine_name: engine_name.clone(), description },
-                    WorkEvent::ImprovementActualized { description } =>
-                        GameEvent::ImprovementActualized { engine_name: engine_name.clone(), description },
-                    WorkEvent::TechDeficiencyAttempted { deficiency_id } => {
-                        tech_def_attempts.push((project.project_id, deficiency_id));
-                        continue;
-                    }
-                };
-                events.push(evt);
-            }
+            report_work(project, work_events, &mut events, &mut newly_designed_engines, &mut tech_def_attempts);
         }
-
-        for project in &mut self.rocket_projects {
-            let rocket_name = project.design.name.clone();
+        for project in self.rocket_projects.iter_mut() {
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
-            for we in work_events {
-                let evt = match we {
-                    WorkEvent::DesignComplete =>
-                        GameEvent::RocketDesignComplete { rocket_name: rocket_name.clone() },
-                    WorkEvent::TestingCycleComplete => continue,
-                    WorkEvent::FlawDiscovered { flaw_description } =>
-                        GameEvent::RocketFlawDiscovered { rocket_name: rocket_name.clone(), flaw_description },
-                    WorkEvent::RevisionComplete =>
-                        GameEvent::RocketRevisionComplete { rocket_name: rocket_name.clone() },
-                    // Rockets roll no improvements and carry no
-                    // technology, so these never fire for them.
-                    WorkEvent::ImprovementDiscovered { .. }
-                    | WorkEvent::ImprovementActualized { .. }
-                    | WorkEvent::TechDeficiencyAttempted { .. } => continue,
-                };
-                events.push(evt);
-            }
+            // Rockets carry no technology, so nothing lands in these.
+            report_work(project, work_events, &mut events, &mut Vec::new(), &mut Vec::new());
         }
-
-        // Reactor projects accrue daily work just like engine projects.
         for project in self.reactor_projects.iter_mut() {
-            let reactor_name = project.design.name.clone();
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
-            for we in work_events {
-                let evt = match we {
-                    WorkEvent::DesignComplete => {
-                        newly_designed_reactors.push(project.project_id);
-                        GameEvent::ReactorDesignComplete { reactor_name: reactor_name.clone() }
-                    }
-                    WorkEvent::TestingCycleComplete => continue,
-                    WorkEvent::FlawDiscovered { flaw_description } =>
-                        GameEvent::ReactorFlawDiscovered { reactor_name: reactor_name.clone(), flaw_description },
-                    WorkEvent::ImprovementDiscovered { description } =>
-                        GameEvent::ReactorImprovementDiscovered { reactor_name: reactor_name.clone(), description },
-                    WorkEvent::ImprovementActualized { description } =>
-                        GameEvent::ReactorImprovementActualized { reactor_name: reactor_name.clone(), description },
-                    WorkEvent::RevisionComplete =>
-                        GameEvent::ReactorRevisionComplete { reactor_name: reactor_name.clone() },
-                    WorkEvent::TechDeficiencyAttempted { deficiency_id } => {
-                        reactor_tech_def_attempts.push((project.project_id, deficiency_id));
-                        continue;
-                    }
-                };
-                events.push(evt);
-            }
+            report_work(project, work_events, &mut events, &mut newly_designed_reactors, &mut reactor_tech_def_attempts);
         }
 
         // Accumulate NRE (engineering salary) on active projects

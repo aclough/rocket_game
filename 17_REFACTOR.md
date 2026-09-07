@@ -153,7 +153,7 @@ opportunity in the codebase.
 - **Size/risk:** large / medium. Removes ~250 lines. Can be done
   incrementally before or after B1.
 
-### B3. Three `WorkEvent` enums, 17 `GameEvent` variants that are 6 shapes × 3  ⚠ data-structure
+### ✅ B3. Three `WorkEvent` enums, 17 `GameEvent` variants that are 6 shapes × 3  ⚠ data-structure
 - **Where:** `engine_project.rs:871`, `rocket_project.rs:57`,
   `reactor_project.rs:416`; `company.rs:1787-1859` (three ~25-line
   translation matches); `event.rs:16-46, 93-97` with three display

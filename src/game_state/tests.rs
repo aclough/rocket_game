@@ -1460,7 +1460,7 @@ fn test_reactor_project_advances_to_testing() {
         let events = gs.advance_day();
         if events.iter().any(|e| matches!(
             e,
-            GameEvent::ReactorDesignComplete { .. },
+            GameEvent::Project { kind: crate::project::ProjectKind::Reactor, event: crate::event::ProjectEvent::DesignComplete, .. },
         )) {
             saw_complete = true;
             break;
@@ -1494,7 +1494,7 @@ fn test_reactor_tech_deficiencies_apply_and_revise() {
     let mut saw_deficiencies_evt = false;
     for _ in 0..5_000 {
         let events = gs.advance_day();
-        if events.iter().any(|e| matches!(e, GameEvent::ReactorTechDeficienciesFound { .. })) {
+        if events.iter().any(|e| matches!(e, GameEvent::Project { kind: crate::project::ProjectKind::Reactor, event: crate::event::ProjectEvent::TechDeficienciesFound { .. }, .. })) {
             saw_deficiencies_evt = true;
         }
         if matches!(
@@ -1621,7 +1621,7 @@ fn test_reactor_flaw_activates_mid_flight() {
     let mut discovered = false;
     for _ in 0..60 {
         let events = gs.advance_day();
-        if events.iter().any(|e| matches!(e, GameEvent::ReactorFlawDiscovered { .. })) {
+        if events.iter().any(|e| matches!(e, GameEvent::Project { kind: crate::project::ProjectKind::Reactor, event: crate::event::ProjectEvent::FlawDiscovered { .. }, .. })) {
             discovered = true;
             break;
         }
@@ -1707,7 +1707,7 @@ fn test_reactor_perflight_flaw_fires_at_flight_start() {
 
     // First flight day: the PerFlight reactor flaw must already fire.
     let events = gs.advance_day();
-    assert!(events.iter().any(|e| matches!(e, GameEvent::ReactorFlawDiscovered { .. })),
+    assert!(events.iter().any(|e| matches!(e, GameEvent::Project { kind: crate::project::ProjectKind::Reactor, event: crate::event::ProjectEvent::FlawDiscovered { .. }, .. })),
         "PerFlight reactor flaw should fire on the first flight day");
     let rp = gs.player_company.reactor_projects.iter()
         .find(|rp| rp.design.id == reactor_id).unwrap();
@@ -1832,7 +1832,7 @@ fn test_reactor_flaw_discovery_and_revision_through_daily_loop() {
     let mut saw_flaw_discovered = false;
     for _ in 0..400 {
         let events = gs.advance_day();
-        if events.iter().any(|e| matches!(e, GameEvent::ReactorFlawDiscovered { .. })) {
+        if events.iter().any(|e| matches!(e, GameEvent::Project { kind: crate::project::ProjectKind::Reactor, event: crate::event::ProjectEvent::FlawDiscovered { .. }, .. })) {
             saw_flaw_discovered = true;
         }
         if gs.player_company.reactor_projects[0].discovered_flaw_count() == total_flaws {
@@ -1852,7 +1852,7 @@ fn test_reactor_flaw_discovery_and_revision_through_daily_loop() {
         let mut saw_revision = false;
         for _ in 0..600 {
             let events = gs.advance_day();
-            if events.iter().any(|e| matches!(e, GameEvent::ReactorRevisionComplete { .. })) {
+            if events.iter().any(|e| matches!(e, GameEvent::Project { kind: crate::project::ProjectKind::Reactor, event: crate::event::ProjectEvent::RevisionComplete, .. })) {
                 saw_revision = true;
             }
             if matches!(

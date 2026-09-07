@@ -5,7 +5,8 @@
 
 use crate::engine_project::EngineSource;
 use crate::flight::{Flight, FlightId, FlightStatus, Payload};
-use crate::event::GameEvent;
+use crate::event::{GameEvent, ProjectEvent};
+use crate::project::ProjectKind;
 use crate::launch::{self, LaunchRecord, LaunchOutcome};
 use crate::rocket::RocketId;
 
@@ -146,10 +147,10 @@ impl GameState {
                 for &idx in indices {
                     if idx < ep.flaws.len() {
                         ep.flaws[idx].discovered = true;
-                        discovered.push(GameEvent::FlawDiscovered {
-                            engine_name: ep.design.name.clone(),
-                            flaw_description: ep.flaws[idx].description.clone(),
-                        });
+                        discovered.push(GameEvent::project(
+                            ProjectKind::Engine, ep.design.name.clone(),
+                            ProjectEvent::FlawDiscovered { description: ep.flaws[idx].description.clone() },
+                        ));
                     }
                 }
             }
@@ -179,10 +180,10 @@ impl GameState {
             for &idx in &sim.rocket_flaw_discoveries {
                 if idx < rp_mut.flaws.len() {
                     rp_mut.flaws[idx].discovered = true;
-                    discovered.push(GameEvent::RocketFlawDiscovered {
-                        rocket_name: rp_mut.design.name.clone(),
-                        flaw_description: rp_mut.flaws[idx].description.clone(),
-                    });
+                    discovered.push(GameEvent::project(
+                        ProjectKind::Rocket, rp_mut.design.name.clone(),
+                        ProjectEvent::FlawDiscovered { description: rp_mut.flaws[idx].description.clone() },
+                    ));
                 }
             }
         }
@@ -782,10 +783,12 @@ impl GameState {
                     {
                         if *flaw_index < ep.flaws.len() && !ep.flaws[*flaw_index].discovered {
                             ep.flaws[*flaw_index].discovered = true;
-                            let evt = GameEvent::FlawDiscovered {
-                                engine_name: ep.design.name.clone(),
-                                flaw_description: ep.flaws[*flaw_index].description.clone(),
-                            };
+                            let evt = GameEvent::project(
+                                ProjectKind::Engine, ep.design.name.clone(),
+                                ProjectEvent::FlawDiscovered {
+                                    description: ep.flaws[*flaw_index].description.clone(),
+                                },
+                            );
                             events.push(evt);
                         }
                     }
@@ -809,10 +812,13 @@ impl GameState {
             {
                 if *flaw_index < rp.flaws.len() && !rp.flaws[*flaw_index].discovered {
                     rp.flaws[*flaw_index].discovered = true;
-                    let evt = GameEvent::FlawDiscovered {
-                        engine_name: rp.design.name.clone(),
-                        flaw_description: rp.flaws[*flaw_index].description.clone(),
-                    };
+                    // A rocket flaw: this used to be reported as an engine flaw.
+                    let evt = GameEvent::project(
+                        ProjectKind::Rocket, rp.design.name.clone(),
+                        ProjectEvent::FlawDiscovered {
+                            description: rp.flaws[*flaw_index].description.clone(),
+                        },
+                    );
                     events.push(evt);
                 }
             }
@@ -825,10 +831,12 @@ impl GameState {
             {
                 if *flaw_index < rp.flaws.len() && !rp.flaws[*flaw_index].discovered {
                     rp.flaws[*flaw_index].discovered = true;
-                    let evt = GameEvent::ReactorFlawDiscovered {
-                        reactor_name: rp.design.name.clone(),
-                        flaw_description: rp.flaws[*flaw_index].description.clone(),
-                    };
+                    let evt = GameEvent::project(
+                        ProjectKind::Reactor, rp.design.name.clone(),
+                        ProjectEvent::FlawDiscovered {
+                            description: rp.flaws[*flaw_index].description.clone(),
+                        },
+                    );
                     events.push(evt);
                 }
             }

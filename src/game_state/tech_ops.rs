@@ -13,8 +13,8 @@
 
 use crate::company::Company;
 use crate::engine_project::{EngineProject, EngineProjectId};
-use crate::event::GameEvent;
-use crate::project::Direction;
+use crate::event::{GameEvent, ProjectEvent};
+use crate::project::{Direction, ProjectKind};
 use crate::reactor_project::{ReactorProject, ReactorProjectId};
 use crate::technology::{self, TechDeficiencyId, TechDeficiencyKind, TechnologyId};
 
@@ -26,9 +26,7 @@ pub(super) trait TechProject {
     type Id: Copy + PartialEq;
     /// Where this kind of project lives on a company.
     fn list(company: &mut Company) -> &mut Vec<Self> where Self: Sized;
-    /// How this kind reports the flow's outcomes. Goes away when every
-    /// kind shares one `GameEvent::Project` shape.
-    const EVENTS: TechEvents;
+    const KIND: ProjectKind;
 
     fn id(&self) -> Self::Id;
     fn name(&self) -> &str;
@@ -38,25 +36,10 @@ pub(super) trait TechProject {
     fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction);
 }
 
-/// Constructors for the three events the flow emits: a deficiency
-/// solved, an attempt failed (with the message), deficiencies found on
-/// a fresh design (tech name, joined descriptions).
-pub(super) struct TechEvents {
-    pub solved: fn(String) -> GameEvent,
-    pub failed: fn(String, String) -> GameEvent,
-    pub found: fn(String, String, String) -> GameEvent,
-}
-
 impl TechProject for EngineProject {
     type Id = EngineProjectId;
     fn list(company: &mut Company) -> &mut Vec<Self> { &mut company.engine_projects }
-    const EVENTS: TechEvents = TechEvents {
-        solved: |name| GameEvent::RevisionComplete { engine_name: name },
-        failed: |name, msg| GameEvent::FlawDiscovered { engine_name: name, flaw_description: msg },
-        found: |name, tech, defs| GameEvent::TechDeficienciesFound {
-            engine_name: name, tech_name: tech, deficiencies: defs,
-        },
-    };
+    const KIND: ProjectKind = ProjectKind::Engine;
     fn id(&self) -> Self::Id { self.project_id }
     fn name(&self) -> &str { &self.design.name }
     fn technology_id(&self) -> Option<TechnologyId> { self.technology_id }
@@ -70,13 +53,7 @@ impl TechProject for EngineProject {
 impl TechProject for ReactorProject {
     type Id = ReactorProjectId;
     fn list(company: &mut Company) -> &mut Vec<Self> { &mut company.reactor_projects }
-    const EVENTS: TechEvents = TechEvents {
-        solved: |name| GameEvent::ReactorRevisionComplete { reactor_name: name },
-        failed: |name, msg| GameEvent::ReactorFlawDiscovered { reactor_name: name, flaw_description: msg },
-        found: |name, tech, defs| GameEvent::ReactorTechDeficienciesFound {
-            reactor_name: name, tech_name: tech, deficiencies: defs,
-        },
-    };
+    const KIND: ProjectKind = ProjectKind::Reactor;
     fn id(&self) -> Self::Id { self.project_id }
     fn name(&self) -> &str { &self.design.name }
     fn technology_id(&self) -> Option<TechnologyId> { self.technology_id }
@@ -119,13 +96,15 @@ impl GameState {
                     }
                     kind => project.apply_deficiency(kind, Direction::Revert),
                 }
-                news.push((P::EVENTS.solved)(name));
+                news.push(GameEvent::project(P::KIND, name, ProjectEvent::RevisionComplete));
             } else {
-                let msg = match technology::failure_hint(def.total_attempts) {
-                    Some(hint) => format!("Failed to resolve {}: {}. {}", name, def_desc, hint),
-                    None => format!("Failed to resolve {} deficiency: {}", name, def_desc),
+                let description = match technology::failure_hint(def.total_attempts) {
+                    Some(hint) => format!("failed to resolve {}. {}", def_desc, hint),
+                    None => format!("failed to resolve {}", def_desc),
                 };
-                news.push((P::EVENTS.failed)(name, msg));
+                news.push(GameEvent::project(
+                    P::KIND, name, ProjectEvent::TechDeficiencyUnresolved { description },
+                ));
             }
         }
         self.emit_all(events, news);
@@ -157,8 +136,13 @@ impl GameState {
                 .map(|d| format!("{}: {}", d.description, d.kind))
                 .collect();
             if !desc.is_empty() {
-                news.push((P::EVENTS.found)(
-                    project.name().to_string(), tech.name.clone(), desc.join(", "),
+                news.push(GameEvent::project(
+                    P::KIND,
+                    project.name(),
+                    ProjectEvent::TechDeficienciesFound {
+                        tech_name: tech.name.clone(),
+                        deficiencies: desc.join(", "),
+                    },
                 ));
             }
         }

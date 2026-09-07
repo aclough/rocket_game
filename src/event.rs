@@ -4,6 +4,7 @@ use std::fmt;
 use serde::{Serialize, Deserialize};
 
 use crate::calendar::GameDate;
+use crate::project::ProjectKind;
 
 /// Game events — informational records of things that happened.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,10 +12,9 @@ pub enum GameEvent {
     GameStarted,
     MonthStart,
     TeamHired { name: String },
-    EngineDesignStarted { engine_name: String },
-    EngineDesignComplete { engine_name: String },
-    FlawDiscovered { engine_name: String, flaw_description: String },
-    RevisionComplete { engine_name: String },
+    /// Something happened to an R&D project — engine, rocket or reactor
+    /// alike. See [`ProjectEvent`].
+    Project { kind: ProjectKind, name: String, event: ProjectEvent },
     /// A project started revising on its own because its auto-revise
     /// flag is on. `flaw_count` is *discovered* flaws only — the
     /// number the player can already see in the pane.
@@ -22,34 +22,14 @@ pub enum GameEvent {
     SalariesPaid { amount: f64 },
     InsufficientFunds { shortfall: f64 },
     EngineContracted { engine_name: String },
-    // Phase 3: Rocket design events
-    RocketDesignStarted { rocket_name: String },
-    RocketDesignComplete { rocket_name: String },
-    RocketFlawDiscovered { rocket_name: String, flaw_description: String },
-    RocketRevisionComplete { rocket_name: String },
-    /// Player modified an existing rocket project's tankage / power
-    /// (post-Phase-3). `new_flaw` is true when the modification roll
-    /// introduced a fresh undiscovered flaw.
-    RocketDesignModified { rocket_name: String, new_flaw: bool },
-    // Reactor research events (mirrors the engine ones).
-    ReactorDesignStarted { reactor_name: String },
-    ReactorDesignComplete { reactor_name: String },
-    ReactorFlawDiscovered { reactor_name: String, flaw_description: String },
-    ReactorRevisionComplete { reactor_name: String },
-    /// Reactor improvement discovered during testing.
-    ReactorImprovementDiscovered { reactor_name: String, description: String },
-    /// Reactor improvement actualized via revision.
-    ReactorImprovementActualized { reactor_name: String, description: String },
-    /// Tech deficiencies found on a newly designed reactor.
-    ReactorTechDeficienciesFound { reactor_name: String, tech_name: String, deficiencies: String },
-    // Phase 3: Manufacturing events
+    // Manufacturing events
     ManufacturingTeamHired { name: String },
     EngineBuilt { engine_name: String },
     StageBuilt { stage_name: String },
     RocketIntegrated { rocket_name: String },
     RocketBuildOrdered { rocket_name: String, total_cost: f64 },
     ManufacturingIdle,
-    // Phase 4: Contracts & launches
+    // Contracts & launches
     ContractsRefreshed { count: u32 },
     ContractAccepted { contract_name: String },
     ContractExpired { contract_name: String },
@@ -75,7 +55,7 @@ pub enum GameEvent {
     LaunchFailure { rocket_name: String, reason: String },
     PaymentReceived { amount: f64, contract_name: String },
     EngineBuildOrdered { engine_name: String },
-    // Phase 5: Flight events
+    // Flight events
     FlightDeparted { rocket_name: String, destination: String },
     FlightArrived { rocket_name: String, destination: String },
     SpacecraftDeployed { spacecraft_name: String, location: String },
@@ -87,12 +67,6 @@ pub enum GameEvent {
     SpacecraftLost { rocket_name: String, location: String, reason: String },
     PowerLost { rocket_name: String, location: String },
     MidFlightFlawActivated { rocket_name: String, flaw_description: String, consequence: String },
-    /// Improvement discovered during testing.
-    ImprovementDiscovered { engine_name: String, description: String },
-    /// Improvement actualized via revision.
-    ImprovementActualized { engine_name: String, description: String },
-    /// Tech deficiencies found on newly designed engine.
-    TechDeficienciesFound { engine_name: String, tech_name: String, deficiencies: String },
     /// Major economic shift affecting the launch market.
     EconomicShift { condition: String, description: String },
     /// An anchor customer announced a multi-mission program and opened
@@ -149,58 +123,77 @@ pub enum GameEvent {
     },
 }
 
+/// What happened to an R&D project. One vocabulary for every kind of
+/// design; the kind and the design's name ride alongside on
+/// `GameEvent::Project`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProjectEvent {
+    DesignStarted,
+    DesignComplete,
+    FlawDiscovered { description: String },
+    RevisionComplete,
+    ImprovementDiscovered { description: String },
+    ImprovementActualized { description: String },
+    /// A freshly completed design inherited its technology's deficiencies.
+    TechDeficienciesFound { tech_name: String, deficiencies: String },
+    /// A revision attempt on a deficiency failed.
+    TechDeficiencyUnresolved { description: String },
+    /// The player modified an existing project's tankage / power
+    /// (rockets only today). `new_flaw` is true when the modification
+    /// roll introduced a fresh undiscovered flaw.
+    DesignModified { new_flaw: bool },
+}
+
+impl GameEvent {
+    /// A project event for `name`, a design of `kind`.
+    pub fn project(kind: ProjectKind, name: impl Into<String>, event: ProjectEvent) -> Self {
+        GameEvent::Project { kind, name: name.into(), event }
+    }
+}
+
 impl fmt::Display for GameEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GameEvent::GameStarted => write!(f, "Company founded"),
             GameEvent::MonthStart => write!(f, "New month"),
             GameEvent::TeamHired { name } => write!(f, "Hired team: {}", name),
-            GameEvent::EngineDesignStarted { engine_name } =>
-                write!(f, "Started design: {}", engine_name),
-            GameEvent::EngineDesignComplete { engine_name } =>
-                write!(f, "Design complete: {}", engine_name),
-            GameEvent::FlawDiscovered { engine_name, flaw_description } =>
-                write!(f, "Flaw found in {}: {}", engine_name, flaw_description),
+            GameEvent::Project { kind, name, event } => {
+                let k = kind.label();
+                match event {
+                    ProjectEvent::DesignStarted =>
+                        write!(f, "Started {} design: {}", kind.noun(), name),
+                    ProjectEvent::DesignComplete =>
+                        write!(f, "{} design complete: {}", k, name),
+                    ProjectEvent::FlawDiscovered { description } =>
+                        write!(f, "{} flaw in {}: {}", k, name, description),
+                    ProjectEvent::RevisionComplete =>
+                        write!(f, "{} revision complete: {}", k, name),
+                    ProjectEvent::ImprovementDiscovered { description } =>
+                        write!(f, "Improvement found for {}: {}", name, description),
+                    ProjectEvent::ImprovementActualized { description } =>
+                        write!(f, "Improvement applied to {}: {}", name, description),
+                    ProjectEvent::TechDeficienciesFound { tech_name, deficiencies } =>
+                        write!(f, "{} deficiencies on {}: {}", tech_name, name, deficiencies),
+                    ProjectEvent::TechDeficiencyUnresolved { description } =>
+                        write!(f, "{}: {}", name, description),
+                    ProjectEvent::DesignModified { new_flaw } => {
+                        if *new_flaw {
+                            write!(f, "Modified {} — introduced a new design flaw", name)
+                        } else {
+                            write!(f, "Modified {}", name)
+                        }
+                    }
+                }
+            }
             GameEvent::AutoRevisionStarted { project_name, flaw_count } =>
                 write!(f, "Auto-revising {}: {} discovered flaw(s)",
                     project_name, flaw_count),
-            GameEvent::RevisionComplete { engine_name } =>
-                write!(f, "Revision complete: {}", engine_name),
             GameEvent::SalariesPaid { amount } =>
                 write!(f, "Salaries paid: ${:.0}", amount),
             GameEvent::InsufficientFunds { shortfall } =>
                 write!(f, "Warning: ${:.0} in debt", shortfall),
             GameEvent::EngineContracted { engine_name } =>
                 write!(f, "Contracted engine: {}", engine_name),
-            GameEvent::RocketDesignStarted { rocket_name } =>
-                write!(f, "Started rocket design: {}", rocket_name),
-            GameEvent::RocketDesignComplete { rocket_name } =>
-                write!(f, "Rocket design complete: {}", rocket_name),
-            GameEvent::RocketFlawDiscovered { rocket_name, flaw_description } =>
-                write!(f, "Rocket flaw in {}: {}", rocket_name, flaw_description),
-            GameEvent::RocketRevisionComplete { rocket_name } =>
-                write!(f, "Rocket revision complete: {}", rocket_name),
-            GameEvent::RocketDesignModified { rocket_name, new_flaw } => {
-                if *new_flaw {
-                    write!(f, "Modified {} — introduced a new design flaw", rocket_name)
-                } else {
-                    write!(f, "Modified {}", rocket_name)
-                }
-            }
-            GameEvent::ReactorDesignStarted { reactor_name } =>
-                write!(f, "Started reactor design: {}", reactor_name),
-            GameEvent::ReactorDesignComplete { reactor_name } =>
-                write!(f, "Reactor design complete: {}", reactor_name),
-            GameEvent::ReactorFlawDiscovered { reactor_name, flaw_description } =>
-                write!(f, "Reactor flaw in {}: {}", reactor_name, flaw_description),
-            GameEvent::ReactorRevisionComplete { reactor_name } =>
-                write!(f, "Reactor revision complete: {}", reactor_name),
-            GameEvent::ReactorImprovementDiscovered { reactor_name, description } =>
-                write!(f, "Reactor improvement found for {}: {}", reactor_name, description),
-            GameEvent::ReactorImprovementActualized { reactor_name, description } =>
-                write!(f, "Reactor improvement applied to {}: {}", reactor_name, description),
-            GameEvent::ReactorTechDeficienciesFound { reactor_name, tech_name, deficiencies } =>
-                write!(f, "{} deficiencies on {}: {}", tech_name, reactor_name, deficiencies),
             GameEvent::ManufacturingTeamHired { name } =>
                 write!(f, "Hired manufacturing team: {}", name),
             GameEvent::EngineBuilt { engine_name } =>
@@ -274,12 +267,6 @@ impl fmt::Display for GameEvent {
                     rocket_name, location),
             GameEvent::MidFlightFlawActivated { rocket_name, flaw_description, consequence } =>
                 write!(f, "In-flight flaw on {}: {} ({})", rocket_name, flaw_description, consequence),
-            GameEvent::ImprovementDiscovered { engine_name, description } =>
-                write!(f, "Improvement found for {}: {}", engine_name, description),
-            GameEvent::ImprovementActualized { engine_name, description } =>
-                write!(f, "Improvement applied to {}: {}", engine_name, description),
-            GameEvent::TechDeficienciesFound { engine_name, tech_name, deficiencies } =>
-                write!(f, "{} has {} deficiencies: {}", engine_name, tech_name, deficiencies),
             GameEvent::EconomicShift { condition, description } =>
                 write!(f, "Economic shift — {}: {}", condition, description),
             GameEvent::CampaignAnnounced {
@@ -343,25 +330,10 @@ impl GameEvent {
             }
             GameEvent::GameStarted
             | GameEvent::TeamHired { .. }
-            | GameEvent::EngineDesignStarted { .. }
-            | GameEvent::EngineDesignComplete { .. }
-            | GameEvent::FlawDiscovered { .. }
+            | GameEvent::Project { .. }
             | GameEvent::AutoRevisionStarted { .. }
-            | GameEvent::RevisionComplete { .. }
             | GameEvent::InsufficientFunds { .. }
             | GameEvent::EngineContracted { .. }
-            | GameEvent::RocketDesignStarted { .. }
-            | GameEvent::RocketDesignComplete { .. }
-            | GameEvent::RocketFlawDiscovered { .. }
-            | GameEvent::RocketRevisionComplete { .. }
-            | GameEvent::RocketDesignModified { .. }
-            | GameEvent::ReactorDesignStarted { .. }
-            | GameEvent::ReactorDesignComplete { .. }
-            | GameEvent::ReactorFlawDiscovered { .. }
-            | GameEvent::ReactorRevisionComplete { .. }
-            | GameEvent::ReactorImprovementDiscovered { .. }
-            | GameEvent::ReactorImprovementActualized { .. }
-            | GameEvent::ReactorTechDeficienciesFound { .. }
             | GameEvent::ManufacturingTeamHired { .. }
             | GameEvent::EngineBuilt { .. }
             | GameEvent::StageBuilt { .. }
@@ -387,9 +359,6 @@ impl GameEvent {
             | GameEvent::SpacecraftStranded { .. }
             | GameEvent::PowerLost { .. }
             | GameEvent::MidFlightFlawActivated { .. }
-            | GameEvent::ImprovementDiscovered { .. }
-            | GameEvent::ImprovementActualized { .. }
-            | GameEvent::TechDeficienciesFound { .. }
             | GameEvent::CampaignBidPlaced { .. }
             | GameEvent::CampaignAwarded { .. }
             | GameEvent::CampaignBidRejected { .. }
@@ -548,11 +517,11 @@ mod tests {
         // Exact strings, not a "contains no digits" heuristic — design
         // names legitimately carry digits ("Mk1", "BLV-1").
         let cases = [
-            (GameEvent::EngineDesignComplete { engine_name: "Mk1".into() },
-             "Design complete: Mk1"),
-            (GameEvent::RocketDesignComplete { rocket_name: "Smol".into() },
+            (GameEvent::project(ProjectKind::Engine, "Mk1", ProjectEvent::DesignComplete),
+             "Engine design complete: Mk1"),
+            (GameEvent::project(ProjectKind::Rocket, "Smol", ProjectEvent::DesignComplete),
              "Rocket design complete: Smol"),
-            (GameEvent::ReactorDesignComplete { reactor_name: "Mk1".into() },
+            (GameEvent::project(ProjectKind::Reactor, "Mk1", ProjectEvent::DesignComplete),
              "Reactor design complete: Mk1"),
         ];
         for (e, want) in &cases {
@@ -563,16 +532,5 @@ mod tests {
             );
             assert_eq!(&text, want, "nothing may be appended to the name");
         }
-    }
-
-    /// Saves written before the flaw count was removed still load: the
-    /// event log is serialized into the save file, and serde ignores
-    /// the now-unknown `flaw_count` field rather than erroring.
-    #[test]
-    fn old_saves_with_flaw_count_still_deserialize() {
-        let old = r#"{"RocketDesignComplete":{"rocket_name":"Smol","flaw_count":5}}"#;
-        let e: GameEvent = serde_json::from_str(old)
-            .expect("pre-M5 event should still deserialize");
-        assert_eq!(e.to_string(), "Rocket design complete: Smol");
     }
 }

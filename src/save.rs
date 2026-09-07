@@ -47,7 +47,11 @@ pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
 ///
 /// v2: revision queues address flaws and improvements by id instead of
 /// by vec index, and improvements carry an `id`. See `migrate_json`.
-pub const SAVE_VERSION: u32 = 2;
+///
+/// v3: the nineteen per-kind project events (`FlawDiscovered`,
+/// `RocketFlawDiscovered`, `ReactorFlawDiscovered`, …) in the event log
+/// collapsed into one `Project { kind, name, event }`.
+pub const SAVE_VERSION: u32 = 3;
 
 /// Load game state from a JSON file, running any migrations the file
 /// needs, then stamping it with the current version.
@@ -128,6 +132,78 @@ fn migrate_json(root: &mut serde_json::Value, from: u32) {
                 }
             }
         }
+    }
+    if from < 3 {
+        migrate_event_log_to_v3(root);
+    }
+}
+
+/// The v3 shape of one pre-v3 project event: which kind it was for,
+/// which `ProjectEvent` variant it becomes, which field held the
+/// design's name, and whether the new variant is a unit (serialised as a
+/// bare string rather than `{name: {}}`).
+const PROJECT_EVENTS_V3: &[(&str, &str, &str, &str, bool)] = &[
+    ("EngineDesignStarted", "Engine", "DesignStarted", "engine_name", true),
+    ("EngineDesignComplete", "Engine", "DesignComplete", "engine_name", true),
+    ("FlawDiscovered", "Engine", "FlawDiscovered", "engine_name", false),
+    ("RevisionComplete", "Engine", "RevisionComplete", "engine_name", true),
+    ("ImprovementDiscovered", "Engine", "ImprovementDiscovered", "engine_name", false),
+    ("ImprovementActualized", "Engine", "ImprovementActualized", "engine_name", false),
+    ("TechDeficienciesFound", "Engine", "TechDeficienciesFound", "engine_name", false),
+    ("RocketDesignStarted", "Rocket", "DesignStarted", "rocket_name", true),
+    ("RocketDesignComplete", "Rocket", "DesignComplete", "rocket_name", true),
+    ("RocketFlawDiscovered", "Rocket", "FlawDiscovered", "rocket_name", false),
+    ("RocketRevisionComplete", "Rocket", "RevisionComplete", "rocket_name", true),
+    ("RocketDesignModified", "Rocket", "DesignModified", "rocket_name", false),
+    ("ReactorDesignStarted", "Reactor", "DesignStarted", "reactor_name", true),
+    ("ReactorDesignComplete", "Reactor", "DesignComplete", "reactor_name", true),
+    ("ReactorFlawDiscovered", "Reactor", "FlawDiscovered", "reactor_name", false),
+    ("ReactorRevisionComplete", "Reactor", "RevisionComplete", "reactor_name", true),
+    ("ReactorImprovementDiscovered", "Reactor", "ImprovementDiscovered", "reactor_name", false),
+    ("ReactorImprovementActualized", "Reactor", "ImprovementActualized", "reactor_name", false),
+    ("ReactorTechDeficienciesFound", "Reactor", "TechDeficienciesFound", "reactor_name", false),
+];
+
+/// v2 -> v3: rewrite each pre-v3 project event in the log into
+/// `{"Project": {"kind", "name", "event"}}`. Fields the old variant
+/// carried beyond the name ride along into the new variant's payload
+/// (`flaw_description` becomes `description`); anything else is
+/// dropped, as serde would have ignored it anyway.
+fn migrate_event_log_to_v3(root: &mut serde_json::Value) {
+    use serde_json::{json, Value};
+    let Some(entries) = root.get_mut("event_log")
+        .and_then(|l| l.get_mut("events"))
+        .and_then(|e| e.as_array_mut())
+    else {
+        return;
+    };
+    for entry in entries {
+        // Each entry is `[date, event]`.
+        let Some(event) = entry.get_mut(1) else { continue };
+        let Some(obj) = event.as_object() else { continue };
+        if obj.len() != 1 {
+            continue;
+        }
+        let old_name = obj.keys().next().cloned().unwrap();
+        let Some(&(_, kind, new_variant, name_field, is_unit)) =
+            PROJECT_EVENTS_V3.iter().find(|row| row.0 == old_name)
+        else {
+            continue;
+        };
+        let mut payload = match event.as_object_mut().unwrap().remove(&old_name) {
+            Some(Value::Object(m)) => m,
+            _ => continue,
+        };
+        let name = payload.remove(name_field).unwrap_or(Value::String(String::new()));
+        if let Some(d) = payload.remove("flaw_description") {
+            payload.insert("description".into(), d);
+        }
+        let new_event = if is_unit {
+            Value::String(new_variant.to_string())
+        } else {
+            json!({ new_variant: payload })
+        };
+        *event = json!({ "Project": { "kind": kind, "name": name, "event": new_event } });
     }
 }
 
@@ -508,6 +584,42 @@ mod tests {
             }
             other => panic!("expected Revising, got {other:?}"),
         }
+    }
+
+    /// Pre-v3 event logs carried one variant per (kind, happening);
+    /// they load as `Project` events and read the same. A stray field
+    /// an even older writer added (`flaw_count`, dropped in M5) is
+    /// still ignored.
+    #[test]
+    fn v2_event_log_migrates_to_project_events() {
+        use serde_json::json;
+
+        let state = GameState::new("Log Co".into(), 200_000_000.0, 42);
+        let mut raw = serde_json::to_value(&state).unwrap();
+        raw.as_object_mut().unwrap().insert("save_version".into(), json!(2));
+        let date = json!({ "year": 2001, "month": 3, "day": 4 });
+        raw["event_log"]["events"] = json!([
+            [date, "GameStarted"],
+            [date, { "RocketDesignComplete": { "rocket_name": "Smol", "flaw_count": 5 } }],
+            [date, { "FlawDiscovered": { "engine_name": "BLV", "flaw_description": "Turbopump seal leak" } }],
+            [date, { "ReactorImprovementDiscovered": { "reactor_name": "Mk1", "description": "x: +2% power" } }],
+            [date, { "RocketDesignModified": { "rocket_name": "Smol", "new_flaw": true } }],
+        ]);
+
+        let path = temp_path();
+        fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
+        let loaded = load_game(&path).expect("v2 save should load");
+        let _ = fs::remove_file(&path);
+
+        let texts: Vec<String> = loaded.event_log.iter().map(|(_, e)| e.to_string()).collect();
+        assert_eq!(texts, vec![
+            "Company founded".to_string(),
+            "Rocket design complete: Smol".into(),
+            "Engine flaw in BLV: Turbopump seal leak".into(),
+            "Improvement found for Mk1: x: +2% power".into(),
+            "Modified Smol — introduced a new design flaw".into(),
+        ]);
+        assert_eq!(loaded.save_version, SAVE_VERSION);
     }
 
     #[test]

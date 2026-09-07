@@ -398,10 +398,10 @@ impl GameState {
         }
         let project = self.player_company.rocket_projects.iter()
             .find(|p| p.project_id == project_id)?;
-        Some(GameEvent::RocketDesignModified {
-            rocket_name: project.design.name.clone(),
-            new_flaw,
-        })
+        Some(GameEvent::project(
+            crate::project::ProjectKind::Rocket, project.design.name.clone(),
+            crate::event::ProjectEvent::DesignModified { new_flaw },
+        ))
     }
 
     /// Days elapsed since the game started.

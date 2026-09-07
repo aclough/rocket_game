@@ -300,7 +300,10 @@ pub enum ProjectEvent {
 }
 ```
 
-Replaces 17 `GameEvent` variants. `tick_daily_research` maps
+Replaces 19 `GameEvent` variants (7 engine, 5 rocket, 7 reactor). Found
+while doing it: `flight_ops.rs` reported a mid-flight *rocket* flaw
+discovery as an engine flaw event; the new shape carries the right
+kind. `tick_daily_research` maps
 `WorkEvent → ProjectEvent` in one 8-arm match instead of three.
 `AutoRevisionStarted` already carries `project_name` and stays as is.
 
@@ -329,7 +332,10 @@ pins the current strings and gets updated in the same edit. (Q3)
 
 ### 2.7 Save migration
 
-- `SAVE_VERSION` → 2.
+- `SAVE_VERSION` → 2 for the revision-queue change (step 1), then → 3
+  for the event collapse (step 4): saves written between the two steps
+  are v2 and still carry old event names, so the event migration is
+  gated on `from < 3`.
 - New step in `load_game`: parse to `serde_json::Value`, read
   `save_version` (default 0), run `migrate_json(&mut value, from)`, then
   `from_value::<GameState>`. Shape changes go here; `migrate()` on the
@@ -473,7 +479,7 @@ Each step compiles, passes `cargo test` and clippy, matches the
 | 1 ✅ | **B5.** `ImprovementId` + `next_improvement_id`; `remaining_flaw_ids` / `remaining_improvement_ids` on all three `Revising` variants (rocket's field renamed too). `SAVE_VERSION = 2`, `migrate_json` with the improvement-id stamp and the Revising index→id rewrite, plus unit tests. Delete the three shift-fixup loops. | `*_project.rs`, `company.rs`, `save.rs`, `tests/bid_rules.rs:588` | low |
 | 2 ✅ | **B4 + FlawDomain.** Add `Direction`, `apply_deficiency` as inherent methods on `EngineDesign` / `ReactorDesign`; `tech_ops.rs` with the two generic fns (generic over a tiny private trait for now, since `Designable` doesn't exist yet); `flaw::generate_flaws(FlawDomain, …)`. `advance_day` shrinks by ~200 lines. | `engine.rs`, `reactor.rs`, `flaw.rs`, `third_party.rs`, `game_state/{advance,tech_ops,mod}.rs` | low |
 | 3 ✅ | **B1.** `src/project.rs` with `DesignStatus`, `DesignProject<D>`, `Designable`, `Improvement<K>`, `WorkEvent`. Implement `Designable` for the three designs (moving the improvement generators and `apply_deficiency` in). Type aliases. Delete the duplicated methods from the three `*_project.rs`. `EngineSpec` (B7). `tick_daily_research` still maps three ways to `GameEvent` (that's step 4). | `project.rs` (new), `*_project.rs`, `company.rs`, `technology.rs` | **medium** — serde generic bounds, `flatten` |
-| 4 | **B3.** `GameEvent::Project { kind, name, event }`; event-log JSON migration + table; `ResearchTick` by `ProjectRef`; Display table in §2.6; update the pinned-string test and the six `matches!` sites in `game_state/tests.rs`; UI's three direct constructions. | `event.rs`, `save.rs`, `company.rs`, `advance.rs`, `flight_ops.rs`, `ui/mod.rs`, tests | medium — save format |
+| 4 ✅ | **B3.** `GameEvent::Project { kind, name, event }`; event-log JSON migration + table; `ResearchTick` by `ProjectRef`; Display table in §2.6; update the pinned-string test and the six `matches!` sites in `game_state/tests.rs`; UI's three direct constructions. | `event.rs`, `save.rs`, `company.rs`, `advance.rs`, `flight_ops.rs`, `ui/mod.rs`, tests | medium — save format |
 | 5 | **B2.** `ProjectKind` public + `ProjectRef`, `ProjectCore`, company dispatch collapse, `policy.rs` / `report.rs` callers, `handle_project_pane_key`, shared draw helpers. | `company.rs`, `ui/mod.rs`, `ui/draw.rs`, `policy.rs`, `report.rs`, tests | medium — largest diff, but mechanical |
 
 Steps 1 and 2 are independent of each other and could be reordered.

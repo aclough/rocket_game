@@ -59,6 +59,15 @@ impl ProjectKind {
             ProjectKind::Reactor => "Reactor",
         }
     }
+
+    /// Lower-case noun for mid-sentence use.
+    pub fn noun(&self) -> &'static str {
+        match self {
+            ProjectKind::Engine => "engine",
+            ProjectKind::Rocket => "rocket",
+            ProjectKind::Reactor => "reactor",
+        }
+    }
 }
 
 /// Where a project is in its workflow.

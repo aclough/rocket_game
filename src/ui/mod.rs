@@ -3145,9 +3145,10 @@ impl App {
                             if let Some(engine_name) = self.game.player_company
                                 .promote_proposed_engine(*id)
                             {
-                                self.game.log(
-                                    crate::event::GameEvent::EngineDesignStarted { engine_name },
-                                );
+                                self.game.log(crate::event::GameEvent::project(
+                                    crate::project::ProjectKind::Engine, engine_name,
+                                    crate::event::ProjectEvent::DesignStarted,
+                                ));
                             }
                         } else {
                             self.game.player_company.delete_proposed_engine(*id);
@@ -3508,10 +3509,10 @@ impl App {
                 // then close. No-op for projects already past Proposed
                 // (they only land here via the "edit existing" path).
                 if let Some(rname) = self.game.player_company.promote_proposed_reactor(project_id) {
-                    let evt = crate::event::GameEvent::ReactorDesignStarted {
-                        reactor_name: rname,
-                    };
-                    self.game.log(evt);
+                    self.game.log(crate::event::GameEvent::project(
+                        crate::project::ProjectKind::Reactor, rname,
+                        crate::event::ProjectEvent::DesignStarted,
+                    ));
                 }
                 self.exit_modal();
             }
@@ -3616,8 +3617,10 @@ impl App {
             // Standalone only: commit the draft to InDesign.
             KeyCode::Char('d') | KeyCode::Char('D') if state.is_none() => {
                 if let Some(name) = self.game.player_company.promote_proposed_engine(project_id) {
-                    let evt = crate::event::GameEvent::EngineDesignStarted { engine_name: name };
-                    self.game.log(evt);
+                    self.game.log(crate::event::GameEvent::project(
+                        crate::project::ProjectKind::Engine, name,
+                        crate::event::ProjectEvent::DesignStarted,
+                    ));
                 }
                 self.exit_modal();
             }
