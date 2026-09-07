@@ -4371,11 +4371,13 @@ mod reactor_render_tests {
             trigger: FlawTrigger::PerFlight,
         });
         project.improvements.push(ReactorImprovement {
+            id: crate::project::ImprovementId(0),
             description: "Compact reactor core design".into(),
             kind: ReactorImprovementKind::Mass(0.03),
             actualized: true,
         });
         project.improvements.push(ReactorImprovement {
+            id: crate::project::ImprovementId(1),
             description: "Optimized coolant flow raises output".into(),
             kind: ReactorImprovementKind::Power(0.02),
             actualized: false,

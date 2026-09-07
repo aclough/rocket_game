@@ -12,6 +12,7 @@ pub mod seed;
 pub mod balance;
 pub mod balance_config;
 pub mod flaw;
+pub mod project;
 pub mod team;
 pub mod engine_project;
 pub mod reactor_project;

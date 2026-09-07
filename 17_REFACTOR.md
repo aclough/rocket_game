@@ -177,7 +177,7 @@ opportunity in the codebase.
 - **Size/risk:** medium / low. Removes ~150 lines from `advance_day`.
   Independent of B1; a good first step toward it.
 
-### B5. Index-based references across mutation boundaries  ⚠ data-structure
+### ✅ B5. Index-based references across mutation boundaries  ⚠ data-structure
 - **Where:** `ResearchTick.newly_designed_engines: Vec<usize>` and
   `tech_def_attempts: Vec<(usize, _)>` are raw indices consumed after
   the tick. `Revising { remaining_flaw_indices, ... }` indexes into

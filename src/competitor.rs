@@ -222,6 +222,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             complexity,
             nre_cost: 0.0,
             improvements: Vec::new(),
+            next_improvement_id: 0,
             cumulative_testing_work: 0.0,
             tech_deficiency_ids: Vec::new(),
             technology_id: None,

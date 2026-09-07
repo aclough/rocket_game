@@ -36,8 +36,8 @@ fn test_advance_day() {
     // out its first month.
     assert!(events.iter().any(|e| matches!(e, GameEvent::MonthStart)));
 
-    // An ordinary mid-month day still produces nothing (DayAdvanced is not
-    // logged).
+    // An ordinary mid-month day still produces nothing (there is no
+    // day-advanced event).
     let quiet = gs.advance_day();
     assert_eq!(gs.date, GameDate::new(2001, 1, 3));
     assert!(quiet.is_empty());
@@ -242,7 +242,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         revision: 0,
         teams_assigned: 0,
         complexity: 6,
-        nre_cost: 0.0, improvements: Vec::new(), cumulative_testing_work: 0.0,
+        nre_cost: 0.0, improvements: Vec::new(), next_improvement_id: 0, cumulative_testing_work: 0.0,
         tech_deficiency_ids: Vec::new(), technology_id: None,
     };
     let ep2 = EngineProject {
@@ -259,7 +259,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         revision: 0,
         teams_assigned: 0,
         complexity: 6,
-        nre_cost: 0.0, improvements: Vec::new(), cumulative_testing_work: 0.0,
+        nre_cost: 0.0, improvements: Vec::new(), next_improvement_id: 0, cumulative_testing_work: 0.0,
         tech_deficiency_ids: Vec::new(), technology_id: None,
     };
 

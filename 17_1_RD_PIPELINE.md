@@ -80,11 +80,9 @@ pub enum DesignStatus {
         /// Flaws queued for removal, by id — stable across the
         /// `flaws.remove()` that each completed revision performs.
         remaining_flaw_ids: Vec<FlawId>,
-        /// Improvements queued for actualisation, by index.
-        /// `improvements` is append-only (actualised ones stay in the
-        /// vec, flagged), so indices are stable; no id needed.
+        /// Improvements queued for actualisation, by id (Q6).
         #[serde(default)]
-        remaining_improvement_indices: Vec<usize>,
+        remaining_improvement_ids: Vec<ImprovementId>,
         #[serde(default)]
         remaining_tech_deficiency_ids: Vec<TechDeficiencyId>,
         work_completed: f64,
@@ -131,9 +129,19 @@ pub type EngineProject  = DesignProject<EngineDesign>;
 pub type RocketProject  = DesignProject<RocketDesign>;
 pub type ReactorProject = DesignProject<ReactorDesign>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ImprovementId(pub u64);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Improvement<K> { pub description: String, pub kind: K, pub actualized: bool }
+pub struct Improvement<K> { pub id: ImprovementId, pub description: String, pub kind: K, pub actualized: bool }
 ```
+
+Each project carries its own `next_improvement_id: u64` (serde default
+0). An improvement never leaves the project that discovered it, so the
+id only has to be unique within the project, and a per-project counter
+avoids threading a second `&mut u64` through every `apply_daily_work`
+call and its ~17 test callers. (Deviation from the first draft, which
+put the counter on `Company`.)
 
 Serde layout check against today's JSON: every field name is the same;
 `preset`/`scale` stay top-level via `flatten`; rocket saves have no
@@ -333,13 +341,19 @@ pins the current strings and gets updated in the same edit. (Q3)
      `{"Project": {"kind": …, "name": <the *_name field>, "event": {<new variant>: {…}}}}`.
      A 17-row table `(old_name, kind, new_variant, name_field)` drives
      it. Unknown keys are left alone.
-  2. **Mid-revision projects.** In each of the three project lists,
-     for a `status.Revising` object: replace `remaining_indices` /
-     `remaining_flaw_indices: [i, …]` with
-     `remaining_flaw_ids: [flaws[i].id, …]`. No corpus save has one,
-     so this gets a unit test with a hand-built v1 project snippet
-     (fine for a unit test; the corpus rule is about not hand-editing
-     the era files).
+  2. **Improvement ids.** Walk every project's `improvements` array
+     and stamp `id` sequentially from a fresh counter; write the
+     counter's final value to `player_company.next_improvement_id`
+     (and each competitor's). Every era from m3 on has improvements,
+     so the corpus exercises this.
+  3. **Mid-revision projects.** For a `status.Revising` object:
+     replace `remaining_indices` / `remaining_flaw_indices: [i, …]`
+     with `remaining_flaw_ids: [flaws[i].id, …]`, and
+     `remaining_improvement_indices: [i, …]` with
+     `remaining_improvement_ids: [improvements[i].id, …]` (after step
+     2 has stamped them). No corpus save is mid-revision, so this gets
+     a unit test with a hand-built v1 project snippet (fine for a unit
+     test; the corpus rule is about not hand-editing the era files).
 - Compat corpus: `tests/save_compat.rs` already loads m1–m4 and asserts
   the event log is non-empty and displayable, which covers (1) for
   real data. Before starting, generate **`m5.json`** from `e79811a` the
@@ -455,8 +469,8 @@ Each step compiles, passes `cargo test` and clippy, matches the
 
 | # | Step | Touches | Risk |
 |---|---|---|---|
-| 0 | Generate `tests/saves/m5.json` from `e79811a` per the corpus recipe. | `tests/saves`, `save_compat.rs` header table | none |
-| 1 | **B5.** `remaining_flaw_ids: Vec<FlawId>` on all three `Revising` variants (rocket's field renamed too). `SAVE_VERSION = 2`, `migrate_json` scaffold with the Revising index→id rewrite and its unit test. Delete the three shift-fixup loops. | `*_project.rs`, `save.rs`, `tests/bid_rules.rs:588` | low |
+| 0 ✅ | Generate `tests/saves/m5.json` from `e79811a` per the corpus recipe. The recipe is now an `#[ignore]`d test, `generate_corpus_snapshot`. Folded into the step 1 commit: m5 is written at save v1, and the compat test's "corpus predates the current version" check only holds once step 1 bumps to v2. | `tests/saves`, `save_compat.rs` | none |
+| 1 ✅ | **B5.** `ImprovementId` + `next_improvement_id`; `remaining_flaw_ids` / `remaining_improvement_ids` on all three `Revising` variants (rocket's field renamed too). `SAVE_VERSION = 2`, `migrate_json` with the improvement-id stamp and the Revising index→id rewrite, plus unit tests. Delete the three shift-fixup loops. | `*_project.rs`, `company.rs`, `save.rs`, `tests/bid_rules.rs:588` | low |
 | 2 | **B4 + FlawDomain.** Add `Direction`, `apply_deficiency` as inherent methods on `EngineDesign` / `ReactorDesign`; `tech_ops.rs` with the two generic fns (generic over a tiny private trait for now, since `Designable` doesn't exist yet); `flaw::generate_flaws(FlawDomain, …)`. `advance_day` shrinks by ~200 lines. | `engine.rs`, `reactor.rs`, `flaw.rs`, `third_party.rs`, `game_state/{advance,tech_ops,mod}.rs` | low |
 | 3 | **B1.** `src/project.rs` with `DesignStatus`, `DesignProject<D>`, `Designable`, `Improvement<K>`, `WorkEvent`. Implement `Designable` for the three designs (moving the improvement generators and `apply_deficiency` in). Type aliases. Delete the duplicated methods from the three `*_project.rs`. `EngineSpec` (B7). `tick_daily_research` still maps three ways to `GameEvent` (that's step 4). | `project.rs` (new), `*_project.rs`, `company.rs`, `technology.rs` | **medium** — serde generic bounds, `flatten` |
 | 4 | **B3.** `GameEvent::Project { kind, name, event }`; event-log JSON migration + table; `ResearchTick` by `ProjectRef`; Display table in §2.6; update the pinned-string test and the six `matches!` sites in `game_state/tests.rs`; UI's three direct constructions. | `event.rs`, `save.rs`, `company.rs`, `advance.rs`, `flight_ops.rs`, `ui/mod.rs`, tests | medium — save format |
@@ -545,7 +559,9 @@ NRE accrual, team assignment — is symmetric, which matches the
 ## 7. Verification
 
 - `cargo test` and `cargo clippy --all-targets` green at every step.
-- **Oracle:** before step 1, run
+- **Oracle:** before step 1, run (step 1 result: identical, 2,896 rows;
+  the "before" build lives in a git worktree of `e79811a` so later steps
+  can re-run it)
   ```
   cargo run --release --bin simulate -- --seeds 1..40 --years 6 --policy basic --summary-only --csv /tmp/oracle_before.csv
   ```
@@ -555,9 +571,9 @@ NRE accrual, team assignment — is symmetric, which matches the
   CSV doesn't carry, so it should also be identical; if the harness
   ever counts project events, that column would shift and the reason
   would be known.
-- `tests/save_compat.rs` (m1–m5) after step 4 proves the event-log
-  migration on real data; the step 1 unit test proves the Revising
-  migration on a synthetic one.
+- `tests/save_compat.rs` (m1–m5) after step 1 proves the improvement-id
+  stamp on real data and after step 4 the event-log migration; the
+  step 1 unit test proves the Revising migration on a synthetic one.
 - `tests/sim_bands.rs` and `tests/seed_fairness.rs` as a second net.
 
 ---
@@ -568,23 +584,49 @@ NRE accrual, team assignment — is symmetric, which matches the
    `FlawDiscovered` events with a "Failed to resolve…" description.
    Give them their own `ProjectEvent::TechDeficiencyUnresolved`
    (recommended), or keep reporting them as flaws for continuity?
+   USER:  Yeah, a new event would make sense here.
+   CLAUDE: Will do — `ProjectEvent::TechDeficiencyUnresolved`.
 2. **Rocket `Proposed`.** The shared status gives rockets a `Proposed`
    variant nothing constructs. Fine to leave dormant? It would be the
    hook if you ever want rocket drafts to work like engine drafts.
+   USER:  Having rocket drafts makes sense but we'd have to think about the UI.
+   It theoretically makes sense so its possibly good that it falls out of this
+   but no sense hooking it up now so yeah leave it dormant.
+   CLAUDE: Left dormant; noted as a future hook in the status doc comment.
 3. **Event wording.** Normalise to the table in §2.6 (engine strings
    gain an "Engine" prefix, one pinned test updated), or keep the exact
    current strings per kind (a per-kind lookup table instead of a
    template; slightly more code, zero visible change)?
+   USER:  Go ahead and normalize.
+   CLAUDE: Table in §2.6 it is; the pinned-string test gets updated in step 4.
 4. **Corpus m5.** Generate `tests/saves/m5.json` from the current
    commit before starting? Recommended: it is the last save shape
    before the format bump, and the corpus recipe says to generate, not
    hand-edit.
+   USER:  Yup.
+   CLAUDE: Step 0, from `e79811a`, following the recipe in the corpus header.
 5. **`RetireTarget` → `ProjectRef`.** Rename outright (touches ~12
    sites in `company.rs` / `ui/mod.rs`) or keep `RetireTarget` as a
    type alias?
+   USER:  I guess it didn't make sense to have this duplicated.  Yeah,
+   ProjectRef instead.
+   CLAUDE: Renamed outright in step 5; `RetireRefusal` / `RetirementEffects` keep their names since they are about retiring.
 6. **Improvement addressing.** Keep `remaining_improvement_indices`
    (append-only vec, indices stable, no new id type) as proposed, or
    introduce `ImprovementId` for symmetry with flaws?
+   USER:  Update for symmetry.
+   CLAUDE: Done in the design below (§2.1, §2.2, §2.7, step 1). Consequences:
+   `Improvement<K>` gains `id: ImprovementId`; each project gets a
+   `next_improvement_id` counter (per project, not per company — see
+   §2.2 for why); the v<2 JSON migration stamps ids on improvements
+   already in a save and rewrites any `remaining_improvement_indices`
+   to ids. Revision then removes from both queues by id.
+   Implementation note: improvements are also snapshotted onto
+   manufacturing orders and inventory engines (`manufacturing.rs:35,
+   137, 324`), which the first draft missed; the id stamp therefore
+   walks the whole document rather than just the project lists.
 7. **Step order.** Steps 1 and 2 first as two small commits, then the
    step-3 spike before writing the generic for real — agreed? Or would
    you rather see the spike result before approving step 3 at all?
+   USER:  Agreed.
+   CLAUDE: Starting with step 0 and step 1.

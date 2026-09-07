@@ -8,7 +8,8 @@ use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 
 use crate::balance_config::BalanceConfig;
-use crate::flaw::{self, Flaw};
+use crate::flaw::{self, Flaw, FlawId};
+use crate::project::ImprovementId;
 use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
 use crate::technology::TechDeficiencyId;
 
@@ -17,6 +18,7 @@ use crate::technology::TechDeficiencyId;
 /// the engine's `EngineImprovement` (reactors have no Isp/thrust to improve).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReactorImprovement {
+    pub id: ImprovementId,
     pub description: String,
     pub kind: ReactorImprovementKind,
     /// Whether this improvement has been actualized via revision.
@@ -42,7 +44,7 @@ impl std::fmt::Display for ReactorImprovementKind {
 }
 
 /// Generate a random reactor improvement (Power or Mass).
-fn generate_reactor_improvement(rng: &mut StdRng) -> ReactorImprovement {
+fn generate_reactor_improvement(rng: &mut StdRng, id: ImprovementId) -> ReactorImprovement {
     let roll: f64 = rng.gen();
     let (kind, description) = if roll < 0.55 {
         let frac = rng.gen_range(0.01..0.04);
@@ -60,6 +62,7 @@ fn generate_reactor_improvement(rng: &mut StdRng) -> ReactorImprovement {
         })
     };
     ReactorImprovement {
+        id,
         description: description.to_string(),
         kind,
         actualized: false,
@@ -93,9 +96,10 @@ pub enum ReactorDesignStatus {
     InDesign { work_completed: f64, work_required: f64 },
     Testing { work_completed: f64 },
     /// Revising discovered flaws / improvements / tech deficiencies.
+    /// Queues hold ids, not vec positions (see `EngineDesignStatus`).
     Revising {
-        remaining_flaw_indices: Vec<usize>,
-        remaining_improvement_indices: Vec<usize>,
+        remaining_flaw_ids: Vec<FlawId>,
+        remaining_improvement_ids: Vec<ImprovementId>,
         remaining_tech_deficiency_ids: Vec<TechDeficiencyId>,
         work_completed: f64,
     },
@@ -131,6 +135,9 @@ pub struct ReactorProject {
     /// revision to actualize.
     #[serde(default)]
     pub improvements: Vec<ReactorImprovement>,
+    /// Allocator for `ImprovementId` on this project.
+    #[serde(default)]
+    pub next_improvement_id: u64,
     /// Cumulative work spent in testing (persists across revisions).
     #[serde(default)]
     pub cumulative_testing_work: f64,
@@ -186,6 +193,7 @@ impl ReactorProject {
             complexity,
             nre_cost: 0.0,
             improvements: Vec::new(),
+            next_improvement_id: 0,
             cumulative_testing_work: 0.0,
             tech_deficiency_ids: Vec::new(),
             technology_id: Some(crate::technology::TECH_FISSION_REACTOR),
@@ -295,7 +303,9 @@ impl ReactorProject {
                     let improvement_chance = balance_cfg.flaws.reactor_improvement_discovery_chance
                         * balance_cfg.flaws.improvement_decay.powi(self.improvements.len() as i32);
                     if rng.gen::<f64>() < improvement_chance {
-                        let improvement = generate_reactor_improvement(rng);
+                        let id = ImprovementId(self.next_improvement_id);
+                        self.next_improvement_id += 1;
+                        let improvement = generate_reactor_improvement(rng, id);
                         events.push(ReactorWorkEvent::ImprovementDiscovered {
                             description: format!("{}: {}", improvement.description, improvement.kind),
                         });
@@ -305,29 +315,24 @@ impl ReactorProject {
                 }
             }
             ReactorDesignStatus::Revising {
-                remaining_flaw_indices,
-                remaining_improvement_indices,
+                remaining_flaw_ids,
+                remaining_improvement_ids,
                 remaining_tech_deficiency_ids,
                 work_completed,
             } => {
                 *work_completed += work;
                 // Process flaws first.
-                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_flaw_indices.is_empty() {
+                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_flaw_ids.is_empty() {
                     *work_completed -= balance_cfg.work.flaw_revision_work;
-                    let fi = remaining_flaw_indices.remove(0);
-                    self.flaws.remove(fi);
+                    let fid = remaining_flaw_ids.remove(0);
+                    self.flaws.retain(|f| f.id != fid);
                     events.push(ReactorWorkEvent::RevisionComplete);
-                    for idx in remaining_flaw_indices.iter_mut() {
-                        if *idx > fi {
-                            *idx -= 1;
-                        }
-                    }
                 }
                 // Then actualize improvements.
-                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_improvement_indices.is_empty() {
+                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_improvement_ids.is_empty() {
                     *work_completed -= balance_cfg.work.flaw_revision_work;
-                    let ii = remaining_improvement_indices.remove(0);
-                    if let Some(imp) = self.improvements.get_mut(ii) {
+                    let iid = remaining_improvement_ids.remove(0);
+                    if let Some(imp) = self.improvements.iter_mut().find(|imp| imp.id == iid) {
                         imp.actualized = true;
                         match &imp.kind {
                             ReactorImprovementKind::Power(frac) => {
@@ -353,8 +358,8 @@ impl ReactorProject {
                     let def_id = remaining_tech_deficiency_ids.remove(0);
                     events.push(ReactorWorkEvent::TechDeficiencyAttempted { deficiency_id: def_id });
                 }
-                if remaining_flaw_indices.is_empty()
-                    && remaining_improvement_indices.is_empty()
+                if remaining_flaw_ids.is_empty()
+                    && remaining_improvement_ids.is_empty()
                     && remaining_tech_deficiency_ids.is_empty()
                 {
                     let leftover = *work_completed;
@@ -373,24 +378,22 @@ impl ReactorProject {
         if !matches!(self.status, ReactorDesignStatus::Testing { .. }) {
             return false;
         }
-        let flaw_indices: Vec<usize> = self.flaws.iter()
-            .enumerate()
-            .filter(|(_, f)| f.discovered)
-            .map(|(i, _)| i)
+        let flaw_ids: Vec<FlawId> = self.flaws.iter()
+            .filter(|f| f.discovered)
+            .map(|f| f.id)
             .collect();
-        let improvement_indices: Vec<usize> = self.improvements.iter()
-            .enumerate()
-            .filter(|(_, imp)| !imp.actualized)
-            .map(|(i, _)| i)
+        let improvement_ids: Vec<ImprovementId> = self.improvements.iter()
+            .filter(|imp| !imp.actualized)
+            .map(|imp| imp.id)
             .collect();
         let tech_def_ids = self.tech_deficiency_ids.clone();
-        if flaw_indices.is_empty() && improvement_indices.is_empty() && tech_def_ids.is_empty() {
+        if flaw_ids.is_empty() && improvement_ids.is_empty() && tech_def_ids.is_empty() {
             return false;
         }
         self.revision += 1;
         self.status = ReactorDesignStatus::Revising {
-            remaining_flaw_indices: flaw_indices,
-            remaining_improvement_indices: improvement_indices,
+            remaining_flaw_ids: flaw_ids,
+            remaining_improvement_ids: improvement_ids,
             remaining_tech_deficiency_ids: tech_def_ids,
             work_completed: 0.0,
         };
@@ -632,6 +635,7 @@ mod tests {
         p.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
         let before_w = p.design.steady_w;
         p.improvements.push(ReactorImprovement {
+            id: ImprovementId(0),
             description: "Optimized coolant flow raises output".into(),
             kind: ReactorImprovementKind::Power(0.05),
             actualized: false,
@@ -658,6 +662,7 @@ mod tests {
         );
         p.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
         p.improvements.push(ReactorImprovement {
+            id: ImprovementId(0),
             description: "Lighter radiation shielding".into(),
             kind: ReactorImprovementKind::Mass(0.10),
             actualized: false,

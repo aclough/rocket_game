@@ -366,8 +366,8 @@ impl Company {
             return None;
         }
         match &project.status {
-            EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, .. } =>
-                Some((remaining_flaw_indices.len(), remaining_improvement_indices.len())),
+            EngineDesignStatus::Revising { remaining_flaw_ids, remaining_improvement_ids, .. } =>
+                Some((remaining_flaw_ids.len(), remaining_improvement_ids.len())),
             _ => Some((0, 0)),
         }
     }
@@ -380,8 +380,8 @@ impl Company {
             return None;
         }
         match &project.status {
-            crate::rocket_project::RocketDesignStatus::Revising { remaining_indices, .. } =>
-                Some(remaining_indices.len()),
+            crate::rocket_project::RocketDesignStatus::Revising { remaining_flaw_ids, .. } =>
+                Some(remaining_flaw_ids.len()),
             _ => Some(0),
         }
     }
@@ -396,13 +396,13 @@ impl Company {
         }
         match &project.status {
             crate::reactor_project::ReactorDesignStatus::Revising {
-                remaining_flaw_indices,
-                remaining_improvement_indices,
+                remaining_flaw_ids,
+                remaining_improvement_ids,
                 remaining_tech_deficiency_ids,
                 ..
             } => Some((
-                remaining_flaw_indices.len(),
-                remaining_improvement_indices.len(),
+                remaining_flaw_ids.len(),
+                remaining_improvement_ids.len(),
                 remaining_tech_deficiency_ids.len(),
             )),
             _ => Some((0, 0, 0)),

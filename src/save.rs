@@ -43,16 +43,26 @@ pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
 /// v1 (M5) introduced versioning itself and contains no format
 /// changes: everything the old loader repaired turned out to be
 /// state repair rather than format migration, and lives in
-/// `sanitize`. The mechanism is here so the *next* change has a floor
-/// to migrate from instead of guessing what a file contains.
-pub const SAVE_VERSION: u32 = 1;
+/// `sanitize`.
+///
+/// v2: revision queues address flaws and improvements by id instead of
+/// by vec index, and improvements carry an `id`. See `migrate_json`.
+pub const SAVE_VERSION: u32 = 2;
 
 /// Load game state from a JSON file, running any migrations the file
 /// needs, then stamping it with the current version.
+///
+/// Shape changes are applied to the raw JSON *before* it is typed
+/// (`migrate_json`), so a field that no longer exists in the Rust
+/// types can still be read and converted. State repair that needs game
+/// logic runs afterwards on the typed value (`sanitize`, `migrate`).
 pub fn load_game(path: &Path) -> io::Result<GameState> {
     let json = fs::read_to_string(path)?;
-    let mut state: GameState = serde_json::from_str(&json)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let invalid = |e: serde_json::Error| io::Error::new(io::ErrorKind::InvalidData, e);
+    let mut raw: serde_json::Value = serde_json::from_str(&json).map_err(invalid)?;
+    let from = raw.get("save_version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    migrate_json(&mut raw, from);
+    let mut state: GameState = serde_json::from_value(raw).map_err(invalid)?;
 
     // Not serialized — rebuilt on every load regardless of version.
     state.seed.fix_after_load();
@@ -95,16 +105,119 @@ fn sanitize(state: &mut GameState) {
     }
 }
 
-/// Version-gated format migrations, applied in order. Each arm must be
-/// idempotent and must leave the state loadable by the next arm.
-///
-/// Empty today — see `SAVE_VERSION`. A future arm looks like:
-///
-/// ```ignore
-/// if state.save_version < 2 {
-///     // v1 -> v2: <what changed and why the old shape can't be read>
-/// }
-/// ```
+/// Version-gated shape migrations on the untyped JSON, applied in
+/// order. Each arm must be idempotent and must leave the document
+/// loadable by the next arm. `from` is the version the file was
+/// written at (0 for files that predate versioning).
+fn migrate_json(root: &mut serde_json::Value, from: u32) {
+    if from < 2 {
+        // v1 -> v2: revision queues held vec indices into `flaws` /
+        // `improvements`, which shifted under a removal; they now hold
+        // ids, and improvements gained one. Improvements are snapshotted
+        // onto manufacturing orders and inventory as well as living on
+        // projects, so the id stamp walks the whole document; the queue
+        // rewrite is project-only.
+        stamp_improvement_ids(root);
+        if let Some(company) = root.get_mut("player_company") {
+            migrate_company_to_v2(company);
+        }
+        if let Some(comps) = root.get_mut("competitors").and_then(|c| c.as_array_mut()) {
+            for comp in comps {
+                if let Some(company) = comp.get_mut("company") {
+                    migrate_company_to_v2(company);
+                }
+            }
+        }
+    }
+}
+
+fn migrate_company_to_v2(company: &mut serde_json::Value) {
+    for list in ["engine_projects", "rocket_projects", "reactor_projects"] {
+        let Some(projects) = company.get_mut(list).and_then(|l| l.as_array_mut()) else {
+            continue;
+        };
+        for project in projects {
+            migrate_project_to_v2(project);
+        }
+    }
+}
+
+/// Give every improvement in the document an `id` equal to its position
+/// in its array. Project improvement vecs were append-only, so the
+/// position was already a stable identity; snapshots elsewhere (build
+/// orders, inventory) are copies and only need the field to exist.
+fn stamp_improvement_ids(value: &mut serde_json::Value) {
+    use serde_json::{json, Value};
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key == "improvements" {
+                    if let Some(imps) = child.as_array_mut() {
+                        for (i, imp) in imps.iter_mut().enumerate() {
+                            if let Some(obj) = imp.as_object_mut() {
+                                obj.entry("id").or_insert(json!(i));
+                            }
+                        }
+                    }
+                } else {
+                    stamp_improvement_ids(child);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(stamp_improvement_ids),
+        _ => {}
+    }
+}
+
+/// One project's v1 -> v2 rewrite: set the improvement allocator past
+/// the ids `stamp_improvement_ids` assigned, then translate any
+/// `Revising` queue from positions to ids.
+fn migrate_project_to_v2(project: &mut serde_json::Value) {
+    use serde_json::{json, Value};
+
+    let flaw_ids: Vec<Value> = project.get("flaws")
+        .and_then(|f| f.as_array())
+        .map(|flaws| flaws.iter().map(|f| f.get("id").cloned().unwrap_or(Value::Null)).collect())
+        .unwrap_or_default();
+
+    let improvement_count = project.get("improvements")
+        .and_then(|i| i.as_array())
+        .map_or(0, |i| i.len());
+    if let Some(obj) = project.as_object_mut() {
+        if obj.contains_key("improvements") {
+            obj.entry("next_improvement_id").or_insert(json!(improvement_count));
+        }
+    }
+
+    let Some(revising) = project.get_mut("status")
+        .and_then(|s| s.get_mut("Revising"))
+        .and_then(|r| r.as_object_mut())
+    else {
+        return;
+    };
+    let positions = |v: Value| -> Vec<usize> {
+        v.as_array().into_iter().flatten()
+            .filter_map(|i| i.as_u64()).map(|i| i as usize).collect()
+    };
+    // Rocket projects named the queue `remaining_indices`; engines and
+    // reactors `remaining_flaw_indices`.
+    for old_key in ["remaining_indices", "remaining_flaw_indices"] {
+        if let Some(idx) = revising.remove(old_key) {
+            let ids: Vec<Value> = positions(idx).into_iter()
+                .filter_map(|i| flaw_ids.get(i).cloned())
+                .collect();
+            revising.insert("remaining_flaw_ids".into(), Value::Array(ids));
+        }
+    }
+    if let Some(idx) = revising.remove("remaining_improvement_indices") {
+        // Ids were just assigned as positions, so this is the identity.
+        let ids: Vec<Value> = positions(idx).into_iter().map(|i| json!(i)).collect();
+        revising.insert("remaining_improvement_ids".into(), Value::Array(ids));
+    }
+}
+
+/// Version-gated migrations that need the typed state. Empty today;
+/// shape changes belong in `migrate_json`.
 fn migrate(_state: &mut GameState) {}
 
 /// How many rotating autosave slots each company keeps.
@@ -277,6 +390,124 @@ mod tests {
 
         // Clean up
         let _ = fs::remove_file(&path);
+    }
+
+    /// A v1 save with an engine project mid-revision: the flaw queue
+    /// held positions, improvements had no ids, and the project had no
+    /// allocator. After load the queue names the same flaws by id and
+    /// the improvements are numbered by position.
+    #[test]
+    fn v1_revision_queues_migrate_to_ids() {
+        use crate::engine::EngineCycle;
+        use crate::engine_project::{EngineDesignStatus, PropellantPreset};
+        use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawTrigger};
+        use crate::project::ImprovementId;
+        use serde_json::{json, Value};
+
+        let mut state = GameState::new("Mig Co".into(), 200_000_000.0, 42);
+        let balance = state.balance.clone();
+        state.player_company.start_engine_project(
+            "Old".into(), EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, None, &balance,
+        );
+        {
+            let ep = &mut state.player_company.engine_projects[0];
+            for (id, discovered) in [(10u64, false), (11, true), (12, true)] {
+                ep.flaws.push(Flaw {
+                    id: FlawId(id),
+                    description: format!("flaw {id}"),
+                    consequence: FlawConsequence::EngineLoss,
+                    activation_chance: 0.1,
+                    discovery_probability: 0.5,
+                    discovered,
+                    trigger: FlawTrigger::PerFlight,
+                });
+            }
+            for (i, actualized) in [(0u64, true), (1, false)] {
+                ep.improvements.push(crate::engine_project::EngineImprovement {
+                    id: ImprovementId(i),
+                    description: format!("imp {i}"),
+                    kind: crate::engine_project::EngineImprovementKind::Isp(0.02),
+                    actualized,
+                });
+            }
+            ep.next_improvement_id = 2;
+            ep.status = EngineDesignStatus::Revising {
+                remaining_flaw_ids: vec![FlawId(11), FlawId(12)],
+                remaining_improvement_ids: vec![ImprovementId(1)],
+                remaining_tech_deficiency_ids: Vec::new(),
+                work_completed: 3.0,
+            };
+        }
+
+        // Downgrade the document to the v1 shape by hand.
+        let mut raw = serde_json::to_value(&state).unwrap();
+        raw.as_object_mut().unwrap().insert("save_version".into(), json!(1));
+        let ep = &mut raw["player_company"]["engine_projects"][0];
+        ep.as_object_mut().unwrap().remove("next_improvement_id");
+        for imp in ep["improvements"].as_array_mut().unwrap() {
+            imp.as_object_mut().unwrap().remove("id");
+        }
+        let rev = ep["status"]["Revising"].as_object_mut().unwrap();
+        rev.remove("remaining_flaw_ids");
+        rev.remove("remaining_improvement_ids");
+        rev.insert("remaining_flaw_indices".into(), json!([1, 2]));
+        rev.insert("remaining_improvement_indices".into(), json!([1]));
+        assert!(ep["improvements"][0].get("id").is_none(), "premise: v1 has no ids");
+
+        let path = temp_path();
+        fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
+        let loaded = load_game(&path).expect("v1 save should load");
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(loaded.save_version, SAVE_VERSION);
+        let ep = &loaded.player_company.engine_projects[0];
+        assert_eq!(ep.next_improvement_id, 2);
+        assert_eq!(ep.improvements[0].id, ImprovementId(0));
+        assert_eq!(ep.improvements[1].id, ImprovementId(1));
+        match &ep.status {
+            EngineDesignStatus::Revising { remaining_flaw_ids, remaining_improvement_ids, work_completed, .. } => {
+                assert_eq!(remaining_flaw_ids, &vec![FlawId(11), FlawId(12)]);
+                assert_eq!(remaining_improvement_ids, &vec![ImprovementId(1)]);
+                assert_eq!(*work_completed, 3.0);
+            }
+            other => panic!("expected Revising, got {other:?}"),
+        }
+        let _: Value = serde_json::to_value(&loaded).unwrap(); // re-serialisable
+    }
+
+    /// The rocket variant named its queue differently. Taken from the
+    /// real m4 corpus save with one project's flaws and status
+    /// rewritten (the bot had revised every flaw away, so two are put
+    /// back), so the rest of the document is genuine v0 output.
+    #[test]
+    fn v0_rocket_revision_queue_migrates_to_ids() {
+        use crate::rocket_project::RocketDesignStatus;
+        use serde_json::json;
+
+        let corpus = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/saves/m4.json");
+        let mut raw: serde_json::Value = serde_json::from_str(&fs::read_to_string(corpus).unwrap()).unwrap();
+        let rp = &mut raw["player_company"]["rocket_projects"][0];
+        let flaw = |id: u64| json!({
+            "id": id, "description": format!("flaw {id}"), "consequence": "EngineLoss",
+            "activation_chance": 0.1, "discovery_probability": 0.5, "discovered": true,
+            "trigger": "PerFlight",
+        });
+        let flaw_ids = [501u64, 502];
+        rp["flaws"] = json!([flaw(flaw_ids[0]), flaw(flaw_ids[1])]);
+        rp["status"] = json!({ "Revising": { "remaining_indices": [1, 0], "work_completed": 0.0 } });
+
+        let path = temp_path();
+        fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
+        let loaded = load_game(&path).expect("v0 save should load");
+        let _ = fs::remove_file(&path);
+
+        match &loaded.player_company.rocket_projects[0].status {
+            RocketDesignStatus::Revising { remaining_flaw_ids, .. } => {
+                let got: Vec<u64> = remaining_flaw_ids.iter().map(|f| f.0).collect();
+                assert_eq!(got, vec![flaw_ids[1], flaw_ids[0]], "positions map to the flaws they pointed at, in order");
+            }
+            other => panic!("expected Revising, got {other:?}"),
+        }
     }
 
     #[test]

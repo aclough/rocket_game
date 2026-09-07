@@ -329,9 +329,9 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             EngineDesignStatus::InDesign { .. } => "In Design".to_string(),
             EngineDesignStatus::Testing { .. } =>
                 format!("Testing  {}", project.testing_level(&app.game.balance)),
-            EngineDesignStatus::Revising { remaining_flaw_indices, remaining_improvement_indices, .. } =>
+            EngineDesignStatus::Revising { remaining_flaw_ids, remaining_improvement_ids, .. } =>
                 format!("Revising {} flaw(s), {} improvement(s)",
-                    remaining_flaw_indices.len(), remaining_improvement_indices.len()),
+                    remaining_flaw_ids.len(), remaining_improvement_ids.len()),
         };
 
         let line_text = format!(
@@ -575,14 +575,14 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
             ReactorDesignStatus::Testing { .. } =>
                 format!("Testing  {}", project.testing_level(&app.game.balance)),
             ReactorDesignStatus::Revising {
-                remaining_flaw_indices,
-                remaining_improvement_indices,
+                remaining_flaw_ids,
+                remaining_improvement_ids,
                 remaining_tech_deficiency_ids,
                 ..
             } =>
                 format!("Revising {} flaw(s), {} improvement(s), {} deficiency(ies)",
-                    remaining_flaw_indices.len(),
-                    remaining_improvement_indices.len(),
+                    remaining_flaw_ids.len(),
+                    remaining_improvement_ids.len(),
                     remaining_tech_deficiency_ids.len()),
         };
 
@@ -767,8 +767,8 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 "In Design".to_string(),
             rocket_project::RocketDesignStatus::Testing { .. } =>
                 format!("Testing  {}", project.testing_level(&app.game.balance)),
-            rocket_project::RocketDesignStatus::Revising { remaining_indices, .. } =>
-                format!("Revising {} flaw(s)", remaining_indices.len()),
+            rocket_project::RocketDesignStatus::Revising { remaining_flaw_ids, .. } =>
+                format!("Revising {} flaw(s)", remaining_flaw_ids.len()),
         };
 
         let auto_target = company.auto_build_targets.get(&project.project_id).copied().unwrap_or(0);

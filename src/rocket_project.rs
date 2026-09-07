@@ -5,7 +5,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::balance;
 use crate::balance_config::BalanceConfig;
-use crate::flaw::{self, Flaw};
+use crate::flaw::{self, Flaw, FlawId};
 use crate::location::DELTA_V_MAP;
 use crate::rocket::RocketDesign;
 
@@ -18,7 +18,8 @@ pub struct RocketProjectId(pub u64);
 pub enum RocketDesignStatus {
     InDesign { work_completed: f64, work_required: f64 },
     Testing { work_completed: f64 },
-    Revising { remaining_indices: Vec<usize>, work_completed: f64 },
+    /// Queue holds flaw ids, not vec positions (see `EngineDesignStatus`).
+    Revising { remaining_flaw_ids: Vec<FlawId>, work_completed: f64 },
 }
 
 impl RocketDesignStatus {
@@ -134,20 +135,15 @@ impl RocketProject {
                     events.push(RocketWorkEvent::TestingCycleComplete);
                 }
             }
-            RocketDesignStatus::Revising { remaining_indices, work_completed } => {
+            RocketDesignStatus::Revising { remaining_flaw_ids, work_completed } => {
                 *work_completed += work;
-                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_indices.is_empty() {
+                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_flaw_ids.is_empty() {
                     *work_completed -= balance_cfg.work.flaw_revision_work;
-                    let fi = remaining_indices.remove(0);
-                    self.flaws.remove(fi);
+                    let fid = remaining_flaw_ids.remove(0);
+                    self.flaws.retain(|f| f.id != fid);
                     events.push(RocketWorkEvent::RevisionComplete);
-                    for idx in remaining_indices.iter_mut() {
-                        if *idx > fi {
-                            *idx -= 1;
-                        }
-                    }
                 }
-                if remaining_indices.is_empty() {
+                if remaining_flaw_ids.is_empty() {
                     let leftover = *work_completed;
                     self.status = RocketDesignStatus::Testing { work_completed: leftover };
                 }
@@ -162,17 +158,16 @@ impl RocketProject {
         if !matches!(self.status, RocketDesignStatus::Testing { .. }) {
             return false;
         }
-        let discovered_indices: Vec<usize> = self.flaws.iter()
-            .enumerate()
-            .filter(|(_, f)| f.discovered)
-            .map(|(i, _)| i)
+        let discovered_ids: Vec<FlawId> = self.flaws.iter()
+            .filter(|f| f.discovered)
+            .map(|f| f.id)
             .collect();
-        if discovered_indices.is_empty() {
+        if discovered_ids.is_empty() {
             return false;
         }
         self.revision += 1;
         self.status = RocketDesignStatus::Revising {
-            remaining_indices: discovered_indices,
+            remaining_flaw_ids: discovered_ids,
             work_completed: 0.0,
         };
         true
