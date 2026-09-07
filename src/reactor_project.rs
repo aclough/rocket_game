@@ -2,9 +2,6 @@
 //! [`ReactorDesign`]. Mirrors `engine_project::EngineProject` so the
 //! Reactors pane can reuse the same status / team-assignment / NRE
 //! patterns the Engines pane already has.
-//!
-//! Phase 1 only needs `Proposed → InDesign → Testing`; flaw discovery
-//! and revision are stubbed out and arrive in Phase 3.
 
 use rand::Rng;
 use rand::rngs::StdRng;
@@ -70,8 +67,8 @@ fn generate_reactor_improvement(rng: &mut StdRng) -> ReactorImprovement {
 }
 
 /// Reactor design complexity. Fission reactors are a hard engineering
-/// domain — fixed at staged-combustion-engine tier for Phase 1. Phase 3
-/// can promote this to a function of scale / enrichment.
+/// domain — fixed at staged-combustion-engine tier. Could become a
+/// function of scale / enrichment.
 pub const REACTOR_BASE_COMPLEXITY: u32 = 8;
 
 /// Days of engineering work required to take a reactor through design.
@@ -96,13 +93,24 @@ pub enum ReactorDesignStatus {
     InDesign { work_completed: f64, work_required: f64 },
     Testing { work_completed: f64 },
     /// Revising discovered flaws / improvements / tech deficiencies.
-    /// Phase 3 wires this; Phase 1 never constructs it.
     Revising {
         remaining_flaw_indices: Vec<usize>,
         remaining_improvement_indices: Vec<usize>,
         remaining_tech_deficiency_ids: Vec<TechDeficiencyId>,
         work_completed: f64,
     },
+}
+
+impl ReactorDesignStatus {
+    /// Short phase name for status lines, editors and reports.
+    pub fn label(&self) -> &'static str {
+        match self {
+            ReactorDesignStatus::Proposed { .. } => "Proposed",
+            ReactorDesignStatus::InDesign { .. } => "In Design",
+            ReactorDesignStatus::Testing { .. } => "Testing",
+            ReactorDesignStatus::Revising { .. } => "Revising",
+        }
+    }
 }
 
 /// Reactor research project. Owns its `ReactorDesign` and carries the
@@ -127,7 +135,7 @@ pub struct ReactorProject {
     #[serde(default)]
     pub cumulative_testing_work: f64,
     /// IDs of unsolved tech deficiencies on this reactor (references
-    /// Technology.deficiencies). Wired in Phase 3.
+    /// Technology.deficiencies).
     #[serde(default)]
     pub tech_deficiency_ids: Vec<TechDeficiencyId>,
     /// Which technology this reactor uses — always

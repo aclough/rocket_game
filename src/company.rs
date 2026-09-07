@@ -173,7 +173,6 @@ pub struct Company {
     pub reactor_projects: Vec<crate::reactor_project::ReactorProject>,
     pub third_party_catalog: Vec<ThirdPartyEngine>,
     pub contracted_engines: Vec<ContractedEngine>,
-    pub rocket_designs: Vec<RocketDesign>,
     pub manufacturing: Manufacturing,
     /// Flag to avoid repeatedly pausing when manufacturing is idle.
     #[serde(default)]
@@ -276,7 +275,6 @@ impl Company {
             reactor_projects: Vec::new(),
             third_party_catalog: catalog,
             contracted_engines: Vec::new(),
-            rocket_designs: Vec::new(),
             manufacturing: Manufacturing::new(),
             notified_manufacturing_idle: false,
             active_contracts: Vec::new(),
@@ -622,9 +620,8 @@ impl Company {
     }
 
     /// Reactor projects that are usable in a rocket — anything past
-    /// design, i.e. Testing or Revising. (Phase 3 will tighten "usable"
-    /// to "no discovered un-revised flaws"; for now any Testing+ design
-    /// installs.)
+    /// design, i.e. Testing or Revising. Discovered un-revised flaws
+    /// don't block installation; they fly with the reactor.
     pub fn installable_reactor_projects(
         &self,
     ) -> impl Iterator<Item = &crate::reactor_project::ReactorProject> {
@@ -1829,8 +1826,6 @@ impl Company {
         }
 
         // Reactor projects accrue daily work just like engine projects.
-        // Phase 1 only fires DesignComplete; testing/revision events
-        // arrive in Phase 3.
         for (pi, project) in self.reactor_projects.iter_mut().enumerate() {
             let reactor_name = project.design.name.clone();
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);

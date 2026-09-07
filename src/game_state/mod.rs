@@ -318,6 +318,28 @@ impl GameState {
         }
     }
 
+    /// Record an event in the log under today's date. The one place an
+    /// event gets stamped; UI and policy actions call this directly with
+    /// the events `Company` methods hand back.
+    pub fn log(&mut self, evt: GameEvent) {
+        self.event_log.push(self.date, evt);
+    }
+
+    /// Log an event *and* report it to the caller's per-tick list. The
+    /// daily tick uses this everywhere so the log and the returned
+    /// events never disagree about what happened today.
+    pub(crate) fn emit(&mut self, events: &mut Vec<GameEvent>, evt: GameEvent) {
+        self.event_log.push(self.date, evt.clone());
+        events.push(evt);
+    }
+
+    /// `emit` for a batch produced by a helper that returns its events.
+    pub(crate) fn emit_all(&mut self, events: &mut Vec<GameEvent>, batch: Vec<GameEvent>) {
+        for evt in batch {
+            self.emit(events, evt);
+        }
+    }
+
     /// Apply a modification (tankage / power tweak) to an existing
     /// rocket project. Replaces the design's stage_groups, transitions
     /// status back to `InDesign` with `MODIFICATION_WORK_FRACTION` of

@@ -1,16 +1,12 @@
 use std::io;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
 use rocket_tycoon::game_state::GameState;
 use rocket_tycoon::save;
-use rocket_tycoon::ui::App;
+use rocket_tycoon::ui::{with_terminal, App, Tui};
 
 enum StartupState {
     Menu,
@@ -42,24 +38,10 @@ fn main() -> io::Result<()> {
 }
 
 fn run_startup_screen() -> io::Result<(GameState, bool)> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let result = startup_loop(&mut terminal);
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
-    result
+    with_terminal(startup_loop)
 }
 
-fn startup_loop(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-) -> io::Result<(GameState, bool)> {
+fn startup_loop(terminal: &mut Tui) -> io::Result<(GameState, bool)> {
     let mut state = StartupState::Menu;
     let mut selected: usize = 0;
     let mut saves = save::list_saves();

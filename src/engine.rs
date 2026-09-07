@@ -20,6 +20,22 @@ pub enum EngineCycle {
     SolarSail,
 }
 
+impl EngineCycle {
+    /// Human-readable name for panes and editors.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            EngineCycle::PressureFed => "Pressure Fed",
+            EngineCycle::GasGenerator => "Gas Generator",
+            EngineCycle::Expander => "Expander",
+            EngineCycle::StagedCombustion => "Staged Combustion",
+            EngineCycle::FullFlow => "Full Flow",
+            EngineCycle::NuclearThermal => "Nuclear Thermal",
+            EngineCycle::ElectricPropulsion => "Electric Propulsion",
+            EngineCycle::SolarSail => "Solar Sail",
+        }
+    }
+}
+
 /// A single propellant component in the engine's mix.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropellantFraction {
@@ -123,16 +139,6 @@ impl EngineDesign {
         }
         let k = 0.20;
         (1.0 - k * (1.0 - self.exit_pressure_pa / ambient_pressure_pa)).max(0.0)
-    }
-
-    /// Effective Isp at the given ambient pressure (accounting for overexpansion).
-    pub fn effective_isp_at(&self, ambient_pressure_pa: f64) -> f64 {
-        self.isp_s * self.isp_fraction_at(ambient_pressure_pa)
-    }
-
-    /// Effective exhaust velocity at the given ambient pressure.
-    pub fn effective_exhaust_velocity_at(&self, ambient_pressure_pa: f64) -> f64 {
-        self.effective_isp_at(ambient_pressure_pa) * G0
     }
 
     /// Per-engine probability of destruction from flow separation due to

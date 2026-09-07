@@ -3,15 +3,15 @@ use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph};
 
 use crate::calendar::GameDate;
 use crate::contract::{self, Contract};
-use crate::engine::EngineCycle;
 use crate::engine_project::{EngineDesignStatus, EngineSource};
 use crate::game_state::GameState;
 use crate::manufacturing::ManufacturingOrderType;
 use crate::rocket_project;
 use crate::event::EventImportance;
-use crate::flaw::{Flaw, FlawConsequence, FlawTrigger};
+use crate::flaw::{Flaw, FlawTrigger};
 use crate::launch::LaunchOutcome;
 use crate::location::DELTA_V_MAP;
+use crate::resources::format_money;
 use crate::rocket;
 use crate::ui::{App, FocusedPane, InputMode, RocketDesignerState, Tab};
 
@@ -382,16 +382,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
 
         // Show details for selected project
         if selected {
-            let cycle_name = match project.design.cycle {
-                EngineCycle::PressureFed => "Pressure Fed",
-                EngineCycle::GasGenerator => "Gas Generator",
-                EngineCycle::Expander => "Expander",
-                EngineCycle::StagedCombustion => "Staged Combustion",
-                EngineCycle::FullFlow => "Full Flow",
-                EngineCycle::NuclearThermal => "Nuclear Thermal",
-                EngineCycle::ElectricPropulsion => "Electric Propulsion",
-                EngineCycle::SolarSail => "Solar Sail",
-            };
+            let cycle_name = project.design.cycle.display_name();
 
             // Propellant display with 2 sig figs
             let prop_str: Vec<String> = project.design.propellant_mix.iter()
@@ -445,12 +436,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 )));
                 for flaw in &project.flaws {
                     if flaw.discovered {
-                        let consequence_str = match &flaw.consequence {
-                            FlawConsequence::PerformanceDegradation(frac) =>
-                                format!("{:.0}% perf loss", frac * 100.0),
-                            FlawConsequence::EngineLoss => "engine loss".to_string(),
-                            FlawConsequence::StageLoss => "stage loss".to_string(),
-                        };
+                        let consequence_str = flaw.consequence.short_label();
                         lines.push(Line::from(Span::styled(
                             format!(
                                 "        ▲ {}: {} ({})",
@@ -526,16 +512,11 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
             // Show discovered flaws
             for flaw in &ce.flaws {
                 if flaw.discovered {
-                    let consequence_str = match &flaw.consequence {
-                        FlawConsequence::PerformanceDegradation(frac) =>
-                            format!("{:.0}% perf loss", frac * 100.0),
-                        FlawConsequence::EngineLoss => "engine loss".to_string(),
-                        FlawConsequence::StageLoss => "stage loss".to_string(),
-                    };
+                    let consequence_str = flaw.consequence.short_label();
                     lines.push(Line::from(Span::styled(
                         format!(
-                            "        ▲ {}: {} ({:.0}%/flight)",
-                            flaw.description, consequence_str, flaw.activation_chance * 100.0,
+                            "        ▲ {}: {} ({})",
+                            flaw.description, consequence_str, format_flaw_rate(flaw),
                         ),
                         Style::default().fg(Color::Red),
                     )));
@@ -685,12 +666,7 @@ fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Sty
                 lines.push(Line::from(format!("      Flaws: {} discovered", discovered)));
                 for flaw in &project.flaws {
                     if flaw.discovered {
-                        let consequence_str = match &flaw.consequence {
-                            FlawConsequence::PerformanceDegradation(frac) =>
-                                format!("{:.0}% power loss", frac * 100.0),
-                            FlawConsequence::EngineLoss => "reactor shutdown".to_string(),
-                            FlawConsequence::StageLoss => "stage loss".to_string(),
-                        };
+                        let consequence_str = flaw.consequence.reactor_short_label();
                         lines.push(Line::from(Span::styled(
                             format!(
                                 "        ▲ {}: {} ({})",
@@ -934,12 +910,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 lines.push(Line::from(format!("      Flaws: {} discovered", discovered)));
                 for flaw in &project.flaws {
                     if flaw.discovered {
-                        let consequence_str = match &flaw.consequence {
-                            crate::flaw::FlawConsequence::PerformanceDegradation(frac) =>
-                                format!("{:.0}% perf loss", frac * 100.0),
-                            crate::flaw::FlawConsequence::EngineLoss => "engine loss".to_string(),
-                            crate::flaw::FlawConsequence::StageLoss => "stage loss".to_string(),
-                        };
+                        let consequence_str = flaw.consequence.short_label();
                         lines.push(Line::from(Span::styled(
                             format!(
                                 "        ▲ {}: {} ({})",
@@ -1205,7 +1176,6 @@ impl ContractCols {
     }
 }
 
-/// Truncate to `width` display columns, marking elision with `…`.
 /// Control hints, indented and clipped to the width they're drawn in.
 ///
 /// Before M5 Task 7 the line was rendered unclipped and the pane cut
@@ -1260,6 +1230,7 @@ fn hint_line_for(
     format!("  {}  {HELP_HINT}", shown.join("  "))
 }
 
+/// Truncate to `width` display columns, marking elision with `…`.
 fn fit(s: &str, width: usize) -> String {
     if s.chars().count() <= width {
         return s.to_string();
@@ -1940,11 +1911,7 @@ fn draw_finance_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 ("—".to_string(), "—".to_string())
             };
 
-            let name = if rp.design.name.len() > 18 {
-                format!("{}…", &rp.design.name[..17])
-            } else {
-                rp.design.name.clone()
-            };
+            let name = fit(&rp.design.name, 18);
 
             lines.push(Line::from(format!(
                 "  {:<18} {:>12} {:>12} {:>12} {:>5}",
@@ -1982,11 +1949,7 @@ fn draw_finance_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 ("—".to_string(), "—".to_string())
             };
 
-            let name = if ep.design.name.len() > 18 {
-                format!("{}…", &ep.design.name[..17])
-            } else {
-                ep.design.name.clone()
-            };
+            let name = fit(&ep.design.name, 18);
 
             lines.push(Line::from(format!(
                 "  {:<18} {:>12} {:>12} {:>12} {:>5}",
@@ -1998,11 +1961,7 @@ fn draw_finance_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         for ce in &company.contracted_engines {
             let built = *company.contracted_engine_build_counts
                 .get(&ce.id).unwrap_or(&0);
-            let name = if ce.design.name.len() > 18 {
-                format!("{}…", &ce.design.name[..17])
-            } else {
-                ce.design.name.clone()
-            };
+            let name = fit(&ce.design.name, 18);
             let marginal_str = format_money(ce.purchase_cost_per_unit);
             lines.push(Line::from(format!(
                 "  {:<18} {:>12} {:>12} {:>12} {:>5}",
@@ -2275,10 +2234,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
             let burn_str = if stage.engine.is_solar_sail() {
                 "   ∞".to_string()
             } else {
-                let burn_time_s = {
-                    let mfr = stage.engine.mass_flow_rate() * stage.engine_count as f64;
-                    if mfr > 0.0 { stage.propellant_mass_kg / mfr } else { 0.0 }
-                };
+                let burn_time_s = stage.burn_time_s();
                 if burn_time_s > 86400.0 {
                     format!("{:>4.0}d", burn_time_s / 86400.0)
                 } else {
@@ -2834,7 +2790,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             for r in &records {
                 let market_entry = app.game.markets.iter().find(|m| m.id == r.market_id);
                 let market: String = market_entry
-                    .map(|m| m.name.chars().take(18).collect())
+                    .map(|m| fit(&m.name, 18))
                     .unwrap_or_else(|| "?".into());
                 // Short destination tag ("GTO"), not the long display
                 // name — these rows are tight.
@@ -2898,7 +2854,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             for (i, c) in app.game.active_campaigns.iter().enumerate() {
                 let market: String = app.game.markets.iter()
                     .find(|m| m.id == c.market_id)
-                    .map(|m| m.name.chars().take(18).collect())
+                    .map(|m| fit(&m.name, 18))
                     .unwrap_or_else(|| "?".into());
                 let marker = if i == *selected { "▶ " } else { "  " };
                 // Status is strictly public knowledge: bids close /
@@ -2930,7 +2886,7 @@ fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 };
                 lines.push(Line::from(format!(
                     "  {marker}{:<24} {:<18} {:>6.0} kg →{:<4} x{}",
-                    c.name.chars().take(24).collect::<String>(),
+                    fit(&c.name, 24),
                     market, c.payload_kg, c.destination_display, c.missions_total,
                 )));
                 lines.push(Line::from(format!("        {status}"))
@@ -3602,11 +3558,10 @@ fn draw_engine_editor_modal(
 
     let mut lines = vec![
         Line::from(Span::styled(
-            format!(" Status: {}", match &ep.status {
-                crate::engine_project::EngineDesignStatus::Proposed { .. } => "Proposed",
-                crate::engine_project::EngineDesignStatus::InDesign { .. } => "In Design",
-                crate::engine_project::EngineDesignStatus::Testing { .. } => "Testing (read-only)",
-                crate::engine_project::EngineDesignStatus::Revising { .. } => "Revising",
+            format!(" Status: {}{}", ep.status.label(), match &ep.status {
+                crate::engine_project::EngineDesignStatus::Proposed { .. } => " (new draft)",
+                crate::engine_project::EngineDesignStatus::Testing { .. } => " (read-only)",
+                _ => "",
             }),
             Style::default().fg(Color::DarkGray),
         )),
@@ -3618,7 +3573,7 @@ fn draw_engine_editor_modal(
         row_style(0),
     )));
     lines.push(Line::from(Span::styled(
-        format!(" {} Cycle:  {:?}", row_label(1, true), ep.design.cycle),
+        format!(" {} Cycle:  {}", row_label(1, true), ep.design.cycle.display_name()),
         row_style(1),
     )));
     lines.push(Line::from(Span::styled(
@@ -3732,12 +3687,11 @@ fn draw_reactor_editor_modal(
         } else { Style::default() }
     };
 
-    let status_label = match &rp.status {
-        ReactorDesignStatus::Proposed { .. } => "Proposed (new draft)",
-        ReactorDesignStatus::InDesign { .. } => "In Design",
-        ReactorDesignStatus::Testing { .. } => "Testing (read-only)",
-        ReactorDesignStatus::Revising { .. } => "Revising",
-    };
+    let status_label = format!("{}{}", rp.status.label(), match &rp.status {
+        ReactorDesignStatus::Proposed { .. } => " (new draft)",
+        ReactorDesignStatus::Testing { .. } => " (read-only)",
+        _ => "",
+    });
 
     // Enrichment row: list the levels, dim ones still gated by
     // reputation, mark the current pick, and annotate the row's tail
@@ -4025,7 +3979,6 @@ fn format_mass(kg: f64) -> String {
     }
 }
 
-/// Format a power draw in watts, picking W / kW / MW for readability.
 /// Format an acceleration in m/s² as a multiple of standard gravity,
 /// scaling down to mg / μg / ng for low-thrust craft.
 fn format_accel(a_m_s2: f64) -> String {
@@ -4049,10 +4002,6 @@ fn format_money_signed(amount: f64) -> String {
     } else {
         format_money(amount)
     }
-}
-
-pub fn format_money(amount: f64) -> String {
-    crate::resources::format_money(amount)
 }
 
 /// Minimum gauge width.

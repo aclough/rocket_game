@@ -9,9 +9,7 @@ use crate::calendar::GameDate;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GameEvent {
     GameStarted,
-    DayAdvanced,
     MonthStart,
-    MoneyChanged { amount: f64, reason: String },
     TeamHired { name: String },
     EngineDesignStarted { engine_name: String },
     EngineDesignComplete { engine_name: String },
@@ -155,15 +153,7 @@ impl fmt::Display for GameEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GameEvent::GameStarted => write!(f, "Company founded"),
-            GameEvent::DayAdvanced => write!(f, "Day advanced"),
             GameEvent::MonthStart => write!(f, "New month"),
-            GameEvent::MoneyChanged { amount, reason } => {
-                if *amount >= 0.0 {
-                    write!(f, "+${:.0}: {}", amount, reason)
-                } else {
-                    write!(f, "-${:.0}: {}", amount.abs(), reason)
-                }
-            }
             GameEvent::TeamHired { name } => write!(f, "Hired team: {}", name),
             GameEvent::EngineDesignStarted { engine_name } =>
                 write!(f, "Started design: {}", engine_name),
@@ -342,7 +332,7 @@ pub enum EventImportance {
 impl GameEvent {
     pub fn importance(&self) -> EventImportance {
         match self {
-            GameEvent::DayAdvanced | GameEvent::MonthStart | GameEvent::SalariesPaid { .. }
+            GameEvent::MonthStart | GameEvent::SalariesPaid { .. }
             | GameEvent::CompetitorRocketBuilt { .. } =>
                 EventImportance::Routine,
             GameEvent::ContractAwardedToCompetitor { player_bid, .. } => {
@@ -352,7 +342,6 @@ impl GameEvent {
                 if *success { EventImportance::Routine } else { EventImportance::Notable }
             }
             GameEvent::GameStarted
-            | GameEvent::MoneyChanged { .. }
             | GameEvent::TeamHired { .. }
             | GameEvent::EngineDesignStarted { .. }
             | GameEvent::EngineDesignComplete { .. }
@@ -493,8 +482,8 @@ mod tests {
     fn test_push_and_recent() {
         let mut log = EventLog::new(100);
         log.push(date(1), GameEvent::GameStarted);
-        log.push(date(1), GameEvent::DayAdvanced);
-        log.push(date(2), GameEvent::DayAdvanced);
+        log.push(date(1), GameEvent::MonthStart);
+        log.push(date(2), GameEvent::MonthStart);
 
         assert_eq!(log.len(), 3);
 
@@ -509,7 +498,7 @@ mod tests {
     fn test_ring_buffer() {
         let mut log = EventLog::new(3);
         for d in 1..=5 {
-            log.push(date(d), GameEvent::DayAdvanced);
+            log.push(date(d), GameEvent::MonthStart);
         }
         assert_eq!(log.len(), 3);
         // Should have days 3, 4, 5
@@ -532,21 +521,11 @@ mod tests {
     }
 
     #[test]
-    fn test_display_money_changed() {
-        let e = GameEvent::MoneyChanged { amount: -50000.0, reason: "Salaries".into() };
-        assert_eq!(e.to_string(), "-$50000: Salaries");
-
-        let e2 = GameEvent::MoneyChanged { amount: 100000.0, reason: "Contract".into() };
-        assert_eq!(e2.to_string(), "+$100000: Contract");
-    }
-
-    #[test]
     fn test_importance() {
         use super::EventImportance;
-        assert_eq!(GameEvent::DayAdvanced.importance(), EventImportance::Routine);
         assert_eq!(GameEvent::MonthStart.importance(), EventImportance::Routine);
         assert_eq!(GameEvent::GameStarted.importance(), EventImportance::Notable);
-        assert_eq!(GameEvent::MoneyChanged { amount: 0.0, reason: "test".into() }.importance(), EventImportance::Notable);
+        assert_eq!(GameEvent::TeamHired { name: "test".into() }.importance(), EventImportance::Notable);
     }
 
     #[test]

@@ -207,13 +207,13 @@ impl BasicPolicy {
         if game.player_company.teams.len() < 3 {
             let name = format!("Team {}", game.player_company.teams.len() + 1);
             if let Some(evt) = game.player_company.hire_team(name, &game.balance) {
-                game.event_log.push(game.date, evt);
+                game.log(evt);
             }
         }
         if game.player_company.manufacturing_teams.len() < 3 {
             let name = format!("Mfg Team {}", game.player_company.manufacturing_teams.len() + 1);
             if let Some(evt) = game.player_company.hire_manufacturing_team(name, &game.balance) {
-                game.event_log.push(game.date, evt);
+                game.log(evt);
             }
         }
     }
@@ -231,7 +231,7 @@ impl BasicPolicy {
                 None,
                 &game.balance,
             ) {
-                game.event_log.push(game.date, evt);
+                game.log(evt);
                 self.booster = game.player_company.engine_projects.last()
                     .map(|p| p.project_id);
             }
@@ -245,7 +245,7 @@ impl BasicPolicy {
                 None,
                 &game.balance,
             ) {
-                game.event_log.push(game.date, evt);
+                game.log(evt);
                 self.upper = game.player_company.engine_projects.last()
                     .map(|p| p.project_id);
             }
@@ -349,7 +349,7 @@ impl BasicPolicy {
             return;
         };
         if let Some(evt) = game.player_company.start_rocket_project(design, &game.balance) {
-            game.event_log.push(game.date, evt);
+            game.log(evt);
             self.rocket = game.player_company.rocket_projects.last()
                 .map(|p| p.project_id);
         }

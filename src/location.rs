@@ -83,13 +83,6 @@ impl Location {
     }
 }
 
-/// Animation type for a transfer between locations
-#[derive(Debug, Clone)]
-pub enum TransferAnimation {
-    Launch,
-    Landing,
-}
-
 /// A transfer edge in the delta-v graph
 #[derive(Debug, Clone)]
 pub struct Transfer {
@@ -97,7 +90,6 @@ pub struct Transfer {
     pub to: &'static str,
     pub delta_v: f64,
     pub through_atmosphere: bool,
-    pub animation: Option<TransferAnimation>,
     pub can_aerobrake: bool,
     /// Transit time in game-days for this transfer leg
     pub transit_days: u32,
@@ -226,7 +218,7 @@ fn add_impulsive_pair(
 ) {
     let make = |from, to| Transfer {
         from, to, delta_v: dv,
-        through_atmosphere: false, animation: None,
+        through_atmosphere: false,
         can_aerobrake: false, transit_days: days,
         low_thrust_ok: false, low_thrust_delta_v: None,
     };
@@ -243,7 +235,7 @@ fn add_spiral_pair(
 ) {
     let make = |from, to| Transfer {
         from, to, delta_v: dv,
-        through_atmosphere: false, animation: None,
+        through_atmosphere: false,
         can_aerobrake: false, transit_days: days,
         low_thrust_ok: true, low_thrust_delta_v: lt_dv,
     };
@@ -264,14 +256,12 @@ fn add_ground_pair(
     transfers.push(Transfer {
         from: surface, to: orbit, delta_v: dv,
         through_atmosphere: has_atm,
-        animation: Some(TransferAnimation::Launch),
         can_aerobrake: false, transit_days: days,
         low_thrust_ok: lt_ok, low_thrust_delta_v: lt_dv,
     });
     transfers.push(Transfer {
         from: orbit, to: surface, delta_v: dv,
         through_atmosphere: false,
-        animation: Some(TransferAnimation::Landing),
         can_aerobrake: has_atm, transit_days: days,
         low_thrust_ok: lt_ok, low_thrust_delta_v: lt_dv,
     });
@@ -388,7 +378,7 @@ impl DeltaVMap {
         // so it stays asymmetric.
         transfers.push(Transfer {
             from: "earth_surface", to: "suborbital", delta_v: 3500.0,
-            through_atmosphere: true, animation: Some(TransferAnimation::Launch),
+            through_atmosphere: true,
             can_aerobrake: false, transit_days: 0,
             low_thrust_ok: false, low_thrust_delta_v: None,
         });
@@ -775,11 +765,6 @@ pub fn simulate_gravity_losses(
     results
 }
 
-/// Return the IDs of locations that are surfaces (where launches can originate).
-pub fn surface_location_ids() -> &'static [&'static str] {
-    &["earth_surface", "lunar_surface"]
-}
-
 /// Global delta-v map instance
 pub static DELTA_V_MAP: LazyLock<DeltaVMap> = LazyLock::new(DeltaVMap::earth_moon);
 
@@ -807,8 +792,7 @@ mod tests {
     fn test_transfer_no_atmosphere() {
         let t = Transfer {
             from: "leo", to: "gto", delta_v: 2440.0,
-            through_atmosphere: false,
-            animation: None, can_aerobrake: false, transit_days: 1, low_thrust_ok: true, low_thrust_delta_v: None,
+            through_atmosphere: false, can_aerobrake: false, transit_days: 1, low_thrust_ok: true, low_thrust_delta_v: None,
         };
         assert_eq!(t.total_delta_v(REF_MASS), 2440.0);
     }
@@ -817,8 +801,7 @@ mod tests {
     fn test_transfer_through_atmosphere() {
         let t = Transfer {
             from: "earth_surface", to: "leo", delta_v: 7800.0,
-            through_atmosphere: true,
-            animation: None, can_aerobrake: false, transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: None,
+            through_atmosphere: true, can_aerobrake: false, transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: None,
         };
         let total = t.total_delta_v(REF_MASS);
         assert!((total - 8100.0).abs() < 1.0, "Should be ~8100, got {}", total);
@@ -1370,11 +1353,4 @@ mod tests {
             "SSTO gravity loss should be moderate, got {:.0}", losses[0]);
     }
 
-    #[test]
-    fn test_surface_location_ids() {
-        let ids = surface_location_ids();
-        assert!(ids.contains(&"earth_surface"));
-        assert!(ids.contains(&"lunar_surface"));
-        assert!(!ids.contains(&"leo"));
-    }
 }

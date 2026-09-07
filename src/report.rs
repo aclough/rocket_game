@@ -116,7 +116,7 @@ pub fn report(
         out.push_str(&format!(
             "engine  {:<24} rev {} {:<10} teams {} flaws {}/{} auto-revise {}\n",
             truncate(&p.design.name, 24), p.revision,
-            engine_status(&p.status), p.teams_assigned,
+            p.status.label(), p.teams_assigned,
             p.discovered_flaw_count(), p.flaws.len(),
             if p.auto_revise { "on" } else { "off" },
         ));
@@ -125,7 +125,7 @@ pub fn report(
         out.push_str(&format!(
             "rocket  {:<24} rev {} {:<10} teams {} flaws {}/{} auto-revise {}\n",
             truncate(&p.design.name, 24), p.revision,
-            rocket_status(&p.status), p.teams_assigned,
+            p.status.label(), p.teams_assigned,
             p.discovered_flaw_count(), p.flaws.len(),
             if p.auto_revise { "on" } else { "off" },
         ));
@@ -218,25 +218,6 @@ fn truncate(s: &str, n: usize) -> String {
         s.to_string()
     } else {
         s.chars().take(n.saturating_sub(1)).chain(std::iter::once('…')).collect()
-    }
-}
-
-fn engine_status(s: &crate::engine_project::EngineDesignStatus) -> &'static str {
-    use crate::engine_project::EngineDesignStatus as S;
-    match s {
-        S::Proposed { .. } => "proposed",
-        S::InDesign { .. } => "in-design",
-        S::Testing { .. } => "testing",
-        S::Revising { .. } => "revising",
-    }
-}
-
-fn rocket_status(s: &crate::rocket_project::RocketDesignStatus) -> &'static str {
-    use crate::rocket_project::RocketDesignStatus as S;
-    match s {
-        S::InDesign { .. } => "in-design",
-        S::Testing { .. } => "testing",
-        S::Revising { .. } => "revising",
     }
 }
 

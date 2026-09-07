@@ -138,6 +138,7 @@ impl GameState {
         let mut events = Vec::new();
 
         // Mark activated flaws as discovered on engine projects
+        let mut discovered = Vec::new();
         for (engine_id, indices) in &sim.engine_flaw_discoveries {
             if let Some(ep) = self.player_company.engine_projects.iter_mut()
                 .find(|ep| ep.design.id == *engine_id)
@@ -145,16 +146,15 @@ impl GameState {
                 for &idx in indices {
                     if idx < ep.flaws.len() {
                         ep.flaws[idx].discovered = true;
-                        let evt = GameEvent::FlawDiscovered {
+                        discovered.push(GameEvent::FlawDiscovered {
                             engine_name: ep.design.name.clone(),
                             flaw_description: ep.flaws[idx].description.clone(),
-                        };
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
+                        });
                     }
                 }
             }
         }
+        self.emit_all(&mut events, discovered);
 
         // Mark activated flaws as discovered on contracted engines
         for (source, indices) in &sim.contracted_flaw_discoveries {
@@ -172,21 +172,21 @@ impl GameState {
         }
 
         // Mark activated flaws as discovered on rocket project
+        let mut discovered = Vec::new();
         if let Some(rp_mut) = self.player_company.rocket_projects.iter_mut()
             .find(|rp| rp.project_id == inv_rocket.rocket_project_id)
         {
             for &idx in &sim.rocket_flaw_discoveries {
                 if idx < rp_mut.flaws.len() {
                     rp_mut.flaws[idx].discovered = true;
-                    let evt = GameEvent::RocketFlawDiscovered {
+                    discovered.push(GameEvent::RocketFlawDiscovered {
                         rocket_name: rp_mut.design.name.clone(),
                         flaw_description: rp_mut.flaws[idx].description.clone(),
-                    };
-                    self.event_log.push(self.date, evt.clone());
-                    events.push(evt);
+                    });
                 }
             }
         }
+        self.emit_all(&mut events, discovered);
 
 
         // Update launch tracking
@@ -227,8 +227,7 @@ impl GameState {
                 rocket_name: inv_rocket.rocket_name.clone(),
                 reason: reason.clone(),
             };
-            self.event_log.push(self.date, evt.clone());
-            events.push(evt);
+            self.emit(&mut events, evt);
 
             let record = LaunchRecord {
                 launch_date: self.date,
@@ -322,8 +321,7 @@ impl GameState {
             rocket_name: inv_rocket.rocket_name,
             destination: dest_display.to_string(),
         };
-        self.event_log.push(self.date, evt.clone());
-        events.push(evt);
+        self.emit(&mut events, evt);
 
         self.speed = GameSpeed::Paused;
 
@@ -1135,7 +1133,7 @@ impl GameState {
             rocket_name: sc.name,
             destination: dest_display.to_string(),
         };
-        self.event_log.push(self.date, evt);
+        self.log(evt);
     }
 
     /// Dock spacecraft `small_idx` onto `large_idx`. Both must be at the
@@ -1173,7 +1171,7 @@ impl GameState {
             large: large_name,
             location: crate::contract::destination_display_name(&location).to_string(),
         };
-        self.event_log.push(self.date, evt);
+        self.log(evt);
         true
     }
 
@@ -1213,7 +1211,7 @@ impl GameState {
             carrier: carrier_name,
             location: crate::contract::destination_display_name(&location).to_string(),
         };
-        self.event_log.push(self.date, evt);
+        self.log(evt);
         true
     }
 }

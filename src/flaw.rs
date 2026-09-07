@@ -36,6 +36,29 @@ pub enum FlawConsequence {
     StageLoss,
 }
 
+impl FlawConsequence {
+    /// Compact wording for engine and rocket flaw lists.
+    pub fn short_label(&self) -> String {
+        match self {
+            FlawConsequence::PerformanceDegradation(frac) =>
+                format!("{:.0}% perf loss", frac * 100.0),
+            FlawConsequence::EngineLoss => "engine loss".to_string(),
+            FlawConsequence::StageLoss => "stage loss".to_string(),
+        }
+    }
+
+    /// Compact wording for reactor flaw lists, where "engine loss" means
+    /// the reactor shuts down and degradation is lost power.
+    pub fn reactor_short_label(&self) -> String {
+        match self {
+            FlawConsequence::PerformanceDegradation(frac) =>
+                format!("{:.0}% power loss", frac * 100.0),
+            FlawConsequence::EngineLoss => "reactor shutdown".to_string(),
+            FlawConsequence::StageLoss => "stage loss".to_string(),
+        }
+    }
+}
+
 impl std::fmt::Display for FlawConsequence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -47,13 +70,13 @@ impl std::fmt::Display for FlawConsequence {
     }
 }
 
-/// A flaw in an engine design that may activate during flight.
 /// Serde default for the per-project `auto_revise` flag. New projects
 /// and projects loaded from pre-M5 saves both get it on.
 pub fn auto_revise_default() -> bool {
     true
 }
 
+/// A latent defect in a design that may activate in flight.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flaw {
     pub id: FlawId,

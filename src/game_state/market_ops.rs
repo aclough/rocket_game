@@ -63,8 +63,7 @@ impl GameState {
                             amount: c.payment,
                         };
                         self.player_company.active_contracts.push(c);
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
+                        self.emit(events, evt);
                     }
                     Some(ci) => {
                         // The winner's missions schedule abstract
@@ -156,8 +155,7 @@ impl GameState {
             misses,
             max_misses,
         };
-        self.event_log.push(self.date, evt.clone());
-        events.push(evt);
+        self.emit(events, evt);
 
         let missions_remaining =
             self.active_campaigns[idx].missions_total - self.active_campaigns[idx].missions_issued;
@@ -170,8 +168,7 @@ impl GameState {
                 by_player,
                 missions_remaining,
             };
-            self.event_log.push(self.date, evt.clone());
-            events.push(evt);
+            self.emit(events, evt);
         }
     }
 
@@ -221,7 +218,7 @@ impl GameState {
             amount: bid,
             missions: campaign.missions_total,
         };
-        self.event_log.push(self.date, evt.clone());
+        self.log(evt.clone());
         Some(evt)
     }
 
@@ -321,8 +318,7 @@ impl GameState {
                         campaign,
                     );
                     self.push_award_record(record);
-                    self.event_log.push(self.date, evt.clone());
-                    events.push(evt);
+                    self.emit(events, evt);
                     // Winning a program is a decision point (schedule
                     // builds for the whole block) — stop the clock.
                     self.speed = GameSpeed::Paused;
@@ -353,8 +349,7 @@ impl GameState {
                         campaign,
                     );
                     self.push_award_record(record);
-                    self.event_log.push(self.date, evt.clone());
-                    events.push(evt);
+                    self.emit(events, evt);
                     i += 1;
                 }
                 None => {
@@ -370,8 +365,7 @@ impl GameState {
                         let evt = GameEvent::CampaignBidRejected {
                             program: campaign.name.clone(),
                         };
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
+                        self.emit(events, evt);
                     }
                     // No bid at all: lapses without ceremony.
                 }
@@ -566,8 +560,7 @@ impl GameState {
                         amount: bid,
                     };
                     self.player_company.active_contracts.push(c);
-                    self.event_log.push(self.date, evt.clone());
-                    events.push(evt);
+                    self.emit(events, evt);
                     // Winning a contract is a decision point (schedule
                     // the launch, adjust rules) — stop the clock.
                     self.speed = GameSpeed::Paused;
@@ -601,8 +594,7 @@ impl GameState {
                         player_bid: losing_player_bid,
                     };
                     comp.company.active_contracts.push(c);
-                    self.event_log.push(self.date, evt.clone());
-                    events.push(evt);
+                    self.emit(events, evt);
                 }
                 None if player_over_ceiling => {
                     // Over budget: no award, and the customer doesn't
@@ -617,8 +609,7 @@ impl GameState {
                     let evt = GameEvent::BidRejected {
                         contract_name: c.name.clone(),
                     };
-                    self.event_log.push(self.date, evt.clone());
-                    events.push(evt);
+                    self.emit(events, evt);
                 }
                 None => {} // No valid bids: lapses without ceremony.
             }
@@ -643,6 +634,7 @@ impl GameState {
         for ci in 0..self.competitors.len() {
             let comp = &mut self.competitors[ci];
             let mfg_events = comp.company.manufacturing.advance_day(&self.balance.costs);
+            let mut news = Vec::new();
             for me in mfg_events {
                 if let crate::manufacturing::ManufacturingEvent::RocketIntegrated {
                     design_id, rocket_name, build_cost, ..
@@ -652,12 +644,10 @@ impl GameState {
                         .entry(design_id)
                         .or_default()
                         .push(build_cost);
-                    let evt = GameEvent::CompetitorRocketBuilt {
+                    news.push(GameEvent::CompetitorRocketBuilt {
                         company: comp.company.name.clone(),
                         rocket_name,
-                    };
-                    self.event_log.push(self.date, evt.clone());
-                    events.push(evt);
+                    });
                 }
             }
             comp.company.try_unblock_manufacturing_orders();
@@ -665,6 +655,7 @@ impl GameState {
             // bookkeeping, not news.
             let _ = comp.company.auto_reorder_rockets(&self.balance);
             comp.company.assign_manufacturing_teams();
+            self.emit_all(events, news);
         }
     }
 
@@ -739,8 +730,7 @@ impl GameState {
                     contract_name: contract.name.clone(),
                     success: !failed,
                 };
-                self.event_log.push(self.date, evt.clone());
-                events.push(evt);
+                self.emit(events, evt);
             }
         }
     }
@@ -759,7 +749,7 @@ impl GameState {
             contract_name: c.name.clone(),
             amount: bid,
         };
-        self.event_log.push(self.date, evt.clone());
+        self.log(evt.clone());
         Some(evt)
     }
 
@@ -788,8 +778,7 @@ impl GameState {
             let severity = self.market_failure_severity(market_id);
             self.player_company.reputation.on_contract_expired(&self.balance.reputation, severity);
             let evt = GameEvent::ContractExpired { contract_name: name.clone() };
-            self.event_log.push(self.date, evt.clone());
-            events.push(evt);
+            self.emit(events, evt);
             // A missed program mission also strikes the campaign
             // clause on top of the normal expiry hit.
             if let Some(campaign_id) = campaign_id {
@@ -830,13 +819,14 @@ impl GameState {
         c.status = contract::ContractStatus::Accepted;
         self.player_company.active_contracts.push(c);
         let evt = GameEvent::ContractAccepted { contract_name: name };
-        self.event_log.push(self.date, evt.clone());
+        self.log(evt.clone());
         Some(evt)
     }
 
     /// Check yearly tech unlock rolls.
     pub(super) fn check_tech_unlocks(&mut self, events: &mut Vec<GameEvent>) {
         use rand::Rng;
+        let mut unlocked = Vec::new();
         for tech in &mut self.technologies {
             if tech.unlocked {
                 continue;
@@ -850,15 +840,16 @@ impl GameState {
             };
             if rng.gen::<f64>() < chance {
                 tech.unlocked = true;
-                let evt = GameEvent::EconomicShift {
+                unlocked.push(GameEvent::EconomicShift {
                     condition: format!("Technology Available: {}", tech.name),
                     description: tech.description.clone(),
-                };
-                self.event_log.push(self.date, evt.clone());
-                events.push(evt);
-                self.speed = GameSpeed::Paused;
+                });
             }
         }
+        if !unlocked.is_empty() {
+            self.speed = GameSpeed::Paused;
+        }
+        self.emit_all(events, unlocked);
     }
 
     /// Apply the market consequences of a geopolitical transition.

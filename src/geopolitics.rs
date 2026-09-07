@@ -74,16 +74,6 @@ pub enum Geopolitics {
 }
 
 impl Geopolitics {
-    /// Whether reconnaissance launch is running hot.
-    pub fn nro_surge(&self) -> bool {
-        matches!(self, Geopolitics::War { .. } | Geopolitics::WarWithAsat { .. })
-    }
-
-    /// Whether debris is currently suppressing the low orbits.
-    pub fn debris_active(&self) -> bool {
-        matches!(self, Geopolitics::WarWithAsat { .. })
-    }
-
     /// One line for the economy pane, or None in peacetime.
     pub fn headline(&self) -> Option<&'static str> {
         match self {

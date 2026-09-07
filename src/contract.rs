@@ -19,9 +19,6 @@ pub struct MarketId(pub u64);
 pub enum ContractStatus {
     Available,
     Accepted,
-    Completed,
-    Failed { reason: String },
-    Expired,
 }
 
 /// Unique identifier for an anchor-customer campaign.

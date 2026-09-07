@@ -315,18 +315,6 @@ fn is_solid_engine(engine: &EngineDesign) -> bool {
         && engine.propellant_mix[0].propellant == crate::propellant::Propellant::SolidMix
 }
 
-/// Thrust-to-weight each stage group is sized for at its own ignition.
-///
-/// The first stage has to lift the stack off the pad, so it wants real
-/// margin — real launchers leave the ground between about 1.2 and 1.5.
-/// Everything above ignites already moving, so 1.0 is enough to keep it
-/// accelerating, and anything more is engine it didn't need.
-///
-/// Sizing every stage against its own thrust deliberately keeps the
-/// answer independent of the designer's payload field: that defaults to
-/// a nominal test mass most players never touch, and a rule that solved
-/// for a mission delta-v would quietly hang every tank in the vehicle off
-/// a number nobody chose.
 /// How long the paused game waits for a keypress before looping. Long
 /// enough that idling costs nothing, short enough that the UI still feels
 /// immediate.
@@ -353,6 +341,18 @@ fn input_timeout(
     }
 }
 
+/// Thrust-to-weight each stage group is sized for at its own ignition.
+///
+/// The first stage has to lift the stack off the pad, so it wants real
+/// margin — real launchers leave the ground between about 1.2 and 1.5.
+/// Everything above ignites already moving, so 1.0 is enough to keep it
+/// accelerating, and anything more is engine it didn't need.
+///
+/// Sizing every stage against its own thrust deliberately keeps the
+/// answer independent of the designer's payload field: that defaults to
+/// a nominal test mass most players never touch, and a rule that solved
+/// for a mission delta-v would quietly hang every tank in the vehicle off
+/// a number nobody chose.
 const TARGET_LIFTOFF_TWR: f64 = 1.2;
 const TARGET_STAGE_TWR: f64 = 1.0;
 
@@ -898,6 +898,35 @@ pub struct DvPlannerState {
     pub payload_kg: f64,
 }
 
+/// The terminal every screen in the game draws to.
+pub type Tui = Terminal<CrosstermBackend<io::Stdout>>;
+
+/// Run `body` inside raw mode on the alternate screen, and restore the
+/// terminal afterwards — on a clean return, an error, *or* a panic. A
+/// panic is re-raised once the terminal is back, so callers that want
+/// to report it can catch it outside this call and print to a screen
+/// the player can see.
+pub fn with_terminal<T>(body: impl FnOnce(&mut Tui) -> io::Result<T>) -> io::Result<T> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let caught = std::panic::catch_unwind(
+        std::panic::AssertUnwindSafe(|| body(&mut terminal)),
+    );
+
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
+
+    match caught {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
 /// Application state wrapping the game and UI concerns.
 pub struct App {
     pub game: GameState,
@@ -1027,7 +1056,7 @@ fn wrap_cycle<T: Copy + PartialEq>(values: &[T], current: T, forward: bool) -> O
 }
 
 fn reachable_destinations_multistage(
-    from: &str, remaining_dv: f64, rocket_mass: f64, _low_thrust: bool,
+    from: &str, remaining_dv: f64, rocket_mass: f64,
     rocket: Option<&crate::rocket::Rocket>,
     design: Option<&crate::rocket::RocketDesign>,
 ) -> Vec<(String, String, f64)> {
@@ -1165,23 +1194,12 @@ impl App {
     pub fn run(&mut self) -> io::Result<()> {
         crate::report::install_hook();
 
-        enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
-
-        // Catch a panic so the terminal can be restored before anything
-        // is reported — a message printed inside the alternate screen
-        // is a message the player never sees. See `crash.rs`.
+        // `with_terminal` has already given the terminal back by the time
+        // a panic reaches here, so the report below is printed somewhere
+        // the player can actually read it. See `report.rs`.
         let caught = std::panic::catch_unwind(
-            std::panic::AssertUnwindSafe(|| self.main_loop(&mut terminal)),
+            std::panic::AssertUnwindSafe(|| with_terminal(|terminal| self.main_loop(terminal))),
         );
-
-        // Always give the terminal back, panic or not.
-        let _ = disable_raw_mode();
-        let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-        let _ = terminal.show_cursor();
 
         match caught {
             Ok(result) => result,
@@ -1194,7 +1212,7 @@ impl App {
         }
     }
 
-    fn main_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
+    fn main_loop(&mut self, terminal: &mut Tui) -> io::Result<()> {
         let mut last_tick = Instant::now();
 
         while self.running {
@@ -1497,8 +1515,8 @@ impl App {
                 // Order standalone engine build
                 let idx = real_idx.unwrap_or(usize::MAX);
                 if let Some((cost, evt)) = self.game.player_company.order_engine_build(idx, &self.game.balance) {
-                    self.game.event_log.push(self.game.date, evt);
-                    self.status_message = Some(format!("Engine build ordered ({})", crate::ui::draw::format_money(cost)));
+                    self.game.log(evt);
+                    self.status_message = Some(format!("Engine build ordered ({})", crate::resources::format_money(cost)));
                 } else {
                     self.status_message = Some("Must be in Testing to order build".into());
                 }
@@ -1526,7 +1544,7 @@ impl App {
                 let team_num = self.game.player_company.team_count() + 1;
                 let name = format!("Team {}", team_num);
                 if let Some(evt) = self.game.player_company.hire_team(name.clone(), &self.game.balance) {
-                    self.game.event_log.push(self.game.date, evt);
+                    self.game.log(evt);
                     self.status_message = Some(format!("Hired {}", name));
                 }
             }
@@ -1634,15 +1652,15 @@ impl App {
                 let team_num = self.game.player_company.team_count() + 1;
                 let name = format!("Team {}", team_num);
                 if let Some(evt) = self.game.player_company.hire_team(name.clone(), &self.game.balance) {
-                    self.game.event_log.push(self.game.date, evt);
+                    self.game.log(evt);
                     self.status_message = Some(format!("Hired {}", name));
                 }
             }
             KeyCode::Char('o') | KeyCode::Char('O') => {
                 // Order rocket build
                 if let Some((cost, evt)) = self.game.player_company.order_rocket_build(idx, &self.game.balance) {
-                    self.game.event_log.push(self.game.date, evt);
-                    self.status_message = Some(format!("Build ordered ({})", crate::ui::draw::format_money(cost)));
+                    self.game.log(evt);
+                    self.status_message = Some(format!("Build ordered ({})", crate::resources::format_money(cost)));
                 } else {
                     self.status_message = Some("Must be in Testing to order build".into());
                 }
@@ -1721,7 +1739,7 @@ impl App {
                 let team_num = self.game.player_company.manufacturing_teams.len() + 1;
                 let name = format!("Mfg Team {}", team_num);
                 if let Some(evt) = self.game.player_company.hire_manufacturing_team(name.clone(), &self.game.balance) {
-                    self.game.event_log.push(self.game.date, evt);
+                    self.game.log(evt);
                     self.status_message = Some(format!("Hired {}", name));
                 }
             }
@@ -2148,7 +2166,7 @@ impl App {
                         self.exit_modal();
                         let seed_clone = self.game.seed.clone();
                         if let Some(evt) = self.game.player_company.contract_third_party(idx, date, &seed_clone, &self.game.balance) {
-                            self.game.event_log.push(self.game.date, evt);
+                            self.game.log(evt);
                             self.status_message = Some("Engine contracted".into());
                         }
                     }
@@ -2438,9 +2456,8 @@ impl App {
                         // payloads were detached on a previous flight.
                         let payload_mass: f64 = sc.payloads.iter().map(|p| p.mass_kg()).sum();
                         let rocket_mass = payload_mass + sc.design.total_mass_kg();
-                        let low_thrust = sc.rocket.is_current_stage_low_thrust(&sc.design);
                         let destinations = reachable_destinations_multistage(
-                            &sc.location, remaining_dv, rocket_mass, low_thrust,
+                            &sc.location, remaining_dv, rocket_mass,
                             Some(&sc.rocket), Some(&sc.design),
                         );
                         if destinations.is_empty() {
@@ -2657,9 +2674,8 @@ impl App {
                         );
                         let remaining_dv = rocket.remaining_delta_v(&rp.design);
                         let rocket_mass = rp.design.total_mass_kg() + payload_kg;
-                        let low_thrust = rocket.is_current_stage_low_thrust(&rp.design);
                         let destinations = reachable_destinations_multistage(
-                            start_id, remaining_dv, rocket_mass, low_thrust,
+                            start_id, remaining_dv, rocket_mass,
                             Some(&rocket), Some(&rp.design),
                         );
                         self.input_mode = InputMode::DvPlanner {
@@ -2722,9 +2738,8 @@ impl App {
                             // Recompute destinations
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg() + state.payload_kg;
-                            let lt = state.rocket.is_current_stage_low_thrust(&state.design);
                             state.destinations = reachable_destinations_multistage(
-                                &state.current_location, remaining_dv, rocket_mass, lt,
+                                &state.current_location, remaining_dv, rocket_mass,
                                 Some(&state.rocket), Some(&state.design),
                             );
                             state.selected = 0;
@@ -2742,9 +2757,8 @@ impl App {
                             // Recompute destinations with new mass
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg();
-                            let lt = state.rocket.is_current_stage_low_thrust(&state.design);
                             state.destinations = reachable_destinations_multistage(
-                                &state.current_location, remaining_dv, rocket_mass, lt,
+                                &state.current_location, remaining_dv, rocket_mass,
                                 Some(&state.rocket), Some(&state.design),
                             );
                             state.selected = state.selected.min(
@@ -2763,9 +2777,8 @@ impl App {
 
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg() + state.payload_kg;
-                            let lt = state.rocket.is_current_stage_low_thrust(&state.design);
                             state.destinations = reachable_destinations_multistage(
-                                &state.current_location, remaining_dv, rocket_mass, lt,
+                                &state.current_location, remaining_dv, rocket_mass,
                                 Some(&state.rocket), Some(&state.design),
                             );
                             state.selected = state.selected.min(
@@ -3107,7 +3120,7 @@ impl App {
                     self.exit_modal();
                     if let Some(evt) = self.game.apply_rocket_modification(project_id, stage_groups) {
                         let summary = format!("{}", evt);
-                        self.game.event_log.push(self.game.date, evt);
+                        self.game.log(evt);
                         self.status_message = Some(summary);
                     }
                 } else {
@@ -3132,11 +3145,8 @@ impl App {
                             if let Some(engine_name) = self.game.player_company
                                 .promote_proposed_engine(*id)
                             {
-                                self.game.event_log.push(
-                                    self.game.date,
-                                    crate::event::GameEvent::EngineDesignStarted {
-                                        engine_name,
-                                    },
+                                self.game.log(
+                                    crate::event::GameEvent::EngineDesignStarted { engine_name },
                                 );
                             }
                         } else {
@@ -3501,7 +3511,7 @@ impl App {
                     let evt = crate::event::GameEvent::ReactorDesignStarted {
                         reactor_name: rname,
                     };
-                    self.game.event_log.push(self.game.date, evt);
+                    self.game.log(evt);
                 }
                 self.exit_modal();
             }
@@ -3607,7 +3617,7 @@ impl App {
             KeyCode::Char('d') | KeyCode::Char('D') if state.is_none() => {
                 if let Some(name) = self.game.player_company.promote_proposed_engine(project_id) {
                     let evt = crate::event::GameEvent::EngineDesignStarted { engine_name: name };
-                    self.game.event_log.push(self.game.date, evt);
+                    self.game.log(evt);
                 }
                 self.exit_modal();
             }
@@ -3952,7 +3962,7 @@ impl App {
         };
 
         if let Some(evt) = self.game.player_company.start_rocket_project(design, &self.game.balance) {
-            self.game.event_log.push(self.game.date, evt);
+            self.game.log(evt);
             self.status_message = Some(format!("Started rocket design: {}", name));
         }
     }

@@ -26,8 +26,7 @@ pub struct ReactorId(pub u64);
 
 /// Fissile enrichment level. Higher enrichment → more compact reactor
 /// (much better kg/kW). MEU and HEU are gated behind reputation
-/// thresholds; LEU is always available. Phase 2b will surface the
-/// picker in the editor.
+/// thresholds; LEU is always available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EnrichmentLevel {
     /// Low-enriched uranium (<20% U-235). Civilian-power-reactor grade;

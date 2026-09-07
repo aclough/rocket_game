@@ -610,20 +610,6 @@ impl Manufacturing {
         }
     }
 
-    /// Count pending engine orders for a given engine source.
-    pub fn pending_engine_orders(&self, source: EngineSource) -> u32 {
-        self.orders.iter()
-            .filter(|o| matches!(&o.order_type, ManufacturingOrderType::Engine { source: s, .. } if *s == source))
-            .count() as u32
-    }
-
-    /// Count pending stage orders for a given rocket project.
-    pub fn pending_stage_orders(&self, rocket_project_id: RocketProjectId) -> u32 {
-        self.orders.iter()
-            .filter(|o| matches!(&o.order_type, ManufacturingOrderType::Stage { rocket_project_id: id, .. } if *id == rocket_project_id))
-            .count() as u32
-    }
-
     /// Count pending integration orders for a given rocket project.
     pub fn pending_integration_orders(&self, rocket_project_id: RocketProjectId) -> u32 {
         self.orders.iter()

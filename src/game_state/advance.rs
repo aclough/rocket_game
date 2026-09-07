@@ -76,8 +76,7 @@ impl GameState {
                             crate::technology::TechDeficiencyKind::PowerPenalty(_) => {}
                         }
                         let evt = GameEvent::RevisionComplete { engine_name: engine_name.clone() };
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
+                        self.emit(&mut events, evt);
                     } else {
                         // Failed — report attempt count
                         let hint = crate::technology::failure_hint(def.total_attempts);
@@ -90,8 +89,7 @@ impl GameState {
                             engine_name,
                             flaw_description: msg,
                         };
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
+                        self.emit(&mut events, evt);
                     }
                 }
             }
@@ -136,8 +134,7 @@ impl GameState {
                             tech_name: tech_name.clone(),
                             deficiencies: desc.join(", "),
                         };
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
+                        self.emit(&mut events, evt);
                     }
                 }
             }
@@ -177,8 +174,7 @@ impl GameState {
                             | crate::technology::TechDeficiencyKind::ThrustPenalty(_) => {}
                         }
                         let evt = GameEvent::ReactorRevisionComplete { reactor_name };
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
+                        self.emit(&mut events, evt);
                     } else {
                         // Failed — report attempt count.
                         let hint = crate::technology::failure_hint(def.total_attempts);
@@ -191,8 +187,7 @@ impl GameState {
                             reactor_name,
                             flaw_description: msg,
                         };
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
+                        self.emit(&mut events, evt);
                     }
                 }
             }
@@ -237,8 +232,7 @@ impl GameState {
                             tech_name,
                             deficiencies: desc.join(", "),
                         };
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
+                        self.emit(&mut events, evt);
                     }
                 }
             }
@@ -246,8 +240,7 @@ impl GameState {
 
         if self.date.is_first_of_month() {
             let evt = GameEvent::MonthStart;
-            self.event_log.push(self.date, evt.clone());
-            events.push(evt);
+            self.emit(&mut events, evt);
 
             // Deduct salaries
             let salary = self.player_company.monthly_salary_cost();
@@ -256,15 +249,13 @@ impl GameState {
                 // Track expense
                 self.record_expense(salary);
                 let evt = GameEvent::SalariesPaid { amount: salary };
-                self.event_log.push(self.date, evt.clone());
-                events.push(evt);
+                self.emit(&mut events, evt);
 
                 if self.player_company.money < 0.0 {
                     let evt = GameEvent::InsufficientFunds {
                         shortfall: -self.player_company.money,
                     };
-                    self.event_log.push(self.date, evt.clone());
-                    events.push(evt);
+                    self.emit(&mut events, evt);
                 }
             }
 
@@ -285,8 +276,7 @@ impl GameState {
                         condition: new_condition.display_name().to_string(),
                         description: new_condition.flavor_text().to_string(),
                     };
-                    self.event_log.push(self.date, evt.clone());
-                    events.push(evt);
+                    self.emit(&mut events, evt);
                     self.speed = GameSpeed::Paused;
                 }
             }
@@ -299,11 +289,8 @@ impl GameState {
                 if let Some(shift) = crate::geopolitics::advance_geopolitics(
                     &mut self.geopolitics, &self.seed, year,
                 ) {
-                    let mut geo_events = self.apply_geopolitical_shift(shift);
-                    for evt in geo_events.drain(..) {
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
-                    }
+                    let geo_events = self.apply_geopolitical_shift(shift);
+                    self.emit_all(&mut events, geo_events);
                     // A war is at least as worth stopping for as a recession.
                     self.speed = GameSpeed::Paused;
                 }
@@ -316,11 +303,10 @@ impl GameState {
 
             // Check seed-driven market events
             let market_events = self.check_market_events();
-            for evt in market_events {
-                self.event_log.push(self.date, evt.clone());
-                events.push(evt);
+            if !market_events.is_empty() {
                 self.speed = GameSpeed::Paused;
             }
+            self.emit_all(&mut events, market_events);
 
             // Check yearly tech unlock rolls (on January)
             if self.date.month == 1 {
@@ -353,8 +339,7 @@ impl GameState {
                 // Sort by market ID so display order matches selection order
                 self.available_contracts.sort_by_key(|c| c.market_id.0);
                 let evt = GameEvent::ContractsRefreshed { count: generated };
-                self.event_log.push(self.date, evt.clone());
-                events.push(evt);
+                self.emit(&mut events, evt);
             }
 
             // Roll anchor-customer campaign announcements. Seeded per
@@ -439,8 +424,7 @@ impl GameState {
                     bid_deadline,
                     liftable,
                 };
-                self.event_log.push(self.date, evt.clone());
-                events.push(evt);
+                self.emit(&mut events, evt);
                 self.active_campaigns.push(campaign);
             }
 
@@ -523,8 +507,7 @@ impl GameState {
                     GameEvent::RocketIntegrated { rocket_name }
                 }
             };
-            self.event_log.push(self.date, evt.clone());
-            events.push(evt);
+            self.emit(&mut events, evt);
         }
 
         // Try to unblock manufacturing orders that now have prerequisites
@@ -533,8 +516,7 @@ impl GameState {
         // Auto-reorder rockets to maintain inventory targets
         let auto_events = self.player_company.auto_reorder_rockets(&self.balance);
         for evt in auto_events {
-            self.event_log.push(self.date, evt.clone());
-            events.push(evt);
+            self.emit(&mut events, evt);
         }
 
         // A rush job is over once its last order has left the queue —
@@ -559,10 +541,7 @@ impl GameState {
 
         // Advance flights in transit
         let flight_events = self.advance_flights();
-        for evt in flight_events {
-            self.event_log.push(self.date, evt.clone());
-            events.push(evt);
-        }
+        self.emit_all(&mut events, flight_events);
 
         // Run the daily power balance on parked spacecraft too. Brownout
         // kills the spacecraft (loss of attitude/comms/etc — same lethal
@@ -588,8 +567,7 @@ impl GameState {
                 location: crate::contract::destination_display_name(&sc.location)
                     .to_string(),
             };
-            self.event_log.push(self.date, evt.clone());
-            events.push(evt);
+            self.emit(&mut events, evt);
         }
 
         // Roll endurance flaws for parked spacecraft
@@ -619,6 +597,7 @@ impl GameState {
                 }
             }
             let mut sc_flaw_discoveries: Vec<(RocketProjectId, usize)> = Vec::new();
+            let mut sc_news = Vec::new();
             for sc in &mut self.spacecraft {
                 for rf in &sc_flaw_table {
                     if rf.project_id != sc.rocket_project_id {
@@ -644,17 +623,16 @@ impl GameState {
                         crate::launch::apply_consequence_to_stage(
                             &mut sc.design, &rf.consequence, gi, si,
                         );
-                        let evt = GameEvent::MidFlightFlawActivated {
+                        sc_news.push(GameEvent::MidFlightFlawActivated {
                             rocket_name: sc.name.clone(),
                             flaw_description: rf.description.clone(),
                             consequence: rf.consequence.to_string(),
-                        };
-                        self.event_log.push(self.date, evt.clone());
-                        events.push(evt);
+                        });
                         sc_flaw_discoveries.push((rf.project_id, rf.flaw_index));
                     }
                 }
             }
+            self.emit_all(&mut events, sc_news);
             // Discover activated flaws on rocket projects
             for (project_id, flaw_index) in &sc_flaw_discoveries {
                 if let Some(rp) = self.player_company.rocket_projects.iter_mut()
@@ -675,8 +653,7 @@ impl GameState {
             self.speed = GameSpeed::Paused;
             self.player_company.notified_manufacturing_idle = true;
             let evt = GameEvent::ManufacturingIdle;
-            self.event_log.push(self.date, evt.clone());
-            events.push(evt);
+            self.emit(&mut events, evt);
         }
         if self.player_company.has_actionable_manufacturing_orders() {
             self.player_company.notified_manufacturing_idle = false;
@@ -729,8 +706,7 @@ impl GameState {
 
         for (project_name, flaw_count) in started {
             let evt = GameEvent::AutoRevisionStarted { project_name, flaw_count };
-            self.event_log.push(self.date, evt.clone());
-            events.push(evt);
+            self.emit(events, evt);
         }
     }
 }

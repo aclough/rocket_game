@@ -319,6 +319,18 @@ pub enum EngineDesignStatus {
     },
 }
 
+impl EngineDesignStatus {
+    /// Short phase name for status lines, editors and reports.
+    pub fn label(&self) -> &'static str {
+        match self {
+            EngineDesignStatus::Proposed { .. } => "Proposed",
+            EngineDesignStatus::InDesign { .. } => "In Design",
+            EngineDesignStatus::Testing { .. } => "Testing",
+            EngineDesignStatus::Revising { .. } => "Revising",
+        }
+    }
+}
+
 /// Unique identifier for an engine project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EngineProjectId(pub u64);

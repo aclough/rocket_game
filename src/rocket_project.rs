@@ -21,6 +21,17 @@ pub enum RocketDesignStatus {
     Revising { remaining_indices: Vec<usize>, work_completed: f64 },
 }
 
+impl RocketDesignStatus {
+    /// Short phase name for status lines, editors and reports.
+    pub fn label(&self) -> &'static str {
+        match self {
+            RocketDesignStatus::InDesign { .. } => "In Design",
+            RocketDesignStatus::Testing { .. } => "Testing",
+            RocketDesignStatus::Revising { .. } => "Revising",
+        }
+    }
+}
+
 /// A rocket design project with workflow state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RocketProject {
@@ -357,47 +368,6 @@ pub fn survives_trip(design: &RocketDesign, from: &str, to: &str, payload_kg: f6
     trip_power(design, from, to, payload_kg).is_some_and(|p| p.survives())
 }
 
-/// Compute max payload for all reachable destinations from a given location.
-/// Returns a sorted list of (destination_name, max_payload_kg).
-pub fn payload_table(design: &RocketDesign, from: &str) -> Vec<(&'static str, f64)> {
-    let mut results = Vec::new();
-    for location in DELTA_V_MAP.locations() {
-        if location.id == from {
-            continue;
-        }
-        let payload = max_payload_to(design, from, location.id);
-        if payload > 0.0 {
-            results.push((location.display_name, payload));
-        }
-    }
-    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    results
-}
-
-/// Compute max payload for a specific list of destinations only. Used by the
-/// UI to show payload feasibility just for places the player has contracts
-/// for (the full 50-location table is too long to display).
-pub fn payload_table_for(
-    design: &RocketDesign, from: &str, destinations: &[&str],
-) -> Vec<(&'static str, f64)> {
-    let mut results = Vec::new();
-    for &dest_id in destinations {
-        if dest_id == from {
-            continue;
-        }
-        let location = match DELTA_V_MAP.location(dest_id) {
-            Some(l) => l,
-            None => continue,
-        };
-        let payload = max_payload_to(design, from, dest_id);
-        if payload > 0.0 {
-            results.push((location.display_name, payload));
-        }
-    }
-    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    results
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,37 +567,6 @@ mod tests {
         let payload = max_payload_to(&design, "earth_surface", "leo");
         // Should be able to carry some payload to LEO
         assert!(payload > 0.0, "Should reach LEO with some payload, got {}", payload);
-    }
-
-    #[test]
-    fn test_payload_table_not_empty() {
-        let design = simple_two_stage_design();
-        let table = payload_table(&design, "earth_surface");
-        assert!(!table.is_empty(), "Should reach at least one destination");
-    }
-
-    #[test]
-    fn test_payload_table_for_filters_to_listed_destinations() {
-        let design = simple_two_stage_design();
-        let dests = ["leo", "gto"];
-        let table = payload_table_for(&design, "earth_surface", &dests);
-        // Only LEO and GTO appear (subset of full table).
-        let names: Vec<&str> = table.iter().map(|(n, _)| *n).collect();
-        assert!(names.iter().any(|n| n.contains("LEO") || n.contains("Low Earth")),
-            "expected LEO in {:?}", names);
-        assert!(names.len() <= 2, "should not have more than 2 entries: {:?}", names);
-        // Mars should not appear because it wasn't in the destinations list.
-        assert!(!names.iter().any(|n| n.contains("Mars")));
-    }
-
-    #[test]
-    fn test_payload_table_for_skips_unknown_destinations() {
-        // Stale or otherwise unknown destination ids should be silently
-        // filtered out, not crash.
-        let design = simple_two_stage_design();
-        let dests = ["leo", "nea", "made_up_place"];
-        let table = payload_table_for(&design, "earth_surface", &dests);
-        assert!(table.iter().any(|(n, _)| n.contains("LEO") || n.contains("Low Earth")));
     }
 
     /// Reaching a place and surviving the trip there are different

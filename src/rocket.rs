@@ -441,35 +441,6 @@ impl Rocket {
         false
     }
 
-    /// Consume propellant from a specific stage to achieve a given delta-v.
-    /// Returns the actual delta-v achieved (may be less if propellant runs out).
-    pub fn burn(&mut self, design: &RocketDesign, group: usize, index: usize, target_dv: f64) -> f64 {
-        // Check preconditions without holding a mutable borrow
-        let state_ref = match self.stage_states.get(group).and_then(|g| g.get(index)) {
-            Some(s) if s.attached && s.propellant_remaining_kg > 0.0 => s,
-            _ => return 0.0,
-        };
-
-        let stage = &design.stage_groups[group][index];
-        let ve = stage.engine.exhaust_velocity();
-        let other_mass = self.attached_mass_except(design, group, index);
-        let prop_remaining = state_ref.propellant_remaining_kg;
-
-        let m0 = stage.dry_mass_kg() + prop_remaining + self.payload_mass_kg + other_mass;
-        let mf_target = m0 / (target_dv / ve).exp();
-        let prop_needed = m0 - mf_target;
-        let prop_used = prop_needed.min(prop_remaining);
-
-        // Now take the mutable borrow
-        self.stage_states[group][index].propellant_remaining_kg -= prop_used;
-
-        let mf_actual = m0 - prop_used;
-        if mf_actual <= 0.0 {
-            return 0.0;
-        }
-        ve * (m0 / mf_actual).ln()
-    }
-
     /// Whether the current active stage group (lowest with propellant or solar sail) is low-thrust.
     pub fn is_current_stage_low_thrust(&self, design: &RocketDesign) -> bool {
         for (gi, group) in design.stage_groups.iter().enumerate() {
@@ -714,22 +685,6 @@ impl Rocket {
             return 0.0;
         }
         ve * (m0 / mf_actual).ln()
-    }
-
-    /// Mass of all attached stages except the one at (group, index), plus their propellant.
-    fn attached_mass_except(&self, design: &RocketDesign, skip_group: usize, skip_index: usize) -> f64 {
-        let mut mass = 0.0;
-        for (gi, group) in self.stage_states.iter().enumerate() {
-            for (si, ss) in group.iter().enumerate() {
-                if gi == skip_group && si == skip_index {
-                    continue;
-                }
-                if ss.attached {
-                    mass += design.stage_groups[gi][si].dry_mass_kg() + ss.propellant_remaining_kg;
-                }
-            }
-        }
-        mass
     }
 
     // ─── Power balance ────────────────────────────────────────────────
@@ -1435,35 +1390,6 @@ mod tests {
             (design_dv - instance_dv).abs() < 1.0,
             "design_dv={}, instance_dv={}", design_dv, instance_dv
         );
-    }
-
-    #[test]
-    fn test_burn_consumes_propellant() {
-        let engine = kerolox_engine(1, 500_000.0, 250.0, 300.0);
-        let s1 = Stage {
-            id: StageId(1), name: "S1".into(),
-            engine: engine.clone(), engine_count: 1,
-            propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
-            fairing: None,
-            power_sources: Vec::new(),
-        };
-
-        let design = RocketDesign {
-            id: RocketDesignId(1),
-            name: "Test".into(),
-            stage_groups: vec![vec![s1]],
-        };
-
-        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
-        let initial_dv = rocket.remaining_delta_v(&design);
-
-        let burned = rocket.burn(&design, 0, 0, 1_000.0);
-        assert!((burned - 1_000.0).abs() < 1.0, "Should burn ~1000 m/s, got {}", burned);
-
-        let after_dv = rocket.remaining_delta_v(&design);
-        assert!(after_dv < initial_dv, "Delta-v should decrease after burn");
-        assert!((initial_dv - after_dv - 1_000.0).abs() < 50.0,
-            "Should have lost ~1000 m/s of dv capability");
     }
 
     #[test]

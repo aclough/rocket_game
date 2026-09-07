@@ -1,7 +1,7 @@
 //! Electrical power generation and storage on rocket stages.
 //!
-//! Phase 1: Battery, SolarPanel, RTG. Fuel cells (Phase 2) and reactors
-//! (Phase 3) are stubbed in the enum but not surfaced in the UI yet.
+//! Battery, solar panel, RTG, fuel cell and fission reactor, all
+//! placeable from the designer's power editor.
 
 use serde::{Deserialize, Serialize};
 
@@ -63,7 +63,6 @@ pub enum PowerSourceKind {
     /// Radioisotope thermoelectric generator — small constant trickle.
     Rtg { steady_w: f64 },
     /// Fuel cell — burns a tiny fraction of stage propellant for power.
-    /// Phase 2.
     FuelCell { peak_w: f64, kg_per_kwd: f64 },
     /// Nuclear reactor — owns a cloned snapshot of the [`ReactorDesign`]
     /// the player researched. Mirrors how `Stage::engine` carries a
@@ -191,9 +190,9 @@ impl PowerSource {
     }
 
     /// Build a fixed-size space-rated fission reactor at one of the
-    /// three legacy preset scales. Phase 1 keeps these so the existing
-    /// power editor still works; Phase 2 will retire `new_reactor` in
-    /// favour of installing player-designed reactors by id.
+    /// three legacy preset scales. Player-designed reactors install by
+    /// id through `installable_reactor_projects`; the presets remain for
+    /// tests and for a quick fixed-size pick in the power editor.
     ///
     /// Preset → scale mapping (anchored to the historical Medium
     /// preset = `scale = 1.0`):
