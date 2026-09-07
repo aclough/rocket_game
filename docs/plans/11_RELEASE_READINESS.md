@@ -603,7 +603,7 @@ before the friends round (it's the instrument that makes the round
 useful). Tasks 0 and 6 are independent and can move.
 
 Housekeeping to fold in along the way (from ROADMAP's hygiene list):
-archive `m4_plan.md` and this file into `docs/plans/` when M5 closes;
+archive `10_BALANCE_PASS.md` and this file into `docs/plans/` when M5 closes;
 the root should keep only ROADMAP.md, TODO.txt, Rocket_Tycoon.md, and
 CLAUDE.md.
 

@@ -98,7 +98,7 @@ pinned Rideshare/GEO mainstays, seeded volume growth, per-market
 deadlines + failure severity, steady/lumpy/burst cadence, and
 anchor-customer campaigns. The additive-only year-1 rule is enforced
 at config load and by a 200-seed property test. Details in
-docs/plans/m2_plan.md.)
+docs/plans/7_SEEDED_MARKETS.md.)
 
 1. **Seed-perturbed market table** — at game start, `world_query`
    per market archetype draws: exists?, emergence date/trigger, volume

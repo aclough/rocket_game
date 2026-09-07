@@ -65,7 +65,7 @@ mostly size. The two big real drivers are:
    correctly via the learning curve — it's the one axis where we're
    structurally right.
 
-Dev-time spread (from the verified §2 tables in m4_plan.md): ~4 years
+Dev-time spread (from the verified §2 tables in 10_BALANCE_PASS.md): ~4 years
 (Merlin, RL10) to 8–9 years (F-1, RS-25, Raptor-class). Task 3's design
 exponent now gives ~1.6× → ~5.7× work spread — directionally right.
 
@@ -118,7 +118,7 @@ lesser degree, top-cycle premium (too flat).
   biggest realism gap and doubles as an engine-balance lever for the
   GTO/GEO struggle (hydrolox uppers stop being free performance).
   USER:  Yes, I think that's pretty important.
-  CLAUDE: Made it Task 4a in m4_plan.md. Note it needs a per-preset
+  CLAUDE: Made it Task 4a in 10_BALANCE_PASS.md. Note it needs a per-preset
   material *multiplier*, not just BOM fraction shifts — fractions alone
   cap out around 1.7× because superalloys are cheap per kg. The DinoSoar
   ripple (+~$20M on its unit cost at 3.5×) is called out there; its
@@ -131,14 +131,14 @@ lesser degree, top-cycle premium (too flat).
   RL10C-X reaches ~1/week), which is the learning curve's territory.
   Final landed value: hydrolox 3.0× materials-only (no labor premium,
   teams stay unspecialized), giving ~3-6× kerolox per kN — the
-  RS-68-grounded band. Full story in m4_plan.md Task 4 results.
+  RS-68-grounded band. Full story in 10_BALANCE_PASS.md Task 4 results.
 - **Q2:** Size terms (levers 3–4): fold into the Task 4 "fewer, bigger
   engines" measurement, or keep as a separate later pass? They change
   the same trade-off Task 4 is about to measure, so doing Task 4's
   measurement first would give a before/after.
-  USER:  Yes, lets fold that in.  Task 4 never made it to the m4_plan.md so
+  USER:  Yes, lets fold that in.  Task 4 never made it to the 10_BALANCE_PASS.md so
   let's put things there to work out.
-  CLAUDE: Done — "Task 4 plan" section added to m4_plan.md with
+  CLAUDE: Done — "Task 4 plan" section added to 10_BALANCE_PASS.md with
   sub-parts 4a–4f: hydrolox premium, cycle premium, size terms, the
   big-vs-clustered measurement protocol (run before and after the cost
   levers), improvement escalation, and the re-baseline. Three open
@@ -153,7 +153,7 @@ lesser degree, top-cycle premium (too flat).
   complexity superlinear, so complexity now carries a real dev-time and
   flaw-count premium per cycle — bumping SC/FF complexity further would
   tax those a second time on top of Task 3's stretch. Proposal in
-  m4_plan.md: the unit-cost premium lives in a per-cycle material
+  10_BALANCE_PASS.md: the unit-cost premium lives in a per-cycle material
   multiplier first, and the SC/FF complexity bump (8→9, 9→10) is the
   fallback sweep point if the big-vs-clustered measurement (4d) shows top
   cycles still dominating. Q4b there asks whether you're OK with that
