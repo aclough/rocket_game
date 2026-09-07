@@ -48,6 +48,12 @@ impl GameState {
 
         // Today is done — roll over. Everything above ran under today's date.
         self.date = self.date.next_day();
+        // A new month's ledger row opens with the calendar, so what the
+        // player spends on the 1st before its tick lands in the right
+        // month.
+        if self.date.is_first_of_month() {
+            self.open_ledger_month();
+        }
 
         events
     }
@@ -88,7 +94,8 @@ impl GameState {
     /// Everything that happens on the 1st: salaries, the economy and
     /// (in January) the geopolitical arc, market modifiers and events,
     /// (in January) tech unlock rolls, this month's contracts, campaign
-    /// announcements, and the new financial month.
+    /// announcements. (The month's ledger row was opened when the
+    /// calendar rolled over, so anything spent today is already in it.)
     fn tick_month_start(&mut self, events: &mut Vec<GameEvent>) {
         self.emit(events, GameEvent::MonthStart);
         self.pay_salaries(events);
@@ -102,7 +109,6 @@ impl GameState {
         }
         self.generate_monthly_contracts(events);
         self.announce_campaigns(events);
-        self.ensure_current_month_financials();
     }
 
     /// Charge the month's salaries — the player's with an event and a
@@ -110,8 +116,7 @@ impl GameState {
     fn pay_salaries(&mut self, events: &mut Vec<GameEvent>) {
         let salary = self.player_company.monthly_salary_cost();
         if salary > 0.0 {
-            self.player_company.money -= salary;
-            self.record_expense(salary);
+            self.player_company.debit(salary);
             self.emit(events, GameEvent::SalariesPaid { amount: salary });
 
             if self.player_company.money < 0.0 {
@@ -123,7 +128,7 @@ impl GameState {
         }
         for comp in &mut self.competitors {
             let salary = comp.company.monthly_salary_cost();
-            comp.company.money -= salary;
+            comp.company.debit(salary);
         }
     }
 

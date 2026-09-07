@@ -21,7 +21,7 @@ discussion before implementation.
 These are the items closest to being bugs. CLAUDE.md calls out time and
 money specifically, and each of these has two definitions of one thing.
 
-### A1. The monthly expense ledger only sees salaries
+### ✅ A1. The monthly expense ledger only sees salaries
 - **Where:** `src/game_state/mod.rs:557-598` (`record_expense`,
   `record_income`, `pub(super)`); the only callers are
   `advance.rs:257` (salary) and `flight_ops.rs:953` (contract payment).

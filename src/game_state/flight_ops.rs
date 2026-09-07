@@ -955,8 +955,7 @@ impl GameState {
                             contract.payment
                         };
                         let contract_name = contract.name.clone();
-                        self.player_company.money += payment;
-                        self.record_income(payment);
+                        self.player_company.credit(payment);
                         self.player_company.reputation.on_contract_launch(&self.balance.reputation);
 
                         let pay_evt = GameEvent::PaymentReceived {

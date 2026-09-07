@@ -720,7 +720,7 @@ impl GameState {
                 if failed {
                     comp.company.reputation.on_launch_failure(&self.balance.reputation, severity);
                 } else {
-                    comp.company.money += contract.payment;
+                    comp.company.credit(contract.payment);
                     comp.company.reputation.on_launch_success(&self.balance.reputation);
                     comp.company.reputation.on_contract_launch(&self.balance.reputation);
                 }

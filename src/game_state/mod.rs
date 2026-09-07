@@ -277,7 +277,7 @@ impl GameState {
             Vec::new()
         };
 
-        GameState {
+        let mut state = GameState {
             save_version: crate::save::SAVE_VERSION,
             date: start,
             start_date: start,
@@ -304,6 +304,18 @@ impl GameState {
             balance,
             payload_capability_cache: RefCell::new(HashMap::new()),
             trip_survival_cache: RefCell::new(HashMap::new()),
+        };
+        state.open_ledger_month();
+        state
+    }
+
+    /// Open the ledger row for the current month on every company, so
+    /// spending from here on is booked to it. Idempotent.
+    pub(crate) fn open_ledger_month(&mut self) {
+        let date = self.date;
+        self.player_company.open_month(date);
+        for comp in &mut self.competitors {
+            comp.company.open_month(date);
         }
     }
 
@@ -576,51 +588,6 @@ impl GameState {
         }
         self.speed = speed;
     }
-
-    /// Ensure the current month has an entry in the financials buffer.
-    pub(super) fn ensure_current_month_financials(&mut self) {
-        let year = self.date.year;
-        let month = self.date.month;
-        let already = self.player_company.monthly_financials.iter()
-            .any(|f| f.year == year && f.month == month);
-        if !already {
-            self.player_company.monthly_financials.push_back(MonthlyFinancials {
-                year,
-                month,
-                income: 0.0,
-                expenses: 0.0,
-            });
-            // Keep rolling 12-month window
-            while self.player_company.monthly_financials.len() > 12 {
-                self.player_company.monthly_financials.pop_front();
-            }
-        }
-    }
-
-    /// Record an expense in the current month's financials.
-    pub(super) fn record_expense(&mut self, amount: f64) {
-        self.ensure_current_month_financials();
-        let year = self.date.year;
-        let month = self.date.month;
-        if let Some(f) = self.player_company.monthly_financials.iter_mut()
-            .find(|f| f.year == year && f.month == month)
-        {
-            f.expenses += amount;
-        }
-    }
-
-    /// Record income in the current month's financials.
-    pub(super) fn record_income(&mut self, amount: f64) {
-        self.ensure_current_month_financials();
-        let year = self.date.year;
-        let month = self.date.month;
-        if let Some(f) = self.player_company.monthly_financials.iter_mut()
-            .find(|f| f.year == year && f.month == month)
-        {
-            f.income += amount;
-        }
-    }
-
 }
 
 #[cfg(test)]

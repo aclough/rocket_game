@@ -326,7 +326,7 @@ impl Company {
     /// Hire a new engineering team, paying the hiring fee. Returns the
     /// event if successful.
     pub fn hire_team(&mut self, name: String, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
-        self.money -= balance_cfg.costs.engineering_hiring_cost;
+        self.debit(balance_cfg.costs.engineering_hiring_cost);
         self.enroll_team(name.clone(), balance_cfg);
         Some(GameEvent::TeamHired { name })
     }
@@ -334,6 +334,50 @@ impl Company {
     /// Total number of teams.
     pub fn team_count(&self) -> usize {
         self.teams.len()
+    }
+
+    // ── Cash and the monthly ledger ──
+    //
+    // `money` is the balance; `monthly_financials` is how it got there,
+    // one row per month for the last twelve. Every inflow and outflow
+    // goes through `credit` / `debit` so the two can't disagree — the
+    // Finance tab's Expenses column used to show salaries only, because
+    // hiring and build orders wrote `money` directly.
+
+    /// Start the ledger row for `date`'s month, unless it is already the
+    /// open one. Called as the calendar rolls into a month (before any
+    /// spending in it) and on a fresh company; the window keeps twelve.
+    pub fn open_month(&mut self, date: GameDate) {
+        let open = self.monthly_financials.back()
+            .is_some_and(|f| f.year == date.year && f.month == date.month);
+        if open {
+            return;
+        }
+        self.monthly_financials.push_back(MonthlyFinancials {
+            year: date.year,
+            month: date.month,
+            income: 0.0,
+            expenses: 0.0,
+        });
+        while self.monthly_financials.len() > 12 {
+            self.monthly_financials.pop_front();
+        }
+    }
+
+    /// Spend `amount`: cash down, this month's expenses up.
+    pub fn debit(&mut self, amount: f64) {
+        self.money -= amount;
+        if let Some(row) = self.monthly_financials.back_mut() {
+            row.expenses += amount;
+        }
+    }
+
+    /// Receive `amount`: cash up, this month's income up.
+    pub fn credit(&mut self, amount: f64) {
+        self.money += amount;
+        if let Some(row) = self.monthly_financials.back_mut() {
+            row.income += amount;
+        }
     }
 
     /// Number of engineering teams not assigned to any project.
@@ -357,7 +401,7 @@ impl Company {
 
     /// Hire a manufacturing team.
     pub fn hire_manufacturing_team(&mut self, name: String, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
-        self.money -= balance_cfg.costs.manufacturing_hiring_cost;
+        self.debit(balance_cfg.costs.manufacturing_hiring_cost);
         let id = TeamId(self.next_team_id);
         self.next_team_id += 1;
         let team = ManufacturingTeam::new(id, name.clone(), balance_cfg.costs.manufacturing_monthly_salary);
@@ -924,8 +968,7 @@ impl Company {
         // (see advance_day) so the recorded marginal cost includes labor
         // accrued during manufacturing, not just material cost.
 
-        // Deduct costs
-        self.money -= total_cost;
+        self.debit(total_cost);
 
         // Reset idle notification since new orders were placed
         self.notified_manufacturing_idle = false;
@@ -982,7 +1025,7 @@ impl Company {
         *self.engine_build_counts.entry(ep_id).or_insert(0) += 1;
         // engine_cost_history is populated at engine-build completion so the
         // recorded cost includes labor in addition to materials.
-        self.money -= cost;
+        self.debit(cost);
         self.notified_manufacturing_idle = false;
 
         Some((cost, GameEvent::EngineBuildOrdered { engine_name }))

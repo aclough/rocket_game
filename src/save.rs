@@ -73,6 +73,9 @@ pub fn load_game(path: &Path) -> io::Result<GameState> {
 
     sanitize(&mut state);
     migrate(&mut state);
+    // Saves from before the ledger, or written mid-month by an older
+    // writer, may have no row for the current month yet.
+    state.open_ledger_month();
     state.save_version = SAVE_VERSION;
     Ok(state)
 }
