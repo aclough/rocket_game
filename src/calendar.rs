@@ -67,25 +67,41 @@ impl GameDate {
         total + self.day
     }
 
-    /// Count of days between two dates (self must be <= other).
-    pub fn days_until(&self, other: &GameDate) -> u32 {
-        // Simple brute force — fine for game timescales
-        let mut count = 0;
-        let mut d = *self;
-        while d < *other {
-            d = d.next_day();
-            count += 1;
+    /// Days since the proleptic Gregorian epoch (0001-01-01 is day 0).
+    /// The basis for O(1) date arithmetic; `days_until` is asked per
+    /// contract row per frame, so a day-by-day walk was not free.
+    pub fn ordinal(&self) -> i64 {
+        days_before_year(self.year) + i64::from(self.day_of_year()) - 1
+    }
+
+    /// The date `ordinal` days after the epoch; inverse of [`ordinal`].
+    pub fn from_ordinal(ordinal: i64) -> Self {
+        // Estimate the year from the mean year length, then correct by
+        // at most one step either way.
+        let mut year = (ordinal as f64 / DAYS_PER_YEAR).floor() as u32 + 1;
+        while days_before_year(year) > ordinal {
+            year -= 1;
         }
-        count
+        while days_before_year(year + 1) <= ordinal {
+            year += 1;
+        }
+        let mut remaining = (ordinal - days_before_year(year)) as u32;
+        let mut month = 1;
+        while remaining >= days_in_month(year, month) {
+            remaining -= days_in_month(year, month);
+            month += 1;
+        }
+        GameDate { year, month, day: remaining + 1 }
+    }
+
+    /// Count of days from self to `other`; 0 when `other` is not later.
+    pub fn days_until(&self, other: &GameDate) -> u32 {
+        (other.ordinal() - self.ordinal()).max(0) as u32
     }
 
     /// Advance by N days.
     pub fn add_days(self, n: u32) -> Self {
-        let mut d = self;
-        for _ in 0..n {
-            d = d.next_day();
-        }
-        d
+        GameDate::from_ordinal(self.ordinal() + i64::from(n))
     }
 
     /// Add N months, landing on the 1st of the target month.
@@ -125,6 +141,13 @@ impl fmt::Display for GameDate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {}, {}", self.month_name(), self.day, self.year)
     }
+}
+
+/// Days from the epoch to January 1st of `year`: 365 per year plus the
+/// leap days of the years before it.
+fn days_before_year(year: u32) -> i64 {
+    let y = i64::from(year) - 1;
+    365 * y + y / 4 - y / 100 + y / 400
 }
 
 /// Whether a year is a leap year.
@@ -286,6 +309,24 @@ mod tests {
     #[test]
     fn test_iso() {
         assert_eq!(GameDate::new(2001, 3, 7).iso(), "2001-03-07");
+    }
+
+    /// The closed-form arithmetic agrees with walking the calendar a
+    /// day at a time, both ways, across a span that crosses several
+    /// leap years including the 2100 exception.
+    #[test]
+    fn ordinal_arithmetic_matches_day_by_day_walk() {
+        let start = GameDate::new(2001, 1, 1);
+        let mut walked = start;
+        for n in 0..(200 * 366) {
+            assert_eq!(start.add_days(n), walked, "add_days({n})");
+            assert_eq!(start.days_until(&walked), n, "days_until at {walked}");
+            assert_eq!(GameDate::from_ordinal(walked.ordinal()), walked, "ordinal round trip at {walked}");
+            walked = walked.next_day();
+        }
+        assert_eq!(walked.year, 2201);
+        // Not later means zero, never a negative wrapped to u32.
+        assert_eq!(walked.days_until(&start), 0);
     }
 
     #[test]
