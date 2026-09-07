@@ -4,11 +4,14 @@ use serde::{Serialize, Deserialize};
 
 use crate::balance;
 use crate::engine::{EngineDesign, EngineCycle, EngineId, PropellantFraction, G0};
-use crate::balance_config::BalanceConfig;
-use crate::flaw::{self, Flaw, FlawId};
-use crate::project::ImprovementId;
+use crate::balance_config::{BalanceConfig, FlawsConfig};
+use crate::flaw::FlawDomain;
+use crate::project::{DesignProject, DesignStatus, Designable, Direction, Improvement, ImprovementId, ProjectKind};
 use crate::propellant::Propellant;
+use crate::technology::TechDeficiencyKind;
 use crate::third_party::ContractedEngineId;
+
+pub use crate::project::WorkEvent;
 
 /// A preset propellant combination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +133,32 @@ pub struct EngineBaseline {
     /// Electrical power draw at full thrust (watts). 0 for everything
     /// except `ElectricPropulsion`.
     pub power_draw_w: f64,
+}
+
+impl EngineBaseline {
+    /// The engine this baseline yields at `scale`, with the sea-level or
+    /// vacuum nozzle. Baselines that only exist in vacuum ignore
+    /// `vacuum` and always give the vacuum form.
+    pub fn design(
+        &self, id: EngineId, name: String, cycle: EngineCycle, preset: PropellantPreset,
+        scale: f64, vacuum: bool,
+    ) -> EngineDesign {
+        let use_vacuum = self.vacuum_only || vacuum;
+        EngineDesign {
+            id,
+            name,
+            cycle,
+            thrust_n: self.thrust_n * scale,
+            mass_kg: self.mass_kg * scale,
+            isp_s: if use_vacuum { self.isp_vac_s } else { self.isp_sl_s },
+            exit_pressure_pa: if use_vacuum { self.exit_pressure_vac_pa } else { self.exit_pressure_sl_pa },
+            needs_atmosphere: !use_vacuum,
+            propellant_mix: preset.propellant_mix(),
+            // Power draw: scales with thrust for ion drives (~30 kW/N
+            // ≈ NEXT thruster ratio); 0 for everything else.
+            power_draw_w: self.power_draw_w * scale,
+        }
+    }
 }
 
 /// Get the baseline engine parameters for a (cycle, propellant) combination.
@@ -301,38 +330,8 @@ pub const MAX_SCALE: f64 = 4.0;
 pub const DEFAULT_SCALE: f64 = 1.0;
 pub const SCALE_STEP: f64 = 0.25;
 
-/// Status of an engine design project.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum EngineDesignStatus {
-    /// Tentative engine — created inside an in-progress rocket designer
-    /// session but not yet committed. Doesn't accrue work and is hidden
-    /// from the engine pane. Promoted to `InDesign` when the rocket is
-    /// finalised; deleted if the designer is cancelled.
-    Proposed { work_required: f64 },
-    InDesign { work_completed: f64, work_required: f64 },
-    Testing { work_completed: f64 },
-    /// Revising discovered flaws, actualizing improvements, and attempting tech deficiency fixes.
-    /// Queues hold ids, not vec positions, so removing a flaw mid-revision
-    /// can't shift what the rest of the queue points at.
-    Revising {
-        remaining_flaw_ids: Vec<FlawId>,
-        remaining_improvement_ids: Vec<ImprovementId>,
-        remaining_tech_deficiency_ids: Vec<crate::technology::TechDeficiencyId>,
-        work_completed: f64,
-    },
-}
-
-impl EngineDesignStatus {
-    /// Short phase name for status lines, editors and reports.
-    pub fn label(&self) -> &'static str {
-        match self {
-            EngineDesignStatus::Proposed { .. } => "Proposed",
-            EngineDesignStatus::InDesign { .. } => "In Design",
-            EngineDesignStatus::Testing { .. } => "Testing",
-            EngineDesignStatus::Revising { .. } => "Revising",
-        }
-    }
-}
+/// Status of an engine design project — the shared [`DesignStatus`].
+pub type EngineDesignStatus = DesignStatus;
 
 /// Unique identifier for an engine project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -345,51 +344,57 @@ pub enum EngineSource {
     Contracted(ContractedEngineId),
 }
 
-/// An engine design project with workflow state.
+/// The player's choices an engine is derived from, kept beside the
+/// design so the editor and `design_variant` can re-derive it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EngineProject {
-    pub project_id: EngineProjectId,
-    pub design: EngineDesign,
+pub struct EngineSpec {
     pub preset: PropellantPreset,
     pub scale: f64,
-    pub status: EngineDesignStatus,
-    pub flaws: Vec<Flaw>,
-    pub revision: u32,
-    pub teams_assigned: u32,
-    pub complexity: u32,
-    /// Cumulative engineering salary spent on this project (NRE).
-    #[serde(default)]
-    pub nre_cost: f64,
-    /// Improvements discovered during testing. Pending ones need a revision to actualize.
-    #[serde(default)]
-    pub improvements: Vec<EngineImprovement>,
-    /// Allocator for `ImprovementId` on this project.
-    #[serde(default)]
-    pub next_improvement_id: u64,
-    /// Cumulative work spent in testing (persists across revisions).
-    #[serde(default)]
-    pub cumulative_testing_work: f64,
-    /// IDs of unsolved tech deficiencies on this engine (references Technology.deficiencies).
-    #[serde(default)]
-    pub tech_deficiency_ids: Vec<crate::technology::TechDeficiencyId>,
-    /// Which technology this engine uses (if experimental).
-    #[serde(default)]
-    pub technology_id: Option<crate::technology::TechnologyId>,
-    /// Automatically start a revision as soon as testing discovers a
-    /// flaw. Default on: for a project you aren't yet mass-producing,
-    /// revising promptly is what you'd do anyway. Turn it off on a
-    /// design with a production run going — a revision bumps
-    /// `revision`, which flows onto build orders and inventory and so
-    /// partially resets the learning curve.
-    #[serde(default = "crate::flaw::auto_revise_default")]
-    pub auto_revise: bool,
-    /// Retired by the player — hidden from the Engines pane and from
-    /// the rocket designer's engine picker, but still present so every
-    /// id that refers to it keeps resolving: stages of rocket designs
-    /// that already use it, engines in inventory, build-cost history.
-    /// Deleting the project outright would dangle all of those.
-    #[serde(default)]
-    pub retired: bool,
+}
+
+/// An engine design project with workflow state.
+pub type EngineProject = DesignProject<EngineDesign>;
+
+impl Designable for EngineDesign {
+    type Id = EngineProjectId;
+    type Spec = EngineSpec;
+    type ImprovementKind = EngineImprovementKind;
+    const KIND: ProjectKind = ProjectKind::Engine;
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn flaw_domain(&self) -> FlawDomain {
+        FlawDomain::Engine(Some(self.cycle))
+    }
+
+    /// Effective complexity folds the propellants' problem factors into
+    /// the cycle's; the project's stored complexity is the plain
+    /// combined figure used for work and NRE.
+    fn flaw_complexity(&self, spec: &EngineSpec, _project_complexity: u32) -> u32 {
+        balance::effective_complexity(self.cycle, &spec.preset.propellants())
+    }
+
+    fn improvement_chance(cfg: &FlawsConfig) -> Option<f64> {
+        Some(cfg.improvement_discovery_chance)
+    }
+
+    fn roll_improvement(&self, rng: &mut StdRng, id: ImprovementId) -> EngineImprovement {
+        generate_improvement(rng, self.cycle, id)
+    }
+
+    fn apply_improvement(&mut self, kind: &EngineImprovementKind) {
+        match kind {
+            EngineImprovementKind::Isp(frac) => self.isp_s *= 1.0 + frac,
+            EngineImprovementKind::Mass(frac) => self.mass_kg *= 1.0 - frac,
+            EngineImprovementKind::Thrust(frac) => self.thrust_n *= 1.0 + frac,
+        }
+    }
+
+    fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction) {
+        EngineDesign::apply_deficiency(self, kind, dir)
+    }
 }
 
 impl EngineProject {
@@ -409,54 +414,13 @@ impl EngineProject {
         let complexity = balance::combined_complexity(cycle, &propellants);
         let effective = balance::effective_complexity(cycle, &propellants);
         let work_required = balance_cfg.work.design_work_required(effective, scale);
-
-        let thrust = baseline.thrust_n * scale;
-        let mass = baseline.mass_kg * scale;
         // The project's own `design` holds the canonical (sea-level)
         // form of the family; `design_variant` derives the nozzle a
-        // given stage actually flies. Baselines that can only exist in
-        // vacuum have no choice to make.
-        let use_vacuum = baseline.vacuum_only;
-        let isp = if use_vacuum { baseline.isp_vac_s } else { baseline.isp_sl_s };
-        let exit_pressure = if use_vacuum { baseline.exit_pressure_vac_pa } else { baseline.exit_pressure_sl_pa };
-
-        let design = EngineDesign {
-            id: engine_id,
-            name,
-            cycle,
-            thrust_n: thrust,
-            mass_kg: mass,
-            isp_s: isp,
-            exit_pressure_pa: exit_pressure,
-            needs_atmosphere: !use_vacuum,
-            propellant_mix: preset.propellant_mix(),
-            // Power draw: scales with thrust for ion drives (~30 kW/N
-            // ≈ NEXT thruster ratio); 0 for everything else.
-            power_draw_w: baseline.power_draw_w * scale,
-        };
-
-        Some(EngineProject {
-            auto_revise: crate::flaw::auto_revise_default(),
-            retired: false,
-            project_id,
-            design,
-            preset,
-            scale,
-            status: EngineDesignStatus::InDesign {
-                work_completed: 0.0,
-                work_required,
-            },
-            flaws: Vec::new(),
-            revision: 0,
-            teams_assigned: 0,
-            complexity,
-            nre_cost: 0.0,
-            improvements: Vec::new(),
-            next_improvement_id: 0,
-            cumulative_testing_work: 0.0,
-            tech_deficiency_ids: Vec::new(),
-            technology_id: None,
-        })
+        // given stage actually flies.
+        let design = baseline.design(engine_id, name, cycle, preset, scale, false);
+        Some(DesignProject::new_in_design(
+            project_id, design, EngineSpec { preset, scale }, complexity, work_required, None,
+        ))
     }
 
     /// Create a tentative engine project in `Proposed` status. Used by
@@ -483,9 +447,9 @@ impl EngineProject {
 
     /// Rebuild the design from a fresh set of player choices. Used by
     /// the engine editor for non-linear editing. Recomputes complexity
-    /// and work_required; for InDesign/Revising statuses, work_completed
-    /// is clamped to the new work_required so a player can't appear to
-    /// have over-completed a now-cheaper design.
+    /// and work_required; progress is clamped to the new work_required
+    /// so a player can't appear to have over-completed a now-cheaper
+    /// design.
     pub fn apply_edit(
         &mut self,
         name: String,
@@ -494,194 +458,19 @@ impl EngineProject {
         scale: f64,
         balance_cfg: &BalanceConfig,
     ) -> bool {
-        let baseline = match engine_baseline(cycle, preset) {
-            Some(b) => b,
-            None => return false,
+        let Some(baseline) = engine_baseline(cycle, preset) else {
+            return false;
         };
         let propellants = preset.propellants();
         let complexity = balance::combined_complexity(cycle, &propellants);
         let effective = balance::effective_complexity(cycle, &propellants);
         let work_required = balance_cfg.work.design_work_required(effective, scale);
 
-        let use_vacuum = baseline.vacuum_only;
-        let isp = if use_vacuum { baseline.isp_vac_s } else { baseline.isp_sl_s };
-        let exit_pressure = if use_vacuum { baseline.exit_pressure_vac_pa } else { baseline.exit_pressure_sl_pa };
-
         // Preserve engine id and re-derive everything else.
-        self.design = EngineDesign {
-            id: self.design.id,
-            name,
-            cycle,
-            thrust_n: baseline.thrust_n * scale,
-            mass_kg: baseline.mass_kg * scale,
-            isp_s: isp,
-            exit_pressure_pa: exit_pressure,
-            needs_atmosphere: !use_vacuum,
-            propellant_mix: preset.propellant_mix(),
-            power_draw_w: baseline.power_draw_w * scale,
-        };
-        self.preset = preset;
-        self.scale = scale;
+        self.design = baseline.design(self.design.id, name, cycle, preset, scale, false);
+        self.spec = EngineSpec { preset, scale };
         self.complexity = complexity;
-
-        match &mut self.status {
-            EngineDesignStatus::Proposed { work_required: wr } => { *wr = work_required; }
-            EngineDesignStatus::InDesign { work_completed, work_required: wr } => {
-                *wr = work_required;
-                if *work_completed > *wr { *work_completed = *wr; }
-            }
-            EngineDesignStatus::Revising { work_completed, .. } => {
-                // Revising doesn't carry a work_required (it's a fixed
-                // per-flaw cost), but clamp any stored progress just in
-                // case future logic uses work_required as a ceiling.
-                let _ = work_required;
-                if *work_completed < 0.0 { *work_completed = 0.0; }
-            }
-            EngineDesignStatus::Testing { .. } => {
-                // Editor shouldn't be opened on Testing; defensive no-op.
-            }
-        }
-        true
-    }
-
-    /// Promote a `Proposed` engine to `InDesign` with no work completed.
-    /// No-op if not Proposed. Called when the parent rocket is finalised.
-    pub fn promote_to_in_design(&mut self) {
-        if let EngineDesignStatus::Proposed { work_required } = self.status {
-            self.status = EngineDesignStatus::InDesign {
-                work_completed: 0.0,
-                work_required,
-            };
-        }
-    }
-
-    /// Apply one day of work. Returns any completed work events.
-    pub fn apply_daily_work(&mut self, rng: &mut StdRng, next_flaw_id: &mut u64, balance_cfg: &BalanceConfig) -> Vec<WorkEvent> {
-        if self.teams_assigned == 0 {
-            return Vec::new();
-        }
-        let work = crate::team::effective_work_rate(self.teams_assigned);
-        let mut events = Vec::new();
-
-        match &mut self.status {
-            EngineDesignStatus::Proposed { .. } => {
-                // Proposed engines don't accrue work — they're tentative
-                // until the parent rocket designer commits.
-            }
-            EngineDesignStatus::InDesign { work_completed, work_required } => {
-                *work_completed += work;
-                if *work_completed >= *work_required {
-                    // Design complete — generate flaws
-                    let propellants = self.preset.propellants();
-                    let eff = balance::effective_complexity(self.design.cycle, &propellants);
-                    self.flaws = flaw::generate_flaws(flaw::FlawDomain::Engine(Some(self.design.cycle)), eff, rng, next_flaw_id, &balance_cfg.flaws);
-                    self.status = EngineDesignStatus::Testing { work_completed: 0.0 };
-                    events.push(WorkEvent::DesignComplete);
-                }
-            }
-            EngineDesignStatus::Testing { work_completed } => {
-                *work_completed += work;
-                self.cumulative_testing_work += work;
-                // Check for testing cycle completion
-                while *work_completed >= balance_cfg.work.testing_cycle_work {
-                    *work_completed -= balance_cfg.work.testing_cycle_work;
-                    let discovered = flaw::roll_discoveries_with_rng(&mut self.flaws, rng);
-                    for idx in discovered {
-                        events.push(WorkEvent::FlawDiscovered {
-                            flaw_description: self.flaws[idx].description.clone(),
-                        });
-                    }
-                    // Roll for improvement discovery. The chance decays
-                    // with improvements already found on this design —
-                    // the low-hanging fruit runs out (M4 Task 4e).
-                    let improvement_chance = balance_cfg.flaws.improvement_discovery_chance
-                        * balance_cfg.flaws.improvement_decay.powi(self.improvements.len() as i32);
-                    if rng.gen::<f64>() < improvement_chance {
-                        let id = ImprovementId(self.next_improvement_id);
-                        self.next_improvement_id += 1;
-                        let improvement = generate_improvement(rng, self.design.cycle, id);
-                        events.push(WorkEvent::ImprovementDiscovered {
-                            description: format!("{}: {}", improvement.description, improvement.kind),
-                        });
-                        self.improvements.push(improvement);
-                    }
-                    events.push(WorkEvent::TestingCycleComplete);
-                }
-            }
-            EngineDesignStatus::Revising { remaining_flaw_ids, remaining_improvement_ids, remaining_tech_deficiency_ids, work_completed } => {
-                *work_completed += work;
-                // Process flaws first
-                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_flaw_ids.is_empty() {
-                    *work_completed -= balance_cfg.work.flaw_revision_work;
-                    let fid = remaining_flaw_ids.remove(0);
-                    self.flaws.retain(|f| f.id != fid);
-                    events.push(WorkEvent::RevisionComplete);
-                }
-                // Then actualize improvements
-                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_improvement_ids.is_empty() {
-                    *work_completed -= balance_cfg.work.flaw_revision_work;
-                    let iid = remaining_improvement_ids.remove(0);
-                    if let Some(imp) = self.improvements.iter_mut().find(|imp| imp.id == iid) {
-                        imp.actualized = true;
-                        // Apply the improvement to the engine design
-                        match &imp.kind {
-                            EngineImprovementKind::Isp(frac) => {
-                                self.design.isp_s *= 1.0 + frac;
-                            }
-                            EngineImprovementKind::Mass(frac) => {
-                                self.design.mass_kg *= 1.0 - frac;
-                            }
-                            EngineImprovementKind::Thrust(frac) => {
-                                self.design.thrust_n *= 1.0 + frac;
-                            }
-                        }
-                        events.push(WorkEvent::ImprovementActualized {
-                            description: format!("{}: {}", imp.description, imp.kind),
-                        });
-                    }
-                }
-                // Then attempt tech deficiency fixes
-                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_tech_deficiency_ids.is_empty() {
-                    *work_completed -= balance_cfg.work.flaw_revision_work;
-                    let def_id = remaining_tech_deficiency_ids.remove(0);
-                    events.push(WorkEvent::TechDeficiencyAttempted { deficiency_id: def_id });
-                }
-                if remaining_flaw_ids.is_empty() && remaining_improvement_ids.is_empty()
-                    && remaining_tech_deficiency_ids.is_empty()
-                {
-                    let leftover = *work_completed;
-                    self.status = EngineDesignStatus::Testing { work_completed: leftover };
-                }
-            }
-        }
-
-        events
-    }
-
-    /// Start revising all discovered flaws and pending improvements.
-    pub fn start_revision(&mut self) -> bool {
-        if !matches!(self.status, EngineDesignStatus::Testing { .. }) {
-            return false;
-        }
-        let flaw_ids: Vec<FlawId> = self.flaws.iter()
-            .filter(|f| f.discovered)
-            .map(|f| f.id)
-            .collect();
-        let improvement_ids: Vec<ImprovementId> = self.improvements.iter()
-            .filter(|imp| !imp.actualized)
-            .map(|imp| imp.id)
-            .collect();
-        let tech_def_ids = self.tech_deficiency_ids.clone();
-        if flaw_ids.is_empty() && improvement_ids.is_empty() && tech_def_ids.is_empty() {
-            return false;
-        }
-        self.revision += 1;
-        self.status = EngineDesignStatus::Revising {
-            remaining_flaw_ids: flaw_ids,
-            remaining_improvement_ids: improvement_ids,
-            remaining_tech_deficiency_ids: tech_def_ids,
-            work_completed: 0.0,
-        };
+        self.clamp_work_after_edit(work_required);
         true
     }
 
@@ -697,7 +486,7 @@ impl EngineProject {
     /// Baselines that only exist in vacuum (electric, solar sail, NTR)
     /// ignore `vacuum` and always return the vacuum form.
     pub fn design_variant(&self, vacuum: bool) -> EngineDesign {
-        let Some(baseline) = engine_baseline(self.design.cycle, self.preset) else {
+        let Some(baseline) = engine_baseline(self.design.cycle, self.spec.preset) else {
             // No baseline (shouldn't happen for a live project) — the
             // stored design is the best answer available.
             return self.design.clone();
@@ -718,43 +507,15 @@ impl EngineProject {
     /// Whether this engine offers a nozzle choice at all. False for
     /// vacuum-only baselines, which have nothing to toggle.
     pub fn has_nozzle_choice(&self) -> bool {
-        engine_baseline(self.design.cycle, self.preset)
+        engine_baseline(self.design.cycle, self.spec.preset)
             .is_some_and(|b| !b.vacuum_only)
     }
 
-    /// Number of discovered flaws.
-    pub fn discovered_flaw_count(&self) -> usize {
-        self.flaws.iter().filter(|f| f.discovered).count()
-    }
-
-    /// Total number of flaws (hidden from player — for testing only).
-    pub fn total_flaw_count(&self) -> usize {
-        self.flaws.len()
-    }
-
-    /// Testing level description based on cumulative work in testing.
-    pub fn testing_level(&self, balance_cfg: &BalanceConfig) -> &'static str {
-        let cycles = (self.cumulative_testing_work / balance_cfg.work.testing_cycle_work) as u32;
-        match cycles {
-            0 => "Untested",
-            1..=2 => "Lightly Tested",
-            3..=5 => "Moderately Tested",
-            6..=9 => "Well Tested",
-            _ => "Thoroughly Tested",
-        }
-    }
 }
 
 /// A potential engine improvement discovered during testing. The
 /// reactor counterpart is `reactor_project::ReactorImprovement`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EngineImprovement {
-    pub id: ImprovementId,
-    pub description: String,
-    pub kind: EngineImprovementKind,
-    /// Whether this improvement has been actualized via revision.
-    pub actualized: bool,
-}
+pub type EngineImprovement = Improvement<EngineImprovementKind>;
 
 /// What an engine improvement affects.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -884,22 +645,10 @@ fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle, id: ImprovementId)
     }
 }
 
-/// Events generated by engine project work.
-#[derive(Debug, Clone)]
-pub enum WorkEvent {
-    DesignComplete,
-    TestingCycleComplete,
-    FlawDiscovered { flaw_description: String },
-    ImprovementDiscovered { description: String },
-    RevisionComplete,
-    ImprovementActualized { description: String },
-    /// A tech deficiency revision was attempted — caller must resolve with technology state.
-    TechDeficiencyAttempted { deficiency_id: crate::technology::TechDeficiencyId },
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flaw::Flaw;
     use rand::SeedableRng;
 
     fn test_rng() -> StdRng {

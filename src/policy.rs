@@ -265,6 +265,7 @@ impl BasicPolicy {
                 RocketDesignStatus::InDesign { .. }
                 | RocketDesignStatus::Revising { .. } => 2,
                 RocketDesignStatus::Testing { .. } => 1,
+                RocketDesignStatus::Proposed { .. } => 0,
             };
             while company.rocket_projects[ri].teams_assigned < want
                 && company.add_team_to_rocket_project(ri) {}

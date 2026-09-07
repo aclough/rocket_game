@@ -3412,8 +3412,8 @@ impl App {
         Some((
             ep.design.name.clone(),
             ep.design.cycle,
-            ep.preset,
-            ep.scale,
+            ep.spec.preset,
+            ep.spec.scale,
         ))
     }
 

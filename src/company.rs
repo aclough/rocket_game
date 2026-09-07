@@ -11,14 +11,15 @@ use serde::{Serialize, Deserialize};
 
 use crate::contract::{self, Contract};
 use crate::engine::{EngineCycle, EngineId};
-use crate::engine_project::{EngineDesignStatus, EngineProject, EngineProjectId, EngineSource, PropellantPreset, WorkEvent};
+use crate::engine_project::{EngineDesignStatus, EngineProject, EngineProjectId, EngineSource, PropellantPreset};
 use crate::calendar::GameDate;
 use crate::event::GameEvent;
 use crate::manufacturing::{Manufacturing, ManufacturingOrder, ManufacturingOrderType, InventoryEngine};
 use crate::launch::LaunchRecord;
 use crate::reputation::Reputation;
 use crate::rocket::{RocketDesign, RocketDesignId};
-use crate::rocket_project::{RocketProject, RocketProjectId, RocketWorkEvent};
+use crate::project::WorkEvent;
+use crate::rocket_project::{RocketProject, RocketProjectId};
 use crate::seed::GameSeed;
 use crate::balance_config::BalanceConfig;
 use crate::team::{EngineeringTeam, ManufacturingTeam, TeamId};
@@ -693,7 +694,8 @@ impl Company {
     /// `visible_engine_projects`; rocket projects have no `Proposed`
     /// status, so retirement is the only thing it hides.
     pub fn visible_rocket_projects(&self) -> impl Iterator<Item = (usize, &RocketProject)> {
-        self.rocket_projects.iter().enumerate().filter(|(_, rp)| !rp.retired)
+        self.rocket_projects.iter().enumerate()
+            .filter(|(_, rp)| !rp.is_proposed() && !rp.retired)
     }
 
     // ── Retiring a design ──
@@ -1002,7 +1004,7 @@ impl Company {
                                     stage.engine.name.clone(),
                                     stage.engine.mass_kg,
                                     ep.complexity,
-                                    ep.preset,
+                                    ep.spec.preset,
                                     ep.design.cycle,
                                     engine_prior,
                                     ep.revision,
@@ -1118,7 +1120,7 @@ impl Company {
         let engine_id = ep.design.id;
         let mass_kg = ep.design.mass_kg;
         let complexity = ep.complexity;
-        let preset = ep.preset;
+        let preset = ep.spec.preset;
         let cycle = ep.design.cycle;
         let revision = ep.revision;
         let flaws = ep.flaws.clone();
@@ -1811,13 +1813,18 @@ impl Company {
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
             for we in work_events {
                 let evt = match we {
-                    RocketWorkEvent::DesignComplete =>
+                    WorkEvent::DesignComplete =>
                         GameEvent::RocketDesignComplete { rocket_name: rocket_name.clone() },
-                    RocketWorkEvent::TestingCycleComplete => continue,
-                    RocketWorkEvent::FlawDiscovered { flaw_description } =>
+                    WorkEvent::TestingCycleComplete => continue,
+                    WorkEvent::FlawDiscovered { flaw_description } =>
                         GameEvent::RocketFlawDiscovered { rocket_name: rocket_name.clone(), flaw_description },
-                    RocketWorkEvent::RevisionComplete =>
+                    WorkEvent::RevisionComplete =>
                         GameEvent::RocketRevisionComplete { rocket_name: rocket_name.clone() },
+                    // Rockets roll no improvements and carry no
+                    // technology, so these never fire for them.
+                    WorkEvent::ImprovementDiscovered { .. }
+                    | WorkEvent::ImprovementActualized { .. }
+                    | WorkEvent::TechDeficiencyAttempted { .. } => continue,
                 };
                 events.push(evt);
             }
@@ -1829,20 +1836,20 @@ impl Company {
             let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
             for we in work_events {
                 let evt = match we {
-                    crate::reactor_project::ReactorWorkEvent::DesignComplete => {
+                    WorkEvent::DesignComplete => {
                         newly_designed_reactors.push(project.project_id);
                         GameEvent::ReactorDesignComplete { reactor_name: reactor_name.clone() }
                     }
-                    crate::reactor_project::ReactorWorkEvent::TestingCycleComplete => continue,
-                    crate::reactor_project::ReactorWorkEvent::FlawDiscovered { flaw_description } =>
+                    WorkEvent::TestingCycleComplete => continue,
+                    WorkEvent::FlawDiscovered { flaw_description } =>
                         GameEvent::ReactorFlawDiscovered { reactor_name: reactor_name.clone(), flaw_description },
-                    crate::reactor_project::ReactorWorkEvent::ImprovementDiscovered { description } =>
+                    WorkEvent::ImprovementDiscovered { description } =>
                         GameEvent::ReactorImprovementDiscovered { reactor_name: reactor_name.clone(), description },
-                    crate::reactor_project::ReactorWorkEvent::ImprovementActualized { description } =>
+                    WorkEvent::ImprovementActualized { description } =>
                         GameEvent::ReactorImprovementActualized { reactor_name: reactor_name.clone(), description },
-                    crate::reactor_project::ReactorWorkEvent::RevisionComplete =>
+                    WorkEvent::RevisionComplete =>
                         GameEvent::ReactorRevisionComplete { reactor_name: reactor_name.clone() },
-                    crate::reactor_project::ReactorWorkEvent::TechDeficiencyAttempted { deficiency_id } => {
+                    WorkEvent::TechDeficiencyAttempted { deficiency_id } => {
                         reactor_tech_def_attempts.push((project.project_id, deficiency_id));
                         continue;
                     }

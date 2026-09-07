@@ -472,7 +472,7 @@ Each step compiles, passes `cargo test` and clippy, matches the
 | 0 ✅ | Generate `tests/saves/m5.json` from `e79811a` per the corpus recipe. The recipe is now an `#[ignore]`d test, `generate_corpus_snapshot`. Folded into the step 1 commit: m5 is written at save v1, and the compat test's "corpus predates the current version" check only holds once step 1 bumps to v2. | `tests/saves`, `save_compat.rs` | none |
 | 1 ✅ | **B5.** `ImprovementId` + `next_improvement_id`; `remaining_flaw_ids` / `remaining_improvement_ids` on all three `Revising` variants (rocket's field renamed too). `SAVE_VERSION = 2`, `migrate_json` with the improvement-id stamp and the Revising index→id rewrite, plus unit tests. Delete the three shift-fixup loops. | `*_project.rs`, `company.rs`, `save.rs`, `tests/bid_rules.rs:588` | low |
 | 2 ✅ | **B4 + FlawDomain.** Add `Direction`, `apply_deficiency` as inherent methods on `EngineDesign` / `ReactorDesign`; `tech_ops.rs` with the two generic fns (generic over a tiny private trait for now, since `Designable` doesn't exist yet); `flaw::generate_flaws(FlawDomain, …)`. `advance_day` shrinks by ~200 lines. | `engine.rs`, `reactor.rs`, `flaw.rs`, `third_party.rs`, `game_state/{advance,tech_ops,mod}.rs` | low |
-| 3 | **B1.** `src/project.rs` with `DesignStatus`, `DesignProject<D>`, `Designable`, `Improvement<K>`, `WorkEvent`. Implement `Designable` for the three designs (moving the improvement generators and `apply_deficiency` in). Type aliases. Delete the duplicated methods from the three `*_project.rs`. `EngineSpec` (B7). `tick_daily_research` still maps three ways to `GameEvent` (that's step 4). | `project.rs` (new), `*_project.rs`, `company.rs`, `technology.rs` | **medium** — serde generic bounds, `flatten` |
+| 3 ✅ | **B1.** `src/project.rs` with `DesignStatus`, `DesignProject<D>`, `Designable`, `Improvement<K>`, `WorkEvent`. Implement `Designable` for the three designs (moving the improvement generators and `apply_deficiency` in). Type aliases. Delete the duplicated methods from the three `*_project.rs`. `EngineSpec` (B7). `tick_daily_research` still maps three ways to `GameEvent` (that's step 4). | `project.rs` (new), `*_project.rs`, `company.rs`, `technology.rs` | **medium** — serde generic bounds, `flatten` |
 | 4 | **B3.** `GameEvent::Project { kind, name, event }`; event-log JSON migration + table; `ResearchTick` by `ProjectRef`; Display table in §2.6; update the pinned-string test and the six `matches!` sites in `game_state/tests.rs`; UI's three direct constructions. | `event.rs`, `save.rs`, `company.rs`, `advance.rs`, `flight_ops.rs`, `ui/mod.rs`, tests | medium — save format |
 | 5 | **B2.** `ProjectKind` public + `ProjectRef`, `ProjectCore`, company dispatch collapse, `policy.rs` / `report.rs` callers, `handle_project_pane_key`, shared draw helpers. | `company.rs`, `ui/mod.rs`, `ui/draw.rs`, `policy.rs`, `report.rs`, tests | medium — largest diff, but mechanical |
 
@@ -503,6 +503,11 @@ scratch struct:
 4. Round-trip of an m4 engine project JSON object through
    `DesignProject<EngineDesign>` is byte-for-byte identical on
    re-serialise (field order may differ; compare as `Value`).
+
+Spike result (run against the migrated m5 corpus, then deleted): all
+four hold. Rocket projects gain `improvements`, `next_improvement_id`,
+`tech_deficiency_ids` and `technology_id` keys with default values on
+re-save, which the round-trip test already tolerates.
 
 If (1) or (2) bites, the fallback is to drop `flatten` and put `preset`
 / `scale` inside `EngineDesign` with a one-shot JSON migration moving

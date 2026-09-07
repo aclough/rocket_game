@@ -233,8 +233,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         retired: false,
         project_id: EngineProjectId(1),
         design: engine1,
-        preset: PropellantPreset::Kerolox,
-        scale: 1.0,
+        spec: crate::engine_project::EngineSpec { preset: PropellantPreset::Kerolox, scale: 1.0 },
         status: EngineDesignStatus::Testing {
             work_completed: 100.0,
         },
@@ -250,8 +249,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         retired: false,
         project_id: EngineProjectId(2),
         design: engine2,
-        preset: PropellantPreset::Kerolox,
-        scale: 1.0,
+        spec: crate::engine_project::EngineSpec { preset: PropellantPreset::Kerolox, scale: 1.0 },
         status: EngineDesignStatus::Testing {
             work_completed: 100.0,
         },

@@ -7,23 +7,16 @@ use rand::Rng;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 
-use crate::balance_config::BalanceConfig;
-use crate::flaw::{self, Flaw, FlawId};
-use crate::project::ImprovementId;
+use crate::balance_config::{BalanceConfig, FlawsConfig};
+use crate::flaw::FlawDomain;
+use crate::project::{DesignProject, DesignStatus, Designable, Direction, Improvement, ImprovementId, NoSpec, ProjectKind};
 use crate::reactor::{EnrichmentLevel, ReactorDesign, ReactorId};
-use crate::technology::TechDeficiencyId;
+use crate::technology::TechDeficiencyKind;
 
 /// A potential improvement to a reactor design, discovered during
 /// testing and actualized via revision. Reactor-specific counterpart to
 /// the engine's `EngineImprovement` (reactors have no Isp/thrust to improve).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReactorImprovement {
-    pub id: ImprovementId,
-    pub description: String,
-    pub kind: ReactorImprovementKind,
-    /// Whether this improvement has been actualized via revision.
-    pub actualized: bool,
-}
+pub type ReactorImprovement = Improvement<ReactorImprovementKind>;
 
 /// What a reactor improvement affects.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,83 +79,55 @@ pub fn reactor_design_work_required(complexity: u32, balance_cfg: &BalanceConfig
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ReactorProjectId(pub u64);
 
-/// Workflow status of a reactor project. Mirrors `EngineDesignStatus`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ReactorDesignStatus {
-    /// Tentative — created inside the rocket designer but not committed.
-    /// No work accrues. Promoted to `InDesign` when the parent rocket
-    /// is finalised; deleted if the designer is cancelled.
-    Proposed { work_required: f64 },
-    InDesign { work_completed: f64, work_required: f64 },
-    Testing { work_completed: f64 },
-    /// Revising discovered flaws / improvements / tech deficiencies.
-    /// Queues hold ids, not vec positions (see `EngineDesignStatus`).
-    Revising {
-        remaining_flaw_ids: Vec<FlawId>,
-        remaining_improvement_ids: Vec<ImprovementId>,
-        remaining_tech_deficiency_ids: Vec<TechDeficiencyId>,
-        work_completed: f64,
-    },
-}
-
-impl ReactorDesignStatus {
-    /// Short phase name for status lines, editors and reports.
-    pub fn label(&self) -> &'static str {
-        match self {
-            ReactorDesignStatus::Proposed { .. } => "Proposed",
-            ReactorDesignStatus::InDesign { .. } => "In Design",
-            ReactorDesignStatus::Testing { .. } => "Testing",
-            ReactorDesignStatus::Revising { .. } => "Revising",
-        }
-    }
-}
+/// Workflow status of a reactor project — the shared [`DesignStatus`].
+pub type ReactorDesignStatus = DesignStatus;
 
 /// Reactor research project. Owns its `ReactorDesign` and carries the
 /// same workflow / NRE bookkeeping as `EngineProject`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReactorProject {
-    pub project_id: ReactorProjectId,
-    pub design: ReactorDesign,
-    pub status: ReactorDesignStatus,
-    pub flaws: Vec<Flaw>,
-    pub revision: u32,
-    pub teams_assigned: u32,
-    pub complexity: u32,
-    /// Cumulative engineering salary spent on this project (NRE).
-    #[serde(default)]
-    pub nre_cost: f64,
-    /// Improvements discovered during testing. Pending ones need a
-    /// revision to actualize.
-    #[serde(default)]
-    pub improvements: Vec<ReactorImprovement>,
-    /// Allocator for `ImprovementId` on this project.
-    #[serde(default)]
-    pub next_improvement_id: u64,
-    /// Cumulative work spent in testing (persists across revisions).
-    #[serde(default)]
-    pub cumulative_testing_work: f64,
-    /// IDs of unsolved tech deficiencies on this reactor (references
-    /// Technology.deficiencies).
-    #[serde(default)]
-    pub tech_deficiency_ids: Vec<TechDeficiencyId>,
-    /// Which technology this reactor uses — always
-    /// `Some(TECH_FISSION_REACTOR)` for now.
-    #[serde(default)]
-    pub technology_id: Option<crate::technology::TechnologyId>,
-    /// Automatically start a revision as soon as testing discovers a
-    /// flaw. Default on: for a project you aren't yet mass-producing,
-    /// revising promptly is what you'd do anyway. Turn it off on a
-    /// design with a production run going — a revision bumps
-    /// `revision`, which flows onto build orders and inventory and so
-    /// partially resets the learning curve.
-    #[serde(default = "crate::flaw::auto_revise_default")]
-    pub auto_revise: bool,
-    /// Retired by the player — hidden from the Reactors pane and from
-    /// the power editor's reactor list. Unlike engines and rockets this
-    /// can never dangle: `PowerSourceKind::Reactor` carries a *cloned*
-    /// `ReactorDesign`, so a stage never refers back to the project.
-    #[serde(default)]
-    pub retired: bool,
+pub type ReactorProject = DesignProject<ReactorDesign>;
+
+impl Designable for ReactorDesign {
+    type Id = ReactorProjectId;
+    type Spec = NoSpec;
+    type ImprovementKind = ReactorImprovementKind;
+    const KIND: ProjectKind = ProjectKind::Reactor;
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn flaw_domain(&self) -> FlawDomain {
+        FlawDomain::Reactor
+    }
+
+    fn flaw_complexity(&self, _spec: &NoSpec, project_complexity: u32) -> u32 {
+        project_complexity
+    }
+
+    fn improvement_chance(cfg: &FlawsConfig) -> Option<f64> {
+        Some(cfg.reactor_improvement_discovery_chance)
+    }
+
+    fn roll_improvement(&self, rng: &mut StdRng, id: ImprovementId) -> ReactorImprovement {
+        generate_reactor_improvement(rng, id)
+    }
+
+    fn apply_improvement(&mut self, kind: &ReactorImprovementKind) {
+        match kind {
+            ReactorImprovementKind::Power(frac) => self.steady_w *= 1.0 + frac,
+            ReactorImprovementKind::Mass(frac) => {
+                // Trim the reactor structure (not the bundled radiator)
+                // and keep the mass_kg = reactor + radiator invariant.
+                let delta = self.reactor_mass_kg * frac;
+                self.reactor_mass_kg -= delta;
+                self.mass_kg -= delta;
+            }
+        }
+    }
+
+    fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction) {
+        ReactorDesign::apply_deficiency(self, kind, dir)
+    }
 }
 
 impl ReactorProject {
@@ -178,26 +143,10 @@ impl ReactorProject {
         let design = ReactorDesign::new(reactor_id, name, scale, enrichment, &balance_cfg.costs);
         let complexity = REACTOR_BASE_COMPLEXITY;
         let work_required = reactor_design_work_required(complexity, balance_cfg);
-        ReactorProject {
-            auto_revise: crate::flaw::auto_revise_default(),
-            retired: false,
-            project_id,
-            design,
-            status: ReactorDesignStatus::InDesign {
-                work_completed: 0.0,
-                work_required,
-            },
-            flaws: Vec::new(),
-            revision: 0,
-            teams_assigned: 0,
-            complexity,
-            nre_cost: 0.0,
-            improvements: Vec::new(),
-            next_improvement_id: 0,
-            cumulative_testing_work: 0.0,
-            tech_deficiency_ids: Vec::new(),
-            technology_id: Some(crate::technology::TECH_FISSION_REACTOR),
-        }
+        DesignProject::new_in_design(
+            project_id, design, NoSpec {}, complexity, work_required,
+            Some(crate::technology::TECH_FISSION_REACTOR),
+        )
     }
 
     /// Create a tentative `Proposed` reactor project, used by the
@@ -220,225 +169,22 @@ impl ReactorProject {
         p
     }
 
-    /// Promote a `Proposed` reactor to `InDesign` with no work
-    /// completed. No-op if not Proposed.
-    pub fn promote_to_in_design(&mut self) {
-        if let ReactorDesignStatus::Proposed { work_required } = self.status {
-            self.status = ReactorDesignStatus::InDesign {
-                work_completed: 0.0,
-                work_required,
-            };
-        }
-    }
-
     /// Re-derive the design from a fresh (name, scale, enrichment)
-    /// triple. Clamps `work_completed` to the new `work_required` so
-    /// the player can't appear to have over-completed a now-cheaper
-    /// design.
+    /// triple. Progress is clamped to the new `work_required` so the
+    /// player can't appear to have over-completed a now-cheaper design.
     pub fn apply_edit(&mut self, name: String, scale: f64, enrichment: EnrichmentLevel, balance_cfg: &BalanceConfig) {
         self.design.apply_edit(name, scale, enrichment, &balance_cfg.costs);
         let work_required = reactor_design_work_required(self.complexity, balance_cfg);
-        match &mut self.status {
-            ReactorDesignStatus::Proposed { work_required: wr } => *wr = work_required,
-            ReactorDesignStatus::InDesign { work_completed, work_required: wr } => {
-                *wr = work_required;
-                if *work_completed > *wr {
-                    *work_completed = *wr;
-                }
-            }
-            ReactorDesignStatus::Testing { .. } => {
-                // Editor shouldn't open on Testing; defensive no-op.
-            }
-            ReactorDesignStatus::Revising { work_completed, .. } => {
-                if *work_completed < 0.0 {
-                    *work_completed = 0.0;
-                }
-            }
-        }
+        self.clamp_work_after_edit(work_required);
     }
 
-    /// Apply one day of work. Returns any work events for the
-    /// game-state loop to log. Mirrors `EngineProject::apply_daily_work`:
-    /// design completion generates flaws, testing discovers flaws and
-    /// improvements, and revision removes flaws / actualizes
-    /// improvements / attempts tech-deficiency fixes.
-    pub fn apply_daily_work(
-        &mut self,
-        rng: &mut StdRng,
-        next_flaw_id: &mut u64,
-        balance_cfg: &BalanceConfig,
-    ) -> Vec<ReactorWorkEvent> {
-        if self.teams_assigned == 0 {
-            return Vec::new();
-        }
-        let work = crate::team::effective_work_rate(self.teams_assigned);
-        let mut events = Vec::new();
-
-        match &mut self.status {
-            ReactorDesignStatus::Proposed { .. } => {}
-            ReactorDesignStatus::InDesign { work_completed, work_required } => {
-                *work_completed += work;
-                if *work_completed >= *work_required {
-                    // Design complete — generate flaws. Uses the current
-                    // complexity (tech-deficiency complexity penalties are
-                    // applied afterwards by game_state, matching engines).
-                    self.flaws = flaw::generate_flaws(flaw::FlawDomain::Reactor, self.complexity, rng, next_flaw_id, &balance_cfg.flaws);
-                    self.status = ReactorDesignStatus::Testing { work_completed: 0.0 };
-                    events.push(ReactorWorkEvent::DesignComplete);
-                }
-            }
-            ReactorDesignStatus::Testing { work_completed } => {
-                *work_completed += work;
-                self.cumulative_testing_work += work;
-                while *work_completed >= balance_cfg.work.testing_cycle_work {
-                    *work_completed -= balance_cfg.work.testing_cycle_work;
-                    let discovered = flaw::roll_discoveries_with_rng(&mut self.flaws, rng);
-                    for idx in discovered {
-                        events.push(ReactorWorkEvent::FlawDiscovered {
-                            flaw_description: self.flaws[idx].description.clone(),
-                        });
-                    }
-                    // Roll for improvement discovery, decaying with
-                    // improvements already found (M4 Task 4e).
-                    let improvement_chance = balance_cfg.flaws.reactor_improvement_discovery_chance
-                        * balance_cfg.flaws.improvement_decay.powi(self.improvements.len() as i32);
-                    if rng.gen::<f64>() < improvement_chance {
-                        let id = ImprovementId(self.next_improvement_id);
-                        self.next_improvement_id += 1;
-                        let improvement = generate_reactor_improvement(rng, id);
-                        events.push(ReactorWorkEvent::ImprovementDiscovered {
-                            description: format!("{}: {}", improvement.description, improvement.kind),
-                        });
-                        self.improvements.push(improvement);
-                    }
-                    events.push(ReactorWorkEvent::TestingCycleComplete);
-                }
-            }
-            ReactorDesignStatus::Revising {
-                remaining_flaw_ids,
-                remaining_improvement_ids,
-                remaining_tech_deficiency_ids,
-                work_completed,
-            } => {
-                *work_completed += work;
-                // Process flaws first.
-                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_flaw_ids.is_empty() {
-                    *work_completed -= balance_cfg.work.flaw_revision_work;
-                    let fid = remaining_flaw_ids.remove(0);
-                    self.flaws.retain(|f| f.id != fid);
-                    events.push(ReactorWorkEvent::RevisionComplete);
-                }
-                // Then actualize improvements.
-                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_improvement_ids.is_empty() {
-                    *work_completed -= balance_cfg.work.flaw_revision_work;
-                    let iid = remaining_improvement_ids.remove(0);
-                    if let Some(imp) = self.improvements.iter_mut().find(|imp| imp.id == iid) {
-                        imp.actualized = true;
-                        match &imp.kind {
-                            ReactorImprovementKind::Power(frac) => {
-                                self.design.steady_w *= 1.0 + frac;
-                            }
-                            ReactorImprovementKind::Mass(frac) => {
-                                // Trim the reactor structure (not the
-                                // bundled radiator) and keep the
-                                // mass_kg = reactor + radiator invariant.
-                                let delta = self.design.reactor_mass_kg * frac;
-                                self.design.reactor_mass_kg -= delta;
-                                self.design.mass_kg -= delta;
-                            }
-                        }
-                        events.push(ReactorWorkEvent::ImprovementActualized {
-                            description: format!("{}: {}", imp.description, imp.kind),
-                        });
-                    }
-                }
-                // Then attempt tech deficiency fixes (resolved by game_state).
-                while *work_completed >= balance_cfg.work.flaw_revision_work && !remaining_tech_deficiency_ids.is_empty() {
-                    *work_completed -= balance_cfg.work.flaw_revision_work;
-                    let def_id = remaining_tech_deficiency_ids.remove(0);
-                    events.push(ReactorWorkEvent::TechDeficiencyAttempted { deficiency_id: def_id });
-                }
-                if remaining_flaw_ids.is_empty()
-                    && remaining_improvement_ids.is_empty()
-                    && remaining_tech_deficiency_ids.is_empty()
-                {
-                    let leftover = *work_completed;
-                    self.status = ReactorDesignStatus::Testing { work_completed: leftover };
-                }
-            }
-        }
-
-        events
-    }
-
-    /// Start revising all discovered flaws, pending improvements, and
-    /// unsolved tech deficiencies. Testing-only; returns false if not in
-    /// Testing or there's nothing to revise.
-    pub fn start_revision(&mut self) -> bool {
-        if !matches!(self.status, ReactorDesignStatus::Testing { .. }) {
-            return false;
-        }
-        let flaw_ids: Vec<FlawId> = self.flaws.iter()
-            .filter(|f| f.discovered)
-            .map(|f| f.id)
-            .collect();
-        let improvement_ids: Vec<ImprovementId> = self.improvements.iter()
-            .filter(|imp| !imp.actualized)
-            .map(|imp| imp.id)
-            .collect();
-        let tech_def_ids = self.tech_deficiency_ids.clone();
-        if flaw_ids.is_empty() && improvement_ids.is_empty() && tech_def_ids.is_empty() {
-            return false;
-        }
-        self.revision += 1;
-        self.status = ReactorDesignStatus::Revising {
-            remaining_flaw_ids: flaw_ids,
-            remaining_improvement_ids: improvement_ids,
-            remaining_tech_deficiency_ids: tech_def_ids,
-            work_completed: 0.0,
-        };
-        true
-    }
-
-    /// Number of discovered flaws (for the pane display).
-    pub fn discovered_flaw_count(&self) -> usize {
-        self.flaws.iter().filter(|f| f.discovered).count()
-    }
-
-    /// Number of pending (not-yet-actualized) improvements.
-    pub fn pending_improvement_count(&self) -> usize {
-        self.improvements.iter().filter(|imp| !imp.actualized).count()
-    }
-
-    /// Testing level description based on cumulative work in testing.
-    /// Mirrors `EngineProject::testing_level`.
-    pub fn testing_level(&self, balance_cfg: &BalanceConfig) -> &'static str {
-        let cycles = (self.cumulative_testing_work / balance_cfg.work.testing_cycle_work) as u32;
-        match cycles {
-            0 => "Untested",
-            1..=2 => "Lightly Tested",
-            3..=5 => "Moderately Tested",
-            6..=9 => "Well Tested",
-            _ => "Thoroughly Tested",
-        }
-    }
-}
-
-/// Events bubbled up from `apply_daily_work` to the game-state loop.
-#[derive(Debug, Clone)]
-pub enum ReactorWorkEvent {
-    DesignComplete,
-    TestingCycleComplete,
-    FlawDiscovered { flaw_description: String },
-    ImprovementDiscovered { description: String },
-    ImprovementActualized { description: String },
-    RevisionComplete,
-    TechDeficiencyAttempted { deficiency_id: TechDeficiencyId },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flaw::Flaw;
+    use crate::project::WorkEvent;
     use rand::SeedableRng;
 
     fn rng() -> StdRng {
@@ -518,7 +264,7 @@ mod tests {
         // than the process.
         for _ in 0..10_000 {
             let events = p.apply_daily_work(&mut rng(), &mut next_flaw, &bal());
-            if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete)) {
+            if events.iter().any(|e| matches!(e, WorkEvent::DesignComplete)) {
                 saw_complete = true;
                 break;
             }
@@ -542,7 +288,7 @@ mod tests {
             let mut next_flaw = 1u64;
             for _ in 0..10_000 {
                 let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
-                if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete)) {
+                if events.iter().any(|e| matches!(e, WorkEvent::DesignComplete)) {
                     break;
                 }
             }
@@ -566,7 +312,7 @@ mod tests {
         // Advance to Testing.
         for _ in 0..10_000 {
             let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
-            if events.iter().any(|e| matches!(e, ReactorWorkEvent::DesignComplete)) {
+            if events.iter().any(|e| matches!(e, WorkEvent::DesignComplete)) {
                 break;
             }
         }
@@ -579,7 +325,7 @@ mod tests {
         let mut discovered_any = false;
         for _ in 0..200 {
             let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
-            if events.iter().any(|e| matches!(e, ReactorWorkEvent::FlawDiscovered { .. })) {
+            if events.iter().any(|e| matches!(e, WorkEvent::FlawDiscovered { .. })) {
                 discovered_any = true;
             }
             if p.discovered_flaw_count() == total && total > 0 {

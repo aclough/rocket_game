@@ -415,7 +415,7 @@ fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
                 "      Mass: {}    Teams: {}    Scale: {:.2}x    Auto-revise: {}{}",
                 format_kg(project.design.mass_kg),
                 project.teams_assigned,
-                project.scale,
+                project.spec.scale,
                 if project.auto_revise { "on" } else { "off" },
                 power_str,
             )));
@@ -763,6 +763,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         let marker = if selected { "▶" } else { " " };
 
         let status_str = match &project.status {
+            rocket_project::RocketDesignStatus::Proposed { .. } => unreachable!("filtered above"),
             rocket_project::RocketDesignStatus::InDesign { .. } =>
                 "In Design".to_string(),
             rocket_project::RocketDesignStatus::Testing { .. } =>
@@ -791,6 +792,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         // Track gauge data for this line
         let line_idx = lines.len();
         match &project.status {
+            rocket_project::RocketDesignStatus::Proposed { .. } => unreachable!("filtered above"),
             rocket_project::RocketDesignStatus::InDesign { work_completed, work_required } => {
                 let ratio = work_completed / work_required;
                 gauges.push(GaugeInfo {
@@ -3542,7 +3544,7 @@ fn draw_engine_editor_modal(
         Some(ep) => ep,
         None => return,
     };
-    let baseline = crate::engine_project::engine_baseline(ep.design.cycle, ep.preset);
+    let baseline = crate::engine_project::engine_baseline(ep.design.cycle, ep.spec.preset);
     let vacuum_only = baseline.is_some_and(|b| b.vacuum_only);
     let row_count = 4; // Name, Cycle, Preset, Scale
     let cursor = cursor.min(row_count - 1);
@@ -3577,11 +3579,11 @@ fn draw_engine_editor_modal(
         row_style(1),
     )));
     lines.push(Line::from(Span::styled(
-        format!(" {} Preset: {}", row_label(2, true), ep.preset.name()),
+        format!(" {} Preset: {}", row_label(2, true), ep.spec.preset.name()),
         row_style(2),
     )));
     lines.push(Line::from(Span::styled(
-        format!(" {} Scale:  {:.3}×", row_label(3, true), ep.scale),
+        format!(" {} Scale:  {:.3}×", row_label(3, true), ep.spec.scale),
         row_style(3),
     )));
     lines.push(Line::from(Span::styled(
@@ -3598,7 +3600,7 @@ fn draw_engine_editor_modal(
     if let Some(b) = baseline {
         lines.push(Line::from(Span::styled(
             format!(" Baseline ({:?} / {}):  thrust {}  mass {}  Isp {}",
-                ep.design.cycle, ep.preset.name(),
+                ep.design.cycle, ep.spec.preset.name(),
                 format_thrust_n(b.thrust_n), format_kg(b.mass_kg),
                 if b.vacuum_only {
                     format!("{:.0} s", b.isp_vac_s)

@@ -587,6 +587,8 @@ fn a_revising_design_still_bids_with_the_stock_it_already_built() {
     assert!(
         bid_for(RocketDesignStatus::Revising {
             remaining_flaw_ids: vec![rocket_tycoon::flaw::FlawId(0)],
+            remaining_improvement_ids: vec![],
+            remaining_tech_deficiency_ids: vec![],
             work_completed: 0.0,
         }),
         "a design under revision should still bid — its built stock is unaffected",

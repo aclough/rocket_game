@@ -110,7 +110,7 @@ The three project domains were built one after another and the third
 copy is very close to the first two. This is the largest structural
 opportunity in the codebase.
 
-### B1. One state machine written three times  ⚠ data-structure
+### ✅ B1. One state machine written three times  ⚠ data-structure
 - **Where:** `engine_project.rs:303-375, 528-732`,
   `reactor_project.rs:89-414`, `rocket_project.rs:16-186`.
 - **How close:** engine and reactor status enums have identical
@@ -201,7 +201,7 @@ opportunity in the codebase.
   one `generate_flaws(domain, ...)`. Existing pool tests pin behaviour.
 - **Size/risk:** small-medium / low. ~200 lines removed.
 
-### B7. `EngineProject::new` / `apply_edit` / `design_variant` derive the design three times
+### ✅ B7. `EngineProject::new` / `apply_edit` / `design_variant` derive the design three times
 - **Where:** `engine_project.rs:389-418, 478-503, 685-702`. Also a
   dead `let _ = work_required;` and an unreachable `< 0.0` clamp at
   `:518-519`.
