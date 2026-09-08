@@ -688,10 +688,14 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         let initial_thrust = project.design.group_effective_thrust_n(0, avail_power);
         let initial_mass = project.design.total_mass_kg();
         let initial_accel = if initial_mass > 0.0 { initial_thrust / initial_mass } else { 0.0 };
+        // Usable Δv is the planner's figure: vacuum less the ascent's
+        // gravity loss, the number the contract colours are judged by.
+        let usable_dv = rocket::DesignPerformance::compute(&project.design, 0.0, "earth_surface")
+            .total_planner_dv();
         lines.push(Line::from(format!(
-            "      Total mass: {:.0} kg    dV: {:.0} m/s (0 payload)    Initial accel: {}",
+            "      Total mass: {:.0} kg    Usable dV: {:.0} m/s (0 payload)    Initial accel: {}",
             project.design.total_mass_kg(),
-            project.design.vacuum_delta_v(0.0),
+            usable_dv,
             format_accel(initial_accel),
         )));
 
@@ -1883,6 +1887,11 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
     // engine choice (low-thrust, etc) affects the answer. Available dv
     // is Tsiolkovsky-total — both numbers bake in the same launch-leg
     // loss budget (the transfer graph stores fueled-cost dv).
+    // One performance figure for the mission line and the stats table:
+    // the planner's Avail and the table's Eff dV come from the same
+    // ascent integration, computed once per frame rather than twice.
+    let perf = (!state.stage_groups.is_empty())
+        .then(|| rocket::DesignPerformance::compute(&temp_design, state.payload_kg, state.launch_from));
     let mission_line = if state.stage_groups.is_empty() {
         Line::from(Span::styled(
             format!("  Mission: {} → {}    (add a stage to see feasibility)",
@@ -1905,13 +1914,20 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                     min_required_dv, available_dv, min_required_dv - available_dv),
                 Style::default().fg(Color::Red),
             )),
+            crate::path_planning::MissionPlan::StagingInfeasible { min_required_dv, available_dv } => Line::from(Span::styled(
+                format!("  Mission: {} → {}    UNREACHABLE — Δv is there ({:.0} vs {:.0} needed) but no stage can spend it along the route",
+                    launch_display, destination_display, available_dv, min_required_dv),
+                Style::default().fg(Color::Red),
+            )),
             crate::path_planning::MissionPlan::ClassMismatch { .. } => Line::from(Span::styled(
                 format!("  Mission: {} → {}    UNREACHABLE — no route exists for this engine type",
                     launch_display, destination_display),
                 Style::default().fg(Color::Red),
             )),
             crate::path_planning::MissionPlan::Reachable { path, dv: required_dv } => {
-                let available_dv = temp_design.vacuum_delta_v(state.payload_kg);
+                // The planner's own figure — vacuum less what the
+                // ascent costs — so the margin is the one it judged by.
+                let available_dv = perf.as_ref().map_or(0.0, |p| p.total_planner_dv());
                 let margin = available_dv - required_dv;
                 // Reuses the path the planner just found, so the endurance
                 // answer costs no extra search — and it is the same check
@@ -1951,11 +1967,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
     lines.push(mission_line);
     lines.push(Line::from(""));
 
-    let stats = if !state.stage_groups.is_empty() {
-        rocket::compute_stage_stats(&temp_design, state.payload_kg, state.launch_from)
-    } else {
-        Vec::new()
-    };
+    let stats: Vec<rocket::StageGroupStats> = perf.map(|p| p.groups).unwrap_or_default();
 
     lines.push(Line::from(Span::styled(
         format!(

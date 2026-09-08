@@ -235,7 +235,14 @@ pub enum MissionPlan {
     NoGraphPath,
     /// A class-compatible path exists but its Δv cost exceeds what the
     /// rocket can deliver. The rocket needs more fuel / better Isp.
+    /// `available_dv` is the planner's own figure (vacuum less ascent
+    /// losses), so "need X, have Y" is the comparison it actually made.
     DvShortfall { min_required_dv: f64, available_dv: f64 },
+    /// The rocket has the Δv for the cheapest class-compatible route in
+    /// total, but no stage sequence can spend it along that route (a
+    /// stage runs dry mid-edge and the next can't take over). A staging
+    /// problem, not a propellant one.
+    StagingInfeasible { min_required_dv: f64, available_dv: f64 },
     /// No class-compatible path exists: the rocket's engine type
     /// (low-thrust vs high-thrust) can't fly any route to the
     /// destination. The player needs to change engine type.
@@ -261,7 +268,7 @@ impl DeltaVMap {
         if self.shortest_path(from, to, rocket_mass).is_none() {
             return MissionPlan::NoGraphPath;
         }
-        let available_dv = design.vacuum_delta_v(payload_mass_kg);
+        let available_dv = DesignPerformance::compute(design, payload_mass_kg, from).total_planner_dv();
         // Cheapest route restricted to the rocket's thrust class. For
         // low-thrust designs (always single-stage by designer rule) this
         // is the low-thrust subgraph. For chemical-only designs every
@@ -278,12 +285,10 @@ impl DeltaVMap {
                 MissionPlan::DvShortfall { min_required_dv: min_dv, available_dv },
             Some((_, min_dv)) =>
                 // Class-compatible path exists and the rocket has enough
-                // total Δv, but the stage-aware planner still failed.
-                // After the "no staging for low-thrust" rule this should
-                // only happen via narrow stage-ordering edge cases on
-                // mixed designs — call it DvShortfall for the cleanest
-                // message rather than inventing a new variant.
-                MissionPlan::DvShortfall { min_required_dv: min_dv, available_dv },
+                // total Δv, but the stage-aware planner still failed:
+                // the Δv is in the wrong stages for that route. Saying
+                // "shortfall" here produced a negative shortfall figure.
+                MissionPlan::StagingInfeasible { min_required_dv: min_dv, available_dv },
         }
     }
 
