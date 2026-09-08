@@ -404,7 +404,7 @@ pub fn simulate_launch(
     }
 
     // Compute degraded delta-v
-    let degraded_dv = degraded.total_delta_v(payload_kg);
+    let degraded_dv = degraded.vacuum_delta_v(payload_kg);
 
     // Determine outcome. Anything short of nominal names what went wrong:
     // a shortfall with no attribution tells the player nothing they can act

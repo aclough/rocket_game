@@ -294,7 +294,7 @@ pub fn build_route(
         let to = window[1];
         if let Some(transfer) = DELTA_V_MAP.transfer(from, to) {
             let dv_cost = transfer.delta_v_for(low_thrust, rocket_mass_kg)
-                .unwrap_or_else(|| transfer.total_delta_v(rocket_mass_kg));
+                .unwrap_or_else(|| transfer.cost_for_mass(rocket_mass_kg));
             let coast_days = transfer.transit_days;
 
             // Burn time: dv / acceleration, where acceleration = thrust / mass.
@@ -377,7 +377,7 @@ pub fn build_route_for_rocket(
         // dv (impulsive vs spiral) for this transfer.
         let low_thrust = sim.is_current_stage_low_thrust(design);
         let dv_cost = transfer.delta_v_for(low_thrust, current_mass)
-            .unwrap_or_else(|| transfer.total_delta_v(current_mass));
+            .unwrap_or_else(|| transfer.cost_for_mass(current_mass));
         let coast_days = transfer.transit_days;
 
         // Effective thrust at this leg's start: derate electric engines

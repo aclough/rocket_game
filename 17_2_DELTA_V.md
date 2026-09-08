@@ -315,6 +315,39 @@ planner's edge-drag charge stays where it is. What changes is that every
 
 ## 4. Steps and gates
 
+### Step 0 record (measured before any change)
+
+200 seeds × 8 years, basic policy, default balance:
+
+| Metric | Baseline |
+|---|---|
+| Bankrupt | 8/200 |
+| Dip below $0 and recover | 16/200 |
+| Ever profitable | 196/200 |
+| Aggregate launch success | 94.9% (2,476 of 2,608) |
+| Avg first-launch month | 16.8 |
+| Dev spend to first launch | $71.1M |
+| Hidden flaws at first launch | 8.3 |
+| Unit cost / payment | $15.9M / $32.4M |
+| Avg final money | $191.6M |
+
+Bot template (seed 42, day 730) `max_payload_to` from Earth: LEO
+2,820 kg · GTO 1,016 · GEO 380 · lunar orbit 363.
+
+**Double overexpansion charge confirmed.** With a 40 kPa-exit nozzle at
+sea level, `isp_fraction_at` = 0.8790; `simulate_launch` hands the
+flight a design whose group 0 Isp is already ×0.8790, and the first
+leg's burn comes out at ×0.7726 of nominal exhaust velocity = 0.8790².
+Step 3 removes the pre-scaling.
+
+**Seventh symptom, found in step 1:** the planner has no solar-sail
+handling. `Stage::delta_v` gives a sail 0 m/s (no propellant), so a
+sail design plans as unreachable everywhere, while a *flying* sail
+(`Rocket::group_remaining_delta_v`) is ∞ and a parked sail craft can
+plan anywhere. Not touched by this plan; recorded so it isn't
+mistaken for a regression later.
+
+
 Every step: `cargo test`, clippy, the 40-seed simulate oracle, and for
 the steps marked **measure**, the 200-seed band run
 (`cargo run --release --bin simulate -- --seeds 1..200 --years 8 --policy basic --summary-only`)
@@ -322,8 +355,8 @@ compared against the baseline recorded first.
 
 | # | Step | Behaviour | Gate |
 |---|---|---|---|
-| 0 | Record the 200-seed baseline summary to `docs/` (or the plan) and write the **double-overexpansion test**: launch a sea-level-nozzle design with no flaws, fly the first leg, and assert the propellant consumed matches a single `isp_fraction_at` penalty. Expect it to fail today. | none | test documents the bug either way |
-| 1 | `DesignPerformance` + `AscentLosses` + `compute_stage_stats` as a view of it; planner reads `planner_dv()` **with `overexpansion` set to zero** for now, so (b) is unchanged. `only_surface_ascents_are_atmospheric` test. | none | oracle identical |
+| 0 ✅ | Record the 200-seed baseline summary to `docs/` (or the plan) and write the **double-overexpansion test**: launch a sea-level-nozzle design with no flaws, fly the first leg, and assert the propellant consumed matches a single `isp_fraction_at` penalty. Expect it to fail today. | none | test documents the bug either way |
+| 1 ✅ | `DesignPerformance` + `AscentLosses` + `compute_stage_stats` as a view of it; planner reads `planner_dv()` **with `overexpansion` set to zero** for now, so (b) is unchanged. `only_surface_ascents_are_atmospheric` test. | none | oracle identical |
 | 1b | `BurnPhase` / `burn_phases`; `phased_parallel_delta_v` becomes a fold over it; the gravity integrator takes phases; `burn_group` walks phases and jettisons per stage. Add a gravity-loss test for a core + boosters group (loss must exceed the lumped figure) beside `test_core_plus_srbs_phased_burnout`. | **asymmetric groups only**: gravity loss and in-flight jettison | oracle identical (the bot's groups are symmetric); the new test pins the asymmetric case |
 | 2 | Designer Avail, shortfall "have", Rockets tab dV → `total_planner_dv()`. Fix the negative-shortfall message. | UI only | oracle identical; screenshots of the designer before/after |
 | 3 | `simulate_launch` judges on `total_planner_dv()` of the degraded design; drop the Isp/thrust scaling (fixes #4 if step 0 confirmed it). | **launch outcomes for flawed vehicles; first-leg propellant** | **measure**: launch success %, bankruptcies, first-launch month |

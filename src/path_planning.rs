@@ -22,7 +22,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
 use crate::location::{aero_drag_loss, DeltaVMap, Transfer};
-use crate::rocket::{Rocket, RocketDesign};
+use crate::rocket::{DesignPerformance, Rocket, RocketDesign};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ThrustClass {
@@ -40,38 +40,6 @@ fn group_thrust_class(design: &RocketDesign, gi: usize) -> ThrustClass {
     } else {
         ThrustClass::HighThrust
     }
-}
-
-/// Mass above stage group `gi`: wet mass of all upper groups + payload.
-fn payload_above_group(design: &RocketDesign, gi: usize, payload_mass_kg: f64) -> f64 {
-    if gi + 1 >= design.stage_groups.len() {
-        return payload_mass_kg;
-    }
-    design.stage_groups[gi + 1..].iter()
-        .flat_map(|g| g.iter())
-        .map(|s| s.wet_mass_kg())
-        .sum::<f64>()
-        + payload_mass_kg
-}
-
-/// Full delta-v for stage group `gi` assuming upper groups are full and a
-/// payload of `payload_mass_kg` sits at the top, net of the gravity loss
-/// that group pays on the way up.
-///
-/// Charging gravity here rather than on the edges is what keeps the planner
-/// honest about low-TWR designs: the loss depends on the ascent profile,
-/// not on which transfer is being flown, and a vehicle heavy enough to
-/// crawl off the pad can burn more delta-v fighting gravity than the extra
-/// propellant bought it. Edges stay responsible for drag, which the graph
-/// already charges per-transfer — see `edge_cost_for_class`.
-fn full_group_dv(
-    design: &RocketDesign,
-    gi: usize,
-    payload_mass_kg: f64,
-    gravity_losses: &[f64],
-) -> f64 {
-    let vacuum = design.group_delta_v(gi, payload_above_group(design, gi, payload_mass_kg));
-    (vacuum - gravity_losses.get(gi).copied().unwrap_or(0.0)).max(0.0)
 }
 
 /// Edge dv cost for a given thrust class. None if the class can't use the
@@ -108,16 +76,14 @@ struct EdgeOutcome {
 /// Try to traverse `transfer` in `class` starting from
 /// `(active_stage, dv_left_in_active)`. Returns Some(outcome) if feasible,
 /// None otherwise.
-#[allow(clippy::too_many_arguments)] // one search state, spread across params rather than boxed into a struct nothing else would use
 fn try_class(
     transfer: &Transfer,
     design: &RocketDesign,
-    payload_mass_kg: f64,
     rocket_mass_kg: f64,
     active_stage: usize,
     dv_left_in_active: f64,
     class: ThrustClass,
-    gravity_losses: &[f64],
+    perf: &DesignPerformance,
 ) -> Option<EdgeOutcome> {
     let cost = edge_cost_for_class(transfer, rocket_mass_kg, class)?;
 
@@ -145,7 +111,11 @@ fn try_class(
         {
             return None;
         }
-        let stage_dv = full_group_dv(design, new_active, payload_mass_kg, gravity_losses);
+        // Charging gravity to the group rather than the edge is what keeps
+        // the planner honest about low-TWR designs: the loss depends on the
+        // ascent profile, not on which transfer is being flown. Edges stay
+        // responsible for drag — see `edge_cost_for_class`.
+        let stage_dv = perf.planner_dv(new_active);
         if stage_dv >= remaining {
             return Some(EdgeOutcome {
                 cost,
@@ -291,7 +261,7 @@ impl DeltaVMap {
         if self.shortest_path(from, to, rocket_mass).is_none() {
             return MissionPlan::NoGraphPath;
         }
-        let available_dv = design.total_delta_v(payload_mass_kg);
+        let available_dv = design.vacuum_delta_v(payload_mass_kg);
         // Cheapest route restricted to the rocket's thrust class. For
         // low-thrust designs (always single-stage by designer rule) this
         // is the low-thrust subgraph. For chemical-only designs every
@@ -336,9 +306,9 @@ impl DeltaVMap {
         if design.stage_groups.is_empty() {
             return None;
         }
-        let gravity_losses = crate::rocket::group_gravity_losses(design, payload_mass_kg, from);
-        let initial_dv = full_group_dv(design, 0, payload_mass_kg, &gravity_losses);
-        self.astar_search(from, to, design, payload_mass_kg, 0, initial_dv, &gravity_losses)
+        let perf = DesignPerformance::compute(design, payload_mass_kg, from);
+        let initial_dv = perf.planner_dv(0);
+        self.astar_search(from, to, design, payload_mass_kg, 0, initial_dv, &perf)
     }
 
     /// Stage-aware shortest-path planner starting from a partial rocket
@@ -364,14 +334,12 @@ impl DeltaVMap {
         // Zero for anything already off a surface, which is the usual case
         // here — a parked spacecraft flying on from orbit owes no ascent.
         // A craft sitting on the lunar surface does, and pays it.
-        let gravity_losses =
-            crate::rocket::group_gravity_losses(design, rocket.payload_mass_kg, from);
+        let perf = DesignPerformance::compute(design, rocket.payload_mass_kg, from);
         let initial_dv = (rocket.group_remaining_delta_v(design, active_stage)
-            - gravity_losses.get(active_stage).copied().unwrap_or(0.0))
+            - perf.ascent.gravity_by_group.get(active_stage).copied().unwrap_or(0.0))
             .max(0.0);
         self.astar_search(
-            from, to, design, rocket.payload_mass_kg, active_stage, initial_dv,
-            &gravity_losses,
+            from, to, design, rocket.payload_mass_kg, active_stage, initial_dv, &perf,
         )
     }
 
@@ -384,7 +352,7 @@ impl DeltaVMap {
         payload_mass_kg: f64,
         initial_active_stage: usize,
         initial_dv_left: f64,
-        gravity_losses: &[f64],
+        perf: &DesignPerformance,
     ) -> Option<(Vec<&'static str>, f64)> {
         let from_idx = self.locations().iter().position(|l| l.id == from)?;
         let to_idx = self.locations().iter().position(|l| l.id == to)?;
@@ -452,12 +420,11 @@ impl DeltaVMap {
                     let outcome = match try_class(
                         transfer,
                         design,
-                        payload_mass_kg,
                         rocket_mass_kg,
                         state.active_stage,
                         state.dv_left_in_active,
                         class,
-                        gravity_losses,
+                        perf,
                     ) {
                         Some(o) => o,
                         None => continue,
@@ -664,8 +631,7 @@ mod tests {
         };
 
         // Sanity: stage 1 alone shouldn't reach LEO.
-        let losses = crate::rocket::group_gravity_losses(&design, 1_000.0, "earth_surface");
-        let s1_dv = full_group_dv(&design, 0, 1_000.0, &losses);
+        let s1_dv = DesignPerformance::compute(&design, 1_000.0, "earth_surface").planner_dv(0);
         let drag = aero_drag_loss(design.total_mass_kg() + 1_000.0);
         assert!(s1_dv < 7_800.0 + drag,
             "test setup wrong: S1 alone has {} dv > 8000 m/s ascent need", s1_dv);
@@ -718,7 +684,7 @@ mod tests {
         let mut expected_dv = 0.0;
         for w in path.windows(2) {
             let t = DELTA_V_MAP.transfer(w[0], w[1]).unwrap();
-            expected_dv += t.total_delta_v(rocket_mass);
+            expected_dv += t.cost_for_mass(rocket_mass);
         }
         assert!((dv - expected_dv).abs() < 1.0,
             "computed dv {} != expected high-thrust dv {} along path {:?}",

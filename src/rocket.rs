@@ -301,9 +301,12 @@ impl RocketDesign {
             .any(|s| s.engine.is_low_thrust())
     }
 
-    /// Total delta-v across all stage groups for a given payload.
-    /// Each group's "payload" is everything above it: upper groups + actual payload.
-    pub fn total_delta_v(&self, payload_kg: f64) -> f64 {
+    /// Total *vacuum* delta-v across all stage groups for a given
+    /// payload — Tsiolkovsky with no losses. Each group's "payload" is
+    /// everything above it: upper groups + actual payload. Feasibility
+    /// decisions read `DesignPerformance`, which nets out the ascent
+    /// losses; this is the raw figure.
+    pub fn vacuum_delta_v(&self, payload_kg: f64) -> f64 {
         let n = self.stage_groups.len();
         let mut total_dv = 0.0;
 
@@ -917,25 +920,204 @@ impl Rocket {
     }
 }
 
-/// Per-stage-group performance statistics for the rocket designer display.
+/// One stage group's delta-v budget for a specific mission start.
+///
+/// The vacuum figure is Tsiolkovsky; the three losses are what the
+/// group pays if it burns during an ascent from a surface (see
+/// [`AscentLosses`]). Which of them a reader subtracts depends on what
+/// it is asking — `planner_dv` for "can this trip be flown",
+/// `effective_dv` for the designer's stats table.
 #[derive(Debug, Clone)]
-pub struct StageGroupStats {
-    /// Mass ratio: (wet + payload_above) / (dry + payload_above)
+pub struct GroupPerformance {
+    /// (wet + payload_above) / (dry + payload_above); 1.0 for a sail.
     pub mass_ratio: f64,
-    /// Tsiolkovsky delta-v (vacuum, no losses)
+    /// Tsiolkovsky delta-v, vacuum, no losses. A solar sail has no
+    /// propellant budget and reports 0 here; see `is_sail`.
     pub delta_v_vacuum: f64,
-    /// Gravity loss from numerical simulation (m/s)
+    /// Gravity loss from the ascent integration (m/s).
     pub gravity_loss: f64,
-    /// Atmospheric drag loss (first stage only, m/s)
+    /// Atmospheric drag loss (first group only, m/s).
     pub aero_drag_loss: f64,
-    /// Overexpansion Isp loss (first stage in atmosphere, m/s)
+    /// Sea-level Isp penalty (first group in atmosphere, m/s).
     pub overexpansion_loss: f64,
-    /// Effective delta-v: vacuum - gravity - aero - overexpansion
-    pub delta_v_effective: f64,
-    /// Thrust-to-weight ratio at ignition
+    /// Thrust-to-weight ratio at ignition.
     pub twr: f64,
-    /// Burn time in seconds
+    /// Burn time in seconds.
     pub burn_time_s: f64,
+    /// Solar sail: unbounded delta-v, no propellant. Displays show ∞.
+    pub is_sail: bool,
+}
+
+impl GroupPerformance {
+    /// What the planner may spend from this group: vacuum less the
+    /// gravity it pays climbing out. Drag is charged on the ascent edge
+    /// against the mass actually flown, so it is not taken here.
+    /// (Step 4 of `17_2_DELTA_V.md` adds the overexpansion loss.)
+    pub fn planner_dv(&self) -> f64 {
+        (self.delta_v_vacuum - self.gravity_loss).max(0.0)
+    }
+
+    /// What the stats table shows: everything charged to the group.
+    pub fn effective_dv(&self) -> f64 {
+        if self.is_sail {
+            return f64::INFINITY;
+        }
+        (self.delta_v_vacuum - self.gravity_loss - self.aero_drag_loss - self.overexpansion_loss)
+            .max(0.0)
+    }
+
+    /// The vacuum figure as displayed: ∞ for a sail.
+    pub fn display_vacuum_dv(&self) -> f64 {
+        if self.is_sail { f64::INFINITY } else { self.delta_v_vacuum }
+    }
+}
+
+/// The designer's stats table row; the same thing.
+pub type StageGroupStats = GroupPerformance;
+
+/// What leaving a surface costs. A journey has at most one such leg
+/// (the graph invariant `only_surface_ascents_are_atmospheric` pins
+/// this); everything after it is a vacuum transfer. A departure from
+/// orbit has an empty budget.
+#[derive(Debug, Clone, Default)]
+pub struct AscentLosses {
+    /// Gravity loss charged to each group that burns during the
+    /// ascent — group 0, and any later group that ignites before
+    /// orbital velocity.
+    pub gravity_by_group: Vec<f64>,
+    /// Flow-weighted sea-level Isp penalty on the first group.
+    pub overexpansion: f64,
+    /// Drag on the first group. For display; the planner charges it on
+    /// the ascent edge.
+    pub drag: f64,
+}
+
+/// A design's performance for a mission from `launch_from` carrying
+/// `payload_kg`: vacuum figures per group plus the one ascent budget.
+/// Computed once and read by the planner, the designer, the launch
+/// simulation and the payload search, so they cannot disagree.
+#[derive(Debug, Clone)]
+pub struct DesignPerformance {
+    pub groups: Vec<GroupPerformance>,
+    pub ascent: AscentLosses,
+}
+
+impl DesignPerformance {
+    pub fn compute(design: &RocketDesign, payload_kg: f64, launch_from: &str) -> Self {
+        let n = design.stage_groups.len();
+        if n == 0 {
+            return DesignPerformance { groups: Vec::new(), ascent: AscentLosses::default() };
+        }
+
+        let surface_props = DELTA_V_MAP.surface_properties(launch_from);
+        // Surface gravity (for TWR reference) — fall back to Earth so TWR
+        // numbers stay readable when launching from a non-surface location.
+        let surface_g = surface_props.map_or(9.81, |p| p.gravity_m_s2);
+        let has_atmosphere = surface_props.is_some_and(|p| p.has_atmosphere);
+        let ambient_pressure = surface_props.map_or(0.0, |p| p.ambient_pressure_pa);
+
+        let total_mass = design.total_mass_kg() + payload_kg;
+        let gravity_losses = group_gravity_losses(design, payload_kg, launch_from);
+        let first_stage_aero = if has_atmosphere {
+            location::aero_drag_loss(total_mass)
+        } else {
+            0.0
+        };
+
+        let mut groups = Vec::with_capacity(n);
+        for (gi, (group, &gravity_loss)) in design.stage_groups.iter().zip(&gravity_losses).enumerate() {
+            let thrust: f64 = group.iter().map(|s| s.total_thrust_n()).sum();
+            let flow: f64 = group.iter()
+                .map(|s| s.engine.mass_flow_rate() * s.engine_count as f64)
+                .sum();
+            let prop: f64 = group.iter().map(|s| s.propellant_mass_kg).sum();
+
+            // Mass above this group: upper groups + payload
+            let payload_above: f64 = design.stage_groups[gi + 1..].iter()
+                .flat_map(|g| g.iter())
+                .map(|s| s.wet_mass_kg())
+                .sum::<f64>()
+                + payload_kg;
+            let group_wet: f64 = group.iter().map(|s| s.wet_mass_kg()).sum();
+            let group_dry: f64 = group.iter().map(|s| s.dry_mass_kg()).sum();
+
+            let is_sail = group.iter().any(|s| s.engine.is_solar_sail());
+            let mass_ratio = if is_sail { 1.0 } else {
+                (group_wet + payload_above) / (group_dry + payload_above)
+            };
+            let delta_v_vacuum = design.group_delta_v(gi, payload_above);
+            let twr = if (group_wet + payload_above) > 0.0 {
+                thrust / ((group_wet + payload_above) * surface_g)
+            } else {
+                0.0
+            };
+            let burn_time_s = if flow > 0.0 { prop / flow } else { 0.0 };
+
+            let aero_drag_loss = if gi == 0 { first_stage_aero } else { 0.0 };
+
+            // Sea-level Isp penalty on the first group: flow-weighted
+            // average Isp fraction across the group's engines.
+            let overexpansion_loss = if gi == 0 && has_atmosphere && ambient_pressure > 0.0 && flow > 0.0 {
+                let weighted_isp_frac: f64 = group.iter()
+                    .map(|s| {
+                        let f = s.engine.mass_flow_rate() * s.engine_count as f64;
+                        s.engine.isp_fraction_at(ambient_pressure) * f
+                    })
+                    .sum::<f64>() / flow;
+                delta_v_vacuum * (1.0 - weighted_isp_frac)
+            } else {
+                0.0
+            };
+
+            groups.push(GroupPerformance {
+                mass_ratio,
+                delta_v_vacuum,
+                gravity_loss,
+                aero_drag_loss,
+                overexpansion_loss,
+                twr,
+                burn_time_s,
+                is_sail,
+            });
+        }
+
+        let ascent = AscentLosses {
+            gravity_by_group: gravity_losses,
+            overexpansion: groups[0].overexpansion_loss,
+            drag: first_stage_aero,
+        };
+        DesignPerformance { groups, ascent }
+    }
+
+    /// What the planner may spend from group `gi`; 0 past the last group.
+    pub fn planner_dv(&self, gi: usize) -> f64 {
+        self.groups.get(gi).map_or(0.0, |g| g.planner_dv())
+    }
+
+    /// Σ vacuum delta-v (∞ with a sail aboard).
+    pub fn total_vacuum_dv(&self) -> f64 {
+        self.groups.iter().map(|g| g.display_vacuum_dv()).sum()
+    }
+
+    /// Σ `planner_dv` — the "available" figure the planner means.
+    pub fn total_planner_dv(&self) -> f64 {
+        self.groups.iter().map(|g| g.planner_dv()).sum()
+    }
+
+    /// Σ `effective_dv` — the stats table's total.
+    pub fn total_effective_dv(&self) -> f64 {
+        self.groups.iter().map(|g| g.effective_dv()).sum()
+    }
+}
+
+/// Per-stage-group stats for the rocket designer display; the groups of
+/// [`DesignPerformance::compute`].
+pub fn compute_stage_stats(
+    design: &RocketDesign,
+    payload_kg: f64,
+    launch_from: &str,
+) -> Vec<StageGroupStats> {
+    DesignPerformance::compute(design, payload_kg, launch_from).groups
 }
 
 /// Per-stage-group gravity loss (m/s) for a design ascending from
@@ -988,118 +1170,6 @@ pub fn group_gravity_losses(
         &stage_params,
         design.total_mass_kg() + payload_kg,
     )
-}
-
-/// Compute per-stage-group stats for a rocket design.
-///
-/// `payload_kg` and `launch_from` are user-configurable in the designer.
-pub fn compute_stage_stats(
-    design: &RocketDesign,
-    payload_kg: f64,
-    launch_from: &str,
-) -> Vec<StageGroupStats> {
-    let n = design.stage_groups.len();
-    if n == 0 {
-        return Vec::new();
-    }
-
-    let surface_props = DELTA_V_MAP.surface_properties(launch_from);
-    // Surface gravity (for TWR reference) — fall back to Earth so TWR
-    // numbers stay readable when launching from a non-surface location.
-    let surface_g = surface_props.map_or(9.81, |p| p.gravity_m_s2);
-    let has_atmosphere = surface_props.is_some_and(|p| p.has_atmosphere);
-    let ambient_pressure = surface_props.map_or(0.0, |p| p.ambient_pressure_pa);
-
-    // Per-group params, still needed below for thrust / burn time.
-    let mut stage_params: Vec<(f64, f64, f64)> = Vec::with_capacity(n);
-    for group in &design.stage_groups {
-        let thrust: f64 = group.iter().map(|s| s.total_thrust_n()).sum();
-        let flow: f64 = group.iter()
-            .map(|s| s.engine.mass_flow_rate() * s.engine_count as f64)
-            .sum();
-        let prop: f64 = group.iter().map(|s| s.propellant_mass_kg).sum();
-        stage_params.push((thrust, flow, prop));
-    }
-
-    let total_mass = design.total_mass_kg() + payload_kg;
-    let gravity_losses = group_gravity_losses(design, payload_kg, launch_from);
-
-    // Compute aero drag loss for first stage only
-    let first_stage_aero = if has_atmosphere {
-        location::aero_drag_loss(total_mass)
-    } else {
-        0.0
-    };
-
-    let mut results = Vec::with_capacity(n);
-
-    for gi in 0..n {
-        let group = &design.stage_groups[gi];
-        let (thrust, flow, prop) = stage_params[gi];
-
-        // Mass above this group: upper groups + payload
-        let payload_above: f64 = design.stage_groups[gi + 1..].iter()
-            .flat_map(|g| g.iter())
-            .map(|s| s.wet_mass_kg())
-            .sum::<f64>()
-            + payload_kg;
-
-        let group_wet: f64 = group.iter().map(|s| s.wet_mass_kg()).sum();
-        let group_dry: f64 = group.iter().map(|s| s.dry_mass_kg()).sum();
-
-        let is_sail = group.iter().any(|s| s.engine.is_solar_sail());
-        let mass_ratio = if is_sail { 1.0 } else {
-            (group_wet + payload_above) / (group_dry + payload_above)
-        };
-        let delta_v_vacuum = if is_sail { f64::INFINITY } else {
-            design.group_delta_v(gi, payload_above)
-        };
-        let twr = if (group_wet + payload_above) > 0.0 {
-            thrust / ((group_wet + payload_above) * surface_g)
-        } else {
-            0.0
-        };
-        let burn_time = if flow > 0.0 { prop / flow } else { 0.0 };
-
-        let grav_loss = gravity_losses[gi];
-        let aero_loss = if gi == 0 { first_stage_aero } else { 0.0 };
-
-        // Overexpansion Isp penalty for first stage group in atmosphere
-        let overexpansion_loss = if gi == 0 && has_atmosphere && ambient_pressure > 0.0 {
-            // Weighted average Isp fraction across all engines in the group
-            let total_flow_frac: f64 = group.iter()
-                .map(|s| s.engine.mass_flow_rate() * s.engine_count as f64)
-                .sum();
-            if total_flow_frac > 0.0 {
-                let weighted_isp_frac: f64 = group.iter()
-                    .map(|s| {
-                        let flow = s.engine.mass_flow_rate() * s.engine_count as f64;
-                        s.engine.isp_fraction_at(ambient_pressure) * flow
-                    })
-                    .sum::<f64>() / total_flow_frac;
-                delta_v_vacuum * (1.0 - weighted_isp_frac)
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
-
-        let delta_v_effective = (delta_v_vacuum - grav_loss - aero_loss - overexpansion_loss).max(0.0);
-
-        results.push(StageGroupStats {
-            mass_ratio,
-            delta_v_vacuum,
-            gravity_loss: grav_loss,
-            aero_drag_loss: aero_loss,
-            overexpansion_loss,
-            delta_v_effective,
-            twr,
-            burn_time_s: burn_time,
-        });
-    }
-
-    results
 }
 
 #[cfg(test)]
@@ -1173,7 +1243,7 @@ mod tests {
         };
 
         let payload = 1_000.0;
-        let total_dv = rocket.total_delta_v(payload);
+        let total_dv = rocket.vacuum_delta_v(payload);
 
         // S2 payload = just the actual payload
         let s2_dv = s2.delta_v(payload);
@@ -1353,7 +1423,7 @@ mod tests {
         assert!(rocket.validate().is_empty());
 
         let payload = 5_000.0;
-        let total_dv = rocket.total_delta_v(payload);
+        let total_dv = rocket.vacuum_delta_v(payload);
         assert!(total_dv > 5_000.0, "Should have significant delta-v, got {}", total_dv);
         assert!(total_dv < 20_000.0, "Sanity check: {}", total_dv);
     }
@@ -1388,7 +1458,7 @@ mod tests {
         let rocket = design.instantiate(RocketId(1), "earth_surface", payload);
 
         // Fresh rocket should have same delta-v as design
-        let design_dv = design.total_delta_v(payload);
+        let design_dv = design.vacuum_delta_v(payload);
         let instance_dv = rocket.remaining_delta_v(&design);
         assert!(
             (design_dv - instance_dv).abs() < 1.0,
@@ -1514,7 +1584,7 @@ mod tests {
         };
 
         assert!(design.validate().is_empty());
-        let dv = design.total_delta_v(500.0);
+        let dv = design.vacuum_delta_v(500.0);
         assert!(dv > 0.0, "Should have positive delta-v");
     }
 
@@ -1555,7 +1625,7 @@ mod tests {
         // First stage should have gravity and aero losses
         assert!(stats[0].gravity_loss > 0.0, "S1 should have gravity loss");
         assert!(stats[0].aero_drag_loss > 0.0, "S1 should have aero loss on Earth");
-        assert!(stats[0].delta_v_effective < stats[0].delta_v_vacuum,
+        assert!(stats[0].effective_dv() < stats[0].delta_v_vacuum,
             "S1 effective dv should be less than vacuum");
         assert!(stats[0].twr > 0.0, "S1 should have positive TWR");
         assert!(stats[0].mass_ratio > 1.0, "S1 mass ratio should be > 1");
@@ -1563,7 +1633,7 @@ mod tests {
         // Second stage should have no aero loss
         assert_eq!(stats[1].aero_drag_loss, 0.0, "S2 should have no aero loss");
         // Both stages have gravity losses, but effective dv should be less than vacuum for both
-        assert!(stats[1].delta_v_effective <= stats[1].delta_v_vacuum,
+        assert!(stats[1].effective_dv() <= stats[1].delta_v_vacuum,
             "Upper stage effective dv should not exceed vacuum");
     }
 

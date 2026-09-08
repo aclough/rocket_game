@@ -294,9 +294,9 @@ fn test_flaw_scoping_by_stage_usage() {
                 design.stage_groups[1].clone(),
             ],
         };
-        two_stage.total_delta_v(0.0)
+        two_stage.vacuum_delta_v(0.0)
     };
-    let total_dv = design.total_delta_v(0.0);
+    let total_dv = design.vacuum_delta_v(0.0);
     assert!(dv_12 > 9400.0,
         "Stages 1+2 should provide enough dv for LEO, got {:.0}", dv_12);
     assert!(total_dv > dv_12 + 2000.0,

@@ -111,8 +111,9 @@ pub fn aero_drag_loss(rocket_mass_kg: f64) -> f64 {
 }
 
 impl Transfer {
-    /// Total delta-v cost including aerodynamic drag losses if applicable.
-    pub fn total_delta_v(&self, rocket_mass_kg: f64) -> f64 {
+    /// What this edge costs a vehicle of `rocket_mass_kg`: the edge's
+    /// delta-v, plus drag if it climbs through an atmosphere.
+    pub fn cost_for_mass(&self, rocket_mass_kg: f64) -> f64 {
         if self.through_atmosphere {
             self.delta_v + aero_drag_loss(rocket_mass_kg)
         } else {
@@ -134,7 +135,7 @@ impl Transfer {
                 Some(dv)
             }
         } else {
-            Some(self.total_delta_v(rocket_mass_kg))
+            Some(self.cost_for_mass(rocket_mass_kg))
         }
     }
 }
@@ -525,7 +526,7 @@ impl DeltaVMap {
 
     /// Find shortest path between two locations using Dijkstra's algorithm.
     /// `rocket_mass_kg` is used to compute atmospheric drag losses.
-    /// Returns (path_of_location_ids, total_delta_v) or None if no path exists.
+    /// Returns (path_of_location_ids, total_cost) or None if no path exists.
     pub fn shortest_path(&self, from: &str, to: &str, rocket_mass_kg: f64) -> Option<(Vec<&'static str>, f64)> {
         let from_idx = self.locations.iter().position(|l| l.id == from)?;
         let to_idx = self.locations.iter().position(|l| l.id == to)?;
@@ -553,7 +554,7 @@ impl DeltaVMap {
             let loc_id = self.locations[node_index].id;
             for transfer in self.transfers_from(loc_id) {
                 if let Some(next_idx) = self.locations.iter().position(|l| l.id == transfer.to) {
-                    let next_cost = cost + transfer.total_delta_v(rocket_mass_kg);
+                    let next_cost = cost + transfer.cost_for_mass(rocket_mass_kg);
                     if next_cost < dist[next_idx] {
                         dist[next_idx] = next_cost;
                         prev[next_idx] = Some(node_index);
@@ -775,6 +776,35 @@ mod tests {
     /// Reference mass for tests — produces exactly 300 m/s drag loss
     const REF_MASS: f64 = 500_000.0;
 
+    /// A journey pays for the atmosphere at most once, on the way up:
+    /// the only edges flagged `through_atmosphere` leave the surface of
+    /// a body that has one. Descent is `can_aerobrake` (a future
+    /// saving, not a cost) until EDL is modelled. The planner's split —
+    /// gravity and nozzle losses charged to the groups that burn during
+    /// the ascent, drag charged on this one edge — rests on this.
+    #[test]
+    fn only_surface_ascents_are_atmospheric() {
+        let map = &*DELTA_V_MAP;
+        let atmospheric: Vec<&Transfer> = map.transfers.iter()
+            .filter(|t| t.through_atmosphere)
+            .collect();
+        assert!(!atmospheric.is_empty(), "Earth's ascent edge should be flagged");
+        for t in atmospheric {
+            let from = map.surface_properties(t.from);
+            assert!(
+                from.is_some_and(|p| p.has_atmosphere),
+                "{} → {}: an atmospheric edge must leave a surface with an atmosphere", t.from, t.to,
+            );
+            assert!(
+                map.surface_properties(t.to).is_none(),
+                "{} → {}: an atmospheric edge must climb to orbit, not land", t.from, t.to,
+            );
+        }
+        for t in map.transfers.iter().filter(|t| t.can_aerobrake) {
+            assert!(!t.through_atmosphere, "{} → {}: descent is never charged drag", t.from, t.to);
+        }
+    }
+
     #[test]
     fn test_aero_drag_loss_reference() {
         let loss = aero_drag_loss(REF_MASS);
@@ -794,7 +824,7 @@ mod tests {
             from: "leo", to: "gto", delta_v: 2440.0,
             through_atmosphere: false, can_aerobrake: false, transit_days: 1, low_thrust_ok: true, low_thrust_delta_v: None,
         };
-        assert_eq!(t.total_delta_v(REF_MASS), 2440.0);
+        assert_eq!(t.cost_for_mass(REF_MASS), 2440.0);
     }
 
     #[test]
@@ -803,7 +833,7 @@ mod tests {
             from: "earth_surface", to: "leo", delta_v: 7800.0,
             through_atmosphere: true, can_aerobrake: false, transit_days: 0, low_thrust_ok: true, low_thrust_delta_v: None,
         };
-        let total = t.total_delta_v(REF_MASS);
+        let total = t.cost_for_mass(REF_MASS);
         assert!((total - 8100.0).abs() < 1.0, "Should be ~8100, got {}", total);
     }
 
@@ -865,7 +895,7 @@ mod tests {
         let t = map.transfer("earth_surface", "leo").unwrap();
         assert_eq!(t.delta_v, 7800.0);
         assert!(t.through_atmosphere);
-        let total = t.total_delta_v(REF_MASS);
+        let total = t.cost_for_mass(REF_MASS);
         assert!((total - 8100.0).abs() < 1.0);
     }
 

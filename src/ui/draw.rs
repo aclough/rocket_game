@@ -691,7 +691,7 @@ fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Styl
         lines.push(Line::from(format!(
             "      Total mass: {:.0} kg    dV: {:.0} m/s (0 payload)    Initial accel: {}",
             project.design.total_mass_kg(),
-            project.design.total_delta_v(0.0),
+            project.design.vacuum_delta_v(0.0),
             format_accel(initial_accel),
         )));
 
@@ -1911,7 +1911,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                 Style::default().fg(Color::Red),
             )),
             crate::path_planning::MissionPlan::Reachable { path, dv: required_dv } => {
-                let available_dv = temp_design.total_delta_v(state.payload_kg);
+                let available_dv = temp_design.vacuum_delta_v(state.payload_kg);
                 let margin = available_dv - required_dv;
                 // Reuses the path the planner just found, so the endurance
                 // answer costs no extra search — and it is the same check
@@ -2024,9 +2024,9 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
             let is_last_in_group = si + 1 == group_len;
             let stat_str = if is_last_in_group {
                 if let Some(s) = stats.get(gi) {
-                    let eff_str = if s.delta_v_effective.is_infinite() { "     ∞".to_string() }
-                        else { format!("{:>6.0}", s.delta_v_effective) };
-                    let vac_str = if s.delta_v_vacuum.is_infinite() { "       ∞".to_string() }
+                    let eff_str = if s.is_sail { "     ∞".to_string() }
+                        else { format!("{:>6.0}", s.effective_dv()) };
+                    let vac_str = if s.is_sail { "       ∞".to_string() }
                         else { format!("{:>8.0}", s.delta_v_vacuum) };
                     format!(
                         "{:>5}  {:>5.1}  {}  {}  {:>5.2}",
@@ -2167,8 +2167,8 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
 
     // Totals
     if !stats.is_empty() {
-        let total_dv_effective: f64 = stats.iter().map(|s| s.delta_v_effective).sum();
-        let total_dv_vacuum: f64 = stats.iter().map(|s| s.delta_v_vacuum).sum();
+        let total_dv_effective: f64 = stats.iter().map(|s| s.effective_dv()).sum();
+        let total_dv_vacuum: f64 = stats.iter().map(|s| s.display_vacuum_dv()).sum();
         let total_mass = temp_design.total_mass_kg() + state.payload_kg;
 
         lines.push(Line::from(format!(
