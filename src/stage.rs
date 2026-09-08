@@ -96,6 +96,11 @@ impl Stage {
         self.propellant_mass_kg = 0.0;
     }
 
+    /// Propellant mass flow of the whole stage (all engines), kg/s.
+    pub fn mass_flow_kg_s(&self) -> f64 {
+        self.engine.mass_flow_rate() * self.engine_count as f64
+    }
+
     /// Burn time in seconds (all propellant, all engines firing).
     pub fn burn_time_s(&self) -> f64 {
         let flow_rate = self.engine.mass_flow_rate() * self.engine_count as f64;

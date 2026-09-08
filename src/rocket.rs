@@ -47,6 +47,9 @@ pub struct BurnResult {
     pub groups_burned: Vec<usize>,
     /// Groups that were fully exhausted and jettisoned.
     pub groups_jettisoned: Vec<usize>,
+    /// Stages that ran dry and were dropped, as (group, stage) — a
+    /// booster can leave long before its group is exhausted.
+    pub stages_jettisoned: Vec<(usize, usize)>,
 }
 
 /// Effective steady-state output of one power source on a given stage.
@@ -357,22 +360,57 @@ impl RocketDesign {
     }
 }
 
-/// Compute delta-v for a group of parallel stages with phased burnout.
-///
-/// Algorithm:
-/// 1. Track remaining propellant for each stage
-/// 2. Find the stage that runs out of fuel soonest (shortest remaining burn time)
-/// 3. All stages fire for that duration; apply Tsiolkovsky for the mass change
-/// 4. Jettison the depleted stage(s), reducing total mass
-/// 5. Repeat until all stages are depleted
-fn phased_parallel_delta_v(stages: &[Stage], payload_above_kg: f64) -> f64 {
-    // Working state: (index, remaining_propellant_kg)
-    let mut remaining: Vec<(usize, f64)> = stages.iter()
-        .enumerate()
-        .map(|(i, s)| (i, s.propellant_mass_kg))
-        .collect();
+/// One interval of a stage group's burn during which the same stages
+/// fire. A Shuttle-style group has two: core + boosters until the
+/// boosters run dry, then the core alone with the boosters' structure
+/// gone. This is the primitive under the vacuum delta-v, the ascent
+/// integration and the in-flight burn, so all three see the same
+/// vehicle.
+#[derive(Debug, Clone)]
+pub struct BurnPhase {
+    /// Indices (into the stage list given to `burn_phases`) firing.
+    pub active: Vec<usize>,
+    pub thrust_n: f64,
+    pub mass_flow_kg_s: f64,
+    pub duration_s: f64,
+    /// Propellant consumed during this phase.
+    pub propellant_kg: f64,
+    /// Everything above the group plus the group's mass, at phase start
+    /// and end.
+    pub mass_start_kg: f64,
+    pub mass_end_kg: f64,
+    /// Stages that run dry as this phase ends and drop off.
+    pub jettisoned: Vec<usize>,
+    pub dry_mass_dropped_kg: f64,
+}
 
-    let mut total_dv = 0.0;
+impl BurnPhase {
+    /// Tsiolkovsky delta-v of this phase, at the phase's blended
+    /// exhaust velocity (total thrust over total flow).
+    pub fn delta_v(&self) -> f64 {
+        if self.mass_flow_kg_s <= 0.0 || self.mass_end_kg <= 0.0 {
+            return 0.0;
+        }
+        (self.thrust_n / self.mass_flow_kg_s) * (self.mass_start_kg / self.mass_end_kg).ln()
+    }
+
+    /// The ascent integrator's view of this phase.
+    pub fn ascent_phase(&self) -> location::AscentPhase {
+        location::AscentPhase {
+            thrust_n: self.thrust_n,
+            mass_flow_kg_s: self.mass_flow_kg_s,
+            propellant_kg: self.propellant_kg,
+            dry_mass_dropped_kg: self.dry_mass_dropped_kg,
+        }
+    }
+}
+
+/// Burn `stages` down from `remaining_kg` of propellant each, with
+/// `payload_above_kg` on top, as phases: all stages fire, the one with
+/// the shortest remaining burn empties and drops off, repeat.
+pub fn burn_phases(stages: &[Stage], remaining_kg: &[f64], payload_above_kg: f64) -> Vec<BurnPhase> {
+    let mut remaining: Vec<(usize, f64)> = remaining_kg.iter().copied().enumerate().collect();
+    let mut phases = Vec::new();
 
     while !remaining.is_empty() {
         // Current total mass: payload + all remaining stages (dry + remaining propellant)
@@ -381,58 +419,75 @@ fn phased_parallel_delta_v(stages: &[Stage], payload_above_kg: f64) -> f64 {
             .sum();
         let m_initial = payload_above_kg + stages_mass;
 
-        // Find the shortest remaining burn time among active stages
+        // The shortest remaining burn among the firing stages ends the phase.
         let min_burn_time = remaining.iter()
             .map(|(i, prop)| {
-                let flow = stages[*i].engine.mass_flow_rate() * stages[*i].engine_count as f64;
+                let flow = stages[*i].mass_flow_kg_s();
                 if flow <= 0.0 { f64::INFINITY } else { prop / flow }
             })
             .fold(f64::INFINITY, f64::min);
-
         if min_burn_time <= 0.0 || min_burn_time.is_infinite() {
             break;
         }
 
-        // Total propellant consumed in this phase
-        let prop_consumed: f64 = remaining.iter()
-            .map(|(i, _)| {
-                let flow = stages[*i].engine.mass_flow_rate() * stages[*i].engine_count as f64;
-                flow * min_burn_time
-            })
-            .sum();
+        let total_thrust: f64 = remaining.iter().map(|(i, _)| stages[*i].total_thrust_n()).sum();
+        let total_flow: f64 = remaining.iter().map(|(i, _)| stages[*i].mass_flow_kg_s()).sum();
 
-        // Compute effective exhaust velocity for this phase
-        // For mixed engines: ve_eff = total_thrust / total_mass_flow
-        let total_thrust: f64 = remaining.iter()
-            .map(|(i, _)| stages[*i].total_thrust_n())
-            .sum();
-        let total_flow: f64 = remaining.iter()
-            .map(|(i, _)| stages[*i].engine.mass_flow_rate() * stages[*i].engine_count as f64)
-            .sum();
-        let ve_eff = if total_flow > 0.0 { total_thrust / total_flow } else { 0.0 };
-
-        let m_final = m_initial - prop_consumed;
+        // What each stage burns this phase; a stage that empties burns
+        // exactly what it had, so the accounting closes.
+        let mut next = Vec::new();
+        let mut jettisoned = Vec::new();
+        let mut consumed = 0.0;
+        let mut dry_dropped = 0.0;
+        for &(i, prop) in &remaining {
+            let burned = stages[i].mass_flow_kg_s() * min_burn_time;
+            let left = prop - burned;
+            if left > 1e-6 {
+                consumed += burned;
+                next.push((i, left));
+            } else {
+                consumed += prop;
+                jettisoned.push(i);
+                dry_dropped += stages[i].dry_mass_kg();
+            }
+        }
+        let m_final = m_initial - consumed;
         if m_final <= 0.0 {
             break;
         }
 
-        total_dv += ve_eff * (m_initial / m_final).ln();
-
-        // Update remaining propellant, remove depleted stages
-        remaining = remaining.into_iter()
-            .filter_map(|(i, prop)| {
-                let flow = stages[i].engine.mass_flow_rate() * stages[i].engine_count as f64;
-                let new_prop = prop - flow * min_burn_time;
-                if new_prop > 1e-6 {
-                    Some((i, new_prop))
-                } else {
-                    None // stage depleted, jettisoned
-                }
-            })
-            .collect();
+        phases.push(BurnPhase {
+            active: remaining.iter().map(|(i, _)| *i).collect(),
+            thrust_n: total_thrust,
+            mass_flow_kg_s: total_flow,
+            duration_s: min_burn_time,
+            propellant_kg: consumed,
+            mass_start_kg: m_initial,
+            mass_end_kg: m_final,
+            jettisoned,
+            dry_mass_dropped_kg: dry_dropped,
+        });
+        remaining = next;
     }
 
-    total_dv
+    phases
+}
+
+impl RocketDesign {
+    /// The phases of stage group `gi`'s burn with full tanks and
+    /// `payload_above_kg` (upper groups plus payload) on top.
+    pub fn burn_phases(&self, gi: usize, payload_above_kg: f64) -> Vec<BurnPhase> {
+        let Some(group) = self.stage_groups.get(gi) else { return Vec::new() };
+        let full: Vec<f64> = group.iter().map(|s| s.propellant_mass_kg).collect();
+        burn_phases(group, &full, payload_above_kg)
+    }
+}
+
+/// Delta-v of a group of parallel stages with phased burnout: the sum
+/// over its phases.
+fn phased_parallel_delta_v(stages: &[Stage], payload_above_kg: f64) -> f64 {
+    let full: Vec<f64> = stages.iter().map(|s| s.propellant_mass_kg).collect();
+    burn_phases(stages, &full, payload_above_kg).iter().map(|p| p.delta_v()).sum()
 }
 
 impl Rocket {
@@ -516,6 +571,7 @@ impl Rocket {
         let mut dv_achieved = 0.0;
         let mut groups_burned = Vec::new();
         let mut groups_jettisoned = Vec::new();
+        let mut stages_jettisoned = Vec::new();
         let n = self.stage_states.len();
         // Only the first group that burns gets the atmospheric Isp penalty;
         // upper stages fire at high altitude where atmosphere is negligible.
@@ -555,26 +611,32 @@ impl Rocket {
 
             if group_dv >= dv_remaining {
                 // This group can satisfy the remaining target — partial burn
-                let burned = self.burn_group(design, gi, dv_remaining, ambient);
+                let (burned, dropped) = self.burn_group(design, gi, dv_remaining, ambient);
                 dv_achieved += burned;
                 dv_remaining -= burned;
                 groups_burned.push(gi);
+                stages_jettisoned.extend(dropped.into_iter().map(|si| (gi, si)));
             } else {
                 // Exhaust this entire group — burn all propellant
-                let burned = self.burn_group(design, gi, f64::INFINITY, ambient);
+                let (burned, dropped) = self.burn_group(design, gi, f64::INFINITY, ambient);
                 dv_achieved += burned;
                 dv_remaining -= burned;
+                stages_jettisoned.extend(dropped.into_iter().map(|si| (gi, si)));
 
-                // Jettison all stages in this group
+                // Jettison whatever is left of the group (stages that
+                // never had propellant, or that `burn_group` drained
+                // without emptying below its threshold).
                 for si in 0..self.stage_states[gi].len() {
-                    self.jettison_stage(gi, si);
+                    if self.jettison_stage(gi, si) {
+                        stages_jettisoned.push((gi, si));
+                    }
                 }
                 groups_burned.push(gi);
                 groups_jettisoned.push(gi);
             }
         }
 
-        BurnResult { dv_achieved, groups_burned, groups_jettisoned }
+        BurnResult { dv_achieved, groups_burned, groups_jettisoned, stages_jettisoned }
     }
 
     /// Compute remaining delta-v for a single group given current propellant state.
@@ -615,9 +677,14 @@ impl Rocket {
         }
     }
 
-    /// Burn a specific group for a target delta-v, consuming propellant proportionally
-    /// across all active stages in the group. Returns actual dv achieved.
-    fn burn_group(&mut self, design: &RocketDesign, gi: usize, target_dv: f64, ambient_pressure_pa: f64) -> f64 {
+    /// Burn a specific group for a target delta-v, phase by phase: the
+    /// stages fire together, the shortest tank empties and that stage is
+    /// jettisoned, and the rest carry on — the same phases the design's
+    /// delta-v and the ascent integration are built from. Returns the
+    /// delta-v achieved and the stages dropped along the way.
+    fn burn_group(
+        &mut self, design: &RocketDesign, gi: usize, target_dv: f64, ambient_pressure_pa: f64,
+    ) -> (f64, Vec<usize>) {
         let n = self.stage_states.len();
 
         // Compute payload above this group
@@ -628,70 +695,77 @@ impl Rocket {
                 .sum::<f64>()
         }).sum::<f64>() + self.payload_mass_kg;
 
-        // Get active stages in this group
-        let active_indices: Vec<usize> = self.stage_states[gi].iter()
-            .enumerate()
-            .filter(|(_, ss)| ss.attached && ss.propellant_remaining_kg > 0.0)
-            .map(|(i, _)| i)
-            .collect();
+        let group = &design.stage_groups[gi];
+        let mut dv_remaining = target_dv;
+        let mut dv_achieved = 0.0;
+        let mut dropped = Vec::new();
 
-        if active_indices.is_empty() {
-            return 0.0;
+        loop {
+            // Stages still firing, with what they have left.
+            let active: Vec<usize> = self.stage_states[gi].iter()
+                .enumerate()
+                .filter(|(_, ss)| ss.attached && ss.propellant_remaining_kg > 0.0)
+                .map(|(i, _)| i)
+                .collect();
+            if active.is_empty() || dv_remaining <= 0.0 {
+                break;
+            }
+            let subset: Vec<Stage> = active.iter().map(|&si| group[si].clone()).collect();
+            let remaining: Vec<f64> = active.iter()
+                .map(|&si| self.stage_states[gi][si].propellant_remaining_kg)
+                .collect();
+            let Some(phase) = burn_phases(&subset, &remaining, payload_above).into_iter().next() else {
+                break;
+            };
+
+            // Exhaust velocity for this phase, accounting for the
+            // overexpansion Isp penalty when burning in atmosphere.
+            let total_thrust: f64 = phase.active.iter()
+                .map(|&k| subset[k].total_thrust_n() * subset[k].engine.isp_fraction_at(ambient_pressure_pa))
+                .sum();
+            let total_flow = phase.mass_flow_kg_s;
+            if total_flow <= 0.0 {
+                break;
+            }
+            let ve = total_thrust / total_flow;
+            let m0 = phase.mass_start_kg;
+
+            // Propellant the remaining target needs at this exhaust velocity,
+            // capped at what the phase holds.
+            let mf_target = m0 / (dv_remaining / ve).exp();
+            let prop_needed = m0 - mf_target;
+            let prop_used = prop_needed.min(phase.propellant_kg).max(0.0);
+            let whole_phase = prop_needed >= phase.propellant_kg;
+
+            // Spend it across the firing stages in proportion to mass flow.
+            for &k in &phase.active {
+                let si = active[k];
+                let fraction = subset[k].mass_flow_kg_s() / total_flow;
+                let ss = &mut self.stage_states[gi][si];
+                ss.propellant_remaining_kg = (ss.propellant_remaining_kg - prop_used * fraction).max(0.0);
+            }
+            let mf_actual = m0 - prop_used;
+            if mf_actual <= 0.0 {
+                break;
+            }
+            let burned = ve * (m0 / mf_actual).ln();
+            dv_achieved += burned;
+            dv_remaining -= burned;
+
+            if !whole_phase {
+                break;
+            }
+            // The phase ran to its end: the stages that emptied drop off,
+            // and the next phase (if any) carries on without them.
+            for &k in &phase.jettisoned {
+                let si = active[k];
+                if self.jettison_stage(gi, si) {
+                    dropped.push(si);
+                }
+            }
         }
 
-        // Compute effective exhaust velocity for the group, accounting for
-        // overexpansion Isp penalty when burning in atmosphere.
-        let total_thrust: f64 = active_indices.iter()
-            .map(|&si| {
-                let stage = &design.stage_groups[gi][si];
-                let isp_frac = stage.engine.isp_fraction_at(ambient_pressure_pa);
-                stage.total_thrust_n() * isp_frac
-            })
-            .sum();
-        let total_flow: f64 = active_indices.iter()
-            .map(|&si| {
-                let stage = &design.stage_groups[gi][si];
-                stage.engine.mass_flow_rate() * stage.engine_count as f64
-            })
-            .sum();
-        let ve = if total_flow > 0.0 { total_thrust / total_flow } else { return 0.0 };
-
-        // Total initial mass
-        let group_mass: f64 = active_indices.iter()
-            .map(|&si| {
-                design.stage_groups[gi][si].dry_mass_kg()
-                    + self.stage_states[gi][si].propellant_remaining_kg
-            })
-            .sum();
-        let m0 = group_mass + payload_above;
-
-        // Compute propellant needed for target_dv
-        let mf_target = m0 / (target_dv / ve).exp();
-        let prop_needed = m0 - mf_target;
-
-        // Total propellant available
-        let total_prop: f64 = active_indices.iter()
-            .map(|&si| self.stage_states[gi][si].propellant_remaining_kg)
-            .sum();
-
-        let prop_used = prop_needed.min(total_prop).max(0.0);
-
-        // Distribute consumed propellant proportionally by mass flow rate
-        for &si in &active_indices {
-            let stage = &design.stage_groups[gi][si];
-            let flow = stage.engine.mass_flow_rate() * stage.engine_count as f64;
-            let fraction = if total_flow > 0.0 { flow / total_flow } else { 0.0 };
-            let consumed = prop_used * fraction;
-            self.stage_states[gi][si].propellant_remaining_kg =
-                (self.stage_states[gi][si].propellant_remaining_kg - consumed).max(0.0);
-        }
-
-        // Compute actual dv achieved
-        let mf_actual = m0 - prop_used;
-        if mf_actual <= 0.0 {
-            return 0.0;
-        }
-        ve * (m0 / mf_actual).ln()
+        (dv_achieved, dropped)
     }
 
     // ─── Power balance ────────────────────────────────────────────────
@@ -1030,7 +1104,6 @@ impl DesignPerformance {
             let flow: f64 = group.iter()
                 .map(|s| s.engine.mass_flow_rate() * s.engine_count as f64)
                 .sum();
-            let prop: f64 = group.iter().map(|s| s.propellant_mass_kg).sum();
 
             // Mass above this group: upper groups + payload
             let payload_above: f64 = design.stage_groups[gi + 1..].iter()
@@ -1051,7 +1124,8 @@ impl DesignPerformance {
             } else {
                 0.0
             };
-            let burn_time_s = if flow > 0.0 { prop / flow } else { 0.0 };
+            // The group's burn lasts as long as its longest tank.
+            let burn_time_s = design.burn_phases(gi, payload_above).iter().map(|p| p.duration_s).sum();
 
             let aero_drag_loss = if gi == 0 { first_stage_aero } else { 0.0 };
 
@@ -1142,32 +1216,33 @@ pub fn group_gravity_losses(
     let Some(props) = DELTA_V_MAP.surface_properties(launch_from) else {
         return vec![0.0; n];
     };
-    // Per group: (thrust_n, mass_flow_kg_s, propellant_kg).
+    // Each group as its burn phases, so a booster that runs dry early
+    // takes its thrust and its structure out of the integration when it
+    // actually leaves.
     //
     // A low-thrust group is zeroed out rather than integrated. The delta-v
     // graph already models electric propulsion as spiralling *from orbit*
     // (`low_thrust_delta_v`), never as lifting off, and an ion stage can't
     // hold itself up anyway: the integrator would watch its velocity decay
     // to zero and then bill it for gravity across a burn lasting weeks.
-    let stage_params: Vec<(f64, f64, f64, f64)> = design.stage_groups.iter()
-        .map(|group| {
+    let groups: Vec<Vec<location::AscentPhase>> = (0..n)
+        .map(|gi| {
+            let group = &design.stage_groups[gi];
             if group.iter().any(|s| s.engine.is_low_thrust()) {
-                return (0.0, 0.0, 0.0, 0.0);
+                return Vec::new();
             }
-            (
-                group.iter().map(|s| s.total_thrust_n()).sum(),
-                group.iter()
-                    .map(|s| s.engine.mass_flow_rate() * s.engine_count as f64)
-                    .sum(),
-                group.iter().map(|s| s.propellant_mass_kg).sum(),
-                group.iter().map(|s| s.dry_mass_kg()).sum(),
-            )
+            let payload_above: f64 = design.stage_groups[gi + 1..].iter()
+                .flat_map(|g| g.iter())
+                .map(|s| s.wet_mass_kg())
+                .sum::<f64>()
+                + payload_kg;
+            design.burn_phases(gi, payload_above).iter().map(|p| p.ascent_phase()).collect()
         })
         .collect();
-    location::simulate_gravity_losses(
+    location::simulate_ascent(
         props.gravity_m_s2,
         props.radius_m,
-        &stage_params,
+        &groups,
         design.total_mass_kg() + payload_kg,
     )
 }
@@ -1337,6 +1412,92 @@ mod tests {
 
         // dv should be positive and reasonable (less than 20 km/s for these params)
         assert!(dv > 0.0 && dv < 20_000.0, "dv={} out of reasonable range", dv);
+    }
+
+    /// The ascent integration has to see the boosters leave: after they
+    /// run dry the core climbs alone on a fraction of the thrust, so the
+    /// vehicle fights gravity for longer than a model that kept the
+    /// whole group's thrust until the whole group's propellant was gone.
+    #[test]
+    fn gravity_loss_sees_boosters_burn_out() {
+        let core_engine = kerolox_engine(1, 800_000.0, 400.0, 311.0);
+        let srb_engine = solid_engine(2, 1_500_000.0, 200.0, 250.0);
+        let core = Stage {
+            id: StageId(1), name: "Core".into(),
+            engine: core_engine, engine_count: 1,
+            propellant_mass_kg: 100_000.0, structural_mass_kg: 5_000.0,
+            fairing: None, power_sources: Vec::new(),
+        };
+        let srb = Stage {
+            id: StageId(2), name: "SRB".into(),
+            engine: srb_engine, engine_count: 1,
+            propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
+            fairing: None, power_sources: Vec::new(),
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(1), name: "CorePlusSRBs".into(),
+            stage_groups: vec![vec![core.clone(), srb.clone(), srb.clone()]],
+        };
+        let payload = 5_000.0;
+
+        let phases = design.burn_phases(0, payload);
+        assert_eq!(phases.len(), 2, "boosters then core alone");
+        assert_eq!(phases[0].jettisoned.len(), 2, "both boosters leave together");
+        assert!(phases[1].thrust_n < phases[0].thrust_n);
+
+        let phased = group_gravity_losses(&design, payload, "earth_surface")[0];
+        let props = DELTA_V_MAP.surface_properties("earth_surface").unwrap();
+        let group = &design.stage_groups[0];
+        let lumped = location::simulate_gravity_losses(
+            props.gravity_m_s2, props.radius_m,
+            &[(
+                group.iter().map(|s| s.total_thrust_n()).sum(),
+                group.iter().map(|s| s.mass_flow_kg_s()).sum(),
+                group.iter().map(|s| s.propellant_mass_kg).sum(),
+                group.iter().map(|s| s.dry_mass_kg()).sum(),
+            )],
+            design.total_mass_kg() + payload,
+        )[0];
+        assert!(phased > lumped,
+            "phased loss {phased:.0} should exceed the lumped model's {lumped:.0}");
+    }
+
+    /// In flight the boosters drop off when their tanks empty, not when
+    /// the whole group is spent.
+    #[test]
+    fn boosters_drop_off_when_empty_in_flight() {
+        let core_engine = kerolox_engine(1, 800_000.0, 400.0, 311.0);
+        let srb_engine = solid_engine(2, 1_500_000.0, 200.0, 250.0);
+        let core = Stage {
+            id: StageId(1), name: "Core".into(),
+            engine: core_engine, engine_count: 1,
+            propellant_mass_kg: 100_000.0, structural_mass_kg: 5_000.0,
+            fairing: None, power_sources: Vec::new(),
+        };
+        let srb = Stage {
+            id: StageId(2), name: "SRB".into(),
+            engine: srb_engine, engine_count: 1,
+            propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
+            fairing: None, power_sources: Vec::new(),
+        };
+        let design = RocketDesign {
+            id: RocketDesignId(1), name: "CorePlusSRBs".into(),
+            stage_groups: vec![vec![core, srb.clone(), srb]],
+        };
+        let payload = 5_000.0;
+        let mut rocket = design.instantiate(RocketId(1), "earth_surface", payload);
+        let first_phase_dv = design.burn_phases(0, payload)[0].delta_v();
+
+        // Burn a little past the boosters' phase.
+        let result = rocket.burn_sequential(&design, first_phase_dv + 200.0, 0.0);
+        assert!((result.dv_achieved - (first_phase_dv + 200.0)).abs() < 1.0);
+        assert!(!rocket.stage_states[0][1].attached && !rocket.stage_states[0][2].attached,
+            "boosters jettisoned once empty");
+        assert!(rocket.stage_states[0][0].attached
+            && rocket.stage_states[0][0].propellant_remaining_kg > 0.0,
+            "core keeps flying");
+        assert_eq!(result.stages_jettisoned, vec![(0, 1), (0, 2)]);
+        assert!(result.groups_jettisoned.is_empty(), "the group as a whole is not spent");
     }
 
     #[test]

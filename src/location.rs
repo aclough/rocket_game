@@ -654,9 +654,23 @@ pub const PITCH_KICK_RAD: f64 = 0.02;
 /// Integration timestep for the ascent, in seconds.
 pub const ASCENT_TIMESTEP_S: f64 = 0.25;
 
+/// One interval of an ascent burn during which thrust and mass flow are
+/// constant: the same engines firing. A stage group whose stages have
+/// different burn times is several of these — core plus boosters, then
+/// core alone — and the boosters' dry mass leaves at the end of theirs.
+#[derive(Debug, Clone, Copy)]
+pub struct AscentPhase {
+    pub thrust_n: f64,
+    pub mass_flow_kg_s: f64,
+    /// Propellant consumed during this phase.
+    pub propellant_kg: f64,
+    /// Structure that falls away when the phase ends (empty stages).
+    pub dry_mass_dropped_kg: f64,
+}
+
 /// Simulate gravity turn ascent to estimate gravity losses.
 ///
-/// Numerically integrates the gravity turn equations with a coarse 1-second timestep:
+/// Numerically integrates the gravity turn equations with a coarse timestep:
 ///   d(pitch)/dt = -g * cos(pitch) / velocity + velocity * cos(pitch) / R
 ///   gravity_loss accumulates g * sin(pitch) * dt each step
 ///
@@ -665,27 +679,18 @@ pub const ASCENT_TIMESTEP_S: f64 = 0.25;
 /// achieved). Without this term vehicles pitch horizontal too early and
 /// upper stages show unrealistically low gravity losses.
 ///
-/// Parameters come from the stage group (thrust, mass flow, propellant) and
-/// the launch location (surface gravity, body radius). The only free parameter
-/// is KICK_OVER_VELOCITY (45 m/s), the velocity at which the rocket begins
-/// pitching from vertical.
+/// `groups` gives each stage group's burn as its phases (see
+/// [`AscentPhase`]); the loss is charged to the group whose phase it
+/// happened in. Groups are simulated in order, each inheriting the
+/// velocity and pitch the previous one reached; the first starts at
+/// rest, vertical. The only free parameter is KICK_OVER_VELOCITY (45 m/s),
+/// the velocity at which the rocket begins pitching from vertical.
 ///
-/// For multi-stage rockets, each stage group is simulated sequentially:
-/// the first group starts at velocity=0, pitch=90°. Subsequent groups
-/// inherit the velocity and pitch from the end of the previous group's burn.
-///
-/// # Arguments
-/// * `surface_gravity` - Surface gravity in m/s² (e.g. 9.81 for Earth)
-/// * `body_radius` - Radius of the body in meters (e.g. 6_371_000.0 for Earth)
-/// * `stage_params` - Per group: (thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_kg)
-/// * `initial_mass_kg` - Total rocket mass including payload
-///
-/// # Returns
-/// Gravity loss in m/s per stage group.
-pub fn simulate_gravity_losses(
+/// Returns gravity loss in m/s per stage group.
+pub fn simulate_ascent(
     surface_gravity: f64,
     body_radius: f64,
-    stage_params: &[(f64, f64, f64, f64)],
+    groups: &[Vec<AscentPhase>],
     initial_mass_kg: f64,
 ) -> Vec<f64> {
     let mut velocity = 0.0_f64;
@@ -697,73 +702,90 @@ pub fn simulate_gravity_losses(
     // values stalls the pitch-over — which is what made upper stages look
     // like they were burning most of their delta-v straight up.
     let mut altitude = 0.0_f64;
-    let mut results = Vec::with_capacity(stage_params.len());
+    let mut results = Vec::with_capacity(groups.len());
 
     let mut kicked_over = false;
 
-    for &(thrust, mass_flow, propellant, dry_mass) in stage_params {
-        let mut gravity_loss = 0.0;
-        let mut remaining_prop = propellant;
+    // Local conditions decide when the ascent is over: reaching circular
+    // velocity for the current radius means the vehicle is in orbit, and
+    // every burn after that is a transfer the delta-v graph already
+    // prices impulsively. Without the cutoff the integrator keeps
+    // charging `g·sin(pitch)·dt` for the whole of every remaining burn,
+    // which for a low-thrust upper stage is tens of km/s of fiction
+    // across a burn measured in weeks.
+    let orbital = |alt: f64| {
+        let r = body_radius + alt;
+        (surface_gravity * body_radius * body_radius / r).sqrt()
+    };
 
-        // Local conditions decide when the ascent is over: reaching circular
-        // velocity for the current radius means the vehicle is in orbit, and
-        // every burn after that is a transfer the delta-v graph already
-        // prices impulsively. Without the cutoff the integrator keeps
-        // charging `g·sin(pitch)·dt` for the whole of every remaining burn,
-        // which for a low-thrust upper stage is tens of km/s of fiction
-        // across a burn measured in weeks.
-        let orbital = |alt: f64| {
-            let r = body_radius + alt;
-            (surface_gravity * body_radius * body_radius / r).sqrt()
-        };
+    for phases in groups {
+        let mut group_loss = 0.0;
+        for &AscentPhase { thrust_n: thrust, mass_flow_kg_s: mass_flow, propellant_kg: propellant, dry_mass_dropped_kg: dry_mass } in phases {
+            let mut remaining_prop = propellant;
 
-        // Skip stages with no propellant/mass flow (solar sails), and any
-        // stage that only ignites once the vehicle is already orbital.
-        if mass_flow <= 0.0 || propellant <= 0.0 || velocity >= orbital(altitude) {
-            results.push(0.0);
-            continue;
-        }
-
-        while remaining_prop > 1e-6 && velocity < orbital(altitude) {
-            let dt = ASCENT_TIMESTEP_S.min(remaining_prop / mass_flow);
-            let r = body_radius + altitude;
-            let g = surface_gravity * (body_radius / r).powi(2);
-
-            gravity_loss += g * pitch.sin() * dt;
-
-            let net_accel = thrust / mass - g * pitch.sin();
-            velocity += net_accel * dt;
-            velocity = velocity.max(0.0); // can't go backwards
-            altitude = (altitude + velocity * pitch.sin() * dt).max(0.0);
-
-            if velocity > KICK_OVER_VELOCITY {
-                // Initiate gravity turn with a small kick if we haven't already
-                if !kicked_over {
-                    kicked_over = true;
-                    // Small initial pitch-over: ~1 degree
-                    pitch -= PITCH_KICK_RAD;
-                }
-                let pitch_rate = g * pitch.cos() / velocity
-                    - velocity * pitch.cos() / r;
-                pitch -= pitch_rate * dt;
-                pitch = pitch.clamp(0.0, std::f64::consts::FRAC_PI_2);
+            // Skip phases with no propellant/mass flow (solar sails), and any
+            // phase that only starts once the vehicle is already orbital.
+            if mass_flow <= 0.0 || propellant <= 0.0 || velocity >= orbital(altitude) {
+                continue;
             }
 
-            let dm = mass_flow * dt;
-            mass -= dm;
-            remaining_prop -= dm;
-        }
+            while remaining_prop > 1e-6 && velocity < orbital(altitude) {
+                let dt = ASCENT_TIMESTEP_S.min(remaining_prop / mass_flow);
+                let r = body_radius + altitude;
+                let g = surface_gravity * (body_radius / r).powi(2);
 
-        results.push(gravity_loss);
-        // Stage separation: the spent group's structure falls away, so the
-        // next group doesn't haul it. Omitting this was charging upper
-        // stages for mass they'd already dropped, which both understated
-        // their acceleration and inflated their gravity loss.
-        mass = (mass - dry_mass).max(0.0);
+                group_loss += g * pitch.sin() * dt;
+
+                let net_accel = thrust / mass - g * pitch.sin();
+                velocity += net_accel * dt;
+                velocity = velocity.max(0.0); // can't go backwards
+                altitude = (altitude + velocity * pitch.sin() * dt).max(0.0);
+
+                if velocity > KICK_OVER_VELOCITY {
+                    // Initiate gravity turn with a small kick if we haven't already
+                    if !kicked_over {
+                        kicked_over = true;
+                        // Small initial pitch-over: ~1 degree
+                        pitch -= PITCH_KICK_RAD;
+                    }
+                    let pitch_rate = g * pitch.cos() / velocity
+                        - velocity * pitch.cos() / r;
+                    pitch -= pitch_rate * dt;
+                    pitch = pitch.clamp(0.0, std::f64::consts::FRAC_PI_2);
+                }
+
+                let dm = mass_flow * dt;
+                mass -= dm;
+                remaining_prop -= dm;
+            }
+
+            // Separation: the spent structure falls away, so what burns
+            // next doesn't haul it. Omitting this was charging upper
+            // stages for mass they'd already dropped, which both
+            // understated their acceleration and inflated their loss.
+            mass = (mass - dry_mass).max(0.0);
+        }
+        results.push(group_loss);
         // Next group inherits velocity and pitch
     }
 
     results
+}
+
+/// [`simulate_ascent`] for groups that burn as a single phase each:
+/// `(thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_kg)` per group.
+pub fn simulate_gravity_losses(
+    surface_gravity: f64,
+    body_radius: f64,
+    stage_params: &[(f64, f64, f64, f64)],
+    initial_mass_kg: f64,
+) -> Vec<f64> {
+    let groups: Vec<Vec<AscentPhase>> = stage_params.iter()
+        .map(|&(thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_dropped_kg)| vec![AscentPhase {
+            thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_dropped_kg,
+        }])
+        .collect();
+    simulate_ascent(surface_gravity, body_radius, &groups, initial_mass_kg)
 }
 
 /// Global delta-v map instance
