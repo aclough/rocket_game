@@ -56,6 +56,8 @@ money specifically, and each of these has two definitions of one thing.
 - **Size/risk:** small / none. Direct CLAUDE.md compliance fix.
 
 ### A4. Three delta-v models feed the same decisions
+
+> Plan: `17_2_DELTA_V.md` (four models, not three — the flight's own burn is the fourth).
 - **Where:**
   (a) `RocketDesign::total_delta_v` (`rocket.rs:302-320`), pure vacuum;
   (b) planner `full_group_dv` (`path_planning.rs:67-77`), vacuum minus
@@ -84,7 +86,7 @@ money specifically, and each of these has two definitions of one thing.
   `GameDate::add_months`, `GameDate::month_index`, `GameDate::iso()`.
 - **Size/risk:** small / none.
 
-### A6. `GameDate::days_until` / `add_days` are O(n) loops on the draw path
+### ✅ A6. `GameDate::days_until` / `add_days` are O(n) loops on the draw path
 - **Where:** `calendar.rs:57-75`. Called per frame by `elapsed_days()`
   (`draw.rs:250`, walks from 2001 to today) and per contract row
   (`draw.rs:1314`), and per generated contract (`contract.rs:359`).
