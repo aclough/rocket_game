@@ -4,7 +4,7 @@ use crate::calendar::GameDate;
 use crate::contract::ContractId;
 use crate::launch::FlawActivation;
 use crate::location::DELTA_V_MAP;
-use crate::rocket::{Rocket, RocketDesign};
+use crate::rocket::{DesignPerformance, Rocket, RocketDesign};
 use crate::rocket_project::RocketProjectId;
 
 /// Unique identifier for a flight.
@@ -85,6 +85,9 @@ pub enum FlightStatus {
 pub struct FlightLeg {
     pub from: String,
     pub to: String,
+    /// What the burn must deliver: the transfer's Δv (drag included on
+    /// an atmospheric ascent) plus, leaving a surface, the ascent's
+    /// gravity loss (`ascent_gravity_cost`).
     pub delta_v_cost: f64,
     pub burn_days: u32,
     pub coast_days: u32,
@@ -277,8 +280,25 @@ impl Flight {
     }
 }
 
+/// What leaving `from` costs on top of the transfer: the ascent's gravity
+/// loss for every group that burns during it
+/// (`AscentLosses::gravity_by_group`), and nothing from anywhere but a
+/// surface. The planner takes this off each group's budget; the flight
+/// pays it here, on the departing leg, so what reaches orbit is what the
+/// planner budgeted and the stranding thresholds mean what they say.
+/// Judged on the design as built, like the planner's own charge.
+pub fn ascent_gravity_cost(design: &RocketDesign, payload_mass_kg: f64, from: &str) -> f64 {
+    if DELTA_V_MAP.surface_properties(from).is_none() {
+        return 0.0;
+    }
+    DesignPerformance::compute(design, payload_mass_kg, from)
+        .ascent.gravity_by_group.iter().sum()
+}
+
 /// Build a flight route from a shortest-path result.
 /// Returns the list of flight legs with delta-v costs, burn times, and coast times.
+/// Knows no design, so a surface departure here carries no ascent
+/// gravity charge; `build_route_for_rocket` is the one flights use.
 pub fn build_route(
     path: &[&'static str],
     rocket_mass_kg: f64,
@@ -365,7 +385,8 @@ pub fn build_route_for_rocket(
         // dv (impulsive vs spiral) for this transfer.
         let low_thrust = sim.is_current_stage_low_thrust(design);
         let dv_cost = transfer.delta_v_for(low_thrust, current_mass)
-            .unwrap_or_else(|| transfer.cost_for_mass(current_mass));
+            .unwrap_or_else(|| transfer.cost_for_mass(current_mass))
+            + ascent_gravity_cost(design, payload_mass_kg, from);
         let coast_days = transfer.transit_days;
 
         // Effective thrust at this leg's start: derate electric engines
@@ -816,6 +837,74 @@ mod tests {
         assert!(legs[1].burn_days >= legs[0].burn_days,
             "expected Mars-side burn to be at least as long: \
              leg0={} leg1={}", legs[0].burn_days, legs[1].burn_days);
+    }
+
+    /// Leaving a surface, the leg costs the transfer plus the ascent's
+    /// gravity loss — the figure the planner took off the design's budget
+    /// — and a leg from orbit costs the transfer alone.
+    #[test]
+    fn surface_leg_pays_the_ascent_gravity() {
+        let (design, rocket) = tiny_spacecraft(1, 3_000.0, 200.0);
+        let transfer = DELTA_V_MAP.transfer("earth_surface", "leo").unwrap();
+        let mass = design.total_mass_kg();
+        let edge = transfer.delta_v_for(false, mass).unwrap_or_else(|| transfer.cost_for_mass(mass));
+        let gravity: f64 = DesignPerformance::compute(&design, 0.0, "earth_surface")
+            .ascent.gravity_by_group.iter().sum();
+        assert!(gravity > 100.0, "fixture premise: the climb costs something ({gravity:.0} m/s)");
+
+        let legs = build_route_for_rocket(&["earth_surface", "leo"], &design, &rocket, 0.0);
+        assert!((legs[0].delta_v_cost - (edge + gravity)).abs() < 1e-6,
+            "surface leg {:.0} should be edge {edge:.0} + gravity {gravity:.0}", legs[0].delta_v_cost);
+
+        let in_orbit = design.instantiate(crate::rocket::RocketId(2), "leo", 0.0);
+        let legs = build_route_for_rocket(&["leo", "gto"], &design, &in_orbit, 0.0);
+        let transfer = DELTA_V_MAP.transfer("leo", "gto").unwrap();
+        let edge = transfer.delta_v_for(false, mass).unwrap_or_else(|| transfer.cost_for_mass(mass));
+        assert!((legs[0].delta_v_cost - edge).abs() < 1e-6,
+            "a leg from orbit owes no ascent: {:.0} vs edge {edge:.0}", legs[0].delta_v_cost);
+        assert_eq!(ascent_gravity_cost(&design, 0.0, "leo"), 0.0);
+    }
+
+    /// The plan's promise in one number: after flying the first leg the
+    /// way the route bills it, the propellant left is exactly what the
+    /// planner said would be left — planner budget less route Δv. The
+    /// first stage pays its Isp penalty multiplicatively in flight and
+    /// subtractively in the planner; they agree because the stage burns
+    /// out on the ascent.
+    #[test]
+    fn arrival_matches_the_planner_budget() {
+        use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
+        let (lower, _) = tiny_spacecraft(1, 60_000.0, 4_000.0);
+        let (upper, _) = tiny_spacecraft(2, 8_000.0, 800.0);
+        let mut s1 = lower.stage_groups[0][0].clone();
+        s1.engine.thrust_n = 1_200_000.0;
+        s1.engine.exit_pressure_pa = 60_000.0; // penalised at the pad
+        let mut s2 = upper.stage_groups[0][0].clone();
+        s2.engine.thrust_n = 150_000.0;
+        s2.engine.isp_s = 340.0;
+        let design = RocketDesign {
+            id: RocketDesignId(9), name: "Budget".into(),
+            stage_groups: vec![vec![s1], vec![s2]],
+        };
+        let payload = 500.0;
+        let perf = DesignPerformance::compute(&design, payload, "earth_surface");
+        assert!(perf.ascent.overexpansion > 10.0 && perf.ascent.gravity_by_group[0] > 100.0,
+            "fixture premise: the ascent charges both losses");
+        let (path, route_dv) = DELTA_V_MAP
+            .shortest_path_for_rocket("earth_surface", "leo", &design, payload)
+            .expect("fixture reaches LEO");
+        let budget_left = perf.total_planner_dv() - route_dv;
+        assert!(budget_left > 0.0);
+
+        let mut rocket = design.instantiate(RocketId(9), "earth_surface", payload);
+        let legs = build_route_for_rocket(&path, &design, &rocket, payload);
+        assert_eq!(legs.len(), 1);
+        let result = rocket.burn_sequential(&design, legs[0].delta_v_cost, "earth_surface");
+        assert!((result.dv_achieved - legs[0].delta_v_cost).abs() < 1e-6, "the leg is flown in full");
+        assert!(result.groups_jettisoned.contains(&0), "the first stage burns out on the ascent");
+        let left = rocket.remaining_delta_v(&design);
+        assert!((left - budget_left).abs() < 1.0,
+            "in orbit with {left:.1} m/s, planner budgeted {budget_left:.1}");
     }
 
     #[test]

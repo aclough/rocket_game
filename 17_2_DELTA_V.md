@@ -597,6 +597,48 @@ the bot's booster) skips the lookup for the rest of the climb and
 brings it back to within noise of before. The sim wall-clock is
 dominated by other work and moved by less than run-to-run scatter.
 
+### Step 5 record
+
+Nothing left to do by the time step 4b landed: the bands were
+recalibrated in the step 3 commit and held through 4/4b, and the pinned
+Δv numbers in `rocket.rs`, `path_planning.rs` and `launch.rs` were
+updated in the step they moved (the chem+ion planner fixture's Isp, the
+launch test's ascent-averaged fraction). Marked done.
+
+### Step 6 record (the flight pays the ascent)
+
+`flight::ascent_gravity_cost(design, payload, from)` is the ascent's
+gravity loss summed over the groups, 0 from anywhere but a surface;
+`build_route_for_rocket` adds it to a leg's `delta_v_cost` when the leg
+leaves a surface, and the designer's Δv planner burns the same figure
+so its "what's left" matches a real flight. `build_route` (mass-only,
+tests) is documented as not charging it. The stranding thresholds are
+untouched; they now compare against a leg cost that means what it says.
+
+Two tests pin the plan's promise: `surface_leg_pays_the_ascent_gravity`
+(leg cost = transfer + gravity from a surface, transfer alone from
+orbit) and `arrival_matches_the_planner_budget` — a two-stage design
+flown to LEO the way the route bills it arrives with exactly
+`total_planner_dv − route Δv` left, to within 1 m/s. The first stage
+pays its Isp penalty multiplicatively in flight and subtractively in
+the planner, and they agree because the stage burns out on the ascent.
+
+**Sim**: identical to step 4b to the byte (same 200-seed summary, same
+1,551 oracle rows). Expected: the bot's flights are single-leg
+deliveries whose outcome is decided by the launch check, which already
+budgets the ascent, and nothing in the sim reads the propellant left in
+orbit. The change is visible where a spacecraft flies on after
+arriving, or a marginal design is flown by hand.
+
+**The plan's four models, after step 6.** (a) `vacuum_delta_v` is the
+raw figure; (b) the planner and (c) the stats table read one
+`DesignPerformance`; (d) the flight charges the same ascent — gravity on
+the leg, the Isp penalty on the first group's exhaust velocity — and the
+launch check judges the degraded design by the planner's own budget.
+Overexpansion is charged once. What is left for the D pass: the
+trajectory model (D7) and the planner's sail handling (the seventh
+symptom, recorded at step 1).
+
 Every step: `cargo test`, clippy, the 40-seed simulate oracle, and for
 the steps marked **measure**, the 200-seed band run
 (`cargo run --release --bin simulate -- --seeds 1..200 --years 8 --policy basic --summary-only`)
@@ -611,7 +653,7 @@ compared against the baseline recorded first.
 | 3 ✅ (bands provisional until 6, see record) | `simulate_launch` judges on `total_planner_dv()` of the degraded design; drop the Isp/thrust scaling (fixes #4 if step 0 confirmed it). | **launch outcomes for flawed vehicles; first-leg propellant** | **measure**: launch success %, bankruptcies, first-launch month |
 | 4 ✅ | Planner charges overexpansion (`planner_dv()` as written above). | **capabilities drop for sea-level-nozzle first stages** | **measure**: plus a capability probe — `max_payload_to` for the bot's template and each corpus save's rocket to LEO/GTO/GEO before and after |
 | 4b ✅ | Overexpansion charged as the air thins: `SurfaceProperties::scale_height_m`, nozzles in the ascent integration, first group only; flight and planner read the same `isp_fraction_by_group` (Q6 → option 3). | **capabilities recover most of step 4's drop; first-stage gravity loss rises slightly** | **measure** + timing |
-| 5 | Update `sim_bands.rs` to the re-measured reality in the same commit as whichever of 3/4 moved it, per CLAUDE.md. Update pinned Δv numbers in `rocket.rs`, `path_planning.rs`, `launch.rs` tests. | — | bands green |
+| 5 ✅ | Update `sim_bands.rs` to the re-measured reality in the same commit as whichever of 3/4 moved it, per CLAUDE.md. Update pinned Δv numbers in `rocket.rs`, `path_planning.rs`, `launch.rs` tests. | — | bands green |
 
 Steps 1 and 2 are pure and can land immediately. Steps 3 and 4 each
 get their own commit and measurement so the effect of each is known
@@ -622,7 +664,7 @@ recommendation is to take step 4: "Eff dV" already tells the player
 that number, and a contract list that promises what the stats table
 denies is the worse experience.
 
-| 6 | Flight pays the ascent: `build_route_for_rocket` adds `ascent.gravity_by_group` to the first leg's `dv_cost` when the origin is a surface (and `fly_spacecraft` from a surface likewise), so what reaches orbit is what the planner budgeted and the stranding thresholds mean what they say. | **gameplay**: less propellant in orbit, strandings become possible for marginal designs | **measure** |
+| 6 ✅ | Flight pays the ascent: `build_route_for_rocket` adds `ascent.gravity_by_group` to the first leg's `dv_cost` when the origin is a surface (and `fly_spacecraft` from a surface likewise), so what reaches orbit is what the planner budgeted and the stranding thresholds mean what they say. | **gameplay**: less propellant in orbit, strandings become possible for marginal designs | **measure** |
 
 Your call on Q3 puts step 6 in scope. It lands after 3 and 4 so its
 effect is measured on its own.

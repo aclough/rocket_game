@@ -55,9 +55,9 @@ money specifically, and each of these has two definitions of one thing.
   `testing_gauge(...)` helper since the two blocks are identical.
 - **Size/risk:** small / none. Direct CLAUDE.md compliance fix.
 
-### A4. Three delta-v models feed the same decisions
+### ✅ A4. Three delta-v models feed the same decisions
 
-> Plan: `17_2_DELTA_V.md` (four models, not three — the flight's own burn is the fourth).
+> Plan: `17_2_DELTA_V.md` (four models, not three — the flight's own burn is the fourth). Done in six steps; the trajectory model it exposed is D7.
 - **Where:**
   (a) `RocketDesign::total_delta_v` (`rocket.rs:302-320`), pure vacuum;
   (b) planner `full_group_dv` (`path_planning.rs:67-77`), vacuum minus

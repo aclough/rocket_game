@@ -2554,8 +2554,12 @@ impl App {
                             // Save snapshot for undo
                             state.snapshots.push((state.rocket.clone(), state.payload_kg));
 
-                            // Burn propellant (the ascent's Isp penalty included)
-                            let _ = state.rocket.burn_sequential(&state.design, dv_cost, &from);
+                            // Burn propellant the way the flight will: the
+                            // transfer plus, leaving a surface, the ascent's
+                            // gravity loss; the Isp penalty rides on the burn.
+                            let leg_cost = dv_cost
+                                + crate::flight::ascent_gravity_cost(&state.design, state.payload_kg, &from);
+                            let _ = state.rocket.burn_sequential(&state.design, leg_cost, &from);
                             state.rocket.location = dest_id.clone();
                             state.current_location = dest_id;
 
@@ -2563,7 +2567,7 @@ impl App {
                                 from,
                                 to: state.current_location.clone(),
                                 to_display: dest_display,
-                                dv_cost,
+                                dv_cost: leg_cost,
                             });
 
                             // Recompute destinations
