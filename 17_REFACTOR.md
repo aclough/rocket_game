@@ -420,7 +420,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
 | E3 ✅ | `rocket.rs` | 2140 | `rocket/{mod, staging, power, stats, fingerprint}` | 47% tests. Falls along existing `// ───` banners. |
 | E4 ✅ | `company.rs` | 1889 | `company/{mod, projects, retire, production, floor, staffing, research}` | `retire.rs` and `floor.rs` are already self-contained with doc essays. |
 | E5 ✅ | `contract.rs` | 1714 | `contract/{mod, market, campaign, archetype, templates}` | ~600 lines are pure data literals. |
-| E6 | `game_state/tests.rs` | 3381 | `game_state/tests/{clock, rockets, manufacturing, flights, reactors, launch, geopolitics, retire}` | 94 tests, no inner modules. Two UI-table tests belong in `ui/draw.rs`. |
+| E6 ✅ | `game_state/tests.rs` | 3381 | `game_state/tests/{clock, rockets, manufacturing, flights, reactors, launch, geopolitics, retire}` | 94 tests, no inner modules. Two UI-table tests belong in `ui/draw.rs`. |
 | E7 ✅ | `rocket_project.rs` | 796 | move `max_payload_to`, `trip_power_along`, `survives_trip`, `payload_table*` (`:210-399`) to `rocket_perf.rs` | Vehicle performance analysis, not workflow. |
 | E8 ✅ | `location.rs` | 1380 | `location/{mod, graph_data}` | See D3. |
 
