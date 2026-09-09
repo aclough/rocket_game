@@ -19,6 +19,7 @@ pub mod reactor_project;
 pub mod structure;
 pub mod resources;
 pub mod rocket_project;
+pub mod rocket_perf;
 pub mod manufacturing;
 pub mod third_party;
 pub mod contract;

@@ -35,7 +35,7 @@ use rocket_tycoon::contract::{
 use rocket_tycoon::event::GameEvent;
 use rocket_tycoon::game_state::{BidRule, GameState};
 use rocket_tycoon::policy::policy_by_name;
-use rocket_tycoon::rocket_project::max_payload_to;
+use rocket_tycoon::rocket_perf::max_payload_to;
 
 /// A fresh game with the scripted competitor disabled (so the player
 /// is the sole bidder) and DinoSoar's realized "Brontosaur IV"

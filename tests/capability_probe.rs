@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use rocket_tycoon::game_state::GameState;
 use rocket_tycoon::policy::{BasicPolicy, CompanyPolicy};
 use rocket_tycoon::rocket::{DesignPerformance, RocketDesign};
-use rocket_tycoon::rocket_project::max_payload_to;
+use rocket_tycoon::rocket_perf::max_payload_to;
 use rocket_tycoon::save;
 
 const DESTINATIONS: [&str; 4] = ["leo", "gto", "geo", "lunar_orbit"];

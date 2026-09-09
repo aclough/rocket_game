@@ -8,6 +8,7 @@ use crate::game_state::GameState;
 use crate::manufacturing::ManufacturingOrderType;
 use crate::project::{DesignProject, DesignStatus, Designable, Improvement, ProjectKind};
 use crate::rocket_project;
+use crate::rocket_perf;
 use crate::event::EventImportance;
 use crate::flaw::{Flaw, FlawTrigger};
 use crate::launch::LaunchOutcome;
@@ -1932,7 +1933,7 @@ fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: &RocketDesi
                 // Reuses the path the planner just found, so the endurance
                 // answer costs no extra search — and it is the same check
                 // the contract list colours by, so the two agree.
-                let power = rocket_project::trip_power_along(
+                let power = rocket_perf::trip_power_along(
                     &temp_design, &path, state.payload_kg,
                 );
                 // Calendar days from launch to arrival. `flight_days`

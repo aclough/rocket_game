@@ -454,7 +454,7 @@ impl GameState {
     ) -> f64 {
         let key = (design.fingerprint(), from.to_string(), to.to_string());
         memo(&self.payload_capability_cache, key, || {
-            crate::rocket_project::max_payload_to(design, from, to)
+            crate::rocket_perf::max_payload_to(design, from, to)
         })
     }
 
@@ -466,7 +466,7 @@ impl GameState {
             design.fingerprint(), from.to_string(), to.to_string(), payload_kg.to_bits(),
         );
         memo(&self.trip_survival_cache, key, || {
-            crate::rocket_project::survives_trip(design, from, to, payload_kg)
+            crate::rocket_perf::survives_trip(design, from, to, payload_kg)
         })
     }
 
