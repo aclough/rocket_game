@@ -530,10 +530,14 @@ mod tests {
     }
 
     /// 2-stage hybrid: chemical booster + ion upper. Sized so S1 alone can
-    /// reach LEO — gravity losses included — and the ion S2 carries enough
-    /// xenon to spiral to NEA.
+    /// reach LEO — gravity losses and the 70 kPa nozzle's sea-level Isp
+    /// penalty (~6% of S1's Δv) included — and the ion S2 carries enough
+    /// xenon to spiral to NEA. At 280 s the booster had ~8.4 km/s for a
+    /// ~8.3 km/s ascent before the planner charged overexpansion; more
+    /// propellant barely helps at a mass ratio of 30, so the fixture's
+    /// Isp is 310 s (vacuum kerolox territory) to keep the margin.
     fn chemical_then_ion() -> RocketDesign {
-        let s1 = stage(1, "S1", kerolox_engine(1, 50_000_000.0, 5_000.0, 280.0), 1, 2_400_000.0, 40_000.0);
+        let s1 = stage(1, "S1", kerolox_engine(1, 50_000_000.0, 5_000.0, 310.0), 1, 2_400_000.0, 40_000.0);
         let s2 = stage(2, "S2-Ion", ion_engine(2, 500.0, 200.0, 3500.0), 1, 30_000.0, 5_000.0);
         RocketDesign {
             id: RocketDesignId(2), name: "ChemIon".into(),

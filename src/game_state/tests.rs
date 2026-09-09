@@ -724,7 +724,7 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
 
     // Simulate burning the ion stage along the Eros transit.
     let (_, eros_dv) = eros_path.unwrap();
-    let burn_result = rocket.burn_sequential(&design, eros_dv, 0.0);
+    let burn_result = rocket.burn_sequential(&design, eros_dv, "leo");
     assert!(burn_result.dv_achieved > 6000.0,
         "Should burn significant dv for Eros transit, got {}", burn_result.dv_achieved);
 
@@ -974,7 +974,6 @@ fn arrive_test_flight(
             from: "earth_surface".into(),
             to: destination.into(),
             delta_v_cost: 0.0, burn_days: 0, coast_days: 0,
-            ambient_pressure_pa: 0.0,
         }],
         current_leg: 0,
         leg_days_remaining: 0,
@@ -1019,7 +1018,6 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
         route: vec![FlightLeg {
             from: "earth_surface".into(), to: "leo".into(),
             delta_v_cost: 0.0, burn_days: 0, coast_days: 0,
-            ambient_pressure_pa: 0.0,
         }],
         current_leg: 0,
         leg_days_remaining: 0,

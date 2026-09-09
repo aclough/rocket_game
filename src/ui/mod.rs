@@ -2554,12 +2554,8 @@ impl App {
                             // Save snapshot for undo
                             state.snapshots.push((state.rocket.clone(), state.payload_kg));
 
-                            // Burn propellant (account for atmospheric Isp penalty)
-                            let ambient = crate::location::DELTA_V_MAP
-                                .surface_properties(&from)
-                                .filter(|p| p.has_atmosphere)
-                                .map_or(0.0, |p| p.ambient_pressure_pa);
-                            let _ = state.rocket.burn_sequential(&state.design, dv_cost, ambient);
+                            // Burn propellant (the ascent's Isp penalty included)
+                            let _ = state.rocket.burn_sequential(&state.design, dv_cost, &from);
                             state.rocket.location = dest_id.clone();
                             state.current_location = dest_id;
 

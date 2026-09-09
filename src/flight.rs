@@ -88,9 +88,6 @@ pub struct FlightLeg {
     pub delta_v_cost: f64,
     pub burn_days: u32,
     pub coast_days: u32,
-    /// Ambient pressure at departure in Pa (>0 for atmospheric launches).
-    #[serde(default)]
-    pub ambient_pressure_pa: f64,
 }
 
 impl FlightLeg {
@@ -257,7 +254,7 @@ impl Flight {
                 .map(|gi| sim_rocket.group_remaining_delta_v(&sim_design, gi))
                 .collect();
 
-            sim_rocket.burn_sequential(&sim_design, leg.delta_v_cost, leg.ambient_pressure_pa);
+            sim_rocket.burn_sequential(&sim_design, leg.delta_v_cost, &leg.from);
 
             let after: Vec<f64> = (0..n_groups)
                 .map(|gi| sim_rocket.group_remaining_delta_v(&sim_design, gi))
@@ -311,21 +308,12 @@ pub fn build_route(
                 0
             };
 
-            // Look up ambient pressure at the departure location
-            let ambient_pressure_pa = if transfer.through_atmosphere {
-                DELTA_V_MAP.surface_properties(from)
-                    .map_or(0.0, |p| p.ambient_pressure_pa)
-            } else {
-                0.0
-            };
-
             legs.push(FlightLeg {
                 from: from.to_string(),
                 to: to.to_string(),
                 delta_v_cost: dv_cost,
                 burn_days,
                 coast_days,
-                ambient_pressure_pa,
             });
         }
     }
@@ -404,25 +392,17 @@ pub fn build_route_for_rocket(
             0
         };
 
-        let ambient_pressure_pa = if transfer.through_atmosphere {
-            DELTA_V_MAP.surface_properties(from)
-                .map_or(0.0, |p| p.ambient_pressure_pa)
-        } else {
-            0.0
-        };
-
         legs.push(FlightLeg {
             from: from.to_string(),
             to: to.to_string(),
             delta_v_cost: dv_cost,
             burn_days,
             coast_days,
-            ambient_pressure_pa,
         });
 
         // Advance the simulated rocket through this burn so the next
         // leg sees the updated stage states (and any jettisons).
-        sim.burn_sequential(design, dv_cost, ambient_pressure_pa);
+        sim.burn_sequential(design, dv_cost, from);
     }
     legs
 }
@@ -564,12 +544,10 @@ mod tests {
                 FlightLeg {
                     from: "earth_surface".into(), to: "leo".into(),
                     delta_v_cost: 9400.0, burn_days: 1, coast_days: 0,
-                    ambient_pressure_pa: 101_325.0,
                 },
                 FlightLeg {
                     from: "leo".into(), to: "gto".into(),
                     delta_v_cost: 2440.0, burn_days: 0, coast_days: 1,
-                    ambient_pressure_pa: 0.0,
                 },
             ],
             current_leg: 0,
@@ -703,12 +681,10 @@ mod tests {
                 FlightLeg {
                     from: "earth_surface".into(), to: "leo".into(),
                     delta_v_cost: 9_400.0, burn_days: 1, coast_days: 0,
-                    ambient_pressure_pa: 101_325.0,
                 },
                 FlightLeg {
                     from: "leo".into(), to: "gto".into(),
                     delta_v_cost: 2_440.0, burn_days: 1, coast_days: 2,
-                    ambient_pressure_pa: 0.0,
                 },
             ],
             current_leg: 0,

@@ -10,7 +10,10 @@
 //! keep min money above $25M, aggregate success 87.7% (2,489 of
 //! 2,839), worst surviving seed 62%, 6–26 launches per surviving seed,
 //! deaths at 7–14 launches. First-launch month (16.8), dev spend
-//! ($71.1M) and hidden flaws (8.3) did not move. These bands are
+//! ($71.1M) and hidden flaws (8.3) did not move. Steps 4 and 4b (the
+//! planner charges the sea-level Isp penalty, averaged over the climb)
+//! re-measured inside these bands — 14/200 bankrupt, 86.7% aggregate,
+//! 129/200 above $25M, 32/200 end above start — so they held. They are
 //! re-measured after step 6 (flight pays the ascent) and the roguelike
 //! 1–6% bankruptcy target is revisited then — see the plan's Q5 for the
 //! bot-margin experiments that did not restore the pre-step-3 figures.

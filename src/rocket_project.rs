@@ -220,7 +220,7 @@ pub fn trip_power_along(
                 return TripPower { flight_days, dark_on_day: Some(day) };
             }
         }
-        rocket.burn_sequential(design, leg.delta_v_cost, leg.ambient_pressure_pa);
+        rocket.burn_sequential(design, leg.delta_v_cost, &leg.from);
         day += 1;
         if rocket.run_daily_power_tick(design, sun_au_at(&leg.to)) {
             return TripPower { flight_days, dark_on_day: Some(day) };

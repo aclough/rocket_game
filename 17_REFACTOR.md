@@ -428,6 +428,29 @@ refactor above easier to see. Proposed layouts are in the appendix.
 
 ## F. UI patterns
 
+### D7. The ascent trajectory model is a pure gravity turn
+- **Where:** `location::simulate_ascent` — a 1° kick at 45 m/s, then
+  `dθ/dt = g·cosθ/v − v·cosθ/r` with no pitch program or altitude
+  target.
+- **Symptom:** a TWR-1.22 vehicle (the sim bot's template) is flying
+  level at 11 km when its first stage burns out, so the upper stage
+  burns to orbit at 11 km with no gravity loss at all; a TWR-1.64
+  vehicle (the m1 corpus rocket) stages at 91 km and its upper stage
+  climbs to 926 km paying 1.9 km/s. Real launchers stage at 60–80 km
+  with the upper stage pitched 20–30° above the horizon. The gravity
+  losses the planner and the launch check use are tuned into the
+  balance around this model, and the bot's 60 t first stage was sized
+  to its "handover near-horizontal" (policy.rs `build_template`).
+- **Consequence today:** the ambient-averaged overexpansion charge
+  (17_2_DELTA_V.md step 4b) trusts the integrator's altitude only for
+  the first group; later groups are charged nothing rather than the
+  air at whatever altitude the model puts them.
+- **Fix:** a pitch program with an altitude target at staging (or a
+  kick-over velocity that scales with TWR), re-measured with the
+  200-seed run and the capability probe; the balance numbers will move
+  and the bot template will need re-sizing. Belongs with D6 in a
+  physics pass, not in the delta-v plan.
+
 ### F1. ~20 hand-rolled Up/Down cursor pairs
 - **Where:** `ui/mod.rs` at 2141, 2195, 2233, 2249, 2379, 2415, 2461,
   2496, 2523, 2547, 2573, 2612, 2673, 3188, 3366, 3508, 3614, 3742,

@@ -394,13 +394,18 @@ impl BurnPhase {
         (self.thrust_n / self.mass_flow_kg_s) * (self.mass_start_kg / self.mass_end_kg).ln()
     }
 
-    /// The ascent integrator's view of this phase.
-    pub fn ascent_phase(&self) -> location::AscentPhase {
+    /// The ascent integrator's view of this phase; `stages` is the list
+    /// `active` indexes, for the nozzles firing.
+    pub fn ascent_phase(&self, stages: &[Stage]) -> location::AscentPhase {
         location::AscentPhase {
             thrust_n: self.thrust_n,
             mass_flow_kg_s: self.mass_flow_kg_s,
             propellant_kg: self.propellant_kg,
             dry_mass_dropped_kg: self.dry_mass_dropped_kg,
+            nozzles: self.active.iter().map(|&k| location::AscentNozzle {
+                exit_pressure_pa: stages[k].engine.exit_pressure_pa,
+                thrust_n: stages[k].total_thrust_n(),
+            }).collect(),
         }
     }
 }
@@ -566,16 +571,27 @@ impl Rocket {
     /// Burns the lowest attached group first; when exhausted, jettisons it and
     /// continues with the next group. Returns actual delta-v achieved and
     /// which groups were jettisoned.
-    pub fn burn_sequential(&mut self, design: &RocketDesign, target_dv: f64, ambient_pressure_pa: f64) -> BurnResult {
+    ///
+    /// `from` is where the burn starts. From a surface with an atmosphere
+    /// the first group pays the sea-level Isp penalty the ascent
+    /// integration averaged over its climb
+    /// (`AscentLosses::isp_fraction_by_group`) — the same figure the
+    /// planner budgeted, so the flight arrives with what the design
+    /// promised. Anywhere else, and for every later group, the nozzles
+    /// run in vacuum.
+    pub fn burn_sequential(&mut self, design: &RocketDesign, target_dv: f64, from: &str) -> BurnResult {
         let mut dv_remaining = target_dv;
         let mut dv_achieved = 0.0;
         let mut groups_burned = Vec::new();
         let mut groups_jettisoned = Vec::new();
         let mut stages_jettisoned = Vec::new();
         let n = self.stage_states.len();
-        // Only the first group that burns gets the atmospheric Isp penalty;
-        // upper stages fire at high altitude where atmosphere is negligible.
-        let mut first_burn = true;
+        let atmospheric = DELTA_V_MAP.surface_properties(from).is_some_and(|p| p.has_atmosphere);
+        let isp_fractions: Vec<f64> = if atmospheric {
+            DesignPerformance::compute(design, self.payload_mass_kg, from).ascent.isp_fraction_by_group
+        } else {
+            Vec::new()
+        };
 
         for gi in 0..n {
             if dv_remaining <= 0.0 {
@@ -606,19 +622,18 @@ impl Rocket {
                 continue;
             }
 
-            let ambient = if first_burn { ambient_pressure_pa } else { 0.0 };
-            first_burn = false;
+            let isp_fraction = isp_fractions.get(gi).copied().unwrap_or(1.0);
 
             if group_dv >= dv_remaining {
                 // This group can satisfy the remaining target — partial burn
-                let (burned, dropped) = self.burn_group(design, gi, dv_remaining, ambient);
+                let (burned, dropped) = self.burn_group(design, gi, dv_remaining, isp_fraction);
                 dv_achieved += burned;
                 dv_remaining -= burned;
                 groups_burned.push(gi);
                 stages_jettisoned.extend(dropped.into_iter().map(|si| (gi, si)));
             } else {
                 // Exhaust this entire group — burn all propellant
-                let (burned, dropped) = self.burn_group(design, gi, f64::INFINITY, ambient);
+                let (burned, dropped) = self.burn_group(design, gi, f64::INFINITY, isp_fraction);
                 dv_achieved += burned;
                 dv_remaining -= burned;
                 stages_jettisoned.extend(dropped.into_iter().map(|si| (gi, si)));
@@ -680,10 +695,12 @@ impl Rocket {
     /// Burn a specific group for a target delta-v, phase by phase: the
     /// stages fire together, the shortest tank empties and that stage is
     /// jettisoned, and the rest carry on — the same phases the design's
-    /// delta-v and the ascent integration are built from. Returns the
-    /// delta-v achieved and the stages dropped along the way.
+    /// delta-v and the ascent integration are built from. `isp_fraction`
+    /// scales the exhaust velocity for the air the group burns through
+    /// (1.0 in vacuum). Returns the delta-v achieved and the stages
+    /// dropped along the way.
     fn burn_group(
-        &mut self, design: &RocketDesign, gi: usize, target_dv: f64, ambient_pressure_pa: f64,
+        &mut self, design: &RocketDesign, gi: usize, target_dv: f64, isp_fraction: f64,
     ) -> (f64, Vec<usize>) {
         let n = self.stage_states.len();
 
@@ -718,11 +735,11 @@ impl Rocket {
                 break;
             };
 
-            // Exhaust velocity for this phase, accounting for the
-            // overexpansion Isp penalty when burning in atmosphere.
+            // Exhaust velocity for this phase, less the overexpansion Isp
+            // penalty the ascent averaged for this group.
             let total_thrust: f64 = phase.active.iter()
-                .map(|&k| subset[k].total_thrust_n() * subset[k].engine.isp_fraction_at(ambient_pressure_pa))
-                .sum();
+                .map(|&k| subset[k].total_thrust_n())
+                .sum::<f64>() * isp_fraction;
             let total_flow = phase.mass_flow_kg_s;
             if total_flow <= 0.0 {
                 break;
@@ -1024,20 +1041,21 @@ pub struct GroupPerformance {
 
 impl GroupPerformance {
     /// What the planner may spend from this group: vacuum less the
-    /// gravity it pays climbing out. Drag is charged on the ascent edge
+    /// gravity it pays climbing out and the sea-level Isp penalty its
+    /// first burn eats (the flight charges both, in `burn_group` and
+    /// the ascent integration). Drag is charged on the ascent edge
     /// against the mass actually flown, so it is not taken here.
-    /// (Step 4 of `17_2_DELTA_V.md` adds the overexpansion loss.)
     pub fn planner_dv(&self) -> f64 {
-        (self.delta_v_vacuum - self.gravity_loss).max(0.0)
+        (self.delta_v_vacuum - self.gravity_loss - self.overexpansion_loss).max(0.0)
     }
 
-    /// What the stats table shows: everything charged to the group.
+    /// What the stats table shows: the planner's figure less drag, so
+    /// everything is charged to the group.
     pub fn effective_dv(&self) -> f64 {
         if self.is_sail {
             return f64::INFINITY;
         }
-        (self.delta_v_vacuum - self.gravity_loss - self.aero_drag_loss - self.overexpansion_loss)
-            .max(0.0)
+        (self.planner_dv() - self.aero_drag_loss).max(0.0)
     }
 
     /// The vacuum figure as displayed: ∞ for a sail.
@@ -1059,8 +1077,14 @@ pub struct AscentLosses {
     /// ascent — group 0, and any later group that ignites before
     /// orbital velocity.
     pub gravity_by_group: Vec<f64>,
-    /// Flow-weighted sea-level Isp penalty on the first group.
+    /// Sea-level Isp penalty across the groups (m/s); zero without an
+    /// atmosphere.
     pub overexpansion: f64,
+    /// Each group's propellant-weighted Isp fraction over the climb
+    /// (`AscentGroupResult::isp_fraction`; 1.0 past the first group, see
+    /// `design_ascent`): what the flight's burn applies, so it and the
+    /// planner agree.
+    pub isp_fraction_by_group: Vec<f64>,
     /// Drag on the first group. For display; the planner charges it on
     /// the ascent edge.
     pub drag: f64,
@@ -1088,10 +1112,9 @@ impl DesignPerformance {
         // numbers stay readable when launching from a non-surface location.
         let surface_g = surface_props.map_or(9.81, |p| p.gravity_m_s2);
         let has_atmosphere = surface_props.is_some_and(|p| p.has_atmosphere);
-        let ambient_pressure = surface_props.map_or(0.0, |p| p.ambient_pressure_pa);
 
         let total_mass = design.total_mass_kg() + payload_kg;
-        let gravity_losses = group_gravity_losses(design, payload_kg, launch_from);
+        let ascent_groups = design_ascent(design, payload_kg, launch_from);
         let first_stage_aero = if has_atmosphere {
             location::aero_drag_loss(total_mass)
         } else {
@@ -1099,11 +1122,9 @@ impl DesignPerformance {
         };
 
         let mut groups = Vec::with_capacity(n);
-        for (gi, (group, &gravity_loss)) in design.stage_groups.iter().zip(&gravity_losses).enumerate() {
+        for (gi, (group, ascent_group)) in design.stage_groups.iter().zip(&ascent_groups).enumerate() {
             let thrust: f64 = group.iter().map(|s| s.total_thrust_n()).sum();
-            let flow: f64 = group.iter()
-                .map(|s| s.engine.mass_flow_rate() * s.engine_count as f64)
-                .sum();
+            let gravity_loss = ascent_group.gravity_loss;
 
             // Mass above this group: upper groups + payload
             let payload_above: f64 = design.stage_groups[gi + 1..].iter()
@@ -1129,19 +1150,9 @@ impl DesignPerformance {
 
             let aero_drag_loss = if gi == 0 { first_stage_aero } else { 0.0 };
 
-            // Sea-level Isp penalty on the first group: flow-weighted
-            // average Isp fraction across the group's engines.
-            let overexpansion_loss = if gi == 0 && has_atmosphere && ambient_pressure > 0.0 && flow > 0.0 {
-                let weighted_isp_frac: f64 = group.iter()
-                    .map(|s| {
-                        let f = s.engine.mass_flow_rate() * s.engine_count as f64;
-                        s.engine.isp_fraction_at(ambient_pressure) * f
-                    })
-                    .sum::<f64>() / flow;
-                delta_v_vacuum * (1.0 - weighted_isp_frac)
-            } else {
-                0.0
-            };
+            // Sea-level Isp penalty, as the ascent averaged it over the
+            // group's climb (nothing for a group that burns in vacuum).
+            let overexpansion_loss = delta_v_vacuum * (1.0 - ascent_group.isp_fraction);
 
             groups.push(GroupPerformance {
                 mass_ratio,
@@ -1156,8 +1167,9 @@ impl DesignPerformance {
         }
 
         let ascent = AscentLosses {
-            gravity_by_group: gravity_losses,
-            overexpansion: groups[0].overexpansion_loss,
+            gravity_by_group: ascent_groups.iter().map(|g| g.gravity_loss).collect(),
+            overexpansion: groups.iter().map(|g| g.overexpansion_loss).sum(),
+            isp_fraction_by_group: ascent_groups.iter().map(|g| g.isp_fraction).collect(),
             drag: first_stage_aero,
         };
         DesignPerformance { groups, ascent }
@@ -1212,9 +1224,21 @@ pub fn group_gravity_losses(
     payload_kg: f64,
     launch_from: &str,
 ) -> Vec<f64> {
+    design_ascent(design, payload_kg, launch_from).iter().map(|g| g.gravity_loss).collect()
+}
+
+/// The ascent integration for a design launched from `launch_from`
+/// with `payload_kg` aboard: gravity loss and averaged Isp fraction per
+/// stage group (see [`location::simulate_ascent`]). From anywhere but a
+/// surface there is no climb: no loss, full Isp.
+pub fn design_ascent(
+    design: &RocketDesign,
+    payload_kg: f64,
+    launch_from: &str,
+) -> Vec<location::AscentGroupResult> {
     let n = design.stage_groups.len();
     let Some(props) = DELTA_V_MAP.surface_properties(launch_from) else {
-        return vec![0.0; n];
+        return vec![location::AscentGroupResult { gravity_loss: 0.0, isp_fraction: 1.0, burnout_altitude_m: 0.0 }; n];
     };
     // Each group as its burn phases, so a booster that runs dry early
     // takes its thrust and its structure out of the integration when it
@@ -1236,15 +1260,24 @@ pub fn group_gravity_losses(
                 .map(|s| s.wet_mass_kg())
                 .sum::<f64>()
                 + payload_kg;
-            design.burn_phases(gi, payload_above).iter().map(|p| p.ascent_phase()).collect()
+            // Only the first group is charged the sea-level Isp penalty.
+            // Upper groups are taken to light above the sensible
+            // atmosphere: the integrator's altitude is a pure gravity
+            // turn from a 1° kick, which has a TWR-1.2 vehicle flying
+            // level at 11 km and a TWR-1.6 one staging at 90 km, and
+            // billing a vacuum bell for the air at either is fiction
+            // (17_REFACTOR.md D7). Their nozzles are left out, so the
+            // integrator charges them nothing.
+            design.burn_phases(gi, payload_above).iter().map(|p| {
+                let mut phase = p.ascent_phase(group);
+                if gi > 0 {
+                    phase.nozzles.clear();
+                }
+                phase
+            }).collect()
         })
         .collect();
-    location::simulate_ascent(
-        props.gravity_m_s2,
-        props.radius_m,
-        &groups,
-        design.total_mass_kg() + payload_kg,
-    )
+    location::simulate_ascent(props, &groups, design.total_mass_kg() + payload_kg)
 }
 
 #[cfg(test)]
@@ -1489,7 +1522,7 @@ mod tests {
         let first_phase_dv = design.burn_phases(0, payload)[0].delta_v();
 
         // Burn a little past the boosters' phase.
-        let result = rocket.burn_sequential(&design, first_phase_dv + 200.0, 0.0);
+        let result = rocket.burn_sequential(&design, first_phase_dv + 200.0, "leo");
         assert!((result.dv_achieved - (first_phase_dv + 200.0)).abs() < 1.0);
         assert!(!rocket.stage_states[0][1].attached && !rocket.stage_states[0][2].attached,
             "boosters jettisoned once empty");
@@ -1896,7 +1929,7 @@ mod tests {
         let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
         let initial_dv = rocket.remaining_delta_v(&design);
 
-        let result = rocket.burn_sequential(&design, 1_000.0, 0.0);
+        let result = rocket.burn_sequential(&design, 1_000.0, "leo");
         assert!((result.dv_achieved - 1_000.0).abs() < 1.0, "Should burn ~1000 m/s, got {}", result.dv_achieved);
         assert!(result.groups_jettisoned.is_empty());
 
@@ -1938,7 +1971,7 @@ mod tests {
         let s1_dv = rocket.group_remaining_delta_v(&design, 0);
         let target = s1_dv + 500.0; // need some from S2
 
-        let result = rocket.burn_sequential(&design, target, 0.0);
+        let result = rocket.burn_sequential(&design, target, "leo");
         assert!((result.dv_achieved - target).abs() < 50.0,
             "Should burn ~{} m/s, got {}", target, result.dv_achieved);
         assert_eq!(result.groups_jettisoned, vec![0]);
@@ -1975,7 +2008,7 @@ mod tests {
         let total_dv = rocket.remaining_delta_v(&design);
 
         // Ask for way more than available
-        let result = rocket.burn_sequential(&design, total_dv + 5_000.0, 0.0);
+        let result = rocket.burn_sequential(&design, total_dv + 5_000.0, "leo");
         assert!((result.dv_achieved - total_dv).abs() < 50.0,
             "Should only burn total available dv={}, got {}", total_dv, result.dv_achieved);
     }

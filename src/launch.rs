@@ -662,15 +662,22 @@ mod tests {
         assert_eq!(sim.degraded_design.stage_groups[0][0].engine.isp_s, e1.isp_s,
             "no flaws fired, so the flight's design carries the nominal Isp");
 
-        // The first burn, at pad pressure, pays the penalty exactly once.
+        // The first burn pays the penalty exactly once, at the fraction the
+        // ascent averaged over the climb: less than the pad figure, since
+        // the air thins as the propellant goes, and less than 1.
+        let averaged = DesignPerformance::compute(&sim.degraded_design, 0.0, "earth_surface")
+            .ascent.isp_fraction_by_group[0];
+        assert!(frac < averaged && averaged < 1.0,
+            "the climb averages the penalty: pad {frac:.4} < flown {averaged:.4} < 1");
         let mut rocket = sim.degraded_design.instantiate(RocketId(1), "earth_surface", 0.0);
         let m0: f64 = sim.degraded_design.stage_groups.iter().flatten().map(|s| s.wet_mass_kg()).sum();
-        let result = rocket.burn_sequential(&sim.degraded_design, 1_000.0, ambient);
+        let result = rocket.burn_sequential(&sim.degraded_design, 1_000.0, "earth_surface");
         let prop_used = 50_000.0 - rocket.stage_states[0][0].propellant_remaining_kg;
         let implied_ve = result.dv_achieved / (m0 / (m0 - prop_used)).ln();
         let ratio = implied_ve / (e1.isp_s * G0);
-        assert!((ratio - frac).abs() < 1e-6,
-            "exhaust velocity should be nominal × {frac:.4}, got × {ratio:.4} (× frac² would be {:.4})", frac * frac);
+        assert!((ratio - averaged).abs() < 1e-6,
+            "exhaust velocity should be nominal × {averaged:.4} (the ascent-averaged fraction), \
+             got × {ratio:.4}; the pad fraction is {frac:.4} and frac² would be {:.4}", frac * frac);
     }
 
     #[test]

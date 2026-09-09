@@ -433,6 +433,170 @@ with (1).
 CLAUDE: Done — knob, cache and gate removed; step 3 is launch.rs, its
 test, the bands and this record.
 
+### Step 4 record (measured after the planner charges overexpansion)
+
+`GroupPerformance::planner_dv` = vacuum − gravity − overexpansion;
+`effective_dv` = that − drag. The bot's first-stage nozzle loses 1.6%
+of its vacuum Δv at sea level (177 m/s of 11,256 at a 1 t payload), and
+the capabilities move with it (`tests/capability_probe.rs`, kept as an
+ignored probe for later steps):
+
+| Design | LEO | GTO | GEO | Lunar orbit |
+|---|---|---|---|---|
+| Bot template, before | 2,820 kg | 1,016 | 380 | 363 |
+| Bot template, after | 2,640 kg (−6%) | 931 (−8%) | 318 (−16%) | 302 (−17%) |
+| Corpus m1–m4 rocket (early-era booster) | 703 → 645 kg | 0 | 0 | 0 |
+| Corpus m5 rocket | same as the bot template | | | |
+
+The smallsat class still lifts to LEO (Q2's line), so the physics is
+accepted as recommended. The sim moved more than the capabilities did:
+
+| Metric | Step 3 | Step 4 |
+|---|---|---|
+| Launches | 2,839 | 2,450 |
+| Aggregate launch success | 87.7% | 85.9% |
+| Bankrupt | 13/200 | 24/200 |
+| Dip below $0 | 27/200 | 37/200 |
+| Ever profitable | 189/200 | 184/200 |
+| Keep min money above $25M | 131/200 | 122/200 |
+| Avg final money | $139.8M | $106.5M |
+| Unit cost / payment | $15.7M / $30.5M | $16.0M / $31.1M |
+
+The mechanism is the one the step 3 sweep exposed: the bot's income is
+the contracts at the edge of its capability, and a 6–17% smaller edge
+takes a seventh of its launches away while salaries continue. Fewer
+launches also leave flaws hidden longer, so the success rate drifts
+down rather than up. The bankruptcy rate is now 12%, three times the
+roguelike target of 2–4% and above the provisional 8% ceiling set at
+step 3; the 20-seed smoke check also fails (18/20 seeds ever
+profitable against a 92% floor).
+
+**Q6 — the step 4 gate.** The plan named the choices in advance:
+retune in balance data, or ship step 3 without 4. A third has appeared.
+
+1. **Accept step 4 as measured and recalibrate the bands again**
+   (bankrupt ceiling 14% at 200 seeds, ever-profitable floor 88%,
+   aggregate success 82%). Cheapest, and step 6 will move them once
+   more anyway. But it codifies a 12% death rate for the bot until
+   someone gives it a better template, and every later balance change
+   is measured against that.
+2. **Retune balance data so the bot's opening capability comes back**:
+   the engine presets' exit pressures (the bot's booster nozzle sits
+   at ~40 kPa; a preset nearer 60 kPa would halve the penalty) or the
+   booster's Isp baseline. This restores roughly the step 3 numbers
+   without touching code, at the cost of quietly changing every
+   engine in the game to pay for one bot.
+3. **Charge overexpansion the way the atmosphere actually thins**:
+   both the flight's first burn and the planner charge the *whole*
+   first-stage burn at sea-level ambient, which over-penalises a
+   90-second booster that spends most of its burn above 10 km. An
+   ambient-averaged fraction along the ascent profile is a physics
+   change to `burn_group` and `compute` together (a D-section item),
+   and would shrink the penalty for every design, not just the bot's.
+   Right long-term, but it is a new plan item, not a step of this one.
+
+My recommendation: (1) now so this step lands and step 6 can be
+measured on top of it, and open (3) as a D item for the physics pass,
+since the double charge this plan removed and the whole-burn ambient
+are the same kind of error.
+
+USER: Lets try 3 but check if it slows down the calculations
+
+CLAUDE: Done as step 4b below; the timing is in its record. The bands
+did not need to move.
+
+### Step 4b record (overexpansion charged as the air thins)
+
+**Design.** The ascent integrator already tracks altitude, so it now
+carries the atmosphere too:
+
+- `SurfaceProperties::scale_height_m` (Earth 8,500 m, Mars 11,100 m,
+  Venus at the 1-bar level 7,500 m, 0 for airless bodies) and
+  `pressure_at(altitude)` = ambient × e^(−h/H). A new column in the
+  static location table, not a save-format change.
+- `AscentPhase` carries the nozzles firing (`AscentNozzle { exit_pressure_pa,
+  thrust_n }`); at each step the thrust is the vacuum figure times the
+  thrust-weighted `engine::isp_fraction` at the local pressure (the one
+  formula, extracted from `EngineDesign::isp_fraction_at`), and that
+  fraction weighted by the propellant burned at it becomes the group's
+  `AscentGroupResult::isp_fraction`. Propellant burned after orbital
+  velocity counts as vacuum. `simulate_ascent` takes the
+  `SurfaceProperties` and returns `AscentGroupResult { gravity_loss,
+  isp_fraction, burnout_altitude_m }` per group; `simulate_gravity_losses`
+  stays as the airless wrapper the tests use.
+- `DesignPerformance::compute` reads the fraction from the same
+  integration it already ran for gravity, so the planner's
+  `overexpansion_loss` is `vacuum × (1 − fraction)`;
+  `AscentLosses::isp_fraction_by_group` exposes it.
+- The flight uses the same figure: `Rocket::burn_sequential(design,
+  dv, from)` takes the departure location instead of a pressure, runs
+  `compute` for the flying design and payload when `from` has an
+  atmosphere, and `burn_group` scales exhaust velocity by the group's
+  fraction. `FlightLeg::ambient_pressure_pa` is gone — `from` was
+  already there, and the flow-separation roll reads pad pressure from
+  the surface table. Old saves load (the field is ignored).
+- The launch test now asserts pad fraction < flown fraction < 1 and
+  that the first burn's implied exhaust velocity is nominal × the flown
+  fraction.
+
+**What the first attempt found.** Charging every group by the
+integrator's altitude *raised* the bot's penalty from 177 to 929 m/s:
+the pure gravity turn has the TWR-1.22 template flying level at 11.4 km
+when the first stage burns out, so the vacuum bell on the upper stage
+was billed for 26 kPa of air it will never see (the m1 corpus rocket,
+TWR 1.64, stages at 91 km and its upper stage climbs to 926 km). The
+integrator's altitude is not to be trusted for staging, so
+`design_ascent` leaves upper groups' nozzles out and only the first
+group is charged — the assumption the old `burn_sequential` made in
+words ("upper stages fire at high altitude"), now in one place with
+the reason. The trajectory model itself is filed as 17_REFACTOR.md D7.
+
+**Capabilities** (`tests/capability_probe.rs`):
+
+| Design | LEO | GTO | GEO | Lunar orbit |
+|---|---|---|---|---|
+| Bot template, step 3 | 2,820 kg | 1,016 | 380 | 363 |
+| Bot template, step 4 (whole burn at pad pressure) | 2,640 | 931 | 318 | 302 |
+| Bot template, step 4b | 2,752 (−2%) | 992 (−2%) | 362 (−5%) | 345 (−5%) |
+| m1–m4 corpus rocket | 703 → 740 kg | 0 | 0 | 0 |
+
+The bot's 80 kPa booster nozzle is under-expanded above 2 km, so its
+penalty falls from 177 m/s (4.2% of the stage) to 29 m/s (0.7%); the
+first stage's gravity loss rises 669 → 702 m/s because its thrust is
+now the sea-level figure while it is low. The early-era corpus rocket
+gains capability for the same reason.
+
+**Sim**, 200 seeds × 8 years:
+
+| Metric | Step 3 | Step 4 | Step 4b |
+|---|---|---|---|
+| Launches | 2,839 | 2,450 | 2,708 |
+| Aggregate launch success | 87.7% | 85.9% | 86.7% |
+| Bankrupt | 13/200 | 24/200 | 14/200 |
+| Dip below $0 | 27/200 | 37/200 | 31/200 |
+| Ever profitable | 189/200 | 184/200 | 188/200 |
+| End above starting money | 44/200 | — | 32/200 |
+| Keep min money above $25M | 131/200 | 122/200 | 129/200 |
+| Avg final money | $139.8M | $106.5M | $123.2M |
+
+Within the provisional step 3 bands (20 and 200 seeds), so `sim_bands.rs`
+keeps its numbers; its header records the step. The oracle differs on
+1,551 of 2,896 rows, as a behaviour change should.
+
+**Timing** (release, bot template; `compute_timing` in the probe file):
+
+| | Before 4b | 4b, every step looks up pressure | 4b as landed |
+|---|---|---|---|
+| `DesignPerformance::compute` | 26.6 µs | 51.5 µs | 28–33 µs |
+| `max_payload_to` | 2.85 ms | 3.15 ms | 2.82–2.85 ms |
+| 200-seed × 8-year simulate | 6.1–6.6 s | 6.4 s | 6.6–6.8 s |
+
+The `exp` per integration step doubled `compute`; the ceiling altitude
+above which every nozzle firing is matched or under-expanded (2 km for
+the bot's booster) skips the lookup for the rest of the climb and
+brings it back to within noise of before. The sim wall-clock is
+dominated by other work and moved by less than run-to-run scatter.
+
 Every step: `cargo test`, clippy, the 40-seed simulate oracle, and for
 the steps marked **measure**, the 200-seed band run
 (`cargo run --release --bin simulate -- --seeds 1..200 --years 8 --policy basic --summary-only`)
@@ -445,7 +609,8 @@ compared against the baseline recorded first.
 | 1b ✅ | `BurnPhase` / `burn_phases`; `phased_parallel_delta_v` becomes a fold over it; the gravity integrator takes phases; `burn_group` walks phases and jettisons per stage. Add a gravity-loss test for a core + boosters group (loss must exceed the lumped figure) beside `test_core_plus_srbs_phased_burnout`. | **asymmetric groups only**: gravity loss and in-flight jettison | oracle identical (the bot's groups are symmetric); the new test pins the asymmetric case |
 | 2 ✅ | Designer Avail, shortfall "have", Rockets tab dV → `total_planner_dv()`. The negative-shortfall case is its own `MissionPlan::StagingInfeasible`. | UI only | oracle identical |
 | 3 ✅ (bands provisional until 6, see record) | `simulate_launch` judges on `total_planner_dv()` of the degraded design; drop the Isp/thrust scaling (fixes #4 if step 0 confirmed it). | **launch outcomes for flawed vehicles; first-leg propellant** | **measure**: launch success %, bankruptcies, first-launch month |
-| 4 | Planner charges overexpansion (`planner_dv()` as written above). | **capabilities drop for sea-level-nozzle first stages** | **measure**: plus a capability probe — `max_payload_to` for the bot's template and each corpus save's rocket to LEO/GTO/GEO before and after |
+| 4 ✅ | Planner charges overexpansion (`planner_dv()` as written above). | **capabilities drop for sea-level-nozzle first stages** | **measure**: plus a capability probe — `max_payload_to` for the bot's template and each corpus save's rocket to LEO/GTO/GEO before and after |
+| 4b ✅ | Overexpansion charged as the air thins: `SurfaceProperties::scale_height_m`, nozzles in the ascent integration, first group only; flight and planner read the same `isp_fraction_by_group` (Q6 → option 3). | **capabilities recover most of step 4's drop; first-stage gravity loss rises slightly** | **measure** + timing |
 | 5 | Update `sim_bands.rs` to the re-measured reality in the same commit as whichever of 3/4 moved it, per CLAUDE.md. Update pinned Δv numbers in `rocket.rs`, `path_planning.rs`, `launch.rs` tests. | — | bands green |
 
 Steps 1 and 2 are pure and can land immediately. Steps 3 and 4 each

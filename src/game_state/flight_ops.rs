@@ -959,16 +959,20 @@ fn tick_flight(
 
     if flight.leg_days_remaining == 0 {
         let leg = flight.route.get(flight.current_leg)
-            .map(|l| (l.delta_v_cost, l.ambient_pressure_pa, l.to.clone()));
-        if let Some((dv_cost, ambient, to)) = leg {
+            .map(|l| (l.delta_v_cost, l.from.clone(), l.to.clone()));
+        if let Some((dv_cost, from, to)) = leg {
             // Leg complete — consume propellant for this leg.
-            let burn_result = flight.rocket.burn_sequential(&flight.design, dv_cost, ambient);
+            let burn_result = flight.rocket.burn_sequential(&flight.design, dv_cost, &from);
             flight.current_location = to.clone();
             flight.rocket.location = to;
 
-            // Flow separation on an atmospheric leg: only the first burned
-            // group faces the pressure; upper groups fire at altitude, and
-            // a group already checked on the pad isn't checked again.
+            // Flow separation on an atmospheric leg, at pad pressure: only
+            // the first burned group faces it; upper groups fire at
+            // altitude, and a group already checked on the pad isn't
+            // checked again.
+            let ambient = crate::location::DELTA_V_MAP.surface_properties(&from)
+                .filter(|p| p.has_atmosphere)
+                .map_or(0.0, |p| p.ambient_pressure_pa);
             if ambient > 0.0 {
                 if let Some(&gi) = burn_result.groups_burned.first() {
                     if !flight.flaw_rolled_groups.contains(&gi) {

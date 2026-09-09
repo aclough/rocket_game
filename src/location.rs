@@ -11,9 +11,37 @@ pub struct SurfaceProperties {
     pub atmosphere_density: f64,
     /// Ambient pressure at the surface in Pascals (e.g. 101_325 for Earth).
     pub ambient_pressure_pa: f64,
+    /// Atmospheric scale height in metres: pressure falls by e every
+    /// `scale_height_m` of altitude (Earth ~8.5 km). 0 for an airless
+    /// body, or to hold the ambient value all the way up.
+    pub scale_height_m: f64,
 }
 
 impl SurfaceProperties {
+    /// Ambient pressure `altitude_m` above the surface: an exponential
+    /// atmosphere with the body's scale height. Without an atmosphere,
+    /// or without a scale height on record, the surface value holds
+    /// everywhere (which is 0 for an airless body).
+    pub fn pressure_at(&self, altitude_m: f64) -> f64 {
+        if !self.has_atmosphere || self.scale_height_m <= 0.0 {
+            return self.ambient_pressure_pa;
+        }
+        self.ambient_pressure_pa * (-altitude_m.max(0.0) / self.scale_height_m).exp()
+    }
+
+    /// The altitude above which pressure has fallen below `pressure_pa`:
+    /// 0 when it already has at the surface, ∞ when the ambient value
+    /// holds all the way up.
+    pub fn altitude_where_pressure_falls_to(&self, pressure_pa: f64) -> f64 {
+        if !self.has_atmosphere || self.ambient_pressure_pa <= pressure_pa {
+            return 0.0;
+        }
+        if self.scale_height_m <= 0.0 {
+            return f64::INFINITY;
+        }
+        self.scale_height_m * (self.ambient_pressure_pa / pressure_pa).ln()
+    }
+
     /// Calculate orbital velocity at the surface: sqrt(g * r)
     pub fn orbital_velocity(&self) -> f64 {
         (self.gravity_m_s2 * self.radius_m).sqrt()
@@ -199,14 +227,14 @@ fn loc_lagrange(
 #[allow(clippy::too_many_arguments)] // constructor-style, callers read positionally with names at the call site
 fn loc_surface(
     id: &'static str, display: &'static str, short: &'static str, parent: &'static str,
-    gravity: f64, radius: f64, has_atm: bool, atm_density: f64, ambient: f64,
+    gravity: f64, radius: f64, has_atm: bool, atm_density: f64, ambient: f64, scale_height: f64,
 ) -> Location {
     Location {
         id, display_name: display, short_name: short,
         location_type: LocationType::Surface(SurfaceProperties {
             gravity_m_s2: gravity, radius_m: radius,
             has_atmosphere: has_atm, atmosphere_density: atm_density,
-            ambient_pressure_pa: ambient,
+            ambient_pressure_pa: ambient, scale_height_m: scale_height,
         }),
         parent_body: parent,
     }
@@ -304,7 +332,7 @@ impl DeltaVMap {
         let locations = vec![
             // ─── Earth system ───
             loc_surface("earth_surface", "Earth Surface", "EARTH", "earth",
-                9.81, 6_371_000.0, true, 1.225, 101_325.0),
+                9.81, 6_371_000.0, true, 1.225, 101_325.0, 8_500.0),
             loc_orbit("suborbital", "Suborbital", "SUB", "earth"),
             loc_orbit("leo", "Low Earth Orbit", "LEO", "earth"),
             loc_orbit("sso", "Sun-Synchronous Orbit", "SSO", "earth"),
@@ -316,60 +344,61 @@ impl DeltaVMap {
             loc_lagrange("l2", "Earth-Moon L2", "L2", "earth"),
             loc_orbit("lunar_orbit", "Lunar Orbit", "LLO", "moon"),
             loc_surface("lunar_surface", "Lunar Surface", "MOON", "moon",
-                1.62, 1_737_000.0, false, 0.0, 0.0),
+                1.62, 1_737_000.0, false, 0.0, 0.0, 0.0),
             // ─── Mercury ───
             loc_orbit("mercury_transfer", "Mercury Transfer", "MTRF", "sun"),
             loc_orbit("mercury_capture", "Mercury Capture", "MCAP", "mercury"),
             loc_orbit("mercury_orbit_100km", "Mercury 100km Orbit", "MORB", "mercury"),
             loc_surface("mercury_surface", "Mercury Surface", "MERC", "mercury",
-                3.7, 2_440_000.0, false, 0.0, 0.0),
+                3.7, 2_440_000.0, false, 0.0, 0.0, 0.0),
             // ─── Venus (balloons at 1 bar instead of surface) ───
             loc_orbit("venus_transfer", "Venus Transfer", "VTRF", "sun"),
             loc_orbit("venus_capture", "Venus Capture", "VCAP", "venus"),
             loc_orbit("venus_orbit_400km", "Venus 400km Orbit", "VORB", "venus"),
+            // Scale height at the 1-bar level (~50 km up, ~340 K, CO2).
             loc_surface("venus_balloons", "Venus 1bar Balloons", "VBAL", "venus",
-                8.69, 6_101_800.0, true, 1.2, 100_000.0),
+                8.69, 6_101_800.0, true, 1.2, 100_000.0, 7_500.0),
             // ─── Mars + moons ───
             loc_orbit("mars_transfer", "Mars Transfer", "MARTR", "sun"),
             loc_orbit("mars_capture", "Mars Capture", "MARC", "mars"),
             loc_orbit("mars_orbit_200km", "Mars 200km Orbit", "MARO", "mars"),
             loc_surface("mars_surface", "Mars Surface", "MARS", "mars",
-                3.71, 3_389_500.0, true, 0.020, 600.0),
+                3.71, 3_389_500.0, true, 0.020, 600.0, 11_100.0),
             loc_orbit("phobos_transfer", "Phobos Transfer", "PHTR", "mars"),
             loc_orbit("phobos_orbit", "Phobos Orbit", "PHOR", "phobos"),
             loc_surface("phobos_surface", "Phobos Surface", "PHOB", "phobos",
-                0.0057, 11_000.0, false, 0.0, 0.0),
+                0.0057, 11_000.0, false, 0.0, 0.0, 0.0),
             loc_orbit("deimos_transfer", "Deimos Transfer", "DETR", "mars"),
             loc_orbit("deimos_orbit", "Deimos Orbit", "DEOR", "deimos"),
             loc_surface("deimos_surface", "Deimos Surface", "DEIM", "deimos",
-                0.003, 6_200.0, false, 0.0, 0.0),
+                0.003, 6_200.0, false, 0.0, 0.0, 0.0),
             // ─── Asteroid belt (Vesta, Ceres, Hygiea — Pallas skipped) ───
             loc_orbit("vesta_transfer", "Vesta Transfer", "VETR", "sun"),
             loc_orbit("vesta_capture", "Vesta Capture", "VECP", "vesta"),
             loc_orbit("vesta_orbit_20km", "Vesta 20km Orbit", "VEOR", "vesta"),
             loc_surface("vesta_surface", "Vesta Surface", "VEST", "vesta",
-                0.25, 262_700.0, false, 0.0, 0.0),
+                0.25, 262_700.0, false, 0.0, 0.0, 0.0),
             loc_orbit("ceres_transfer", "Ceres Transfer", "CETR", "sun"),
             loc_orbit("ceres_capture", "Ceres Capture", "CECP", "ceres"),
             loc_orbit("ceres_orbit_20km", "Ceres 20km Orbit", "CEOR", "ceres"),
             loc_surface("ceres_surface", "Ceres Surface", "CERE", "ceres",
-                0.27, 473_000.0, false, 0.0, 0.0),
+                0.27, 473_000.0, false, 0.0, 0.0, 0.0),
             loc_orbit("hygiea_transfer", "Hygiea Transfer", "HYTR", "sun"),
             loc_orbit("hygiea_capture", "Hygiea Capture", "HYCP", "hygiea"),
             loc_orbit("hygiea_orbit_20km", "Hygiea 20km Orbit", "HYOR", "hygiea"),
             loc_surface("hygiea_surface", "Hygiea Surface", "HYGI", "hygiea",
-                0.13, 200_000.0, false, 0.0, 0.0),
+                0.13, 200_000.0, false, 0.0, 0.0, 0.0),
             // ─── NEAs (Eros, Bennu) ───
             loc_orbit("eros_transfer", "Eros Transfer", "ERTR", "sun"),
             loc_orbit("eros_capture", "Eros Capture", "ERCP", "eros"),
             loc_orbit("eros_orbit", "Eros Orbit", "EROR", "eros"),
             loc_surface("eros_surface", "Eros Surface", "EROS", "eros",
-                0.0059, 16_840.0, false, 0.0, 0.0),
+                0.0059, 16_840.0, false, 0.0, 0.0, 0.0),
             loc_orbit("bennu_transfer", "Bennu Transfer", "BNTR", "sun"),
             loc_orbit("bennu_capture", "Bennu Capture", "BNCP", "bennu"),
             loc_orbit("bennu_orbit", "Bennu Orbit", "BNOR", "bennu"),
             loc_surface("bennu_surface", "Bennu Surface", "BENN", "bennu",
-                0.000060, 245.0, false, 0.0, 0.0),
+                0.000060, 245.0, false, 0.0, 0.0, 0.0),
         ];
 
         let mut transfers: Vec<Transfer> = Vec::new();
@@ -658,17 +687,61 @@ pub const ASCENT_TIMESTEP_S: f64 = 0.25;
 /// constant: the same engines firing. A stage group whose stages have
 /// different burn times is several of these — core plus boosters, then
 /// core alone — and the boosters' dry mass leaves at the end of theirs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AscentPhase {
+    /// Vacuum thrust of everything firing.
     pub thrust_n: f64,
     pub mass_flow_kg_s: f64,
     /// Propellant consumed during this phase.
     pub propellant_kg: f64,
     /// Structure that falls away when the phase ends (empty stages).
     pub dry_mass_dropped_kg: f64,
+    /// The nozzles firing, for the altitude-by-altitude Isp penalty.
+    /// Empty means "charge nothing" (a vacuum-only fixture).
+    pub nozzles: Vec<AscentNozzle>,
 }
 
-/// Simulate gravity turn ascent to estimate gravity losses.
+/// One engine cluster's contribution to an [`AscentPhase`]'s thrust,
+/// with the exit pressure that decides how much of it sea level eats.
+#[derive(Debug, Clone, Copy)]
+pub struct AscentNozzle {
+    pub exit_pressure_pa: f64,
+    /// Vacuum thrust of the cluster.
+    pub thrust_n: f64,
+}
+
+/// What the ascent integration charges one stage group.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AscentGroupResult {
+    /// Gravity loss during the group's burn (m/s).
+    pub gravity_loss: f64,
+    /// Propellant-weighted mean of the group's Isp fraction over its
+    /// burn: 1.0 in vacuum, the pad value for a stage that never climbs,
+    /// and in between for a booster that spends most of its propellant
+    /// low and the rest where the air has thinned.
+    pub isp_fraction: f64,
+    /// Altitude when the group's burn ended (m): where the next group
+    /// lights, and the check that the climb is a climb.
+    pub burnout_altitude_m: f64,
+}
+
+/// Thrust-weighted Isp fraction of the nozzles firing at `pressure_pa`.
+fn nozzle_fraction(nozzles: &[AscentNozzle], pressure_pa: f64) -> f64 {
+    if nozzles.is_empty() || pressure_pa <= 0.0 {
+        return 1.0;
+    }
+    let total: f64 = nozzles.iter().map(|n| n.thrust_n).sum();
+    if total <= 0.0 {
+        return 1.0;
+    }
+    nozzles.iter()
+        .map(|n| n.thrust_n * crate::engine::isp_fraction(n.exit_pressure_pa, pressure_pa))
+        .sum::<f64>() / total
+}
+
+/// Simulate a gravity-turn ascent to estimate what the climb costs each
+/// stage group: gravity loss, and the sea-level Isp penalty averaged
+/// over the propellant actually burned at each altitude.
 ///
 /// Numerically integrates the gravity turn equations with a coarse timestep:
 ///   d(pitch)/dt = -g * cos(pitch) / velocity + velocity * cos(pitch) / R
@@ -686,13 +759,20 @@ pub struct AscentPhase {
 /// rest, vertical. The only free parameter is KICK_OVER_VELOCITY (45 m/s),
 /// the velocity at which the rocket begins pitching from vertical.
 ///
-/// Returns gravity loss in m/s per stage group.
+/// Thrust at each step is the vacuum figure scaled by the nozzles' Isp
+/// fraction at the current altitude's pressure (`surface.pressure_at`),
+/// and that fraction, weighted by the propellant burned at it, is the
+/// group's `isp_fraction`. Propellant burned after orbital velocity, or
+/// in a phase that never entered the integration, counts as vacuum.
+///
+/// Returns one [`AscentGroupResult`] per stage group.
 pub fn simulate_ascent(
-    surface_gravity: f64,
-    body_radius: f64,
+    surface: &SurfaceProperties,
     groups: &[Vec<AscentPhase>],
     initial_mass_kg: f64,
-) -> Vec<f64> {
+) -> Vec<AscentGroupResult> {
+    let surface_gravity = surface.gravity_m_s2;
+    let body_radius = surface.radius_m;
     let mut velocity = 0.0_f64;
     let mut pitch = std::f64::consts::FRAC_PI_2; // 90° = vertical
     let mut mass = initial_mass_kg;
@@ -720,8 +800,22 @@ pub fn simulate_ascent(
 
     for phases in groups {
         let mut group_loss = 0.0;
-        for &AscentPhase { thrust_n: thrust, mass_flow_kg_s: mass_flow, propellant_kg: propellant, dry_mass_dropped_kg: dry_mass } in phases {
+        // Σ (Isp fraction × propellant burned at it), and the propellant
+        // the integration burned at all, for the group's mean fraction.
+        let mut fraction_weight = 0.0;
+        let mut burned = 0.0;
+        let group_propellant: f64 = phases.iter().map(|p| p.propellant_kg).sum();
+        for AscentPhase { thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_dropped_kg, nozzles } in phases {
+            let (thrust, mass_flow, propellant, dry_mass) =
+                (*thrust_n, *mass_flow_kg_s, *propellant_kg, *dry_mass_dropped_kg);
             let mut remaining_prop = propellant;
+            // Above this altitude every nozzle firing is under-expanded or
+            // matched and the fraction is 1: no pressure lookup needed,
+            // which spares the integration an `exp` per step for most of
+            // the climb.
+            let penalty_ceiling_m = nozzles.iter()
+                .map(|n| surface.altitude_where_pressure_falls_to(n.exit_pressure_pa))
+                .fold(0.0_f64, f64::max);
 
             // Skip phases with no propellant/mass flow (solar sails), and any
             // phase that only starts once the vehicle is already orbital.
@@ -736,7 +830,14 @@ pub fn simulate_ascent(
 
                 group_loss += g * pitch.sin() * dt;
 
-                let net_accel = thrust / mass - g * pitch.sin();
+                // The air here decides how much of the vacuum thrust the
+                // nozzles deliver.
+                let fraction = if altitude < penalty_ceiling_m {
+                    nozzle_fraction(nozzles, surface.pressure_at(altitude))
+                } else {
+                    1.0
+                };
+                let net_accel = thrust * fraction / mass - g * pitch.sin();
                 velocity += net_accel * dt;
                 velocity = velocity.max(0.0); // can't go backwards
                 altitude = (altitude + velocity * pitch.sin() * dt).max(0.0);
@@ -757,6 +858,8 @@ pub fn simulate_ascent(
                 let dm = mass_flow * dt;
                 mass -= dm;
                 remaining_prop -= dm;
+                fraction_weight += fraction * dm;
+                burned += dm;
             }
 
             // Separation: the spent structure falls away, so what burns
@@ -765,15 +868,23 @@ pub fn simulate_ascent(
             // understated their acceleration and inflated their loss.
             mass = (mass - dry_mass).max(0.0);
         }
-        results.push(group_loss);
+        // Whatever the integration didn't burn (after orbital velocity,
+        // or in a phase it skipped) burns in vacuum.
+        let isp_fraction = if group_propellant > 0.0 {
+            ((fraction_weight + (group_propellant - burned).max(0.0)) / group_propellant).min(1.0)
+        } else {
+            1.0
+        };
+        results.push(AscentGroupResult { gravity_loss: group_loss, isp_fraction, burnout_altitude_m: altitude });
         // Next group inherits velocity and pitch
     }
 
     results
 }
 
-/// [`simulate_ascent`] for groups that burn as a single phase each:
-/// `(thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_kg)` per group.
+/// [`simulate_ascent`] for groups that burn as a single phase each in a
+/// vacuum (no Isp penalty): `(thrust_n, mass_flow_kg_s, propellant_kg,
+/// dry_mass_kg)` per group. Returns the gravity loss per group.
 pub fn simulate_gravity_losses(
     surface_gravity: f64,
     body_radius: f64,
@@ -782,10 +893,14 @@ pub fn simulate_gravity_losses(
 ) -> Vec<f64> {
     let groups: Vec<Vec<AscentPhase>> = stage_params.iter()
         .map(|&(thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_dropped_kg)| vec![AscentPhase {
-            thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_dropped_kg,
+            thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_dropped_kg, nozzles: Vec::new(),
         }])
         .collect();
-    simulate_ascent(surface_gravity, body_radius, &groups, initial_mass_kg)
+    let airless = SurfaceProperties {
+        gravity_m_s2: surface_gravity, radius_m: body_radius,
+        has_atmosphere: false, atmosphere_density: 0.0, ambient_pressure_pa: 0.0, scale_height_m: 0.0,
+    };
+    simulate_ascent(&airless, &groups, initial_mass_kg).iter().map(|g| g.gravity_loss).collect()
 }
 
 /// Global delta-v map instance

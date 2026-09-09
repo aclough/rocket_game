@@ -77,6 +77,19 @@ pub struct EngineDesign {
     pub power_draw_w: f64,
 }
 
+/// Isp fraction a nozzle with `exit_pressure_pa` retains at
+/// `ambient_pressure_pa`: 1.0 in vacuum or when the nozzle is not
+/// overexpanded. K = 0.20: a vacuum engine (7 kPa exit) at sea level
+/// loses ~19% Isp. The one formula behind `EngineDesign::isp_fraction_at`
+/// and the ascent integrator's altitude-by-altitude charge.
+pub fn isp_fraction(exit_pressure_pa: f64, ambient_pressure_pa: f64) -> f64 {
+    if ambient_pressure_pa <= 0.0 || exit_pressure_pa >= ambient_pressure_pa {
+        return 1.0;
+    }
+    let k = 0.20;
+    (1.0 - k * (1.0 - exit_pressure_pa / ambient_pressure_pa)).max(0.0)
+}
+
 impl EngineDesign {
     /// Apply or revert the stat effect of one technology deficiency.
     /// Complexity penalties land on the project, not the design, and
@@ -150,15 +163,10 @@ impl EngineDesign {
         errors
     }
 
-    /// Isp fraction retained when operating at the given ambient pressure.
-    /// Returns 1.0 in vacuum or when the engine is not overexpanded.
-    /// K = 0.20: a vacuum engine (7 kPa exit) at sea level loses ~19% Isp.
+    /// Isp fraction retained when operating at the given ambient pressure
+    /// (see [`isp_fraction`]).
     pub fn isp_fraction_at(&self, ambient_pressure_pa: f64) -> f64 {
-        if ambient_pressure_pa <= 0.0 || self.exit_pressure_pa >= ambient_pressure_pa {
-            return 1.0;
-        }
-        let k = 0.20;
-        (1.0 - k * (1.0 - self.exit_pressure_pa / ambient_pressure_pa)).max(0.0)
+        isp_fraction(self.exit_pressure_pa, ambient_pressure_pa)
     }
 
     /// Per-engine probability of destruction from flow separation due to
