@@ -1,24 +1,29 @@
 //! M1 Task 4: determinism smoke test + metric-band regression tests.
 //!
-//! Bands are set around the measured baseline (basic policy, default
-//! balance, 200 seeds × 8 years, 2026-07, re-measured after the M4
-//! Task 4 engine-cost retune — hydrolox material premium 3.0×,
-//! per-cycle material multipliers, mass/scale size terms on build and
-//! design work, improvement-discovery decay — on top of the Task 2/3
-//! retunes): 1/200 bankrupt (seed 172; the bot's small hydrolox upper
-//! engine builds cheaper under the mass term, easing Task 3's 4/200 —
-//! Task 5 recalibrates toward 2-4/100), 16/200 survivors dip below $0
-//! and recover (worst -$99.9M, seed 88), 4-26 launches per seed,
-//! per-seed success ≥ 73%, aggregate success 92.9%, 163/200 keep min
-//! money above $25M, 91/200 end above starting money, 200/200 have a
-//! first profitable year (latest start+7). First launch averages
-//! month 16.7 with ~9 undiscovered flaws aboard; dev spend to first
-//! launch ~$69M; unit cost $15.0M vs payment $30.0M (cost ratio ~50%
-//! holds). The margin-sweep context still applies
-//! (see policy.rs DEFAULT_BID_MARGIN): the uncontested small-payload
-//! market rewards higher margins, so these bands lock a chosen honest
-//! posture, not an optimum. Bands are regression protection around
-//! observed reality, not aspirations.
+//! **Provisional bands (17_2_DELTA_V.md step 3, 2026-09).** The launch
+//! check now judges a flawed vehicle on the planner's usable Δv
+//! (vacuum less ascent gravity loss) instead of vacuum Δv alone, which
+//! took away the hidden 8–11% allowance every launch used to carry.
+//! The bot's fixed template bids at zero margin, so its numbers moved:
+//! 200 seeds × 8 years — 13/200 bankrupt, 27/200 dip below $0, 189/200
+//! have a profitable year, 44/200 end above starting money, 131/200
+//! keep min money above $25M, aggregate success 87.7% (2,489 of
+//! 2,839), worst surviving seed 62%, 6–26 launches per surviving seed,
+//! deaths at 7–14 launches. First-launch month (16.8), dev spend
+//! ($71.1M) and hidden flaws (8.3) did not move. These bands are
+//! re-measured after step 6 (flight pays the ascent) and the roguelike
+//! 1–6% bankruptcy target is revisited then — see the plan's Q5 for the
+//! bot-margin experiments that did not restore the pre-step-3 figures.
+//!
+//! Pre-step-3 history, for the record (2026-07 M4 engine-cost retune
+//! baseline): 1/200 bankrupt, 16/200 dip below $0, per-seed success
+//! ≥ 73%, aggregate 92.9% (94.9% at step 0 of the Δv plan), 163/200
+//! keep min money above $25M, 91/200 end above starting money, unit
+//! cost $15.0M vs payment $30.0M. The margin-sweep context still
+//! applies (see policy.rs DEFAULT_BID_MARGIN): the uncontested
+//! small-payload market rewards higher markups, so these bands lock a
+//! chosen honest posture, not an optimum. Bands are regression
+//! protection around observed reality, not aspirations.
 //!
 //! When changing balance values or game constants, re-measure with
 //! `cargo run --release --bin simulate -- --seeds 1..200 --years 8
@@ -63,7 +68,7 @@ fn assert_bands(summaries: &[RunSummary]) {
     for s in summaries {
         // The harness stops a run at SIM_DEBT_LIMIT (-$30M); a single
         // day's spend can overshoot the line, but never by much
-        // (baseline low -$40.2M).
+        // (step 3 low -$37.4M; pre-step-3 baseline -$40.2M).
         assert!(
             s.min_money > -60_000_000.0,
             "seed {}: min money ${:.0} far below the -$30M sim debt limit",
@@ -79,7 +84,7 @@ fn assert_bands(summaries: &[RunSummary]) {
             with_fpy += 1;
             assert!(
                 fpy <= s.start_year + 7,
-                "seed {}: first profitable year {} later than start+7 (baseline max start+7)",
+                "seed {}: first profitable year {} later than start+7 (step 3 max start+7)",
                 s.seed, fpy,
             );
         }
@@ -88,32 +93,33 @@ fn assert_bands(summaries: &[RunSummary]) {
         if s.bankrupt {
             // A bankrupt run is truncated at the debt line, so the
             // per-seed activity bands below don't apply to it
-            // (baseline deaths: 9-13 launches, success 64-78%).
+            // (step 3 deaths: 7-14 launches, success 18-86%).
             bankrupt += 1;
             continue;
         }
         assert!(
             (3..=30).contains(&s.launches),
-            "seed {}: {} launches outside band 3..=30 (baseline 4..=26; the \
+            "seed {}: {} launches outside band 3..=30 (step 3 6..=26; the \
              top is a seed that wins a big block program)",
             s.seed, s.launches,
         );
         let rate = s.successes as f64 / s.launches as f64;
         assert!(
-            rate >= 0.65,
-            "seed {}: launch success rate {:.0}% below 65% (baseline min 73%; \
+            rate >= 0.55,
+            "seed {}: launch success rate {:.0}% below 55% (step 3 min 62%, pre-step-3 73%; \
              low-launch seeds make this floor noisy)",
             s.seed, rate * 100.0,
         );
     }
 
-    // Fleet-level bands (baseline 91/200 end above starting money,
-    // 163/200 keep min money above $25M, 6/200 bankrupt, 196/200 have
+    // Fleet-level bands (step 3: 44/200 end above starting money,
+    // 131/200 keep min money above $25M, 13/200 bankrupt, 189/200 have
     // a profitable year).
     let n = summaries.len() as f64;
-    // The agreed roguelike guard band: 1-6 bankruptcies per 100 seeds
-    // (target 2-4/100, baseline 3.0/100). Neither bound means much at
-    // n=20, so both are size-aware.
+    // The agreed roguelike guard band is 1-6 bankruptcies per 100 seeds
+    // (target 2-4/100); step 3 measured 6.5/100, so the 200-seed
+    // ceiling sits at 8% provisionally until step 6 re-measures.
+    // Neither bound means much at n=20, so both are size-aware.
     //
     // The ceiling needs the same treatment the floor already had. A 6%
     // ceiling on twenty seeds means "at most one bankruptcy", and at a
@@ -121,38 +127,38 @@ fn assert_bands(summaries: &[RunSummary]) {
     // check that cries wolf one run in five. Allowing two (10%) fails
     // about 3% of the time instead, which is what a smoke check should
     // feel like. The 200-seed run keeps the real 6% ceiling.
-    let ceiling = if summaries.len() >= 100 { 0.06 } else { 0.10 };
+    let ceiling = if summaries.len() >= 100 { 0.08 } else { 0.10 };
     assert!(
         bankrupt as f64 / n <= ceiling,
-        "{bankrupt}/{n} seeds bankrupt (band <= {:.0}%, baseline 3.0%, \
-         measured 4.0% at 200 seeds)",
+        "{bankrupt}/{n} seeds bankrupt (band <= {:.0}%, step 3 measured 6.5% \
+         at 200 seeds; roguelike target 2-4%)",
         ceiling * 100.0,
     );
     if summaries.len() >= 100 {
         assert!(
             bankrupt as f64 / n >= 0.01,
-            "only {bankrupt}/{n} seeds bankrupt (band >= 1%, baseline 3.0%; \
+            "only {bankrupt}/{n} seeds bankrupt (band >= 1%, step 3 6.5%; \
              the game should stay dangerous)",
         );
     }
     assert!(
-        min_above_25m as f64 / n >= 0.72,
-        "only {min_above_25m}/{n} seeds kept min money above $25M (band >= 72%, \
-         baseline 81.5%)",
+        min_above_25m as f64 / n >= 0.58,
+        "only {min_above_25m}/{n} seeds kept min money above $25M (band >= 58%, \
+         step 3 65.5%, pre-step-3 81.5%)",
     );
     assert!(
-        profitable as f64 / n >= 0.30,
-        "only {profitable}/{n} seeds profitable after run (band >= 30%, baseline 45.5%)",
+        profitable as f64 / n >= 0.15,
+        "only {profitable}/{n} seeds profitable after run (band >= 15%, step 3 22%, pre-step-3 45.5%)",
     );
     assert!(
-        with_fpy as f64 / n >= 0.95,
-        "only {with_fpy}/{n} seeds ever had a profitable year (band >= 95%, baseline 98%)",
+        with_fpy as f64 / n >= 0.92,
+        "only {with_fpy}/{n} seeds ever had a profitable year (band >= 92%, step 3 94.5%)",
     );
 
     let aggregate = successes as f64 / launches as f64;
     assert!(
-        aggregate >= 0.90,
-        "aggregate launch success rate {:.1}% below 90% (baseline 92.7%)",
+        aggregate >= 0.85,
+        "aggregate launch success rate {:.1}% below 85% (step 3 87.7%, pre-step-3 94.9%)",
         aggregate * 100.0,
     );
 }

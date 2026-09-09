@@ -348,6 +348,91 @@ plan anywhere. Not touched by this plan; recorded so it isn't
 mistaken for a regression later.
 
 
+### Step 3 record (measured after `simulate_launch` judges on `total_planner_dv`)
+
+Same 200 seeds × 8 years. The whole shift is the leniency removal: a
+variant that fixed only the double overexpansion charge and kept the
+old gravity-blind check reproduced the baseline to the launch
+(95.0%, 8 bankrupt).
+
+| Metric | Baseline | Step 3 |
+|---|---|---|
+| Bankrupt | 8/200 | 13/200 |
+| Dip below $0 | 16/200 | 27/200 |
+| Ever profitable | 196/200 | 189/200 |
+| End above starting money | 91/200 | 44/200 |
+| Keep min money above $25M | 163/200 | 131/200 |
+| Launches | 2,608 | 2,839 |
+| Aggregate launch success | 94.9% | 87.7% |
+| Worst surviving seed | 73% | 62% |
+| Avg final money | $191.6M | $139.8M |
+| First-launch month / dev spend / hidden flaws | 16.8 / $71.1M / 8.3 | unchanged |
+
+**Why it moves this much.** The old check compared the degraded design's
+vacuum Δv against the route, so every launch carried a hidden 8–11%
+allowance (the ascent's gravity loss). The bot's template bids at zero
+margin on every market — LEO capability 2,820 kg against contracts of
+500–5,000 kg, GEO 380 kg against 200–3,000 — so a flaw that costs one
+stage 5–15% of its Δv now lands as a shortfall. Over 30 seeds × 6 years
+the outcome mix is 258 success / 22 partial (<5% short) / 19 failure,
+and 16 of the 19 failures are degradation or engine-loss with no stage
+loss.
+
+**Your option 2 (a bidding Δv margin) was tried and does not work for
+this bot.** Implemented as `Company::bid_dv_margin` (a per-company knob
+the rule engine applies in `player_capable_cost`), and swept together
+with a template-size factor *k* on both stages' propellant and
+structure:
+
+| Template ×k | Bid margin | Launches | Success | Bankrupt | Min > $25M |
+|---|---|---|---|---|---|
+| 1.00 | 0 (step 3 alone) | 2,839 | 87.7% | 13 | 131 |
+| 1.00 | 10% | 1,909 | 84.4% | 29 | 104 |
+| 1.00 | 15% | 1,456 | 81.5% | 45 | — |
+| 1.00 | 20% | 1,217 | 80.0% | 51 | — |
+| 1.15 | 0 | 3,224 | 88.7% | 29 | 105 |
+| 1.15 | 10% | 2,338 | 86.6% | 43 | 93 |
+| 1.30 | 0 | 3,217 | 88.4% | 33 | 100 |
+| 1.30 | 10% | 2,408 | 86.3% | 41 | 89 |
+
+Every cell is worse than step 3 alone, on every metric. Two effects:
+the bot's income is the edge-of-capability contracts, so a margin gate
+starves it (salaries continue, launches fall by a third); and fewer
+launches means flaws stay hidden longer, so the per-launch success
+rate *falls* rather than rises. A bigger template just moves the edge
+to heavier, dearer payloads and fails there instead. The gate is not a
+percentage that "roughly works"; there isn't one for a fixed-template
+zero-margin bidder.
+
+**What landed.** Step 3 itself (launch.rs, plus the
+`overexpansion_is_charged_once_across_launch_and_first_leg` test); the
+bidding knob, its cache and the gate were removed again per Q5.
+`sim_bands.rs` is recalibrated to the step 3 numbers, marked
+provisional until step 6 re-measures.
+
+**Q5 — what to do about the shift.** Options:
+
+1. **Accept step 3 as measured** and drop the knob (delete
+   `bid_dv_margin`, `GameState::dv_margin` and the gate — about forty
+   lines). The bot is a novice who flies at zero margin and now pays
+   for it; the game is honest about what a flaw costs. Bands stay at
+   the provisional numbers. My recommendation.
+2. **Keep the knob as a player-facing bidding rule** ("only bid where I
+   have ≥ N% spare Δv") with the bot leaving it at 0. It is a data
+   structure change I made without discussing it first, which is why
+   I am asking rather than keeping it quietly. Saves gain one field
+   (`serde(default)`, no migration).
+3. **Teach the bot to size its template to the market** — a real
+   design loop (pick stage sizes so the biggest contract it wants has
+   margin *m*), not a fixed template. Bigger job, belongs in a policy
+   plan of its own, not in this one.
+
+USER: The increase in failures is within what can be accepted, lets go
+with (1).
+
+CLAUDE: Done — knob, cache and gate removed; step 3 is launch.rs, its
+test, the bands and this record.
+
 Every step: `cargo test`, clippy, the 40-seed simulate oracle, and for
 the steps marked **measure**, the 200-seed band run
 (`cargo run --release --bin simulate -- --seeds 1..200 --years 8 --policy basic --summary-only`)
@@ -359,7 +444,7 @@ compared against the baseline recorded first.
 | 1 ✅ | `DesignPerformance` + `AscentLosses` + `compute_stage_stats` as a view of it; planner reads `planner_dv()` **with `overexpansion` set to zero** for now, so (b) is unchanged. `only_surface_ascents_are_atmospheric` test. | none | oracle identical |
 | 1b ✅ | `BurnPhase` / `burn_phases`; `phased_parallel_delta_v` becomes a fold over it; the gravity integrator takes phases; `burn_group` walks phases and jettisons per stage. Add a gravity-loss test for a core + boosters group (loss must exceed the lumped figure) beside `test_core_plus_srbs_phased_burnout`. | **asymmetric groups only**: gravity loss and in-flight jettison | oracle identical (the bot's groups are symmetric); the new test pins the asymmetric case |
 | 2 ✅ | Designer Avail, shortfall "have", Rockets tab dV → `total_planner_dv()`. The negative-shortfall case is its own `MissionPlan::StagingInfeasible`. | UI only | oracle identical |
-| 3 | `simulate_launch` judges on `total_planner_dv()` of the degraded design; drop the Isp/thrust scaling (fixes #4 if step 0 confirmed it). | **launch outcomes for flawed vehicles; first-leg propellant** | **measure**: launch success %, bankruptcies, first-launch month |
+| 3 ✅ (bands provisional until 6, see record) | `simulate_launch` judges on `total_planner_dv()` of the degraded design; drop the Isp/thrust scaling (fixes #4 if step 0 confirmed it). | **launch outcomes for flawed vehicles; first-leg propellant** | **measure**: launch success %, bankruptcies, first-launch month |
 | 4 | Planner charges overexpansion (`planner_dv()` as written above). | **capabilities drop for sea-level-nozzle first stages** | **measure**: plus a capability probe — `max_payload_to` for the bot's template and each corpus save's rocket to LEO/GTO/GEO before and after |
 | 5 | Update `sim_bands.rs` to the re-measured reality in the same commit as whichever of 3/4 moved it, per CLAUDE.md. Update pinned Δv numbers in `rocket.rs`, `path_planning.rs`, `launch.rs` tests. | — | bands green |
 
@@ -427,6 +512,7 @@ only on a fingerprint change.
    how much of the band shift is the bug fix. Step 4 is then a pure
    "planner now agrees with the stats table" change.
    USER:  Ok, 3 then 4 then.
+   CLAUDE: Doing so.
 2. **If step 4 drops capabilities noticeably**, retune in balance data
    (engine baselines / exit pressures) to restore roughly today's
    capabilities, or accept the new numbers as the corrected physics

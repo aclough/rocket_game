@@ -9,7 +9,7 @@ use crate::engine::EngineId;
 use crate::engine_project::{EngineProject, EngineSource};
 use crate::flaw::{FlawConsequence, FlawTrigger};
 use crate::reactor::ReactorId;
-use crate::rocket::{Rocket, RocketDesign};
+use crate::rocket::{DesignPerformance, Rocket, RocketDesign};
 use crate::rocket_project::RocketProjectId;
 use crate::stage::Stage;
 use crate::third_party::ContractedEngine;
@@ -389,22 +389,14 @@ pub fn simulate_launch(
         }
     }
 
-    // Apply Isp penalty for overexpansion on first stage group (sea level).
-    // Deliberately *not* recorded as an activation: this is nozzle geometry,
-    // not a flaw, and the designer's "Eff dV" column already shows the
-    // sea-level figure, so it is visible before the player commits.
-    if !degraded.stage_groups.is_empty() {
-        for stage in degraded.stage_groups[0].iter_mut() {
-            let frac = stage.engine.isp_fraction_at(ambient);
-            if frac < 1.0 {
-                stage.engine.isp_s *= frac;
-                stage.engine.thrust_n *= frac;
-            }
-        }
-    }
-
-    // Compute degraded delta-v
-    let degraded_dv = degraded.vacuum_delta_v(payload_kg);
+    // Judge the vehicle as it now is the way the planner judged the
+    // design: usable delta-v is the vacuum figure less the ascent's
+    // gravity loss (see `DesignPerformance`). The sea-level Isp penalty
+    // is *not* pre-applied to the design here — the flight's first burn
+    // charges it, once, in `Rocket::burn_group`; scaling the design as
+    // well used to charge it twice.
+    let degraded_dv = DesignPerformance::compute(&degraded, payload_kg, "earth_surface")
+        .total_planner_dv();
 
     // Determine outcome. Anything short of nominal names what went wrong:
     // a shortfall with no attribution tells the player nothing they can act
@@ -621,6 +613,64 @@ mod tests {
         let mut rp = RocketProject::new(RocketProjectId(1), design, &crate::balance_config::BalanceConfig::default());
         rp.flaws = flaws;
         rp
+    }
+
+    /// The sea-level nozzle penalty is paid once, by the first burn.
+    /// The pad simulation used to scale the design's Isp and thrust by
+    /// the penalty *and* hand that design to a flight whose first burn
+    /// applied it again, so a sea-level stage flew at the penalty
+    /// squared.
+    #[test]
+    fn overexpansion_is_charged_once_across_launch_and_first_leg() {
+        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction, G0};
+        use crate::propellant::Propellant;
+        use crate::rocket::{RocketDesignId, RocketId};
+        use crate::stage::{Stage, StageId};
+
+        let ambient = 101_325.0;
+        let engine = |id: u64, thrust: f64, isp: f64, exit_pa: f64| EngineDesign {
+            id: EngineId(id), name: format!("E{id}"), cycle: EngineCycle::GasGenerator,
+            thrust_n: thrust, mass_kg: 500.0, isp_s: isp, exit_pressure_pa: exit_pa,
+            needs_atmosphere: false,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
+            ],
+            power_draw_w: 0.0,
+        };
+        let stage = |id: u64, e: EngineDesign, prop: f64, dry: f64| Stage {
+            id: StageId(id), name: format!("S{id}"), engine: e, engine_count: 1,
+            propellant_mass_kg: prop, structural_mass_kg: dry, fairing: None,
+            power_sources: Vec::new(),
+        };
+        // A first stage whose nozzle is built for altitude: 40 kPa exit at
+        // a 101 kPa pad is well into the penalty.
+        let e1 = engine(1, 1_000_000.0, 280.0, 40_000.0);
+        let frac = e1.isp_fraction_at(ambient);
+        assert!(frac < 0.95, "fixture premise: the nozzle is penalised at sea level");
+        let design = RocketDesign {
+            id: RocketDesignId(1), name: "Probe".into(),
+            stage_groups: vec![
+                vec![stage(1, e1.clone(), 50_000.0, 3_000.0)],
+                vec![stage(2, engine(2, 200_000.0, 340.0, 70_000.0), 10_000.0, 500.0)],
+            ],
+        };
+        let mut rng = StdRng::seed_from_u64(1);
+        let sim = simulate_launch(&design, "leo", 0.0, &[], &[], &[], &mut rng);
+
+        // The vehicle handed to the flight is the design as built.
+        assert_eq!(sim.degraded_design.stage_groups[0][0].engine.isp_s, e1.isp_s,
+            "no flaws fired, so the flight's design carries the nominal Isp");
+
+        // The first burn, at pad pressure, pays the penalty exactly once.
+        let mut rocket = sim.degraded_design.instantiate(RocketId(1), "earth_surface", 0.0);
+        let m0: f64 = sim.degraded_design.stage_groups.iter().flatten().map(|s| s.wet_mass_kg()).sum();
+        let result = rocket.burn_sequential(&sim.degraded_design, 1_000.0, ambient);
+        let prop_used = 50_000.0 - rocket.stage_states[0][0].propellant_remaining_kg;
+        let implied_ve = result.dv_achieved / (m0 / (m0 - prop_used)).ln();
+        let ratio = implied_ve / (e1.isp_s * G0);
+        assert!((ratio - frac).abs() < 1e-6,
+            "exhaust velocity should be nominal × {frac:.4}, got × {ratio:.4} (× frac² would be {:.4})", frac * frac);
     }
 
     #[test]
