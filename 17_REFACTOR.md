@@ -415,7 +415,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
 
 | # | File | Lines | Split into | Notes |
 |---|------|-------|-----------|-------|
-| E1 | `ui/mod.rs` | 5780 | `ui/{tabs/*, designer/*, editors, modals, planner, format, widgets}` + `ui/tests/*` | 31% of the file is tests. `handle_input_mode_key` is 874 lines. |
+| E1 ✅ | `ui/mod.rs` | 5780 | `ui/{tabs/*, designer/*, editors, modals, planner, format, widgets}` + `ui/tests/*` | 31% of the file is tests. `handle_input_mode_key` is 874 lines. |
 | E2 | `ui/draw.rs` | 4324 | same per-feature files as E1 | `draw_modal` is 885 lines, one match with 30 arms. Every feature is split across two files 1500 lines apart. |
 | E3 ✅ | `rocket.rs` | 2140 | `rocket/{mod, staging, power, stats, fingerprint}` | 47% tests. Falls along existing `// ───` banners. |
 | E4 ✅ | `company.rs` | 1889 | `company/{mod, projects, retire, production, floor, staffing, research}` | `retire.rs` and `floor.rs` are already self-contained with doc essays. |
