@@ -39,6 +39,23 @@ The E splits moved things the D list pointed at, so the map first:
 - Gate: oracle identical. Summation order is preserved by iterating
   groups then stages in index order, which is what every site does now.
 
+**Step 1 record.** D4 turned out to be already done: the remaining
+`mass_flow_rate() * count` sites are `Stage::mass_flow_kg_s` itself and
+the autosizer's step over a loose engine and count in `ui/designer.rs`
+(no `Stage` to ask); `simulate_gravity_losses`'s tuple is test-only and
+stays. D1 landed as `Rocket::{attached_stages, attached_stages_in,
+attached_mass_kg, mass_above_group, group_attached,
+group_has_propellant, group_has_attached_sail, lowest_attached_group,
+active_group}` in `rocket/mod.rs`; the fourteen hand-rolled walks in
+`rocket/staging.rs`, `rocket/power.rs`, `flight.rs`, `path_planning.rs`,
+`launch.rs`, `game_state/flight_ops.rs` and `ui/draw/tabs.rs` call them,
+`remaining_delta_v` is the sum of `group_remaining_delta_v`, and the
+two mutating power loops collect indices from the walk first. One
+behavioural nuance folded in deliberately: `group_remaining_delta_v`'s
+sail test now asks for an *attached* sail stage (as
+`remaining_delta_v` always did) rather than any sail in a group with
+anything attached. Net −92 lines; oracle byte-identical.
+
 ### Step 2 — D2: design totals are instance totals with everything attached
 
 - `Stage::battery_capacity_kwd()` and `Stage::source_supply_w(src, sun_au)`

@@ -55,17 +55,8 @@ impl Payload {
             Payload::ContractDelivery { payload_kg, .. } => *payload_kg,
             Payload::TestMass { mass_kg } => *mass_kg,
             Payload::Spacecraft { design, rocket, nested_payloads, .. } => {
-                let mut spacecraft_mass = 0.0;
-                for (gi, group) in design.stage_groups.iter().enumerate() {
-                    for (si, stage) in group.iter().enumerate() {
-                        if let Some(state) = rocket.stage_states.get(gi).and_then(|g| g.get(si)) {
-                            if state.attached {
-                                spacecraft_mass += stage.dry_mass_kg() + state.propellant_remaining_kg;
-                            }
-                        }
-                    }
-                }
-                spacecraft_mass + nested_payloads.iter().map(|p| p.mass_kg()).sum::<f64>()
+                rocket.attached_mass_kg(design)
+                    + nested_payloads.iter().map(|p| p.mass_kg()).sum::<f64>()
             }
         }
     }
@@ -369,17 +360,7 @@ pub fn build_route_for_rocket(
         };
 
         // Current attached wet mass (dry + remaining prop) + payload.
-        let mut stage_mass = 0.0;
-        for (gi, group) in design.stage_groups.iter().enumerate() {
-            for (si, stage) in group.iter().enumerate() {
-                if let Some(state) = sim.stage_states.get(gi).and_then(|g| g.get(si)) {
-                    if state.attached {
-                        stage_mass += stage.dry_mass_kg() + state.propellant_remaining_kg;
-                    }
-                }
-            }
-        }
-        let current_mass = stage_mass + payload_mass_kg;
+        let current_mass = sim.attached_mass_kg(design) + payload_mass_kg;
 
         // Pick the active group's thrust class so we use the right
         // dv (impulsive vs spiral) for this transfer.
@@ -396,11 +377,7 @@ pub fn build_route_for_rocket(
         let supply_w = sim.total_power_supply_w(design, sun_au);
         let housekeeping_w = sim.total_housekeeping_w(design);
         let avail_for_engines = (supply_w - housekeeping_w).max(0.0);
-        let active_group = (0..design.stage_groups.len())
-            .find(|gi| sim.stage_states.get(*gi)
-                .is_some_and(|g| g.iter().any(|s|
-                    s.attached && s.propellant_remaining_kg > 0.0)));
-        let thrust = active_group
+        let thrust = sim.active_group()
             .map(|gi| design.group_effective_thrust_n(gi, avail_for_engines))
             .unwrap_or(0.0);
 

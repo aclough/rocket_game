@@ -324,7 +324,7 @@ opportunity in the codebase.
 
 > Plan: `17_3_PHYSICS.md` (steps 1–6; D7 is the only behaviour change).
 
-### D1. Missing `Rocket::attached_stages()` iterator — ~10 hand-rolled copies
+### ✅ D1. Missing `Rocket::attached_stages()` iterator — ~10 hand-rolled copies
 - **Where:** the `stage_states.get(gi).and_then(|g| g.get(si))
   .is_some_and(|ss| ss.attached)` walk plus mass sum recurs in six
   power functions (`rocket.rs:741-939`), three identical "payload above
@@ -367,7 +367,7 @@ opportunity in the codebase.
   `Rocket.location` in favour of the owner's.
 - **Size/risk:** medium / low-medium.
 
-### D4. Per-group parameter tuples and `mass_flow × count` recomputed everywhere
+### ✅ D4. Per-group parameter tuples and `mass_flow × count` recomputed everywhere
 - **Where:** `engine.mass_flow_rate() * engine_count as f64` at eleven
   sites across `rocket.rs`, `ui/mod.rs`, `ui/draw.rs`;
   `simulate_gravity_losses` takes a positional 4-tuple.

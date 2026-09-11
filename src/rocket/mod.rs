@@ -81,6 +81,82 @@ pub struct Rocket {
     pub stage_states: Vec<Vec<StageState>>,
 }
 
+impl Rocket {
+    /// Every stage still on the vehicle, lowest group first, each with
+    /// the design it was built to and its state — the one walk behind
+    /// every mass, power and flaw question about a flying rocket
+    /// (17_3_PHYSICS.md D1). A stage the design has but the instance
+    /// lacks a state for (a mismatched save) is not on the vehicle.
+    pub fn attached_stages<'a>(
+        &'a self, design: &'a RocketDesign,
+    ) -> impl Iterator<Item = (usize, usize, &'a Stage, &'a StageState)> + 'a {
+        design.stage_groups.iter().enumerate().flat_map(move |(gi, group)| {
+            group.iter().enumerate().filter_map(move |(si, stage)| {
+                self.stage_states.get(gi).and_then(|g| g.get(si))
+                    .filter(|ss| ss.attached)
+                    .map(|ss| (gi, si, stage, ss))
+            })
+        })
+    }
+
+    /// The attached stages of group `gi`, with their states.
+    pub fn attached_stages_in<'a>(
+        &'a self, design: &'a RocketDesign, gi: usize,
+    ) -> impl Iterator<Item = (usize, &'a Stage, &'a StageState)> + 'a {
+        design.stage_groups.get(gi).into_iter().flat_map(|g| g.iter()).enumerate()
+            .filter_map(move |(si, stage)| {
+                self.stage_states.get(gi).and_then(|g| g.get(si))
+                    .filter(|ss| ss.attached)
+                    .map(|ss| (si, stage, ss))
+            })
+    }
+
+    /// Dry mass plus remaining propellant of everything still attached,
+    /// without the payload.
+    pub fn attached_mass_kg(&self, design: &RocketDesign) -> f64 {
+        self.attached_stages(design)
+            .map(|(_, _, stage, ss)| stage.dry_mass_kg() + ss.propellant_remaining_kg)
+            .sum()
+    }
+
+    /// What group `gi` has to push: the attached stages above it plus the
+    /// payload. Summed group by group, as the delta-v code always has.
+    pub fn mass_above_group(&self, design: &RocketDesign, gi: usize) -> f64 {
+        (gi + 1..self.stage_states.len()).map(|gj| {
+            self.attached_stages_in(design, gj)
+                .map(|(_, stage, ss)| stage.dry_mass_kg() + ss.propellant_remaining_kg)
+                .sum::<f64>()
+        }).sum::<f64>() + self.payload_mass_kg
+    }
+
+    /// Whether any stage of group `gi` is still attached.
+    pub fn group_attached(&self, gi: usize) -> bool {
+        self.stage_states.get(gi).is_some_and(|g| g.iter().any(|ss| ss.attached))
+    }
+
+    /// Whether group `gi` still has an attached stage with propellant.
+    pub fn group_has_propellant(&self, gi: usize) -> bool {
+        self.stage_states.get(gi)
+            .is_some_and(|g| g.iter().any(|ss| ss.attached && ss.propellant_remaining_kg > 0.0))
+    }
+
+    /// Whether group `gi` has an attached solar-sail stage: unbounded delta-v.
+    pub fn group_has_attached_sail(&self, design: &RocketDesign, gi: usize) -> bool {
+        self.attached_stages_in(design, gi).any(|(_, stage, _)| stage.engine.is_solar_sail())
+    }
+
+    /// The lowest group with any stage still attached.
+    pub fn lowest_attached_group(&self) -> Option<usize> {
+        (0..self.stage_states.len()).find(|&gi| self.group_attached(gi))
+    }
+
+    /// The lowest group that can still burn: an attached stage with
+    /// propellant.
+    pub fn active_group(&self) -> Option<usize> {
+        (0..self.stage_states.len()).find(|&gi| self.group_has_propellant(gi))
+    }
+}
+
 impl RocketDesign {
     /// Total wet mass of the entire vehicle (excluding payload).
     pub fn total_mass_kg(&self) -> f64 {

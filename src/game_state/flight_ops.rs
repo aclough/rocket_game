@@ -865,18 +865,10 @@ fn roll_reactor_flaws(
 
     let mut roll = FlawRoll::default();
     let mut instances: Vec<(usize, usize, crate::reactor::ReactorId)> = Vec::new();
-    for (gi, group) in design.stage_groups.iter().enumerate() {
-        for (si, stage) in group.iter().enumerate() {
-            let attached = rocket.stage_states.get(gi)
-                .and_then(|g| g.get(si))
-                .is_some_and(|ss| ss.attached);
-            if !attached {
-                continue;
-            }
-            for src in &stage.power_sources {
-                if let crate::power::PowerSourceKind::Reactor { design: rd } = &src.kind {
-                    instances.push((gi, si, rd.id));
-                }
+    for (gi, si, stage, _) in rocket.attached_stages(design) {
+        for src in &stage.power_sources {
+            if let crate::power::PowerSourceKind::Reactor { design: rd } = &src.kind {
+                instances.push((gi, si, rd.id));
             }
         }
     }

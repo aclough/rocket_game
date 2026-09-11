@@ -330,12 +330,8 @@ impl DeltaVMap {
         if design.stage_groups.is_empty() {
             return None;
         }
-        // Find the lowest still-attached stage with propellant remaining.
-        let n = design.stage_groups.len();
-        let active_stage = (0..n).find(|&gi| {
-            rocket.stage_states.get(gi)
-                .is_some_and(|g| g.iter().any(|s| s.attached && s.propellant_remaining_kg > 0.0))
-        })?;
+        // The lowest still-attached stage with propellant remaining.
+        let active_stage = rocket.active_group()?;
         // Zero for anything already off a surface, which is the usual case
         // here — a parked spacecraft flying on from orbit owes no ascent.
         // A craft sitting on the lunar surface does, and pays it.

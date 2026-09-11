@@ -157,18 +157,8 @@ pub fn roll_engine_flaws(
 
 /// A random stage still attached to a flying vehicle, as (group, stage).
 fn random_attached_stage(rng: &mut StdRng, design: &RocketDesign, rocket: &Rocket) -> Option<(usize, usize)> {
-    let attached: Vec<(usize, usize)> = design.stage_groups.iter()
-        .enumerate()
-        .flat_map(|(gi, group)| {
-            let stage_states = &rocket.stage_states;
-            group.iter().enumerate()
-                .filter(move |(si, _)| {
-                    stage_states.get(gi)
-                        .and_then(|g| g.get(*si))
-                        .is_some_and(|ss| ss.attached)
-                })
-                .map(move |(si, _)| (gi, si))
-        })
+    let attached: Vec<(usize, usize)> = rocket.attached_stages(design)
+        .map(|(gi, si, _, _)| (gi, si))
         .collect();
     if attached.is_empty() {
         return None;

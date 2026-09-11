@@ -129,15 +129,9 @@ impl Rocket {
     /// propellant.
     pub fn total_power_supply_w(&self, design: &RocketDesign, sun_distance_au: f64) -> f64 {
         let mut total = 0.0;
-        for (gi, group) in design.stage_groups.iter().enumerate() {
-            for (si, stage) in group.iter().enumerate() {
-                let attached = self.stage_states.get(gi)
-                    .and_then(|g| g.get(si))
-                    .is_some_and(|ss| ss.attached);
-                if !attached { continue; }
-                for src in stage.effective_power_sources().iter() {
-                    total += stage_source_supply_w(stage, src, sun_distance_au);
-                }
+        for (_, _, stage, _) in self.attached_stages(design) {
+            for src in stage.effective_power_sources().iter() {
+                total += stage_source_supply_w(stage, src, sun_distance_au);
             }
         }
         total
@@ -146,15 +140,8 @@ impl Rocket {
     /// Sum of housekeeping draw (watts) across all attached stages.
     pub fn total_housekeeping_w(&self, design: &RocketDesign) -> f64 {
         let mut total = 0.0;
-        for (gi, group) in design.stage_groups.iter().enumerate() {
-            for (si, stage) in group.iter().enumerate() {
-                let attached = self.stage_states.get(gi)
-                    .and_then(|g| g.get(si))
-                    .is_some_and(|ss| ss.attached);
-                if attached {
-                    total += stage.housekeeping_w();
-                }
-            }
+        for (_, _, stage, _) in self.attached_stages(design) {
+            total += stage.housekeeping_w();
         }
         total
     }
@@ -162,16 +149,10 @@ impl Rocket {
     /// Sum of battery capacity (kilowatt-days) across all attached stages.
     pub fn total_battery_capacity_kwd(&self, design: &RocketDesign) -> f64 {
         let mut total = 0.0;
-        for (gi, group) in design.stage_groups.iter().enumerate() {
-            for (si, stage) in group.iter().enumerate() {
-                let attached = self.stage_states.get(gi)
-                    .and_then(|g| g.get(si))
-                    .is_some_and(|ss| ss.attached);
-                if !attached { continue; }
-                for src in stage.effective_power_sources().iter() {
-                    if let crate::power::PowerSourceKind::Battery = src.kind {
-                        total += src.capacity_kwd;
-                    }
+        for (_, _, stage, _) in self.attached_stages(design) {
+            for src in stage.effective_power_sources().iter() {
+                if let crate::power::PowerSourceKind::Battery = src.kind {
+                    total += src.capacity_kwd;
                 }
             }
         }
@@ -229,21 +210,15 @@ impl Rocket {
     /// daily tick).
     fn free_supply_w(&self, design: &RocketDesign, sun_distance_au: f64) -> f64 {
         let mut total = 0.0;
-        for (gi, group) in design.stage_groups.iter().enumerate() {
-            for (si, stage) in group.iter().enumerate() {
-                let attached = self.stage_states.get(gi)
-                    .and_then(|g| g.get(si))
-                    .is_some_and(|ss| ss.attached);
-                if !attached { continue; }
-                for src in stage.effective_power_sources().iter() {
-                    match src.kind {
-                        crate::power::PowerSourceKind::SolarPanel { .. }
-                        | crate::power::PowerSourceKind::Rtg { .. }
-                        | crate::power::PowerSourceKind::Reactor { .. } => {
-                            total += src.steady_output_w(sun_distance_au);
-                        }
-                        _ => {}
+        for (_, _, stage, _) in self.attached_stages(design) {
+            for src in stage.effective_power_sources().iter() {
+                match src.kind {
+                    crate::power::PowerSourceKind::SolarPanel { .. }
+                    | crate::power::PowerSourceKind::Rtg { .. }
+                    | crate::power::PowerSourceKind::Reactor { .. } => {
+                        total += src.steady_output_w(sun_distance_au);
                     }
+                    _ => {}
                 }
             }
         }
@@ -263,36 +238,34 @@ impl Rocket {
         }
         let mut produced_w = 0.0;
         let mut remaining_w = required_w;
-        for gi in 0..design.stage_groups.len() {
-            for si in 0..design.stage_groups[gi].len() {
-                let attached = self.stage_states.get(gi)
-                    .and_then(|g| g.get(si))
-                    .is_some_and(|ss| ss.attached);
-                if !attached { continue; }
-                let stage = &design.stage_groups[gi][si];
-                if !crate::power::fuel_cell_can_run_on(&stage.engine) {
-                    continue;
-                }
-                for src in stage.effective_power_sources().iter() {
-                    if remaining_w <= 0.0 { return produced_w; }
-                    let (peak_w, kg_per_kwd) = match src.kind {
-                        crate::power::PowerSourceKind::FuelCell { peak_w, kg_per_kwd }
-                            => (peak_w, kg_per_kwd),
-                        _ => continue,
-                    };
-                    let desired_w = peak_w.min(remaining_w);
-                    let desired_kwd = desired_w / 1000.0;
-                    let propellant_needed = desired_kwd * kg_per_kwd;
-                    let avail = self.stage_states[gi][si].propellant_remaining_kg;
-                    let consumed = propellant_needed.min(avail);
-                    self.stage_states[gi][si].propellant_remaining_kg -= consumed;
-                    let actual_kwd = if kg_per_kwd > 0.0 {
-                        consumed / kg_per_kwd
-                    } else { desired_kwd };
-                    let actual_w = actual_kwd * 1000.0;
-                    produced_w += actual_w;
-                    remaining_w -= actual_w;
-                }
+        // Indices first: the cells drain their own stage's propellant.
+        let attached: Vec<(usize, usize)> = self.attached_stages(design)
+            .map(|(gi, si, _, _)| (gi, si))
+            .collect();
+        for (gi, si) in attached {
+            let stage = &design.stage_groups[gi][si];
+            if !crate::power::fuel_cell_can_run_on(&stage.engine) {
+                continue;
+            }
+            for src in stage.effective_power_sources().iter() {
+                if remaining_w <= 0.0 { return produced_w; }
+                let (peak_w, kg_per_kwd) = match src.kind {
+                    crate::power::PowerSourceKind::FuelCell { peak_w, kg_per_kwd }
+                        => (peak_w, kg_per_kwd),
+                    _ => continue,
+                };
+                let desired_w = peak_w.min(remaining_w);
+                let desired_kwd = desired_w / 1000.0;
+                let propellant_needed = desired_kwd * kg_per_kwd;
+                let avail = self.stage_states[gi][si].propellant_remaining_kg;
+                let consumed = propellant_needed.min(avail);
+                self.stage_states[gi][si].propellant_remaining_kg -= consumed;
+                let actual_kwd = if kg_per_kwd > 0.0 {
+                    consumed / kg_per_kwd
+                } else { desired_kwd };
+                let actual_w = actual_kwd * 1000.0;
+                produced_w += actual_w;
+                remaining_w -= actual_w;
             }
         }
         produced_w
@@ -301,27 +274,26 @@ impl Rocket {
     /// Distribute `kwd` of charge across attached batteries, respecting
     /// capacity. Helper for `run_daily_power_tick`.
     fn distribute_charge_kwd(&mut self, design: &RocketDesign, mut kwd: f64) {
-        // First pass: how much room is there?
-        for (gi, group) in design.stage_groups.iter().enumerate() {
-            for (si, stage) in group.iter().enumerate() {
-                let attached = self.stage_states.get(gi)
-                    .and_then(|g| g.get(si))
-                    .is_some_and(|ss| ss.attached);
-                if !attached { continue; }
-                let stage_capacity: f64 = stage.effective_power_sources().iter()
-                    .filter_map(|p| match p.kind {
-                        crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
-                        _ => None,
-                    })
-                    .sum();
-                if stage_capacity <= 0.0 { continue; }
-                let state = &mut self.stage_states[gi][si];
-                let room = stage_capacity - state.battery_kwd_remaining;
-                let add = kwd.min(room).max(0.0);
-                state.battery_kwd_remaining += add;
-                kwd -= add;
-                if kwd <= 0.0 { return; }
-            }
+        // Each attached stage's battery room, lowest group first; indices
+        // first because the charge is written back into the states.
+        let attached: Vec<(usize, usize)> = self.attached_stages(design)
+            .map(|(gi, si, _, _)| (gi, si))
+            .collect();
+        for (gi, si) in attached {
+            let stage = &design.stage_groups[gi][si];
+            let stage_capacity: f64 = stage.effective_power_sources().iter()
+                .filter_map(|p| match p.kind {
+                    crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
+                    _ => None,
+                })
+                .sum();
+            if stage_capacity <= 0.0 { continue; }
+            let state = &mut self.stage_states[gi][si];
+            let room = stage_capacity - state.battery_kwd_remaining;
+            let add = kwd.min(room).max(0.0);
+            state.battery_kwd_remaining += add;
+            kwd -= add;
+            if kwd <= 0.0 { return; }
         }
     }
 

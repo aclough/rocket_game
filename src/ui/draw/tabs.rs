@@ -680,9 +680,7 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
             if flight.design.stage_groups.len() > 1 {
                 let mut stage_parts = Vec::new();
                 for gi in 0..flight.design.stage_groups.len() {
-                    let attached = flight.rocket.stage_states.get(gi)
-                        .is_some_and(|ss| ss.iter().any(|s| s.attached));
-                    if !attached {
+                    if !flight.rocket.group_attached(gi) {
                         continue;
                     }
                     let stage_dv = flight.rocket.group_remaining_delta_v(&flight.design, gi);
@@ -698,23 +696,9 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
 
             // Current acceleration of the active stage group (with the
             // power derate applied at the flight's current sun distance).
-            let active_group = (0..flight.design.stage_groups.len())
-                .find(|&gi| flight.rocket.stage_states.get(gi)
-                    .map(|ss| ss.iter().any(|s| s.attached))
-                    .unwrap_or(false));
+            let active_group = flight.rocket.lowest_attached_group();
             if let Some(gi) = active_group {
-                let stage_mass: f64 = flight.design.stage_groups.iter().enumerate()
-                    .flat_map(|(gj, group)| {
-                        let states = &flight.rocket.stage_states;
-                        group.iter().enumerate().filter_map(move |(sj, stage)| {
-                            let attached = states.get(gj).and_then(|g| g.get(sj))
-                                .is_some_and(|s| s.attached);
-                            if !attached { return None; }
-                            let prop = states[gj][sj].propellant_remaining_kg;
-                            Some(stage.dry_mass_kg() + prop)
-                        })
-                    })
-                    .sum();
+                let stage_mass = flight.rocket.attached_mass_kg(&flight.design);
                 let payload_mass: f64 = flight.payloads.iter().map(|p| p.mass_kg()).sum();
                 let total_mass = stage_mass + payload_mass;
                 let sun_au = DELTA_V_MAP.location(&flight.current_location)
@@ -775,10 +759,7 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
             // Show current stage group if not on the final one
             let total_groups = sc.design.stage_groups.len();
             if total_groups > 1 {
-                let current_group = (0..total_groups)
-                    .find(|&gi| sc.rocket.stage_states.get(gi)
-                        .map(|ss| ss.iter().any(|s| s.attached))
-                        .unwrap_or(false));
+                let current_group = sc.rocket.lowest_attached_group();
                 if let Some(gi) = current_group {
                     if gi + 1 < total_groups {
                         spans.push(Span::styled(
@@ -794,9 +775,7 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
             if total_groups > 1 {
                 let mut stage_parts = Vec::new();
                 for gi in 0..total_groups {
-                    let attached = sc.rocket.stage_states.get(gi)
-                        .is_some_and(|ss| ss.iter().any(|s| s.attached));
-                    if !attached {
+                    if !sc.rocket.group_attached(gi) {
                         continue;
                     }
                     let stage_dv = sc.rocket.group_remaining_delta_v(&sc.design, gi);
@@ -814,23 +793,9 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
             // power derate applied at the spacecraft's current sun
             // distance — a Mars-bound ion craft will read lower than at
             // Earth).
-            let active_group = (0..total_groups)
-                .find(|&gi| sc.rocket.stage_states.get(gi)
-                    .map(|ss| ss.iter().any(|s| s.attached))
-                    .unwrap_or(false));
+            let active_group = sc.rocket.lowest_attached_group();
             if let Some(gi) = active_group {
-                let stage_mass: f64 = sc.design.stage_groups.iter().enumerate()
-                    .flat_map(|(gj, group)| {
-                        let states = &sc.rocket.stage_states;
-                        group.iter().enumerate().filter_map(move |(sj, stage)| {
-                            let attached = states.get(gj).and_then(|g| g.get(sj))
-                                .is_some_and(|s| s.attached);
-                            if !attached { return None; }
-                            let prop = states[gj][sj].propellant_remaining_kg;
-                            Some(stage.dry_mass_kg() + prop)
-                        })
-                    })
-                    .sum();
+                let stage_mass = sc.rocket.attached_mass_kg(&sc.design);
                 let payload_mass: f64 = sc.payloads.iter().map(|p| p.mass_kg()).sum();
                 let total_mass = stage_mass + payload_mass;
                 let sun_au = DELTA_V_MAP.location(&sc.location)

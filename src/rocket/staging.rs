@@ -170,48 +170,13 @@ impl Rocket {
         false
     }
 
-    /// Total remaining delta-v based on current propellant state.
-    /// Simplified: treats each group sequentially, each stage in a group independently.
+    /// Total remaining delta-v based on current propellant state: each
+    /// group's [`Self::group_remaining_delta_v`], lowest first (∞ with a
+    /// sail aboard).
     pub fn remaining_delta_v(&self, design: &RocketDesign) -> f64 {
-        let mut total = 0.0;
-        let n = self.stage_states.len();
-
-        for gi in 0..n {
-            // Payload for this group: everything above
-            let payload_above: f64 = (gi + 1..n).map(|gj| {
-                design.stage_groups[gj].iter().zip(self.stage_states[gj].iter())
-                    .filter(|(_, ss)| ss.attached)
-                    .map(|(s, ss)| s.dry_mass_kg() + ss.propellant_remaining_kg)
-                    .sum::<f64>()
-            }).sum::<f64>() + self.payload_mass_kg;
-
-            // Solar sail stages have infinite dv
-            let has_sail = design.stage_groups[gi].iter()
-                .zip(self.stage_states[gi].iter())
-                .any(|(s, ss)| ss.attached && s.engine.is_solar_sail());
-            if has_sail {
-                return f64::INFINITY;
-            }
-
-            // Build temporary stages with remaining propellant for phased calc
-            let active_stages: Vec<Stage> = design.stage_groups[gi].iter()
-                .zip(self.stage_states[gi].iter())
-                .filter(|(_, ss)| ss.attached && ss.propellant_remaining_kg > 0.0)
-                .map(|(s, ss)| {
-                    let mut s = s.clone();
-                    s.propellant_mass_kg = ss.propellant_remaining_kg;
-                    s
-                })
-                .collect();
-
-            if active_stages.len() == 1 {
-                total += active_stages[0].delta_v(payload_above);
-            } else if active_stages.len() > 1 {
-                total += phased_parallel_delta_v(&active_stages, payload_above);
-            }
-        }
-
-        total
+        (0..self.stage_states.len())
+            .map(|gi| self.group_remaining_delta_v(design, gi))
+            .sum()
     }
 
     /// Burn through stage groups sequentially to achieve target delta-v.
@@ -246,20 +211,13 @@ impl Rocket {
             }
 
             // Solar sail: infinite dv, no propellant consumed
-            let is_sail = design.stage_groups.get(gi)
-                .is_some_and(|g| g.iter().any(|s| s.engine.is_solar_sail()))
-                && self.stage_states.get(gi)
-                    .is_some_and(|ss| ss.iter().any(|s| s.attached));
-            if is_sail {
+            if self.group_has_attached_sail(design, gi) {
                 dv_achieved += dv_remaining;
                 groups_burned.push(gi);
                 break;
             }
 
-            // Check if this group has any attached stages with propellant
-            let has_fuel = self.stage_states[gi].iter()
-                .any(|ss| ss.attached && ss.propellant_remaining_kg > 0.0);
-            if !has_fuel {
+            if !self.group_has_propellant(gi) {
                 continue;
             }
 
@@ -304,26 +262,15 @@ impl Rocket {
     /// Compute remaining delta-v for a single group given current propellant state.
     pub fn group_remaining_delta_v(&self, design: &RocketDesign, gi: usize) -> f64 {
         // Solar sail: infinite dv
-        if design.stage_groups.get(gi)
-            .is_some_and(|g| g.iter().any(|s| s.engine.is_solar_sail()))
-            && self.stage_states.get(gi)
-                .is_some_and(|ss| ss.iter().any(|s| s.attached))
-        {
+        if self.group_has_attached_sail(design, gi) {
             return f64::INFINITY;
         }
 
-        let n = self.stage_states.len();
-        let payload_above: f64 = (gi + 1..n).map(|gj| {
-            design.stage_groups[gj].iter().zip(self.stage_states[gj].iter())
-                .filter(|(_, ss)| ss.attached)
-                .map(|(s, ss)| s.dry_mass_kg() + ss.propellant_remaining_kg)
-                .sum::<f64>()
-        }).sum::<f64>() + self.payload_mass_kg;
+        let payload_above = self.mass_above_group(design, gi);
 
-        let active_stages: Vec<Stage> = design.stage_groups[gi].iter()
-            .zip(self.stage_states[gi].iter())
-            .filter(|(_, ss)| ss.attached && ss.propellant_remaining_kg > 0.0)
-            .map(|(s, ss)| {
+        let active_stages: Vec<Stage> = self.attached_stages_in(design, gi)
+            .filter(|(_, _, ss)| ss.propellant_remaining_kg > 0.0)
+            .map(|(_, s, ss)| {
                 let mut s = s.clone();
                 s.propellant_mass_kg = ss.propellant_remaining_kg;
                 s
@@ -349,15 +296,8 @@ impl Rocket {
     fn burn_group(
         &mut self, design: &RocketDesign, gi: usize, target_dv: f64, isp_fraction: f64,
     ) -> (f64, Vec<usize>) {
-        let n = self.stage_states.len();
 
-        // Compute payload above this group
-        let payload_above: f64 = (gi + 1..n).map(|gj| {
-            design.stage_groups[gj].iter().zip(self.stage_states[gj].iter())
-                .filter(|(_, ss)| ss.attached)
-                .map(|(s, ss)| s.dry_mass_kg() + ss.propellant_remaining_kg)
-                .sum::<f64>()
-        }).sum::<f64>() + self.payload_mass_kg;
+        let payload_above = self.mass_above_group(design, gi);
 
         let group = &design.stage_groups[gi];
         let mut dv_remaining = target_dv;
