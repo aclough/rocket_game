@@ -94,6 +94,17 @@ already been fixed. Net −2 lines, six fewer bodies.
 - Gate: oracle identical (the bot doesn't use the sizer today; a later
   policy could, which is the point).
 
+**Step 3 record.** Into `stage.rs` under a "Sizing" banner, per your Q5
+answer: the six sizing constants (now `pub`), `dry_mass_for`,
+`autosize_propellant`, `SizingTarget`, `propellant_step` and
+`recompute_structural_masses`; `is_solid_engine` became
+`EngineDesign::is_solid`. The designer keeps `resize_all_tanks`,
+`resize_tanks_through`, `rename_all_stages`, `apply_picked_engine_to_designer`
+and `sync_stages_to_projects` (they mutate `RocketDesignerState`) and
+the `autosize_tests`, which drive the sizer through the designer state
+and so stay beside it. Two doc comments that E1 had glued onto the
+wrong functions were untangled on the way. Oracle byte-identical.
+
 ### Step 4 — D3: the graph gets an index
 
 - `DeltaVMap` builds, in the constructor, `index: HashMap<&'static str, usize>`

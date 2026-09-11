@@ -146,6 +146,224 @@ impl Stage {
     }
 }
 
+// ─── Sizing ──────────────────────────────────────────────────────────
+//
+// How a stage's tank and structure are chosen for the stack around it.
+// Pure functions over `Stage` lists: the rocket designer calls them as
+// the player edits, and anything headless — a policy that designs its
+// own vehicle — can too (17_3_PHYSICS.md D5).
+
+/// Thrust-to-weight each stage group is sized for at its own ignition.
+///
+/// The first stage has to lift the stack off the pad, so it wants real
+/// margin — real launchers leave the ground between about 1.2 and 1.5.
+/// Everything above ignites already moving, so 1.0 is enough to keep it
+/// accelerating, and anything more is engine it didn't need.
+///
+/// Sizing every stage against its own thrust deliberately keeps the
+/// answer independent of the designer's payload field: that defaults to
+/// a nominal test mass most players never touch, and a rule that solved
+/// for a mission delta-v would quietly hang every tank in the vehicle off
+/// a number nobody chose.
+pub const TARGET_LIFTOFF_TWR: f64 = 1.2;
+
+pub const TARGET_STAGE_TWR: f64 = 1.0;
+
+/// Vacuum delta-v a low-thrust stage is sized towards.
+///
+/// Spiral transfers out of Earth orbit run roughly 3-8 km/s depending on
+/// how far out they go; the middle of that band gives an ion stage a tank
+/// that can do its job without dominating the vehicle it rides on.
+pub const LOW_THRUST_DV_TARGET: f64 = 6_000.0;
+
+/// Floor and ceiling on an auto-sized tank. The floor keeps a stage the
+/// solver can't satisfy (an engine too weak to lift what's above it)
+/// visible and editable rather than empty; the ceiling matches the cap
+/// the `+` key already enforces.
+pub const MIN_AUTOSIZED_PROPELLANT: f64 = 100.0;
+
+pub const MAX_AUTOSIZED_PROPELLANT: f64 = 2_000_000.0;
+
+/// Step size for inline propellant adjustments (`+`/`-` in the
+/// designer): ~10 seconds of burn time per press.
+pub const PROPELLANT_STEP_BURN_SECONDS: f64 = 10.0;
+
+/// Dry mass a stage would come to with a given propellant load.
+///
+/// Mirrors `recompute_structural_masses` followed by `Stage::dry_mass_kg`,
+/// so the sizing solver prices its candidates exactly the way the designer
+/// will price the answer — engines, fairing and power sources included,
+/// not just the tank.
+pub fn dry_mass_for(
+    stage: &Stage, propellant_kg: f64, is_first: bool, has_interstage: bool,
+) -> f64 {
+    let mix: Vec<(crate::propellant::Propellant, f64)> = stage.engine.propellant_mix.iter()
+        .map(|f| (f.propellant, f.mass_fraction))
+        .collect();
+    let structural = crate::structure::compute_structural_mass(
+        propellant_kg, &mix, &stage.engine, stage.engine_count, is_first, has_interstage,
+    ).total;
+    let mut probe = stage.clone();
+    probe.structural_mass_kg = structural;
+    probe.dry_mass_kg()
+}
+
+/// Choose a propellant load for one stage, in the context of the stack
+/// around it.
+///
+/// Every stage is sized by thrust-to-weight at its own ignition: whatever
+/// tank leaves it at `TARGET_LIFTOFF_TWR` off the pad, or
+/// `TARGET_STAGE_TWR` once it's already moving. Low-thrust stages are the
+/// exception — a TWR target is meaningless for them — and are sized for
+/// the spiral they fly instead.
+///
+/// A stage sized purely by burn time, as this used to be, can come out
+/// too small to get what's above it moving. That doesn't show up as a
+/// delta-v problem: it shows up as the next stage igniting slow and steep
+/// and spending its propellant fighting gravity instead of going
+/// sideways. Sizing each stage against what it actually has to lift puts
+/// every handover somewhere the vehicle can recover from.
+///
+/// Solved by bisection because a tank pays for itself twice: propellant
+/// mass, and the structure that has to hold it.
+pub fn autosize_propellant(
+    stage_groups: &[Vec<Stage>],
+    group_index: usize,
+    inner_index: usize,
+    payload_kg: f64,
+    launch_from: &str,
+) -> f64 {
+    let Some(stage) = stage_groups.get(group_index).and_then(|g| g.get(inner_index)) else {
+        return MIN_AUTOSIZED_PROPELLANT;
+    };
+    let is_first = group_index == 0;
+    let has_interstage = group_index + 1 < stage_groups.len();
+
+    // Mass of every stage above this group, plus the payload. Fixed while
+    // this tank is solved for.
+    let mass_above: f64 = stage_groups[group_index + 1..].iter()
+        .flat_map(|g| g.iter())
+        .map(|s| s.wet_mass_kg())
+        .sum::<f64>()
+        + payload_kg;
+
+    // Wet mass of this stage at a candidate propellant load.
+    let wet_at = |p: f64| p + dry_mass_for(stage, p, is_first, has_interstage);
+
+    let target = if stage.engine.is_low_thrust() {
+        // Electric propulsion is *defined* by having a thrust-to-weight
+        // far below 1 — the delta-v graph routes it from orbit and refuses
+        // it the launch edge outright — so sizing it to a TWR target would
+        // just floor every ion tank. Size it for the spiral it will
+        // actually fly. This is also the case the old flat burn-time rule
+        // got worst: 120 seconds of an ion engine's mass flow is grams.
+        SizingTarget::DeltaV(LOW_THRUST_DV_TARGET)
+    } else {
+        // Siblings in the same group fire alongside this stage, so they
+        // contribute both thrust and mass.
+        let (sibling_thrust, sibling_mass): (f64, f64) = stage_groups[group_index].iter()
+            .enumerate()
+            .filter(|(si, _)| *si != inner_index)
+            .fold((0.0, 0.0), |(t, m), (_, s)| (t + s.total_thrust_n(), m + s.wet_mass_kg()));
+        let thrust = stage.total_thrust_n() + sibling_thrust;
+        let gravity = crate::location::DELTA_V_MAP.surface_properties(launch_from)
+            .map_or(9.81, |p| p.gravity_m_s2);
+        if thrust <= 0.0 || gravity <= 0.0 {
+            return MIN_AUTOSIZED_PROPELLANT;
+        }
+        // Ignition mass the target TWR allows, less everything that isn't
+        // this stage. What's left is the budget for tank plus propellant.
+        let twr = if is_first { TARGET_LIFTOFF_TWR } else { TARGET_STAGE_TWR };
+        let budget = thrust / (twr * gravity) - mass_above - sibling_mass;
+        SizingTarget::WetMass(budget)
+    };
+
+    let achieved = |p: f64| match target {
+        SizingTarget::WetMass(_) => wet_at(p),
+        SizingTarget::DeltaV(_) => {
+            // This stage's own delta-v carrying everything above it —
+            // the same expression `Stage::delta_v` evaluates.
+            let dry = mass_above + dry_mass_for(stage, p, is_first, has_interstage);
+            let wet = dry + p;
+            if dry <= 0.0 || wet <= dry {
+                0.0
+            } else {
+                stage.engine.exhaust_velocity() * (wet / dry).ln()
+            }
+        }
+    };
+    let goal = match target {
+        SizingTarget::WetMass(m) => m,
+        SizingTarget::DeltaV(dv) => dv,
+    };
+
+    // Both `achieved` functions rise monotonically with propellant, so
+    // bisect. If even an empty tank overshoots — an engine too weak to
+    // lift what's already above it — the floor is the honest answer, and
+    // the designer's TWR column will say why.
+    if achieved(MIN_AUTOSIZED_PROPELLANT) >= goal {
+        return MIN_AUTOSIZED_PROPELLANT;
+    }
+    if achieved(MAX_AUTOSIZED_PROPELLANT) <= goal {
+        return MAX_AUTOSIZED_PROPELLANT;
+    }
+    let (mut lo, mut hi) = (MIN_AUTOSIZED_PROPELLANT, MAX_AUTOSIZED_PROPELLANT);
+    for _ in 0..60 {
+        let mid = (lo + hi) / 2.0;
+        if achieved(mid) <= goal { lo = mid } else { hi = mid }
+    }
+    let sized = lo;
+
+    // Round *up* to 100 kg, the granularity `+`/`-` moves in. Rounding to
+    // nearest would let the answer land under its own target — on a small
+    // high-Isp stage the whole solution can be a couple of hundred kg, and
+    // dropping to the lower step there costs a fifth of the delta-v.
+    ((sized / 100.0).ceil() * 100.0)
+        .clamp(MIN_AUTOSIZED_PROPELLANT, MAX_AUTOSIZED_PROPELLANT)
+}
+
+/// What `autosize_propellant` is solving for, so the bisection can share
+/// one loop across the two rules.
+enum SizingTarget {
+    /// Total wet mass this stage should come to.
+    WetMass(f64),
+    /// Delta-v this stage should deliver.
+    DeltaV(f64),
+}
+
+/// Compute thrust-scaled propellant step size for inline adjustments.
+/// Rounded to nearest 100 kg, min 100 kg.
+pub fn propellant_step(engine: &EngineDesign, engine_count: u32) -> f64 {
+    let raw = engine.mass_flow_rate() * engine_count as f64 * PROPELLANT_STEP_BURN_SECONDS;
+    (raw / 100.0).round().max(1.0) * 100.0
+}
+
+/// Recompute structural masses for all stage groups based on their
+/// position: the aero shell depends on being group 0 (exposed to
+/// airflow), the interstage on whether the group is the last.
+pub fn recompute_structural_masses(stage_groups: &mut [Vec<Stage>]) {
+    let n = stage_groups.len();
+    for (gi, group) in stage_groups.iter_mut().enumerate() {
+        let is_first = gi == 0;
+        let has_interstage = gi + 1 < n;
+        for stage in group.iter_mut() {
+            let propellant_mix: Vec<(crate::propellant::Propellant, f64)> =
+                stage.engine.propellant_mix.iter()
+                    .map(|f| (f.propellant, f.mass_fraction))
+                    .collect();
+            let breakdown = crate::structure::compute_structural_mass(
+                stage.propellant_mass_kg,
+                &propellant_mix,
+                &stage.engine,
+                stage.engine_count,
+                is_first,
+                has_interstage,
+            );
+            stage.structural_mass_kg = breakdown.total;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

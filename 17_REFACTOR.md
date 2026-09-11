@@ -375,7 +375,7 @@ opportunity in the codebase.
   `RocketDesign::group_params(gi)`.
 - **Size/risk:** small / none.
 
-### D5. Rocket-designer sizing physics lives in `ui/mod.rs`
+### ✅ D5. Rocket-designer sizing physics lives in `ui/mod.rs`
 - **Where:** `ui/mod.rs:313-644` (`autosize_propellant`,
   `recompute_structural_masses`, TWR targets, ~300 lines) plus a
   200-line test module. TWR-target bisection over `Stage` and

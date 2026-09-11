@@ -27,7 +27,6 @@ use crate::project::{ProjectKind, ProjectRef};
 use crate::rocket_project::RocketDesignStatus;
 use crate::save;
 use crate::stage::{Stage, StageId};
-use crate::structure;
 
 /// The Ready Rockets list in the order it is drawn: grouped by rocket
 /// name, newest revision first, and build order within that.

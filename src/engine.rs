@@ -182,6 +182,13 @@ impl EngineDesign {
 
     /// Whether this engine is a low-thrust type (ion, Hall, solar sail).
     /// Low-thrust engines can only use transfer edges marked low_thrust_ok.
+    /// A solid motor: one propellant, the solid mix. Its tank is its
+    /// casing, so the designer can't resize it by the step.
+    pub fn is_solid(&self) -> bool {
+        self.propellant_mix.len() == 1
+            && self.propellant_mix[0].propellant == crate::propellant::Propellant::SolidMix
+    }
+
     pub fn is_low_thrust(&self) -> bool {
         matches!(self.cycle, EngineCycle::ElectricPropulsion | EngineCycle::SolarSail)
     }
