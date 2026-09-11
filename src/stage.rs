@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 
 use crate::engine::EngineDesign;
-use crate::power::PowerSource;
+use crate::power::{PowerSource, PowerSourceKind};
 
 /// Unique identifier for a stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -64,6 +64,29 @@ impl Stage {
         let fairing_mass = self.fairing.as_ref().map_or(0.0, |f| f.mass_kg);
         let power_mass: f64 = self.effective_power_sources().iter().map(|p| p.mass_kg).sum();
         self.structural_mass_kg + engine_mass + fairing_mass + power_mass
+    }
+
+    /// What one of this stage's power sources supplies at `sun_distance_au`:
+    /// a fuel cell's peak if the stage's engine burns something it can run
+    /// on (no solid, no xenon), otherwise the source's steady output.
+    pub fn source_supply_w(&self, src: &PowerSource, sun_distance_au: f64) -> f64 {
+        match src.kind {
+            PowerSourceKind::FuelCell { peak_w, .. } => {
+                if crate::power::fuel_cell_can_run_on(&self.engine) { peak_w } else { 0.0 }
+            }
+            _ => src.steady_output_w(sun_distance_au),
+        }
+    }
+
+    /// Battery capacity (kilowatt-days) aboard this stage, the default
+    /// battery included when nothing was fitted.
+    pub fn battery_capacity_kwd(&self) -> f64 {
+        self.effective_power_sources().iter()
+            .filter_map(|p| match p.kind {
+                PowerSourceKind::Battery => Some(p.capacity_kwd),
+                _ => None,
+            })
+            .sum()
     }
 
     /// Steady-state housekeeping draw in watts. Approximates ~1 W per 10 kg

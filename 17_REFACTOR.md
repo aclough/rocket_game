@@ -337,7 +337,7 @@ opportunity in the codebase.
 - **Size/risk:** medium / low. Makes the CLAUDE.md "new field must
   reach every copy site" pitfall a one-site problem.
 
-### D2. Design/instance power duplication
+### ✅ D2. Design/instance power duplication
 - **Where:** `RocketDesign::total_power_supply_w` etc.
   (`rocket.rs:162-199`) and `Rocket::total_power_supply_w` etc.
   (`:741-790`) are the same bodies with an `attached` filter. Battery

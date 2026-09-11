@@ -10,17 +10,56 @@ use super::{Rocket, RocketDesign};
 /// Same as `PowerSource::steady_output_w` except fuel cells return 0 if
 /// the host stage's engine has propellant the cell can't burn (solid
 /// or xenon).
-pub fn stage_source_supply_w(
-    stage: &Stage,
-    src: &crate::power::PowerSource,
-    sun_distance_au: f64,
-) -> f64 {
-    match src.kind {
-        crate::power::PowerSourceKind::FuelCell { peak_w, .. } => {
-            if crate::power::fuel_cell_can_run_on(&stage.engine) { peak_w } else { 0.0 }
+/// The power totals over a set of stages — the design's whole stack, or
+/// a flying rocket's attached stages — accumulated source by source in
+/// stage order, which is how both used to do it (17_3_PHYSICS.md D2).
+fn total_supply_w<'a>(stages: impl Iterator<Item = &'a Stage>, sun_distance_au: f64) -> f64 {
+    let mut total = 0.0;
+    for stage in stages {
+        for src in stage.effective_power_sources().iter() {
+            total += stage.source_supply_w(src, sun_distance_au);
         }
-        _ => src.steady_output_w(sun_distance_au),
     }
+    total
+}
+
+fn total_housekeeping_w<'a>(stages: impl Iterator<Item = &'a Stage>) -> f64 {
+    let mut total = 0.0;
+    for stage in stages {
+        total += stage.housekeeping_w();
+    }
+    total
+}
+
+fn total_battery_kwd<'a>(stages: impl Iterator<Item = &'a Stage>) -> f64 {
+    let mut total = 0.0;
+    for stage in stages {
+        for src in stage.effective_power_sources().iter() {
+            if let crate::power::PowerSourceKind::Battery = src.kind {
+                total += src.capacity_kwd;
+            }
+        }
+    }
+    total
+}
+
+/// Steady supply from solar / RTG / reactor (excludes fuel cells, which
+/// consume propellant and are the daily tick's fallback).
+fn free_supply_w<'a>(stages: impl Iterator<Item = &'a Stage>, sun_distance_au: f64) -> f64 {
+    let mut total = 0.0;
+    for stage in stages {
+        for src in stage.effective_power_sources().iter() {
+            match src.kind {
+                crate::power::PowerSourceKind::SolarPanel { .. }
+                | crate::power::PowerSourceKind::Rtg { .. }
+                | crate::power::PowerSourceKind::Reactor { .. } => {
+                    total += src.steady_output_w(sun_distance_au);
+                }
+                _ => {}
+            }
+        }
+    }
+    total
 }
 
 impl RocketDesign {
@@ -30,42 +69,18 @@ impl RocketDesign {
     /// count if their host stage's engine uses propellants the cell can
     /// burn (no solid, no xenon).
     pub fn total_power_supply_w(&self, sun_distance_au: f64) -> f64 {
-        let mut total = 0.0;
-        for group in &self.stage_groups {
-            for stage in group {
-                for src in stage.effective_power_sources().iter() {
-                    total += stage_source_supply_w(stage, src, sun_distance_au);
-                }
-            }
-        }
-        total
+        total_supply_w(self.stage_groups.iter().flatten(), sun_distance_au)
     }
 
     /// Total housekeeping demand (watts) across all stages.
     pub fn total_housekeeping_w(&self) -> f64 {
-        let mut total = 0.0;
-        for group in &self.stage_groups {
-            for stage in group {
-                total += stage.housekeeping_w();
-            }
-        }
-        total
+        total_housekeeping_w(self.stage_groups.iter().flatten())
     }
 
     /// Total battery capacity (kilowatt-days) across all stages, counting
     /// the default battery on any stage the player left bare.
     pub fn total_battery_kwd(&self) -> f64 {
-        let mut total = 0.0;
-        for group in &self.stage_groups {
-            for stage in group {
-                for src in stage.effective_power_sources().iter() {
-                    if let crate::power::PowerSourceKind::Battery = src.kind {
-                        total += src.capacity_kwd;
-                    }
-                }
-            }
-        }
-        total
+        total_battery_kwd(self.stage_groups.iter().flatten())
     }
 
     /// How many days this design can run its own housekeeping at
@@ -128,35 +143,17 @@ impl Rocket {
     /// only count when their host stage's engine has compatible
     /// propellant.
     pub fn total_power_supply_w(&self, design: &RocketDesign, sun_distance_au: f64) -> f64 {
-        let mut total = 0.0;
-        for (_, _, stage, _) in self.attached_stages(design) {
-            for src in stage.effective_power_sources().iter() {
-                total += stage_source_supply_w(stage, src, sun_distance_au);
-            }
-        }
-        total
+        total_supply_w(self.attached_stages(design).map(|(_, _, s, _)| s), sun_distance_au)
     }
 
     /// Sum of housekeeping draw (watts) across all attached stages.
     pub fn total_housekeeping_w(&self, design: &RocketDesign) -> f64 {
-        let mut total = 0.0;
-        for (_, _, stage, _) in self.attached_stages(design) {
-            total += stage.housekeeping_w();
-        }
-        total
+        total_housekeeping_w(self.attached_stages(design).map(|(_, _, s, _)| s))
     }
 
     /// Sum of battery capacity (kilowatt-days) across all attached stages.
-    pub fn total_battery_capacity_kwd(&self, design: &RocketDesign) -> f64 {
-        let mut total = 0.0;
-        for (_, _, stage, _) in self.attached_stages(design) {
-            for src in stage.effective_power_sources().iter() {
-                if let crate::power::PowerSourceKind::Battery = src.kind {
-                    total += src.capacity_kwd;
-                }
-            }
-        }
-        total
+    pub fn total_battery_kwd(&self, design: &RocketDesign) -> f64 {
+        total_battery_kwd(self.attached_stages(design).map(|(_, _, s, _)| s))
     }
 
     /// Current battery charge (kilowatt-days) summed across attached stages.
@@ -205,24 +202,9 @@ impl Rocket {
         drained < deficit_kwd - 1e-9
     }
 
-    /// Steady supply from solar / RTG / reactor (excludes fuel cells,
-    /// which consume propellant and are handled as a fallback in the
-    /// daily tick).
+    /// Steady supply from the attached stages' solar / RTG / reactor.
     fn free_supply_w(&self, design: &RocketDesign, sun_distance_au: f64) -> f64 {
-        let mut total = 0.0;
-        for (_, _, stage, _) in self.attached_stages(design) {
-            for src in stage.effective_power_sources().iter() {
-                match src.kind {
-                    crate::power::PowerSourceKind::SolarPanel { .. }
-                    | crate::power::PowerSourceKind::Rtg { .. }
-                    | crate::power::PowerSourceKind::Reactor { .. } => {
-                        total += src.steady_output_w(sun_distance_au);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        total
+        free_supply_w(self.attached_stages(design).map(|(_, _, s, _)| s), sun_distance_au)
     }
 
     /// Fire fuel cells to cover up to `required_w` of demand. Each cell
@@ -280,13 +262,7 @@ impl Rocket {
             .map(|(gi, si, _, _)| (gi, si))
             .collect();
         for (gi, si) in attached {
-            let stage = &design.stage_groups[gi][si];
-            let stage_capacity: f64 = stage.effective_power_sources().iter()
-                .filter_map(|p| match p.kind {
-                    crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
-                    _ => None,
-                })
-                .sum();
+            let stage_capacity = design.stage_groups[gi][si].battery_capacity_kwd();
             if stage_capacity <= 0.0 { continue; }
             let state = &mut self.stage_states[gi][si];
             let room = stage_capacity - state.battery_kwd_remaining;

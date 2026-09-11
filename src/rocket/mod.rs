@@ -10,7 +10,6 @@ mod power;
 mod staging;
 mod stats;
 
-pub use power::stage_source_supply_w;
 pub use staging::{burn_phases, BurnPhase};
 pub use stats::{
     compute_stage_stats, design_ascent, group_gravity_losses, AscentLosses, DesignPerformance,

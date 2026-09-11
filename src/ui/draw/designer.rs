@@ -261,7 +261,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
             {
                 let sources = stage.effective_power_sources();
                 let supply: f64 = sources.iter()
-                    .map(|p| crate::rocket::stage_source_supply_w(stage, p, 1.0)).sum();
+                    .map(|p| stage.source_supply_w(p, 1.0)).sum();
                 let battery: f64 = sources.iter()
                     .filter_map(|p| match p.kind {
                         crate::power::PowerSourceKind::Battery => Some(p.capacity_kwd),
@@ -382,7 +382,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
             for stage in group {
                 total_housekeeping += stage.housekeeping_w();
                 for src in stage.effective_power_sources().iter() {
-                    total_supply_1au += crate::rocket::stage_source_supply_w(stage, src, 1.0);
+                    total_supply_1au += stage.source_supply_w(src, 1.0);
                 }
             }
         }

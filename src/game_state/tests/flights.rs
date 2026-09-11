@@ -581,7 +581,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
     // Against total capacity, not the fitted battery alone: every attached
     // stage carries a battery, explicit or default, and all of them start
     // full, so capacity minus charge is exactly what today's tick took.
-    let capacity = sc.rocket.total_battery_capacity_kwd(&sc.design);
+    let capacity = sc.rocket.total_battery_kwd(&sc.design);
     let drained = capacity - sc.rocket.total_battery_charge_kwd();
     assert!(
         (drained - one_day_kwd).abs() < 1e-9,

@@ -300,7 +300,7 @@ pub(super) fn draw_power_editor_modal(
     // the editable set the cursor indexes into, and the default is not
     // something the player can select or remove.
     let supply_w: f64 = stage.effective_power_sources().iter()
-        .map(|p| crate::rocket::stage_source_supply_w(stage, p, 1.0)).sum();
+        .map(|p| stage.source_supply_w(p, 1.0)).sum();
     let idle_demand_w = stage.housekeeping_w();
     let engine_draw_w = stage.engine.power_draw_w * stage.engine_count as f64;
     let thrust_demand_w = idle_demand_w + engine_draw_w;

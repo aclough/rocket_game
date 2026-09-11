@@ -70,6 +70,17 @@ anything attached. Net −92 lines; oracle byte-identical.
   today; if the shared fold changes a float's last bit the oracle will
   say so and the fix is to keep the order, not to accept the drift.
 
+**Step 2 record.** `Stage::source_supply_w` (the fuel-cell rule, moved
+from the free `stage_source_supply_w`) and `Stage::battery_capacity_kwd`
+on the stage; four private folds in `rocket/power.rs` —
+`total_supply_w`, `total_housekeeping_w`, `total_battery_kwd`,
+`free_supply_w` over any iterator of stages — that `RocketDesign` feeds
+every stage and `Rocket` feeds `attached_stages`. They accumulate source
+by source in stage order exactly as both copies did, so the oracle is
+byte-identical. `Rocket::total_battery_capacity_kwd` is now
+`total_battery_kwd` like the design's. The `power.rs` module doc had
+already been fixed. Net −2 lines, six fewer bodies.
+
 ### Step 3 — D5: sizing physics leaves the UI
 
 - New `src/rocket_sizing.rs`: `SizingTarget`, `TARGET_LIFTOFF_TWR`,
