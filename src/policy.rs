@@ -272,12 +272,16 @@ impl BasicPolicy {
     /// 60 t first stage, one hydrolox engine under an 8 t upper stage.
     /// Sized to put a small-sat class payload into LEO with margin.
     ///
-    /// The first stage was 42 t until the planner started charging gravity
-    /// losses. Staging that early handed over at a steep pitch and left the
-    /// upper stage burning most of its delta-v fighting gravity — 1.9 km/s
-    /// of it — which cost the template three quarters of its payload. The
-    /// extra 18 t buys a handover near-horizontal, where the upper stage's
-    /// loss falls to nothing; capability lands within 3% of where it was.
+    /// Sized for the ascent model. The first stage was 42 t until the
+    /// planner started charging gravity losses, then 60 t on one engine
+    /// to buy a near-horizontal handover under the pure gravity turn —
+    /// which turned out to be that model levelling a TWR-1.22 vehicle off
+    /// at 11 km. With the pitch program (17_3_PHYSICS.md D7) staging at
+    /// 65–85 km, the same template lifted 1.7 t to LEO instead of 2.8 t,
+    /// and adding propellant to one engine only made it slower and worse.
+    /// Two booster engines under 90 t and a 15 t upper stage put it back
+    /// at ~3.4 t to LEO; GEO stays lower (~200 kg vs 380) because the
+    /// upper stage now pays real gravity on the way up.
     fn build_template(&self, game: &GameState) -> Option<RocketDesign> {
         let company = &game.player_company;
         let booster = company.engine_projects.iter()
@@ -302,9 +306,9 @@ impl BasicPolicy {
             // First stage lights at sea level; upper stage flies the
             // vacuum bell of its own engine family.
             engine: booster.design_variant(false),
-            engine_count: 1,
-            propellant_mass_kg: 60_000.0,
-            structural_mass_kg: 4_300.0,
+            engine_count: 2,
+            propellant_mass_kg: 90_000.0,
+            structural_mass_kg: 6_450.0,
             fairing: None,
             power_sources: Vec::new(),
         };
@@ -313,8 +317,8 @@ impl BasicPolicy {
             name: "BLV S2".into(),
             engine: upper.design_variant(true),
             engine_count: 1,
-            propellant_mass_kg: 8_000.0,
-            structural_mass_kg: 800.0,
+            propellant_mass_kg: 15_000.0,
+            structural_mass_kg: 1_500.0,
             fairing: None,
             power_sources: Vec::new(),
         };

@@ -4,11 +4,76 @@
 
 use super::SurfaceProperties;
 
-/// Velocity at which the rocket begins pitching from vertical (gravity turn initiation).
+/// Velocity at which the rocket leaves the vertical, whatever steers it
+/// after that.
 pub const KICK_OVER_VELOCITY: f64 = 45.0;
 
-/// Size of the initial pitch-over kick, in radians.
+/// Size of the initial pitch-over kick of the pure gravity turn, in radians.
 pub const PITCH_KICK_RAD: f64 = 0.02;
+
+/// The air is thin enough to bend hard below this pressure: the pitch
+/// program reaches its end pitch where the ambient falls to it — 65 km
+/// on Earth, 28 km on Mars, 57 km at Venus's 1-bar level — and an
+/// airless body's program completes at the kick, which is how a lunar
+/// ascent flies (the LM pitched over within seconds of liftoff).
+pub const PITCH_SCHEDULE_PRESSURE_PA: f64 = 50.0;
+
+/// The pitch program every ascent flies (17_3_PHYSICS.md D7): from the
+/// kick, the pitch is commanded down from vertical to 30° above the
+/// horizon by the altitude where the air has thinned to
+/// [`PITCH_SCHEDULE_PRESSURE_PA`], along the square root of the altitude
+/// fraction, then follows a gravity turn. Anchored by
+/// `gravity_loss_matches_a_real_launch_vehicle`: a Falcon 9 class
+/// vehicle stages at ~84 km and loses ~1.58 km/s to gravity, and Earth
+/// staging altitudes are 34–95 km across the vehicles in the
+/// `ascent_models` probe — the pure gravity turn had a TWR-1.22 vehicle
+/// level at 11 km and a TWR-1.64 one lofting its upper stage to 900 km.
+pub const DEFAULT_ASCENT_PROFILE: AscentProfile = AscentProfile::PitchProgram {
+    kick_velocity_m_s: KICK_OVER_VELOCITY,
+    schedule_pressure_pa: PITCH_SCHEDULE_PRESSURE_PA,
+    end_pitch_rad: 30.0 * std::f64::consts::PI / 180.0,
+    exponent: 0.5,
+};
+
+/// How the vehicle is steered off the pad. The integrator's physics is
+/// the same for every variant — gravity, thrust, the curvature term —
+/// this is the attitude law the pitch follows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AscentProfile {
+    /// A pure gravity turn: vertical until `kick_velocity_m_s`, one kick
+    /// of `kick_rad`, then the pitch follows gravity. The model until
+    /// 17_3_PHYSICS.md D7, kept as the reference the tests compare
+    /// against: where it puts a vehicle is a steep function of TWR.
+    GravityTurn { kick_velocity_m_s: f64, kick_rad: f64 },
+    /// A flown pitch program: vertical until `kick_velocity_m_s`, then the
+    /// pitch is commanded by altitude — from vertical at the kick down to
+    /// `end_pitch_rad` above the horizon at the altitude where the
+    /// body's air thins to `schedule_pressure_pa`, along
+    /// `(altitude / that altitude)^exponent` — and follows a gravity turn
+    /// from there. On an airless body (or one whose atmosphere has no
+    /// scale height on record) the program completes at the kick. The
+    /// schedule knows nothing about stages: a vehicle stages wherever its
+    /// propellant runs out along it (a PSLV core at 34 km, a Falcon 9 at
+    /// 84, a Shuttle's SRBs partway up its one group), and a slow vehicle
+    /// simply pays more gravity getting to any given altitude.
+    PitchProgram { kick_velocity_m_s: f64, schedule_pressure_pa: f64, end_pitch_rad: f64, exponent: f64 },
+}
+
+impl AscentProfile {
+    /// The velocity at which this profile leaves the vertical.
+    fn kick_velocity(&self) -> f64 {
+        match *self {
+            AscentProfile::GravityTurn { kick_velocity_m_s, .. }
+            | AscentProfile::PitchProgram { kick_velocity_m_s, .. } => kick_velocity_m_s,
+        }
+    }
+}
+
+/// The pure gravity turn the game flew before D7, for tests that compare.
+pub const LEGACY_GRAVITY_TURN: AscentProfile = AscentProfile::GravityTurn {
+    kick_velocity_m_s: KICK_OVER_VELOCITY,
+    kick_rad: PITCH_KICK_RAD,
+};
 
 /// Integration timestep for the ascent, in seconds.
 pub const ASCENT_TIMESTEP_S: f64 = 0.25;
@@ -86,8 +151,7 @@ fn nozzle_fraction(nozzles: &[AscentNozzle], pressure_pa: f64) -> f64 {
 /// [`AscentPhase`]); the loss is charged to the group whose phase it
 /// happened in. Groups are simulated in order, each inheriting the
 /// velocity and pitch the previous one reached; the first starts at
-/// rest, vertical. The only free parameter is KICK_OVER_VELOCITY (45 m/s),
-/// the velocity at which the rocket begins pitching from vertical.
+/// rest, vertical, and is steered by [`DEFAULT_ASCENT_PROFILE`].
 ///
 /// Thrust at each step is the vacuum figure scaled by the nozzles' Isp
 /// fraction at the current altitude's pressure (`surface.pressure_at`),
@@ -97,6 +161,16 @@ fn nozzle_fraction(nozzles: &[AscentNozzle], pressure_pa: f64) -> f64 {
 ///
 /// Returns one [`AscentGroupResult`] per stage group.
 pub fn simulate_ascent(
+    surface: &SurfaceProperties,
+    groups: &[Vec<AscentPhase>],
+    initial_mass_kg: f64,
+) -> Vec<AscentGroupResult> {
+    simulate_ascent_with(&DEFAULT_ASCENT_PROFILE, surface, groups, initial_mass_kg)
+}
+
+/// [`simulate_ascent`] flown with a chosen [`AscentProfile`].
+pub fn simulate_ascent_with(
+    profile: &AscentProfile,
     surface: &SurfaceProperties,
     groups: &[Vec<AscentPhase>],
     initial_mass_kg: f64,
@@ -115,6 +189,18 @@ pub fn simulate_ascent(
     let mut results = Vec::with_capacity(groups.len());
 
     let mut kicked_over = false;
+
+    let kick_velocity = profile.kick_velocity();
+    // Where the pitch program's schedule completes on this body; 0 (at
+    // the kick) for an airless one, and likewise for an atmosphere with
+    // no scale height, which never thins.
+    let schedule_altitude_m = match *profile {
+        AscentProfile::PitchProgram { schedule_pressure_pa, .. } => {
+            let h = surface.altitude_where_pressure_falls_to(schedule_pressure_pa);
+            if h.is_finite() { h } else { 0.0 }
+        }
+        AscentProfile::GravityTurn { .. } => 0.0,
+    };
 
     // Local conditions decide when the ascent is over: reaching circular
     // velocity for the current radius means the vehicle is in orbit, and
@@ -172,16 +258,41 @@ pub fn simulate_ascent(
                 velocity = velocity.max(0.0); // can't go backwards
                 altitude = (altitude + velocity * pitch.sin() * dt).max(0.0);
 
-                if velocity > KICK_OVER_VELOCITY {
-                    // Initiate gravity turn with a small kick if we haven't already
-                    if !kicked_over {
+                if velocity > kick_velocity {
+                    let commanded = match *profile {
+                        AscentProfile::PitchProgram { end_pitch_rad, exponent, .. }
+                            if altitude < schedule_altitude_m =>
+                        {
+                            // Flying the program: pitch is a function of how far
+                            // up the climb the vehicle is.
+                            let f = (altitude / schedule_altitude_m).powf(exponent);
+                            Some(std::f64::consts::FRAC_PI_2 - (std::f64::consts::FRAC_PI_2 - end_pitch_rad) * f)
+                        }
+                        AscentProfile::PitchProgram { end_pitch_rad, .. } if !kicked_over => {
+                            // Past the schedule (or airless: no schedule) without
+                            // ever having flown it — go straight to the end pitch.
+                            Some(end_pitch_rad)
+                        }
+                        _ => None,
+                    };
+                    if let Some(p) = commanded {
+                        pitch = p;
                         kicked_over = true;
-                        // Small initial pitch-over: ~1 degree
-                        pitch -= PITCH_KICK_RAD;
+                    } else {
+                        // Gravity turn: one kick off the vertical if the profile
+                        // hasn't steered yet, then the pitch follows gravity.
+                        if !kicked_over {
+                            kicked_over = true;
+                            let kick = match *profile {
+                                AscentProfile::GravityTurn { kick_rad, .. } => kick_rad,
+                                AscentProfile::PitchProgram { .. } => 0.0,
+                            };
+                            pitch -= kick;
+                        }
+                        let pitch_rate = g * pitch.cos() / velocity
+                            - velocity * pitch.cos() / r;
+                        pitch -= pitch_rate * dt;
                     }
-                    let pitch_rate = g * pitch.cos() / velocity
-                        - velocity * pitch.cos() / r;
-                    pitch -= pitch_rate * dt;
                     pitch = pitch.clamp(0.0, std::f64::consts::FRAC_PI_2);
                 }
 
@@ -212,12 +323,13 @@ pub fn simulate_ascent(
     results
 }
 
-/// [`simulate_ascent`] for groups that burn as a single phase each in a
-/// vacuum (no Isp penalty): `(thrust_n, mass_flow_kg_s, propellant_kg,
-/// dry_mass_kg)` per group. Returns the gravity loss per group.
+/// [`simulate_ascent`] for groups that burn as a single phase each with
+/// no nozzle data (so no Isp penalty, though the pitch program still
+/// reads the surface's atmosphere): `(thrust_n, mass_flow_kg_s,
+/// propellant_kg, dry_mass_kg)` per group. Returns the gravity loss per
+/// group.
 pub fn simulate_gravity_losses(
-    surface_gravity: f64,
-    body_radius: f64,
+    surface: &SurfaceProperties,
     stage_params: &[(f64, f64, f64, f64)],
     initial_mass_kg: f64,
 ) -> Vec<f64> {
@@ -226,11 +338,7 @@ pub fn simulate_gravity_losses(
             thrust_n, mass_flow_kg_s, propellant_kg, dry_mass_dropped_kg, nozzles: Vec::new(),
         }])
         .collect();
-    let airless = SurfaceProperties {
-        gravity_m_s2: surface_gravity, radius_m: body_radius,
-        has_atmosphere: false, atmosphere_density: 0.0, ambient_pressure_pa: 0.0, scale_height_m: 0.0,
-    };
-    simulate_ascent(&airless, &groups, initial_mass_kg).iter().map(|g| g.gravity_loss).collect()
+    simulate_ascent(surface, &groups, initial_mass_kg).iter().map(|g| g.gravity_loss).collect()
 }
 
 #[cfg(test)]
@@ -241,15 +349,20 @@ mod tests {
     // Gravity loss simulation tests
     // ==========================================
 
-    const EARTH_RADIUS: f64 = 6_371_000.0;
-    const MOON_RADIUS: f64 = 1_737_000.0;
+    fn earth() -> &'static SurfaceProperties {
+        crate::location::DELTA_V_MAP.surface_properties("earth_surface").unwrap()
+    }
+    fn moon() -> &'static SurfaceProperties {
+        crate::location::DELTA_V_MAP.surface_properties("lunar_surface").unwrap()
+    }
 
     /// The ascent model's anchor to reality.
     ///
-    /// `KICK_OVER_VELOCITY` and `PITCH_KICK_RAD` are the model's only free
-    /// parameters — nothing derives them, so without a reference vehicle
-    /// they're arbitrary, and the gravity loss they produce feeds straight
-    /// into what every rocket in the game can lift. This pins them to a
+    /// The pitch program's target altitude, target pitch and shape are
+    /// the model's free parameters — nothing derives them, so without a
+    /// reference vehicle they're arbitrary, and the gravity loss they
+    /// produce feeds straight into what every rocket in the game can
+    /// lift. This pins them to a
     /// Falcon 9 v1.2 flying its own published numbers: ~411 t / 22.2 t of
     /// first stage burning ~160 s, ~107.5 t / 4 t of second stage burning
     /// ~400 s, 15.6 t of payload, liftoff TWR ~1.4. Gravity losses for that
@@ -266,7 +379,7 @@ mod tests {
         let total_mass = 411_000.0 + 22_200.0 + 107_500.0 + 4_000.0 + 15_600.0;
 
         let losses = simulate_gravity_losses(
-            9.81, EARTH_RADIUS,
+            earth(),
             &[
                 (s1_thrust, s1_flow, 411_000.0, 22_200.0),
                 (s2_thrust, s2_flow, 107_500.0, 4_000.0),
@@ -294,7 +407,7 @@ mod tests {
         let dry_mass = 10_000.0;
         let total_mass = dry_mass + propellant;
 
-        let losses = simulate_gravity_losses(9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant, dry_mass)], total_mass);
+        let losses = simulate_gravity_losses(earth(), &[(thrust, mass_flow, propellant, dry_mass)], total_mass);
         assert_eq!(losses.len(), 1);
         assert!(losses[0] > 500.0, "Earth launch should have >500 m/s gravity loss, got {}", losses[0]);
         assert!(losses[0] < 3000.0, "Gravity loss should be <3000 m/s, got {}", losses[0]);
@@ -313,14 +426,14 @@ mod tests {
 
         // 1 engine
         let loss_1 = simulate_gravity_losses(
-            9.81, EARTH_RADIUS,
+            earth(),
             &[(single_thrust, mass_flow_per_engine, propellant, dry_mass)],
             total_mass,
         )[0];
 
         // 3 engines (3x thrust, 3x flow, same propellant = 1/3 burn time)
         let loss_3 = simulate_gravity_losses(
-            9.81, EARTH_RADIUS,
+            earth(),
             &[(single_thrust * 3.0, mass_flow_per_engine * 3.0, propellant, dry_mass)],
             total_mass,
         )[0];
@@ -340,10 +453,10 @@ mod tests {
         let total_mass = 60_000.0;
 
         let loss_earth = simulate_gravity_losses(
-            9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant, 10_000.0)], total_mass,
+            earth(), &[(thrust, mass_flow, propellant, 10_000.0)], total_mass,
         )[0];
         let loss_moon = simulate_gravity_losses(
-            1.62, MOON_RADIUS, &[(thrust, mass_flow, propellant, 10_000.0)], total_mass,
+            moon(), &[(thrust, mass_flow, propellant, 10_000.0)], total_mass,
         )[0];
 
         assert!(loss_moon < loss_earth,
@@ -374,7 +487,7 @@ mod tests {
         let total_mass = 5_000.0 + prop_s1 + 1_000.0 + prop_s2 + 5_000.0;
 
         let losses = simulate_gravity_losses(
-            9.81, EARTH_RADIUS,
+            earth(),
             &[
                 (thrust_s1, mass_flow_s1, prop_s1, 5_000.0),
                 (thrust_s2, mass_flow_s2, prop_s2, 1_000.0),
@@ -399,7 +512,7 @@ mod tests {
         let total_mass = 220_000.0;
 
         let losses = simulate_gravity_losses(
-            9.81, EARTH_RADIUS, &[(thrust, mass_flow, propellant, 20_000.0)], total_mass,
+            earth(), &[(thrust, mass_flow, propellant, 20_000.0)], total_mass,
         );
         assert_eq!(losses.len(), 1);
         // Should be moderate — not as bad as a weak first stage, but still significant

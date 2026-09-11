@@ -144,7 +144,12 @@ impl CostsConfig {
 impl Default for CostsConfig {
     fn default() -> Self {
         CostsConfig {
-            starting_money: 200_000_000.0,
+            // $200M until 17_3_PHYSICS.md D7: a vehicle that really lifts
+            // 3 t to LEO costs more to develop and to lose than the one the
+            // old ascent model allowed, and the extra $50M is the runway
+            // that keeps the early flaw-discovery failures survivable
+            // (200 seeds: 47/200 bankrupt at $200M, 20/200 at $250M).
+            starting_money: 250_000_000.0,
             engineering_monthly_salary: 150_000.0,
             engineering_hiring_cost: 150_000.0,
             manufacturing_monthly_salary: 300_000.0,

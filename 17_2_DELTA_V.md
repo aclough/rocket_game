@@ -547,7 +547,8 @@ was billed for 26 kPa of air it will never see (the m1 corpus rocket,
 TWR 1.64, stages at 91 km and its upper stage climbs to 926 km). The
 integrator's altitude is not to be trusted for staging, so
 `design_ascent` leaves upper groups' nozzles out and only the first
-group is charged — the assumption the old `burn_sequential` made in
+group is charged (until 17_3_PHYSICS.md D7 replaced the trajectory
+model; every group is charged again since) — the assumption the old `burn_sequential` made in
 words ("upper stages fire at high altitude"), now in one place with
 the reason. The trajectory model itself is filed as 17_REFACTOR.md D7.
 

@@ -631,9 +631,12 @@ mod tests {
         // partially drained.
         // S1 thrust is sized for a liftoff TWR above 1 — at the original
         // 7 MN this stack couldn't leave the pad, and "has enough delta-v"
-        // no longer implies "flies" now that gravity is charged.
+        // no longer implies "flies" now that gravity is charged. S2's
+        // thrust gives it a TWR near 1 at ignition: the pitch program
+        // (D7) stages at 30° above the horizon, where a 0.24-TWR upper
+        // stage would spend its burn falling, not climbing.
         let s1 = stage(1, "S1", kerolox_engine(1, 12_000_000.0, 1_500.0, 280.0), 1, 200_000.0, 15_000.0);
-        let s2 = stage(2, "S2", kerolox_engine(2, 1_500_000.0, 800.0, 340.0), 1, 600_000.0, 30_000.0);
+        let s2 = stage(2, "S2", kerolox_engine(2, 6_000_000.0, 3_000.0, 340.0), 1, 600_000.0, 30_000.0);
         let design = RocketDesign {
             id: RocketDesignId(10), name: "SmallS1+BigS2".into(),
             stage_groups: vec![vec![s1], vec![s2]],

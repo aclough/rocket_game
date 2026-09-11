@@ -600,7 +600,7 @@ mod tests {
         let props = DELTA_V_MAP.surface_properties("earth_surface").unwrap();
         let group = &design.stage_groups[0];
         let lumped = location::simulate_gravity_losses(
-            props.gravity_m_s2, props.radius_m,
+            props,
             &[(
                 group.iter().map(|s| s.total_thrust_n()).sum(),
                 group.iter().map(|s| s.mass_flow_kg_s()).sum(),

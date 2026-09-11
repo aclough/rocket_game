@@ -322,6 +322,8 @@ opportunity in the codebase.
 
 ## D. Physics and hardware model
 
+> Plan: `17_3_PHYSICS.md` (steps 1–6; D7 is the only behaviour change).
+
 ### D1. Missing `Rocket::attached_stages()` iterator — ~10 hand-rolled copies
 - **Where:** the `stage_states.get(gi).and_then(|g| g.get(si))
   .is_some_and(|ss| ss.attached)` walk plus mass sum recurs in six
@@ -428,7 +430,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
 
 ## F. UI patterns
 
-### D7. The ascent trajectory model is a pure gravity turn
+### ✅ D7. The ascent trajectory model is a pure gravity turn
 - **Where:** `location::simulate_ascent` — a 1° kick at 45 m/s, then
   `dθ/dt = g·cosθ/v − v·cosθ/r` with no pitch program or altitude
   target.

@@ -558,7 +558,11 @@ mod tests {
             id: EngineId(id),
             name: format!("TestEngine{}", id),
             cycle: EngineCycle::GasGenerator,
-            thrust_n: 1_000_000.0,
+            // 2.5 MN on a 53 t stage: liftoff TWR 2.4. At the original
+            // 1 MN the fixture could not leave the pad (TWR 0.96) and only
+            // "reached LEO" through the old ascent model's level-at-11-km
+            // handover (17_3_PHYSICS.md D7).
+            thrust_n: 2_500_000.0,
             isp_s: 300.0,
             exit_pressure_pa: 100_000.0,
             needs_atmosphere: false,

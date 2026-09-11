@@ -255,21 +255,11 @@ pub fn design_ascent(
                 .map(|s| s.wet_mass_kg())
                 .sum::<f64>()
                 + payload_kg;
-            // Only the first group is charged the sea-level Isp penalty.
-            // Upper groups are taken to light above the sensible
-            // atmosphere: the integrator's altitude is a pure gravity
-            // turn from a 1° kick, which has a TWR-1.2 vehicle flying
-            // level at 11 km and a TWR-1.6 one staging at 90 km, and
-            // billing a vacuum bell for the air at either is fiction
-            // (17_REFACTOR.md D7). Their nozzles are left out, so the
-            // integrator charges them nothing.
-            design.burn_phases(gi, payload_above).iter().map(|p| {
-                let mut phase = p.ascent_phase(group);
-                if gi > 0 {
-                    phase.nozzles.clear();
-                }
-                phase
-            }).collect()
+            // Every group is charged the sea-level Isp penalty for the
+            // air at the altitude it actually burns through: since D7
+            // (17_3_PHYSICS.md) the integrator stages where launchers
+            // stage, so an upper stage lighting at 65–95 km sees none.
+            design.burn_phases(gi, payload_above).iter().map(|p| p.ascent_phase(group)).collect()
         })
         .collect();
     location::simulate_ascent(props, &groups, design.total_mass_kg() + payload_kg)
