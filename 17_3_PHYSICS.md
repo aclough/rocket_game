@@ -480,6 +480,29 @@ oracle is byte-identical; `--dump-balance` shows both sections. Commit 2
 magnitudes, `BID_PAYLOAD_MARGIN`) follows; the physics constants stay
 `const` per your Q2 answer.
 
+**Step 5 record, commit 2 — `economy`, `technology`, `improvements`,
+`markets.bid_payload_margin`.** `EconomyConfig` holds the cycle's
+table — one `EconomyConditionConfig` per condition (modifier range,
+duration range, transitions as `[[economy.boom.transitions]]` rows)
+plus the dot-com crash chance; `initial_state`, `advance_economy` and
+`roll_next_condition` read it. `TechnologyConfig` holds the yearly
+unlock chance and the deficiency count per difficulty (lists indexed by
+difficulty, last entry covering the rest), the solvability penalty, the
+magnitude base/step/span, and `attempt_solve`'s ×3 bonus and 0.95 cap;
+`generate_technologies`, `generate_deficiencies` and `attempt_solve`
+take it. `ImprovementsConfig` holds, per engine family (chemical,
+electric, nuclear thermal, solar sail) and for reactors, each
+improvement kind's weight and magnitude range; `generate_improvement`
+picks the kind by cumulative weight and draws in the same RNG order as
+the literal branches did, so the oracle is byte-identical, and the
+descriptions moved to a function of their own. `Designable::roll_improvement`
+takes the balance. `BID_PAYLOAD_MARGIN` is `markets.bid_payload_margin`.
+Left as `const`, per Q2: the overexpansion slope and destruction curve,
+housekeeping W/kg, the drag model, the spiral penalty, `structure.rs`,
+the power-source mass and cost curves. The `balance_config` module doc
+now says which and why. D6 is complete; the sim harness and the game
+binary sweep the same file.
+
 ## 2. Order and why
 
 1 → 2 → 3 → 4 → 5 → 6. Steps 1–3 are small and make 4–6 easier to read

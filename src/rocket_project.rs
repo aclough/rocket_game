@@ -48,7 +48,7 @@ impl Designable for RocketDesign {
         None
     }
 
-    fn roll_improvement(&self, _rng: &mut StdRng, _id: ImprovementId) -> Improvement<Never> {
+    fn roll_improvement(&self, _rng: &mut StdRng, _id: ImprovementId, _balance_cfg: &BalanceConfig) -> Improvement<Never> {
         unreachable!("rocket projects have no improvements: improvement_chance is None")
     }
 

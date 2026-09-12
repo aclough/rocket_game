@@ -37,17 +37,19 @@ impl std::fmt::Display for ReactorImprovementKind {
 }
 
 /// Generate a random reactor improvement (Power or Mass).
-fn generate_reactor_improvement(rng: &mut StdRng, id: ImprovementId) -> ReactorImprovement {
+fn generate_reactor_improvement(
+    rng: &mut StdRng, id: ImprovementId, cfg: &crate::balance_config::ImprovementsConfig,
+) -> ReactorImprovement {
     let roll: f64 = rng.gen();
-    let (kind, description) = if roll < 0.55 {
-        let frac = rng.gen_range(0.01..0.04);
+    let (kind, description) = if roll < cfg.reactor_power.weight {
+        let frac = rng.gen_range(cfg.reactor_power.min..cfg.reactor_power.max);
         (ReactorImprovementKind::Power(frac), match rng.gen_range(0u32..3) {
             0 => "Higher fuel enrichment margin",
             1 => "Improved neutron reflector geometry",
             _ => "Optimized coolant flow raises output",
         })
     } else {
-        let frac = rng.gen_range(0.02..0.06);
+        let frac = rng.gen_range(cfg.reactor_mass.min..cfg.reactor_mass.max);
         (ReactorImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
             0 => "Lighter radiation shielding",
             1 => "Compact reactor core design",
@@ -111,8 +113,8 @@ impl Designable for ReactorDesign {
         Some(cfg.reactor_improvement_discovery_chance)
     }
 
-    fn roll_improvement(&self, rng: &mut StdRng, id: ImprovementId) -> ReactorImprovement {
-        generate_reactor_improvement(rng, id)
+    fn roll_improvement(&self, rng: &mut StdRng, id: ImprovementId, balance_cfg: &BalanceConfig) -> ReactorImprovement {
+        generate_reactor_improvement(rng, id, &balance_cfg.improvements)
     }
 
     fn apply_improvement(&mut self, kind: &ReactorImprovementKind) {

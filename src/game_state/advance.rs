@@ -137,7 +137,7 @@ impl GameState {
     fn tick_economy(&mut self, events: &mut Vec<GameEvent>) {
         let prev_condition = self.economy.condition;
         if let Some(new_condition) = crate::economy::advance_economy(
-            &mut self.economy, &self.seed, self.date,
+            &mut self.economy, &self.seed, self.date, &self.balance.economy,
         ) {
             if new_condition != prev_condition {
                 let evt = GameEvent::EconomicShift {

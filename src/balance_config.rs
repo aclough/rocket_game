@@ -4,14 +4,17 @@
 //! `BalanceConfig::default()` is the single source of truth for the
 //! shipped values — TOML files are partial overrides layered on top
 //! (see [`BalanceConfig::load_layered`]). Deliberately excluded:
-//! complexity tables (`balance.rs`), tech/deficiency generation
-//! (seed-entangled), physics constants, and UI mechanics.
+//! complexity tables (`balance.rs`), physics constants (design
+//! decisions, not knobs — 17_3_PHYSICS.md Q2), and UI mechanics. The
+//! technology section is seed-entangled: changing it regenerates every
+//! world's technologies, not just the odds.
 
 use std::path::Path;
 
 use serde::{Serialize, Deserialize};
 
 use crate::contract::MarketArchetype;
+use crate::economy::EconomicCondition;
 use crate::resources::Resource;
 
 /// All tunable balance parameters. Lives on `GameState` (serialized
@@ -28,6 +31,9 @@ pub struct BalanceConfig {
     pub engine_materials: EngineMaterialsConfig,
     pub flight: FlightConfig,
     pub geopolitics: GeopoliticsConfig,
+    pub economy: EconomyConfig,
+    pub technology: TechnologyConfig,
+    pub improvements: ImprovementsConfig,
 }
 
 impl BalanceConfig {
@@ -394,6 +400,10 @@ pub struct MarketsConfig {
     /// Market templates + perturbation specs, realized per seed at
     /// game start (see [`crate::contract::MarketArchetype`]).
     pub archetypes: Vec<MarketArchetype>,
+    /// Payload safety factor applied when judging whether a design can
+    /// carry a contract — don't book payloads within (1 − this) of the
+    /// physical maximum. Shared by the bid rule engine and `BasicPolicy`.
+    pub bid_payload_margin: f64,
 }
 
 fn default_campaign_miss_rep_penalty() -> f64 { 2.0 }
@@ -413,6 +423,7 @@ impl Default for MarketsConfig {
             campaign_max_misses: default_campaign_max_misses(),
             campaign_cancel_rep_penalty: default_campaign_cancel_rep_penalty(),
             archetypes: crate::contract::default_archetypes(),
+            bid_payload_margin: 0.9,
         }
     }
 }
@@ -1086,6 +1097,203 @@ impl Default for GeopoliticsConfig {
             war_nro_volume_mult: 5.0,
             war_nro_rate_mult: 1.5,
             war_nro_rep_delta: -20.0,
+        }
+    }
+}
+
+// ==========================================
+// Economy (17_3_PHYSICS.md D6)
+// ==========================================
+
+/// One step of the economic cycle's Markov chain.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EconomyTransition {
+    pub to: EconomicCondition,
+    pub chance: f64,
+}
+
+/// How one economic condition behaves while it lasts and where it goes
+/// next. Transition chances should sum to 1.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EconomyConditionConfig {
+    /// Contract quantity and payment multiplier, drawn uniformly.
+    pub modifier_min: f64,
+    pub modifier_max: f64,
+    /// How long the condition lasts, in months, drawn uniformly.
+    pub duration_min_months: u32,
+    pub duration_max_months: u32,
+    pub transitions: Vec<EconomyTransition>,
+}
+
+impl Default for EconomyConditionConfig {
+    fn default() -> Self {
+        EconomyConfig::default().normal
+    }
+}
+
+/// The economic cycle: one entry per condition, plus the opening
+/// dot-com crash.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EconomyConfig {
+    pub boom: EconomyConditionConfig,
+    pub normal: EconomyConditionConfig,
+    pub slowdown: EconomyConditionConfig,
+    pub recession: EconomyConditionConfig,
+    pub recovery: EconomyConditionConfig,
+    /// Chance the first transition of the game is the dot-com crash (a
+    /// recession) regardless of the chain.
+    pub dot_com_crash_chance: f64,
+}
+
+impl EconomyConfig {
+    pub fn condition(&self, c: EconomicCondition) -> &EconomyConditionConfig {
+        match c {
+            EconomicCondition::Boom => &self.boom,
+            EconomicCondition::Normal => &self.normal,
+            EconomicCondition::Slowdown => &self.slowdown,
+            EconomicCondition::Recession => &self.recession,
+            EconomicCondition::Recovery => &self.recovery,
+        }
+    }
+}
+
+impl Default for EconomyConfig {
+    fn default() -> Self {
+        use EconomicCondition::*;
+        let t = |to, chance| EconomyTransition { to, chance };
+        let cond = |modifier: (f64, f64), months: (u32, u32), transitions: Vec<EconomyTransition>| {
+            EconomyConditionConfig {
+                modifier_min: modifier.0, modifier_max: modifier.1,
+                duration_min_months: months.0, duration_max_months: months.1,
+                transitions,
+            }
+        };
+        EconomyConfig {
+            boom: cond((1.3, 1.5), (6, 18), vec![t(Normal, 0.45), t(Slowdown, 0.35), t(Recession, 0.15), t(Boom, 0.05)]),
+            normal: cond((1.0, 1.0), (12, 36), vec![t(Slowdown, 0.40), t(Normal, 0.25), t(Boom, 0.20), t(Recession, 0.15)]),
+            slowdown: cond((0.8, 0.9), (4, 10), vec![t(Recession, 0.45), t(Normal, 0.30), t(Recovery, 0.15), t(Slowdown, 0.10)]),
+            recession: cond((0.5, 0.7), (3, 8), vec![t(Recovery, 0.70), t(Slowdown, 0.20), t(Recession, 0.10)]),
+            recovery: cond((0.85, 0.95), (8, 24), vec![t(Normal, 0.50), t(Boom, 0.25), t(Slowdown, 0.15), t(Recovery, 0.10)]),
+            dot_com_crash_chance: 0.5,
+        }
+    }
+}
+
+// ==========================================
+// Technology (17_3_PHYSICS.md D6)
+// ==========================================
+
+/// How many deficiencies a technology of one difficulty starts with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeficiencyCount {
+    pub min: u32,
+    pub max: u32,
+}
+
+/// Technology unlocks and the deficiencies a new technology carries.
+/// Per-difficulty lists are indexed by difficulty and the last entry
+/// covers anything harder. Generation is seed-driven, so changing these
+/// changes every world's technologies, not just the odds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TechnologyConfig {
+    /// Yearly chance a locked technology becomes available, by difficulty.
+    pub unlock_chance_by_difficulty: Vec<f64>,
+    /// Deficiencies a new technology carries, by difficulty.
+    pub deficiency_count_by_difficulty: Vec<DeficiencyCount>,
+    /// Solvability is drawn from `(−d·p) .. (1 − d·p)` and floored at 0,
+    /// for difficulty `d` and this penalty `p`.
+    pub solvability_penalty_per_difficulty: f64,
+    /// A deficiency's magnitude is drawn from `base + d·step` up to that
+    /// plus `span`.
+    pub deficiency_magnitude_base: f64,
+    pub deficiency_magnitude_per_difficulty: f64,
+    pub deficiency_magnitude_span: f64,
+    /// A deficiency another project already solved is this many times
+    /// as likely to fall on the next attempt…
+    pub solved_elsewhere_multiplier: f64,
+    /// …but never more likely than this.
+    pub solve_chance_cap: f64,
+}
+
+impl TechnologyConfig {
+    fn by_difficulty<T>(list: &[T], difficulty: u32) -> &T {
+        &list[(difficulty as usize).min(list.len() - 1)]
+    }
+    pub fn unlock_chance(&self, difficulty: u32) -> f64 {
+        *Self::by_difficulty(&self.unlock_chance_by_difficulty, difficulty)
+    }
+    pub fn deficiency_count(&self, difficulty: u32) -> &DeficiencyCount {
+        Self::by_difficulty(&self.deficiency_count_by_difficulty, difficulty)
+    }
+}
+
+impl Default for TechnologyConfig {
+    fn default() -> Self {
+        TechnologyConfig {
+            unlock_chance_by_difficulty: vec![0.0, 0.10, 0.08],
+            deficiency_count_by_difficulty: vec![
+                DeficiencyCount { min: 0, max: 2 },
+                DeficiencyCount { min: 1, max: 3 },
+                DeficiencyCount { min: 2, max: 4 },
+            ],
+            solvability_penalty_per_difficulty: 0.1,
+            deficiency_magnitude_base: 0.05,
+            deficiency_magnitude_per_difficulty: 0.05,
+            deficiency_magnitude_span: 0.15,
+            solved_elsewhere_multiplier: 3.0,
+            solve_chance_cap: 0.95,
+        }
+    }
+}
+
+// ==========================================
+// Improvements (17_3_PHYSICS.md D6)
+// ==========================================
+
+/// One kind of improvement a testing cycle can discover: how likely it
+/// is relative to the others, and how big it is (a fraction, drawn
+/// uniformly from `min..max`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImprovementRoll {
+    pub weight: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+/// The three improvement kinds an engine family can discover.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineImprovementsConfig {
+    pub isp: ImprovementRoll,
+    pub mass: ImprovementRoll,
+    pub thrust: ImprovementRoll,
+}
+
+/// What testing discovers, by engine family and for reactors.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImprovementsConfig {
+    pub chemical: EngineImprovementsConfig,
+    pub electric: EngineImprovementsConfig,
+    pub nuclear_thermal: EngineImprovementsConfig,
+    pub solar_sail: EngineImprovementsConfig,
+    pub reactor_power: ImprovementRoll,
+    pub reactor_mass: ImprovementRoll,
+}
+
+impl Default for ImprovementsConfig {
+    fn default() -> Self {
+        let r = |weight, min, max| ImprovementRoll { weight, min, max };
+        let family = |isp, mass, thrust| EngineImprovementsConfig { isp, mass, thrust };
+        ImprovementsConfig {
+            chemical: family(r(0.40, 0.01, 0.04), r(0.30, 0.02, 0.06), r(0.30, 0.01, 0.04)),
+            electric: family(r(0.40, 0.01, 0.04), r(0.30, 0.02, 0.06), r(0.30, 0.01, 0.04)),
+            nuclear_thermal: family(r(0.40, 0.01, 0.04), r(0.30, 0.02, 0.06), r(0.30, 0.01, 0.04)),
+            solar_sail: family(r(0.0, 0.0, 0.0), r(0.50, 0.02, 0.06), r(0.50, 0.02, 0.05)),
+            reactor_power: r(0.55, 0.01, 0.04),
+            reactor_mass: r(0.45, 0.02, 0.06),
         }
     }
 }

@@ -91,10 +91,6 @@ impl Spacecraft {
 
 const EVENT_LOG_SIZE: usize = 1000;
 
-/// Payload safety factor applied when judging whether a design can
-/// carry a contract — don't book payloads within 10% of the physical
-/// maximum. Shared by the bid rule engine and `BasicPolicy`.
-pub const BID_PAYLOAD_MARGIN: f64 = 0.9;
 
 /// Entries to hold in each route-planning memo before dropping the lot.
 /// Sized for a busy board (designs x destinations x contracts) with room
@@ -270,10 +266,10 @@ impl GameState {
         event_log.push(start, GameEvent::GameStarted);
         let seed = GameSeed::new(seed_value);
 
-        let economy = crate::economy::initial_state(&seed, start);
+        let economy = crate::economy::initial_state(&seed, start, &balance.economy);
         // Peace on day one in every world; the arc is rolled each New Year.
         let geopolitics = crate::geopolitics::Geopolitics::default();
-        let technologies = crate::technology::generate_technologies(&seed);
+        let technologies = crate::technology::generate_technologies(&seed, &balance.technology);
 
         // Realize the archetype table for this world: presence rolls,
         // volume/rate multipliers, growth rates, and weight tilts
@@ -522,7 +518,7 @@ impl GameState {
     ///   revision and fly perfectly well. The bid engine used to require
     ///   `Testing` exactly, so with `auto_revise` on by default, the first
     ///   flaw testing turned up silenced bidding entirely.
-    /// * It has to lift the payload with [`BID_PAYLOAD_MARGIN`] to spare.
+    /// * It has to lift the payload with `markets.bid_payload_margin` to spare.
     ///   Readiness used to accept anything up to the physical maximum, so
     ///   contracts in the last 10% were permanently white and never bid.
     /// * It has to survive the trip. Readiness gained this check before
@@ -544,7 +540,7 @@ impl GameState {
             return false;
         }
         let cap = self.payload_capability(&project.design, "earth_surface", destination);
-        if payload_kg > cap * BID_PAYLOAD_MARGIN {
+        if payload_kg > cap * self.balance.markets.bid_payload_margin {
             return false;
         }
         self.survives_trip(&project.design, "earth_surface", destination, payload_kg)

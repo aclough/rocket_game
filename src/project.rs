@@ -234,7 +234,9 @@ pub trait Designable: Clone + fmt::Debug {
 
     /// Roll one improvement. Only called when `improvement_chance` is
     /// `Some`.
-    fn roll_improvement(&self, rng: &mut StdRng, id: ImprovementId) -> Improvement<Self::ImprovementKind>;
+    fn roll_improvement(
+        &self, rng: &mut StdRng, id: ImprovementId, balance_cfg: &BalanceConfig,
+    ) -> Improvement<Self::ImprovementKind>;
 
     /// Land an actualised improvement on the design's stats.
     fn apply_improvement(&mut self, kind: &Self::ImprovementKind);
@@ -412,7 +414,7 @@ impl<D: Designable> DesignProject<D> {
                         if rng.gen::<f64>() < chance {
                             let id = ImprovementId(self.next_improvement_id);
                             self.next_improvement_id += 1;
-                            let improvement = self.design.roll_improvement(rng, id);
+                            let improvement = self.design.roll_improvement(rng, id, balance_cfg);
                             events.push(WorkEvent::ImprovementDiscovered {
                                 description: format!("{}: {}", improvement.description, improvement.kind),
                             });

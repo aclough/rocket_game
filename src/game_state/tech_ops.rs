@@ -87,7 +87,7 @@ impl GameState {
             let name = project.name().to_string();
             let def_desc = format!("{}: {}", def.description, def.kind);
 
-            if technology::attempt_solve(def, already_solved, &mut self.seed.contingent_rng) {
+            if technology::attempt_solve(def, already_solved, &mut self.seed.contingent_rng, &self.balance.technology) {
                 project.tech_deficiency_ids_mut().retain(|id| *id != def_id);
                 match &def.kind {
                     TechDeficiencyKind::ComplexityPenalty(n) => {

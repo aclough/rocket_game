@@ -384,7 +384,7 @@ impl GameState {
 
     /// The player's capable Testing designs for a mission, and the
     /// cheapest mean-of-last-5 marginal cost among those with real
-    /// build history. Capability = payload within `BID_PAYLOAD_MARGIN`
+    /// build history. Capability = payload within `markets.bid_payload_margin`
     /// of the physics cap (cached) — the one rule shared by the
     /// bid-rule engine, announcement liftability, and the sim bot's
     /// block bids. Cost is None when no capable design has history.
@@ -828,11 +828,7 @@ impl GameState {
             }
             let query = format!("tech_unlock_{}_{}", tech.id.0, self.date.year);
             let mut rng = self.seed.world_query(&query);
-            let chance = match tech.difficulty {
-                0 => 0.0,
-                1 => 0.10,
-                _ => 0.08,
-            };
+            let chance = self.balance.technology.unlock_chance(tech.difficulty);
             if rng.gen::<f64>() < chance {
                 tech.unlocked = true;
                 unlocked.push(GameEvent::EconomicShift {

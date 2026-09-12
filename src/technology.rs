@@ -1,6 +1,7 @@
 use rand::Rng;
 use serde::{Serialize, Deserialize};
 
+use crate::balance_config::TechnologyConfig;
 use crate::seed::GameSeed;
 
 /// Unique identifier for a technology.
@@ -99,10 +100,11 @@ pub const TECH_NUCLEAR_THERMAL: TechnologyId = TechnologyId(2);
 pub const TECH_FISSION_REACTOR: TechnologyId = TechnologyId(3);
 
 /// Generate technologies for a new game.
-pub fn generate_technologies(seed: &GameSeed) -> Vec<Technology> {
+pub fn generate_technologies(seed: &GameSeed, cfg: &TechnologyConfig) -> Vec<Technology> {
     vec![
         generate_technology(
             seed,
+            cfg,
             TECH_METHALOX,
             "Methalox",
             "Liquid methane/LOX propulsion — promising but unproven in flight",
@@ -112,6 +114,7 @@ pub fn generate_technologies(seed: &GameSeed) -> Vec<Technology> {
         ),
         generate_technology(
             seed,
+            cfg,
             TECH_NUCLEAR_THERMAL,
             "Nuclear Thermal",
             "Nuclear reactor heating hydrogen propellant — very high Isp but experimental",
@@ -121,6 +124,7 @@ pub fn generate_technologies(seed: &GameSeed) -> Vec<Technology> {
         ),
         generate_technology(
             seed,
+            cfg,
             TECH_FISSION_REACTOR,
             "Fission Reactor",
             "Compact space-rated nuclear reactor producing electricity continuously — \
@@ -132,8 +136,10 @@ pub fn generate_technologies(seed: &GameSeed) -> Vec<Technology> {
     ]
 }
 
+#[allow(clippy::too_many_arguments)] // one technology's identity plus the seed and the config; a builder would just rename them
 fn generate_technology(
     seed: &GameSeed,
+    cfg: &TechnologyConfig,
     id: TechnologyId,
     name: &str,
     description: &str,
@@ -144,7 +150,7 @@ fn generate_technology(
     let query = format!("tech_{}_deficiencies", id.0);
     let mut rng = seed.world_query(&query);
 
-    let deficiencies = generate_deficiencies(&mut rng, difficulty, id, domain);
+    let deficiencies = generate_deficiencies(&mut rng, difficulty, id, domain, cfg);
 
     Technology {
         id,
@@ -161,17 +167,15 @@ fn generate_deficiencies(
     difficulty: u32,
     tech_id: TechnologyId,
     domain: TechDomain,
+    cfg: &TechnologyConfig,
 ) -> Vec<TechDeficiency> {
-    // Difficulty 0: 0-2 deficiencies, solvability 0.0-1.0
-    // Difficulty 1: 1-3 deficiencies, solvability max(-0.1..0.9, 0.0)
-    // Difficulty 2: 2-4 deficiencies, solvability max(-0.2..0.8, 0.0)
-    let (min_count, max_count) = match difficulty {
-        0 => (0u32, 2u32),
-        1 => (1, 3),
-        _ => (2, 4),
-    };
-    let solvability_offset = -(difficulty as f64) * 0.1;
-    let solvability_range = 1.0 - (difficulty as f64) * 0.1;
+    // By default: difficulty 0 carries 0-2 deficiencies at solvability
+    // 0.0-1.0, difficulty 1 carries 1-3 at max(-0.1..0.9, 0), difficulty
+    // 2 carries 2-4 at max(-0.2..0.8, 0) — see `TechnologyConfig`.
+    let count_range = cfg.deficiency_count(difficulty);
+    let (min_count, max_count) = (count_range.min, count_range.max);
+    let solvability_offset = -(difficulty as f64) * cfg.solvability_penalty_per_difficulty;
+    let solvability_range = 1.0 - (difficulty as f64) * cfg.solvability_penalty_per_difficulty;
 
     let count = rng.gen_range(min_count..=max_count);
     let mut next_id = tech_id.0 * 100; // namespace deficiency IDs by tech
@@ -184,8 +188,9 @@ fn generate_deficiencies(
         let solvability = raw_solvability.max(0.0);
 
         // Pick deficiency kind and magnitude (higher difficulty = bigger penalties)
-        let base_magnitude = 0.05 + difficulty as f64 * 0.05;
-        let magnitude = rng.gen_range(base_magnitude..(base_magnitude + 0.15));
+        let base_magnitude = cfg.deficiency_magnitude_base
+            + difficulty as f64 * cfg.deficiency_magnitude_per_difficulty;
+        let magnitude = rng.gen_range(base_magnitude..(base_magnitude + cfg.deficiency_magnitude_span));
 
         let roll: f64 = rng.gen();
         let (kind, description) = match domain {
@@ -276,11 +281,16 @@ fn pick_description(rng: &mut rand::rngs::StdRng, options: &[&str]) -> String {
 
 /// Attempt to solve a tech deficiency during revision.
 /// Returns true if solved, false if failed.
-pub fn attempt_solve(deficiency: &mut TechDeficiency, already_solved_elsewhere: bool, rng: &mut rand::rngs::StdRng) -> bool {
+pub fn attempt_solve(
+    deficiency: &mut TechDeficiency,
+    already_solved_elsewhere: bool,
+    rng: &mut rand::rngs::StdRng,
+    cfg: &TechnologyConfig,
+) -> bool {
     deficiency.total_attempts += 1;
 
     let chance = if already_solved_elsewhere {
-        (deficiency.solvability * 3.0).min(0.95)
+        (deficiency.solvability * cfg.solved_elsewhere_multiplier).min(cfg.solve_chance_cap)
     } else {
         deficiency.solvability
     };
@@ -311,7 +321,7 @@ mod tests {
     #[test]
     fn test_generate_methalox() {
         let seed = GameSeed::new(42);
-        let techs = generate_technologies(&seed);
+        let techs = generate_technologies(&seed, &TechnologyConfig::default());
         let methalox = techs.iter().find(|t| t.id == TECH_METHALOX).unwrap();
         assert!(methalox.unlocked);
         assert_eq!(methalox.difficulty, 0);
@@ -321,7 +331,7 @@ mod tests {
     #[test]
     fn test_generate_nerva() {
         let seed = GameSeed::new(42);
-        let techs = generate_technologies(&seed);
+        let techs = generate_technologies(&seed, &TechnologyConfig::default());
         let nerva = techs.iter().find(|t| t.id == TECH_NUCLEAR_THERMAL).unwrap();
         assert!(!nerva.unlocked);
         assert_eq!(nerva.difficulty, 2);
@@ -336,7 +346,7 @@ mod tests {
         let mut saw_power = false;
         for s in 0..300 {
             let seed = GameSeed::new(s);
-            let techs = generate_technologies(&seed);
+            let techs = generate_technologies(&seed, &TechnologyConfig::default());
             let reactor = techs.iter().find(|t| t.id == TECH_FISSION_REACTOR).unwrap();
             for def in &reactor.deficiencies {
                 match def.kind {
@@ -358,7 +368,7 @@ mod tests {
         // Engine-domain techs must never surface a PowerPenalty.
         for s in 0..300 {
             let seed = GameSeed::new(s);
-            let techs = generate_technologies(&seed);
+            let techs = generate_technologies(&seed, &TechnologyConfig::default());
             for tech in techs.iter().filter(|t| t.id != TECH_FISSION_REACTOR) {
                 for def in &tech.deficiencies {
                     assert!(
@@ -374,7 +384,7 @@ mod tests {
     fn test_solvability_clamped_to_zero() {
         for s in 0..100 {
             let seed = GameSeed::new(s);
-            let techs = generate_technologies(&seed);
+            let techs = generate_technologies(&seed, &TechnologyConfig::default());
             for tech in &techs {
                 for def in &tech.deficiencies {
                     assert!(def.solvability >= 0.0,
@@ -389,7 +399,7 @@ mod tests {
         let mut found_impossible = false;
         for s in 0..200 {
             let seed = GameSeed::new(s);
-            let techs = generate_technologies(&seed);
+            let techs = generate_technologies(&seed, &TechnologyConfig::default());
             let nerva = techs.iter().find(|t| t.id == TECH_NUCLEAR_THERMAL).unwrap();
             if nerva.deficiencies.iter().any(|d| d.solvability == 0.0) {
                 found_impossible = true;
@@ -402,8 +412,8 @@ mod tests {
     #[test]
     fn test_deterministic() {
         let seed = GameSeed::new(99);
-        let t1 = generate_technologies(&seed);
-        let t2 = generate_technologies(&seed);
+        let t1 = generate_technologies(&seed, &TechnologyConfig::default());
+        let t2 = generate_technologies(&seed, &TechnologyConfig::default());
         assert_eq!(t1.len(), t2.len());
         for (a, b) in t1.iter().zip(t2.iter()) {
             assert_eq!(a.deficiencies.len(), b.deficiencies.len());
@@ -417,7 +427,7 @@ mod tests {
     fn test_attempt_solve_unsolved() {
         use rand::SeedableRng;
         let seed = GameSeed::new(42);
-        let techs = generate_technologies(&seed);
+        let techs = generate_technologies(&seed, &TechnologyConfig::default());
         // Find a deficiency with decent solvability
         let tech = &techs[0]; // methalox
         if let Some(def) = tech.deficiencies.iter().find(|d| d.solvability > 0.5) {
@@ -426,7 +436,7 @@ mod tests {
             // Try many times — should eventually solve
             let mut solved = false;
             for _ in 0..20 {
-                if attempt_solve(&mut def, false, &mut rng) {
+                if attempt_solve(&mut def, false, &mut rng, &TechnologyConfig::default()) {
                     solved = true;
                     break;
                 }
@@ -453,9 +463,9 @@ mod tests {
             let mut rng = rand::rngs::StdRng::seed_from_u64(s);
             let mut d1 = def.clone();
             let mut d2 = def.clone();
-            if attempt_solve(&mut d1, false, &mut rng) { successes_without += 1; }
+            if attempt_solve(&mut d1, false, &mut rng, &TechnologyConfig::default()) { successes_without += 1; }
             let mut rng2 = rand::rngs::StdRng::seed_from_u64(s);
-            if attempt_solve(&mut d2, true, &mut rng2) { successes_with += 1; }
+            if attempt_solve(&mut d2, true, &mut rng2, &TechnologyConfig::default()) { successes_with += 1; }
         }
         assert!(successes_with > successes_without * 2,
             "Solved elsewhere should greatly boost success: {} vs {}",

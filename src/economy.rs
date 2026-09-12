@@ -1,6 +1,7 @@
 use rand::Rng;
 use serde::{Serialize, Deserialize};
 
+use crate::balance_config::EconomyConfig;
 use crate::calendar::GameDate;
 use crate::seed::GameSeed;
 
@@ -15,62 +16,8 @@ pub enum EconomicCondition {
 }
 
 impl EconomicCondition {
-    /// Contract quantity and payment multiplier range for this condition.
-    fn modifier_range(&self) -> (f64, f64) {
-        match self {
-            EconomicCondition::Boom => (1.3, 1.5),
-            EconomicCondition::Normal => (1.0, 1.0),
-            EconomicCondition::Slowdown => (0.8, 0.9),
-            EconomicCondition::Recession => (0.5, 0.7),
-            EconomicCondition::Recovery => (0.85, 0.95),
-        }
-    }
-
-    /// Duration range in months for this condition.
-    fn duration_range(&self) -> (u32, u32) {
-        match self {
-            EconomicCondition::Boom => (6, 18),
-            EconomicCondition::Normal => (12, 36),
-            EconomicCondition::Slowdown => (4, 10),
-            EconomicCondition::Recession => (3, 8),
-            EconomicCondition::Recovery => (8, 24),
-        }
-    }
-
-    /// Transition probabilities to next state. Must sum to 1.0.
-    fn transitions(&self) -> &[(EconomicCondition, f64)] {
-        match self {
-            EconomicCondition::Boom => &[
-                (EconomicCondition::Normal, 0.45),
-                (EconomicCondition::Slowdown, 0.35),
-                (EconomicCondition::Recession, 0.15),
-                (EconomicCondition::Boom, 0.05),
-            ],
-            EconomicCondition::Normal => &[
-                (EconomicCondition::Slowdown, 0.40),
-                (EconomicCondition::Normal, 0.25),
-                (EconomicCondition::Boom, 0.20),
-                (EconomicCondition::Recession, 0.15),
-            ],
-            EconomicCondition::Slowdown => &[
-                (EconomicCondition::Recession, 0.45),
-                (EconomicCondition::Normal, 0.30),
-                (EconomicCondition::Recovery, 0.15),
-                (EconomicCondition::Slowdown, 0.10),
-            ],
-            EconomicCondition::Recession => &[
-                (EconomicCondition::Recovery, 0.70),
-                (EconomicCondition::Slowdown, 0.20),
-                (EconomicCondition::Recession, 0.10),
-            ],
-            EconomicCondition::Recovery => &[
-                (EconomicCondition::Normal, 0.50),
-                (EconomicCondition::Boom, 0.25),
-                (EconomicCondition::Slowdown, 0.15),
-                (EconomicCondition::Recovery, 0.10),
-            ],
-        }
-    }
+    // Modifier ranges, durations and transitions are balance data:
+    // `EconomyConfig` (17_3_PHYSICS.md D6).
 
     pub fn display_name(&self) -> &'static str {
         match self {
@@ -120,9 +67,10 @@ impl Default for EconomicState {
 }
 
 /// Generate the initial economic state for a new game.
-pub fn initial_state(seed: &GameSeed, start_date: GameDate) -> EconomicState {
+pub fn initial_state(seed: &GameSeed, start_date: GameDate, cfg: &EconomyConfig) -> EconomicState {
     let mut rng = seed.world_query("economy_event_0");
-    let (dur_lo, dur_hi) = EconomicCondition::Normal.duration_range();
+    let normal = cfg.condition(EconomicCondition::Normal);
+    let (dur_lo, dur_hi) = (normal.duration_min_months, normal.duration_max_months);
     let duration_months = rng.gen_range(dur_lo..=dur_hi);
     let end_date = start_date.add_months(duration_months);
 
@@ -140,6 +88,7 @@ pub fn advance_economy(
     state: &mut EconomicState,
     seed: &GameSeed,
     current_date: GameDate,
+    cfg: &EconomyConfig,
 ) -> Option<EconomicCondition> {
     if current_date < state.end_date {
         return None;
@@ -152,20 +101,21 @@ pub fn advance_economy(
     // Special case: event 1 is a dot-com crash ~50% of the time
     let next_condition = if next_index == 1 {
         let mut dot_com_rng = seed.world_query("economy_dot_com");
-        if dot_com_rng.gen::<f64>() < 0.5 {
+        if dot_com_rng.gen::<f64>() < cfg.dot_com_crash_chance {
             EconomicCondition::Recession
         } else {
-            roll_next_condition(state.condition, &mut rng)
+            roll_next_condition(state.condition, &mut rng, cfg)
         }
     } else {
-        roll_next_condition(state.condition, &mut rng)
+        roll_next_condition(state.condition, &mut rng, cfg)
     };
 
-    let (dur_lo, dur_hi) = next_condition.duration_range();
+    let next = cfg.condition(next_condition);
+    let (dur_lo, dur_hi) = (next.duration_min_months, next.duration_max_months);
     let duration_months = rng.gen_range(dur_lo..=dur_hi);
     let end_date = current_date.add_months(duration_months);
 
-    let (mod_lo, mod_hi) = next_condition.modifier_range();
+    let (mod_lo, mod_hi) = (next.modifier_min, next.modifier_max);
     let modifier = if mod_lo < mod_hi {
         rng.gen_range(mod_lo..=mod_hi)
     } else {
@@ -183,29 +133,34 @@ pub fn advance_economy(
 fn roll_next_condition(
     current: EconomicCondition,
     rng: &mut rand::rngs::StdRng,
+    cfg: &EconomyConfig,
 ) -> EconomicCondition {
-    let transitions = current.transitions();
+    let transitions = &cfg.condition(current).transitions;
     let roll: f64 = rng.gen();
     let mut cumulative = 0.0;
-    for &(condition, prob) in transitions {
-        cumulative += prob;
+    for t in transitions {
+        cumulative += t.chance;
         if roll < cumulative {
-            return condition;
+            return t.to;
         }
     }
     // Fallback (shouldn't happen if probabilities sum to 1.0)
-    transitions.last().unwrap().0
+    transitions.last().unwrap().to
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cfg() -> EconomyConfig {
+        EconomyConfig::default()
+    }
     use crate::seed::GameSeed;
 
     #[test]
     fn test_initial_state_is_normal() {
         let seed = GameSeed::new(42);
-        let state = initial_state(&seed, GameDate::default_start());
+        let state = initial_state(&seed, GameDate::default_start(), &cfg());
         assert_eq!(state.condition, EconomicCondition::Normal);
         assert_eq!(state.modifier, 1.0);
         assert_eq!(state.event_index, 0);
@@ -215,18 +170,18 @@ mod tests {
     #[test]
     fn test_advance_before_expiry_returns_none() {
         let seed = GameSeed::new(42);
-        let mut state = initial_state(&seed, GameDate::default_start());
+        let mut state = initial_state(&seed, GameDate::default_start(), &cfg());
         // Day 2 should be before the end date
-        let result = advance_economy(&mut state, &seed, GameDate::new(2001, 1, 2));
+        let result = advance_economy(&mut state, &seed, GameDate::new(2001, 1, 2), &cfg());
         assert!(result.is_none());
     }
 
     #[test]
     fn test_advance_at_expiry_transitions() {
         let seed = GameSeed::new(42);
-        let mut state = initial_state(&seed, GameDate::default_start());
+        let mut state = initial_state(&seed, GameDate::default_start(), &cfg());
         let end = state.end_date;
-        let result = advance_economy(&mut state, &seed, end);
+        let result = advance_economy(&mut state, &seed, end, &cfg());
         assert!(result.is_some());
         assert_eq!(state.event_index, 1);
         assert!(state.end_date > end);
@@ -235,13 +190,13 @@ mod tests {
     #[test]
     fn test_deterministic_across_calls() {
         let seed = GameSeed::new(123);
-        let mut state1 = initial_state(&seed, GameDate::default_start());
-        let mut state2 = initial_state(&seed, GameDate::default_start());
+        let mut state1 = initial_state(&seed, GameDate::default_start(), &cfg());
+        let mut state2 = initial_state(&seed, GameDate::default_start(), &cfg());
 
         // Advance both to the same point
         let end = state1.end_date;
-        advance_economy(&mut state1, &seed, end);
-        advance_economy(&mut state2, &seed, end);
+        advance_economy(&mut state1, &seed, end, &cfg());
+        advance_economy(&mut state2, &seed, end, &cfg());
 
         assert_eq!(state1.condition, state2.condition);
         assert_eq!(state1.modifier, state2.modifier);
@@ -253,9 +208,9 @@ mod tests {
         let mut crash_count = 0;
         for s in 0..100 {
             let seed = GameSeed::new(s);
-            let mut state = initial_state(&seed, GameDate::default_start());
+            let mut state = initial_state(&seed, GameDate::default_start(), &cfg());
             let end = state.end_date;
-            advance_economy(&mut state, &seed, end);
+            advance_economy(&mut state, &seed, end, &cfg());
             if state.condition == EconomicCondition::Recession {
                 crash_count += 1;
             }
@@ -268,10 +223,10 @@ mod tests {
     #[test]
     fn test_long_chain_stays_valid() {
         let seed = GameSeed::new(99);
-        let mut state = initial_state(&seed, GameDate::default_start());
+        let mut state = initial_state(&seed, GameDate::default_start(), &cfg());
         for _ in 0..50 {
             let end = state.end_date;
-            let result = advance_economy(&mut state, &seed, end);
+            let result = advance_economy(&mut state, &seed, end, &cfg());
             assert!(result.is_some());
             assert!(state.modifier >= 0.4 && state.modifier <= 2.0,
                 "Modifier {} out of range at event {}", state.modifier, state.event_index);
@@ -285,7 +240,7 @@ mod tests {
         for s in 0..200 {
             let seed = GameSeed::new(s);
             let mut rng = seed.world_query(&format!("test_recession_{}", s));
-            let next = roll_next_condition(EconomicCondition::Recession, &mut rng);
+            let next = roll_next_condition(EconomicCondition::Recession, &mut rng, &cfg());
             assert!(
                 matches!(next, EconomicCondition::Recovery | EconomicCondition::Slowdown | EconomicCondition::Recession),
                 "Recession led to {:?} which is not in its transition table", next
@@ -302,7 +257,7 @@ mod tests {
             EconomicCondition::Recession,
             EconomicCondition::Recovery,
         ] {
-            let sum: f64 = condition.transitions().iter().map(|(_, p)| p).sum();
+            let sum: f64 = cfg().condition(condition).transitions.iter().map(|t| t.chance).sum();
             assert!((sum - 1.0).abs() < 0.001,
                 "{:?} transition probabilities sum to {}, expected 1.0", condition, sum);
         }

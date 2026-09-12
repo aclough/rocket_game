@@ -385,7 +385,7 @@ opportunity in the codebase.
   with tests. Zero behaviour change.
 - **Size/risk:** medium / none.
 
-### D6. Physics and balance constants outside `BalanceConfig`
+### ✅ D6. Physics and balance constants outside `BalanceConfig`
 - **Where:** overexpansion slope `engine.rs:124`, destruction curve
   `engine.rs:151`, housekeeping W/kg `stage.rs:76`, drag model
   `location.rs:115-118`, spiral penalty `location.rs:298`, stranding

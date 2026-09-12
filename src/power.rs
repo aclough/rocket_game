@@ -682,7 +682,7 @@ mod tests {
     fn new_game_includes_fission_reactor_tech() {
         use crate::seed::GameSeed;
         let seed = GameSeed::new(42);
-        let techs = crate::technology::generate_technologies(&seed);
+        let techs = crate::technology::generate_technologies(&seed, &crate::balance_config::TechnologyConfig::default());
         let reactor_tech = techs.iter()
             .find(|t| t.id == crate::technology::TECH_FISSION_REACTOR);
         let reactor_tech = reactor_tech.expect("fission reactor tech missing");

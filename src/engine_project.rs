@@ -383,8 +383,8 @@ impl Designable for EngineDesign {
         Some(cfg.improvement_discovery_chance)
     }
 
-    fn roll_improvement(&self, rng: &mut StdRng, id: ImprovementId) -> EngineImprovement {
-        generate_improvement(rng, self.cycle, id)
+    fn roll_improvement(&self, rng: &mut StdRng, id: ImprovementId, balance_cfg: &BalanceConfig) -> EngineImprovement {
+        generate_improvement(rng, self.cycle, id, &balance_cfg.improvements)
     }
 
     fn apply_improvement(&mut self, kind: &EngineImprovementKind) {
@@ -543,108 +543,105 @@ impl std::fmt::Display for EngineImprovementKind {
 
 
 /// Generate a random improvement appropriate for the engine cycle.
-fn generate_improvement(rng: &mut StdRng, cycle: EngineCycle, id: ImprovementId) -> EngineImprovement {
-    let roll: f64 = rng.gen();
-
-    let (kind, description) = match cycle {
-        EngineCycle::SolarSail => {
-            // Solar sails: mass reduction or thrust improvement (reflectivity)
-            if roll < 0.50 {
-                let frac = rng.gen_range(0.02..0.06);
-                (EngineImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
-                    0 => "Lighter boom material",
-                    1 => "Thinner sail substrate",
-                    _ => "Optimized deployment mechanism",
-                })
-            } else {
-                let frac = rng.gen_range(0.02..0.05);
-                (EngineImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
-                    0 => "Higher reflectivity coating",
-                    1 => "Improved sail flatness",
-                    _ => "Better attitude control vane geometry",
-                })
-            }
-        }
-        EngineCycle::ElectricPropulsion => {
-            if roll < 0.40 {
-                let frac = rng.gen_range(0.01..0.04);
-                (EngineImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
-                    0 => "Optimized ion grid spacing",
-                    1 => "Improved beam focusing",
-                    _ => "Better discharge chamber geometry",
-                })
-            } else if roll < 0.70 {
-                let frac = rng.gen_range(0.02..0.06);
-                (EngineImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
-                    0 => "Lighter power processing unit",
-                    1 => "Reduced thruster head mass",
-                    _ => "Compact xenon feed system",
-                })
-            } else {
-                let frac = rng.gen_range(0.01..0.04);
-                (EngineImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
-                    0 => "Higher discharge current achievable",
-                    1 => "Improved ion extraction efficiency",
-                    _ => "Better magnetic field confinement",
-                })
-            }
-        }
-        EngineCycle::NuclearThermal => {
-            if roll < 0.40 {
-                let frac = rng.gen_range(0.01..0.04);
-                (EngineImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
-                    0 => "Higher reactor operating temperature",
-                    1 => "Improved fuel element heat transfer",
-                    _ => "Better hydrogen flow distribution",
-                })
-            } else if roll < 0.70 {
-                let frac = rng.gen_range(0.02..0.06);
-                (EngineImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
-                    0 => "Lighter radiation shielding",
-                    1 => "Compact reactor core design",
-                    _ => "Reduced turbopump mass",
-                })
-            } else {
-                let frac = rng.gen_range(0.01..0.04);
-                (EngineImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
-                    0 => "Higher reactor power output",
-                    1 => "Improved propellant heating efficiency",
-                    _ => "Better nozzle thermal management",
-                })
-            }
-        }
-        _ => {
-            // Chemical engines (default)
-            if roll < 0.40 {
-                let frac = rng.gen_range(0.01..0.04);
-                (EngineImprovementKind::Isp(frac), match rng.gen_range(0u32..3) {
-                    0 => "Optimized injector pattern",
-                    1 => "Improved propellant mixing efficiency",
-                    _ => "Better nozzle contour",
-                })
-            } else if roll < 0.70 {
-                let frac = rng.gen_range(0.02..0.06);
-                (EngineImprovementKind::Mass(frac), match rng.gen_range(0u32..3) {
-                    0 => "Lighter turbopump housing",
-                    1 => "Thinner chamber wall design",
-                    _ => "Reduced gimbal mechanism mass",
-                })
-            } else {
-                let frac = rng.gen_range(0.01..0.04);
-                (EngineImprovementKind::Thrust(frac), match rng.gen_range(0u32..3) {
-                    0 => "Higher chamber pressure achievable",
-                    1 => "Improved injector throughput",
-                    _ => "Better regenerative cooling allows hotter burn",
-                })
-            }
-        }
+/// Roll one testing-cycle improvement for an engine of `cycle`: which
+/// kind, by the family's weights, how big, from that kind's range, and
+/// a description that fits the family (`ImprovementsConfig`).
+fn generate_improvement(
+    rng: &mut StdRng, cycle: EngineCycle, id: ImprovementId,
+    cfg: &crate::balance_config::ImprovementsConfig,
+) -> EngineImprovement {
+    let family = match cycle {
+        EngineCycle::SolarSail => &cfg.solar_sail,
+        EngineCycle::ElectricPropulsion => &cfg.electric,
+        EngineCycle::NuclearThermal => &cfg.nuclear_thermal,
+        _ => &cfg.chemical,
     };
+    let roll: f64 = rng.gen();
+    let kind_roll = if roll < family.isp.weight {
+        &family.isp
+    } else if roll < family.isp.weight + family.mass.weight {
+        &family.mass
+    } else {
+        &family.thrust
+    };
+    let frac = rng.gen_range(kind_roll.min..kind_roll.max);
+    let pick = rng.gen_range(0u32..3);
+    let kind = if std::ptr::eq(kind_roll, &family.isp) {
+        EngineImprovementKind::Isp(frac)
+    } else if std::ptr::eq(kind_roll, &family.mass) {
+        EngineImprovementKind::Mass(frac)
+    } else {
+        EngineImprovementKind::Thrust(frac)
+    };
+    let description = improvement_description(cycle, &kind, pick);
 
     EngineImprovement {
         id,
         description: description.to_string(),
         kind,
         actualized: false,
+    }
+}
+
+/// The story behind an improvement, by engine family and kind.
+fn improvement_description(cycle: EngineCycle, kind: &EngineImprovementKind, pick: u32) -> &'static str {
+    use EngineImprovementKind as K;
+    match (cycle, kind) {
+        (EngineCycle::SolarSail, K::Mass(_)) => match pick {
+            0 => "Lighter boom material",
+            1 => "Thinner sail substrate",
+            _ => "Optimized deployment mechanism",
+        },
+        (EngineCycle::SolarSail, _) => match pick {
+            0 => "Higher reflectivity coating",
+            1 => "Improved sail flatness",
+            _ => "Better attitude control vane geometry",
+        },
+        (EngineCycle::ElectricPropulsion, K::Isp(_)) => match pick {
+            0 => "Optimized ion grid spacing",
+            1 => "Improved beam focusing",
+            _ => "Better discharge chamber geometry",
+        },
+        (EngineCycle::ElectricPropulsion, K::Mass(_)) => match pick {
+            0 => "Lighter power processing unit",
+            1 => "Reduced thruster head mass",
+            _ => "Compact xenon feed system",
+        },
+        (EngineCycle::ElectricPropulsion, K::Thrust(_)) => match pick {
+            0 => "Higher discharge current achievable",
+            1 => "Improved ion extraction efficiency",
+            _ => "Better magnetic field confinement",
+        },
+        (EngineCycle::NuclearThermal, K::Isp(_)) => match pick {
+            0 => "Higher reactor operating temperature",
+            1 => "Improved fuel element heat transfer",
+            _ => "Better hydrogen flow distribution",
+        },
+        (EngineCycle::NuclearThermal, K::Mass(_)) => match pick {
+            0 => "Lighter radiation shielding",
+            1 => "Compact reactor core design",
+            _ => "Reduced turbopump mass",
+        },
+        (EngineCycle::NuclearThermal, K::Thrust(_)) => match pick {
+            0 => "Higher reactor power output",
+            1 => "Improved propellant heating efficiency",
+            _ => "Better nozzle thermal management",
+        },
+        (_, K::Isp(_)) => match pick {
+            0 => "Optimized injector pattern",
+            1 => "Improved propellant mixing efficiency",
+            _ => "Better nozzle contour",
+        },
+        (_, K::Mass(_)) => match pick {
+            0 => "Lighter turbopump housing",
+            1 => "Thinner chamber wall design",
+            _ => "Reduced gimbal mechanism mass",
+        },
+        (_, K::Thrust(_)) => match pick {
+            0 => "Higher chamber pressure achievable",
+            1 => "Improved injector throughput",
+            _ => "Better regenerative cooling allows hotter burn",
+        },
     }
 }
 
