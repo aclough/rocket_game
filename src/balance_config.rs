@@ -26,6 +26,8 @@ pub struct BalanceConfig {
     pub reputation: ReputationConfig,
     pub competitor: CompetitorConfig,
     pub engine_materials: EngineMaterialsConfig,
+    pub flight: FlightConfig,
+    pub geopolitics: GeopoliticsConfig,
 }
 
 impl BalanceConfig {
@@ -1001,6 +1003,90 @@ impl CompetitorConfig {
             return Err("competitor.capability must list at least one destination when enabled".into());
         }
         Ok(())
+    }
+}
+
+// ==========================================
+// Flight (17_3_PHYSICS.md D6)
+// ==========================================
+
+/// The cuts that turn a delta-v shortfall into an outcome, at launch
+/// and in flight, and what a partial delivery pays.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FlightConfig {
+    /// A launch whose degraded vehicle still has at least this fraction
+    /// of the required delta-v is a partial failure; below it, a failure.
+    pub partial_failure_cut: f64,
+    /// A leg burn that delivers less than this fraction of the leg's
+    /// delta-v strands the flight.
+    pub short_burn_strand_cut: f64,
+    /// After a mid-flight flaw, a vehicle with less than this fraction of
+    /// the remaining route's delta-v left is stranded.
+    pub remaining_route_strand_cut: f64,
+    /// Fraction of the contract payment a partial delivery earns.
+    pub partial_payment_fraction: f64,
+}
+
+impl Default for FlightConfig {
+    fn default() -> Self {
+        FlightConfig {
+            partial_failure_cut: 0.95,
+            short_burn_strand_cut: 0.95,
+            remaining_route_strand_cut: 0.5,
+            partial_payment_fraction: 0.5,
+        }
+    }
+}
+
+// ==========================================
+// Geopolitics (17_3_PHYSICS.md D6)
+// ==========================================
+
+/// The Great Power War arc: how often it happens, how it escalates,
+/// and what it does to the markets while it runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GeopoliticsConfig {
+    /// Annual chance a war breaks out. At 0.02, fifteen years give a 26%
+    /// chance of seeing one at all — deliberately the exception.
+    pub war_start_chance: f64,
+    /// Annual chance an ongoing war ends. Geometric, so at 0.5 the mean
+    /// war runs two years.
+    pub war_end_chance: f64,
+    /// Annual chance a war escalates to anti-satellite weapons. With the
+    /// default end chance, 57% of wars get there.
+    pub asat_chance: f64,
+    /// Orbits a debris cascade makes unusable. GEO and GTO are far enough
+    /// out to be left alone, which is why this is per destination.
+    pub debris_orbits: Vec<String>,
+    /// What survives in those orbits while the debris is being thrown.
+    pub debris_volume_mult: f64,
+    /// And what the replacement wave looks like afterwards.
+    pub reconstitution_volume_mult: f64,
+    /// Wartime demand for reconnaissance launch.
+    pub war_nro_volume_mult: f64,
+    /// A desperate customer pays more, which is what makes the surge
+    /// worth having rather than merely busy.
+    pub war_nro_rate_mult: f64,
+    /// Wartime urgency lowers the bar: they need lift more than a
+    /// spotless record. -20 takes the reputation target from 80 to 60.
+    pub war_nro_rep_delta: f64,
+}
+
+impl Default for GeopoliticsConfig {
+    fn default() -> Self {
+        GeopoliticsConfig {
+            war_start_chance: 0.02,
+            war_end_chance: 0.50,
+            asat_chance: 0.40,
+            debris_orbits: vec!["leo".into(), "sso".into()],
+            debris_volume_mult: 0.2,
+            reconstitution_volume_mult: 2.0,
+            war_nro_volume_mult: 5.0,
+            war_nro_rate_mult: 1.5,
+            war_nro_rep_delta: -20.0,
+        }
     }
 }
 

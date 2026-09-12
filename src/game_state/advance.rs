@@ -156,7 +156,7 @@ impl GameState {
     fn tick_geopolitics(&mut self, events: &mut Vec<GameEvent>) {
         let year = self.date.year;
         if let Some(shift) = crate::geopolitics::advance_geopolitics(
-            &mut self.geopolitics, &self.seed, year,
+            &mut self.geopolitics, &self.seed, year, &self.balance.geopolitics,
         ) {
             let geo_events = self.apply_geopolitical_shift(shift);
             self.emit_all(events, geo_events);

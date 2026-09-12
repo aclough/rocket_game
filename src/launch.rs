@@ -279,6 +279,7 @@ pub struct LaunchSimResult {
 /// 2. Applies consequences to a cloned design
 /// 3. Computes delta-v with degraded performance
 /// 4. Compares to required delta-v for the destination
+#[allow(clippy::too_many_arguments)] // the three flaw sources plus the balance cut; a bundle struct would just rename them
 pub fn simulate_launch(
     design: &RocketDesign,
     destination: &str,
@@ -287,6 +288,7 @@ pub fn simulate_launch(
     rocket_flaws: &[crate::flaw::Flaw],
     contracted_engines: &[ContractedEngine],
     rng: &mut StdRng,
+    flight_cfg: &crate::balance_config::FlightConfig,
 ) -> LaunchSimResult {
     let mut rocket_flaw_discoveries: Vec<usize> = Vec::new();
 
@@ -397,7 +399,7 @@ pub fn simulate_launch(
     } else {
         let shortfall = ((1.0 - degraded_dv / required_dv) * 100.0).round();
         let reason = describe_shortfall(&activations, shortfall);
-        if degraded_dv >= required_dv * 0.95 {
+        if degraded_dv >= required_dv * flight_cfg.partial_failure_cut {
             LaunchOutcome::PartialFailure { reason }
         } else {
             LaunchOutcome::Failure { reason }
@@ -650,7 +652,7 @@ mod tests {
             ],
         };
         let mut rng = StdRng::seed_from_u64(1);
-        let sim = simulate_launch(&design, "leo", 0.0, &[], &[], &[], &mut rng);
+        let sim = simulate_launch(&design, "leo", 0.0, &[], &[], &[], &mut rng, &crate::balance_config::FlightConfig::default());
 
         // The vehicle handed to the flight is the design as built.
         assert_eq!(sim.degraded_design.stage_groups[0][0].engine.isp_s, e1.isp_s,
@@ -685,6 +687,7 @@ mod tests {
         let result = simulate_launch(
             &design, "leo", 0.0,
             &[ep1, ep2], &rp.flaws, &[], &mut rng,
+            &crate::balance_config::FlightConfig::default(),
         );
 
         assert!(matches!(result.outcome, LaunchOutcome::Success));
@@ -710,6 +713,7 @@ mod tests {
         let result = simulate_launch(
             &design, "leo", 0.0,
             &[ep1, ep2], &rp.flaws, &[], &mut rng,
+            &crate::balance_config::FlightConfig::default(),
         );
 
         assert_eq!(result.flaws_activated.len(), 1);
@@ -781,6 +785,7 @@ mod tests {
             &design, "leo", PAYLOAD_KG,
             &[make_engine_project(1, vec![flaw]), make_engine_project(2, vec![])],
             &rp.flaws, &[], &mut rng,
+            &crate::balance_config::FlightConfig::default(),
         );
 
         let reason = match &result.outcome {
@@ -810,6 +815,7 @@ mod tests {
         let result = simulate_launch(
             &design, "gto", 5000.0,
             &[ep1, ep2], &rp.flaws, &[], &mut rng,
+            &crate::balance_config::FlightConfig::default(),
         );
 
         // Should be failure or partial failure (not success)
@@ -835,6 +841,7 @@ mod tests {
         let result = simulate_launch(
             &design, "leo", 0.0,
             &[ep1, ep2], &rp.flaws, &[], &mut rng,
+            &crate::balance_config::FlightConfig::default(),
         );
 
         assert_eq!(result.flaws_activated.len(), 1);
@@ -912,6 +919,7 @@ mod tests {
         let result = simulate_launch(
             &design, "leo", 0.0,
             &[ep1, ep2], &rp.flaws, &[], &mut rng,
+            &crate::balance_config::FlightConfig::default(),
         );
 
         assert!(result.flaws_activated.is_empty());

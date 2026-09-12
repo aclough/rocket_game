@@ -465,6 +465,21 @@ the pre-D7 gravity turn as `LEGACY_GRAVITY_TURN` for the comparison
 probe; the velocity-keyed candidate was measured (table above) and not
 kept.
 
+**Step 5 record, commit 1 — `flight` and `geopolitics`.**
+`FlightConfig { partial_failure_cut 0.95, short_burn_strand_cut 0.95,
+remaining_route_strand_cut 0.5, partial_payment_fraction 0.5 }` and
+`GeopoliticsConfig` (the nine former `geopolitics.rs` consts, with the
+debris orbits as a list). `simulate_launch` and `tick_flight` take the
+flight section; `advance_geopolitics` and the three market-modifier
+builders take the geopolitics section; the modifier ids stay consts
+(they are names, not knobs). The game binary now takes `--balance FILE`
+(repeatable, layered like the harness) before either the name/seed
+arguments or the startup screen. Defaults equal the old literals, so the
+oracle is byte-identical; `--dump-balance` shows both sections. Commit 2
+(economy, technology, the testing-level thresholds, improvement
+magnitudes, `BID_PAYLOAD_MARGIN`) follows; the physics constants stay
+`const` per your Q2 answer.
+
 ## 2. Order and why
 
 1 → 2 → 3 → 4 → 5 → 6. Steps 1–3 are small and make 4–6 easier to read

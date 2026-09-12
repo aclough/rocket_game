@@ -516,6 +516,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
     let sim = crate::launch::simulate_launch(
         &design, "leo", 0.0,
         &gs.player_company.engine_projects, &rp.flaws, &[], &mut rng,
+        &crate::balance_config::FlightConfig::default(),
     );
 
     let rocket_mass = sim.degraded_design.total_mass_kg();

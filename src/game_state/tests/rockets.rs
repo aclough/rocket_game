@@ -36,6 +36,7 @@ fn test_flaw_scoping_by_stage_usage() {
     let sim = crate::launch::simulate_launch(
         &design, "leo", 0.0,
         &engine_projects, &rp.flaws, &[], &mut rng,
+        &crate::balance_config::FlightConfig::default(),
     );
 
     assert!(matches!(sim.outcome, crate::launch::LaunchOutcome::Success),
@@ -140,6 +141,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
     let sim = crate::launch::simulate_launch(
         &design, "leo", 0.0,
         &gs.player_company.engine_projects, &rp.flaws, &[], &mut rng,
+        &crate::balance_config::FlightConfig::default(),
     );
 
     // Build route and instantiate rocket

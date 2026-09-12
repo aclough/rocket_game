@@ -887,7 +887,7 @@ impl GameState {
                                           entrants".into(),
                         });
                     }
-                    m.add_modifier(geo::nro_war_modifier());
+                    m.add_modifier(geo::nro_war_modifier(&self.balance.geopolitics));
                 }
                 if !self.fired_market_events.iter().any(|k| k == "market_nssl") {
                     self.fired_market_events.push("market_nssl".into());
@@ -895,7 +895,7 @@ impl GameState {
             }
             Shift::WarEscalates => {
                 for market in self.markets.iter_mut().filter(|m| m.id != nro) {
-                    market.add_modifier(geo::debris_modifier());
+                    market.add_modifier(geo::debris_modifier(&self.balance.geopolitics));
                 }
             }
             Shift::WarEndsWithoutDebris => {
@@ -913,7 +913,7 @@ impl GameState {
                 };
                 let end = GameDate { year: until, month: self.date.month, day: self.date.day };
                 for market in self.markets.iter_mut().filter(|m| m.id != nro) {
-                    market.add_modifier(geo::reconstitution_modifier(end));
+                    market.add_modifier(geo::reconstitution_modifier(end, &self.balance.geopolitics));
                 }
             }
             Shift::ReconstitutionEnds => {

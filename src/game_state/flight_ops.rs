@@ -134,6 +134,7 @@ impl GameState {
             rocket_flaws,
             &self.player_company.contracted_engines,
             &mut self.seed.contingent_rng,
+            &self.balance.flight,
         );
 
         let mut events = Vec::new();
@@ -301,6 +302,7 @@ impl GameState {
             }
             let end = tick_flight(
                 flight, &tables, &mut self.seed.contingent_rng, &mut events, &mut discoveries,
+                &self.balance.flight,
             );
             if let Some(end) = end {
                 ended.push((i, end));
@@ -471,7 +473,7 @@ impl GameState {
                     {
                         let contract = &self.player_company.active_contracts[ci];
                         let payment = if is_partial {
-                            contract.payment * 0.5
+                            contract.payment * self.balance.flight.partial_payment_fraction
                         } else {
                             contract.payment
                         };
@@ -913,6 +915,7 @@ fn tick_flight(
     rng: &mut rand::rngs::StdRng,
     events: &mut Vec<GameEvent>,
     discoveries: &mut FlawDiscoveries,
+    flight_cfg: &crate::balance_config::FlightConfig,
 ) -> Option<FlightEnd> {
     if flight.leg_days_remaining > 0 {
         flight.leg_days_remaining -= 1;
@@ -1013,14 +1016,16 @@ fn tick_flight(
                     .skip(flight.current_leg + 1)
                     .map(|leg| leg.delta_v_cost)
                     .sum();
-                if remaining_route_dv > 0.0 && remaining_dv < remaining_route_dv * 0.5 {
+                if remaining_route_dv > 0.0
+                    && remaining_dv < remaining_route_dv * flight_cfg.remaining_route_strand_cut
+                {
                     flight.status = FlightStatus::Stranded;
                     return Some(FlightEnd::Stranded);
                 }
             }
 
             // A burn that fell significantly short strands the flight.
-            if burn_result.dv_achieved < dv_cost * 0.95 {
+            if burn_result.dv_achieved < dv_cost * flight_cfg.short_burn_strand_cut {
                 flight.status = FlightStatus::Stranded;
                 return Some(FlightEnd::Stranded);
             }

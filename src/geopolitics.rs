@@ -22,36 +22,12 @@
 use rand::Rng;
 use serde::{Serialize, Deserialize};
 
+use crate::balance_config::GeopoliticsConfig;
 use crate::calendar::GameDate;
 use crate::seed::GameSeed;
 
-/// Annual chance a war breaks out. Over fifteen years that is a 26%
-/// chance of seeing one at all — deliberately the exception.
-pub const WAR_START_CHANCE: f64 = 0.02;
-/// Annual chance an ongoing war ends. Geometric, so the mean war runs
-/// two years.
-pub const WAR_END_CHANCE: f64 = 0.50;
-/// Annual chance a war escalates to anti-satellite weapons. Given the
-/// end chance above, 57% of wars get there.
-pub const ASAT_CHANCE: f64 = 0.40;
-
-/// Orbits a debris cascade makes unusable. GEO and GTO are far enough
-/// out to be left alone, which is the whole reason this is expressed
-/// per-destination rather than per-market.
-pub const DEBRIS_ORBITS: [&str; 2] = ["leo", "sso"];
-/// What survives in those orbits while the debris is being thrown.
-pub const DEBRIS_VOLUME_MULT: f64 = 0.2;
-/// And what the replacement wave looks like afterwards.
-pub const RECONSTITUTION_VOLUME_MULT: f64 = 2.0;
-
-/// Wartime demand for reconnaissance launch.
-pub const WAR_NRO_VOLUME_MULT: f64 = 5.0;
-/// A desperate customer pays more, which is what makes the surge worth
-/// having rather than merely busy.
-pub const WAR_NRO_RATE_MULT: f64 = 1.5;
-/// Wartime urgency lowers the bar: they need lift more than they need a
-/// spotless record. Takes the reputation target from 80 to 60.
-pub const WAR_NRO_REP_DELTA: f64 = -20.0;
+// The arc's rates and the market effects it carries are balance data:
+// `GeopoliticsConfig` (17_3_PHYSICS.md D6).
 
 /// Modifier ids, so entering and leaving a state can add and remove the
 /// same thing by name.
@@ -126,12 +102,13 @@ pub fn advance_geopolitics(
     state: &mut Geopolitics,
     seed: &GameSeed,
     year: u32,
+    cfg: &GeopoliticsConfig,
 ) -> Option<GeopoliticalShift> {
     let mut rng = seed.world_query(&format!("geopolitics_{year}"));
 
     match *state {
         Geopolitics::Peace => {
-            if rng.gen::<f64>() < WAR_START_CHANCE {
+            if rng.gen::<f64>() < cfg.war_start_chance {
                 *state = Geopolitics::War { since_year: year };
                 return Some(GeopoliticalShift::WarBegins);
             }
@@ -140,18 +117,18 @@ pub fn advance_geopolitics(
         Geopolitics::War { since_year } => {
             // Escalation is checked first: a war that goes nuclear-adjacent
             // and ends in the same year still leaves the debris behind.
-            if rng.gen::<f64>() < ASAT_CHANCE {
+            if rng.gen::<f64>() < cfg.asat_chance {
                 *state = Geopolitics::WarWithAsat { since_year, asat_since_year: year };
                 return Some(GeopoliticalShift::WarEscalates);
             }
-            if rng.gen::<f64>() < WAR_END_CHANCE {
+            if rng.gen::<f64>() < cfg.war_end_chance {
                 *state = Geopolitics::Peace;
                 return Some(GeopoliticalShift::WarEndsWithoutDebris);
             }
             None
         }
         Geopolitics::WarWithAsat { asat_since_year, .. } => {
-            if rng.gen::<f64>() < WAR_END_CHANCE {
+            if rng.gen::<f64>() < cfg.war_end_chance {
                 // The replacement wave runs as long as the shooting did:
                 // a three-month exchange and a four-year one shouldn't
                 // leave the same hole to fill.
@@ -172,38 +149,38 @@ pub fn advance_geopolitics(
 }
 
 /// The modifier a surging reconnaissance customer carries.
-pub fn nro_war_modifier() -> crate::contract::MarketModifier {
+pub fn nro_war_modifier(cfg: &GeopoliticsConfig) -> crate::contract::MarketModifier {
     crate::contract::MarketModifier {
         id: MOD_WAR_NRO.into(),
         description: "Wartime reconnaissance surge".into(),
-        volume_mult: WAR_NRO_VOLUME_MULT,
-        rate_mult: WAR_NRO_RATE_MULT,
-        rep_target_delta: WAR_NRO_REP_DELTA,
+        volume_mult: cfg.war_nro_volume_mult,
+        rate_mult: cfg.war_nro_rate_mult,
+        rep_target_delta: cfg.war_nro_rep_delta,
         ..Default::default()
     }
 }
 
 /// Debris suppression for every market that isn't the one buying the
 /// replacements.
-pub fn debris_modifier() -> crate::contract::MarketModifier {
+pub fn debris_modifier(cfg: &GeopoliticsConfig) -> crate::contract::MarketModifier {
     crate::contract::MarketModifier {
         id: MOD_ASAT_DEBRIS.into(),
         description: "Orbital debris — LEO and SSO barely usable".into(),
-        destination_volume_mult: DEBRIS_ORBITS.iter()
-            .map(|o| ((*o).to_string(), DEBRIS_VOLUME_MULT))
+        destination_volume_mult: cfg.debris_orbits.iter()
+            .map(|o| (o.clone(), cfg.debris_volume_mult))
             .collect(),
         ..Default::default()
     }
 }
 
 /// The replacement wave, expiring on its own.
-pub fn reconstitution_modifier(end: GameDate) -> crate::contract::MarketModifier {
+pub fn reconstitution_modifier(end: GameDate, cfg: &GeopoliticsConfig) -> crate::contract::MarketModifier {
     crate::contract::MarketModifier {
         id: MOD_RECONSTITUTION.into(),
         description: "Replacing constellations lost to debris".into(),
         end_date: Some(end),
-        destination_volume_mult: DEBRIS_ORBITS.iter()
-            .map(|o| ((*o).to_string(), RECONSTITUTION_VOLUME_MULT))
+        destination_volume_mult: cfg.debris_orbits.iter()
+            .map(|o| (o.clone(), cfg.reconstitution_volume_mult))
             .collect(),
         ..Default::default()
     }
@@ -217,9 +194,10 @@ mod tests {
     /// asserting one seed's story.
     fn run_years(seed_value: u64, years: u32) -> Vec<(u32, Geopolitics, Option<GeopoliticalShift>)> {
         let seed = GameSeed::new(seed_value);
+        let cfg = GeopoliticsConfig::default();
         let mut state = Geopolitics::Peace;
         (2001..2001 + years).map(|y| {
-            let shift = advance_geopolitics(&mut state, &seed, y);
+            let shift = advance_geopolitics(&mut state, &seed, y, &cfg);
             (y, state, shift)
         }).collect()
     }
@@ -299,13 +277,14 @@ mod tests {
     fn reconstitution_lasts_as_long_as_the_shooting() {
         // Find a world that escalates, and check the replacement wave is
         // sized to the exchange rather than fixed.
+        let cfg = GeopoliticsConfig::default();
         for s in 0..2_000u64 {
             let seed = GameSeed::new(s);
             let mut state = Geopolitics::Peace;
             let mut asat_start = None;
             for y in 2001..2041 {
                 let before = state;
-                advance_geopolitics(&mut state, &seed, y);
+                advance_geopolitics(&mut state, &seed, y, &cfg);
                 if let Geopolitics::WarWithAsat { asat_since_year, .. } = state {
                     asat_start.get_or_insert(asat_since_year);
                 }

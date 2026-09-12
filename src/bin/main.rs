@@ -4,6 +4,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
+use rocket_tycoon::balance_config::BalanceConfig;
 use rocket_tycoon::game_state::GameState;
 use rocket_tycoon::save;
 use rocket_tycoon::ui::{with_terminal, App, Tui};
@@ -14,34 +15,44 @@ enum StartupState {
 }
 
 fn main() -> io::Result<()> {
+    // `rocket_tycoon [NAME [SEED]] [--balance FILE]...` — the balance
+    // files layer over the shipped defaults, in order, exactly as the
+    // simulate harness takes them (17_3_PHYSICS.md D6).
+    let mut positional: Vec<String> = Vec::new();
+    let mut balance_files: Vec<String> = Vec::new();
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--balance" {
+            match args.next() {
+                Some(path) => balance_files.push(path),
+                None => return Err(io::Error::other("--balance needs a file")),
+            }
+        } else {
+            positional.push(arg);
+        }
+    }
+    let balance = BalanceConfig::load_layered(&balance_files).map_err(io::Error::other)?;
+
     // `fresh` distinguishes a brand-new company (which gets the
     // one-screen orientation) from a loaded save (which doesn't).
-    let (game, fresh) = if std::env::args().len() >= 2 {
-        let args: Vec<String> = std::env::args().collect();
-        let name = args[1].clone();
-        let seed = args
-            .get(2)
+    let (game, fresh) = if let Some(name) = positional.first() {
+        let seed = positional
+            .get(1)
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or_else(rand::random);
-        (
-            GameState::with_balance(
-                name, seed,
-                rocket_tycoon::balance_config::BalanceConfig::default(),
-            ),
-            true,
-        )
+        (GameState::with_balance(name.clone(), seed, balance), true)
     } else {
-        run_startup_screen()?
+        run_startup_screen(balance)?
     };
     let mut app = if fresh { App::new_game(game) } else { App::new(game) };
     app.run()
 }
 
-fn run_startup_screen() -> io::Result<(GameState, bool)> {
-    with_terminal(startup_loop)
+fn run_startup_screen(balance: BalanceConfig) -> io::Result<(GameState, bool)> {
+    with_terminal(|terminal| startup_loop(terminal, balance))
 }
 
-fn startup_loop(terminal: &mut Tui) -> io::Result<(GameState, bool)> {
+fn startup_loop(terminal: &mut Tui, balance: BalanceConfig) -> io::Result<(GameState, bool)> {
     let mut state = StartupState::Menu;
     let mut selected: usize = 0;
     let mut saves = save::list_saves();
@@ -96,13 +107,7 @@ fn startup_loop(terminal: &mut Tui) -> io::Result<(GameState, bool)> {
                             company_name.trim().to_string()
                         };
                         let seed: u64 = rand::random();
-                        return Ok((
-                            GameState::with_balance(
-                                name, seed,
-                                rocket_tycoon::balance_config::BalanceConfig::default(),
-                            ),
-                            true,
-                        ));
+                        return Ok((GameState::with_balance(name, seed, balance), true));
                     }
                     KeyCode::Esc => {
                         state = StartupState::Menu;
