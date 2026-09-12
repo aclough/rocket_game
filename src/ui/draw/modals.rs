@@ -723,7 +723,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
         }
         InputMode::DvPlanner { state } => {
             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
-            let loc_name = contract::destination_display_name(&state.current_location);
+            let loc_name = contract::destination_display_name(state.current_location.name());
             let mut lines = vec![
                 Line::from(""),
                 Line::from(vec![
@@ -885,7 +885,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 let style = if i == *selected {
                     Style::default().fg(Color::Yellow)
                 } else { Style::default() };
-                let loc = contract::destination_display_name(&sc.location);
+                let loc = contract::destination_display_name(sc.location.name());
                 lines.push(Line::from(Span::styled(
                     format!("{}{}  @ {}", marker, sc.name, loc),
                     style,
@@ -905,7 +905,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
         InputMode::DockSelectLarge { small_idx, candidates, selected } => {
             let small_name = &app.game.spacecraft[*small_idx].name;
             let small_loc = contract::destination_display_name(
-                &app.game.spacecraft[*small_idx].location);
+                app.game.spacecraft[*small_idx].location.name());
             let mut lines = vec![
                 Line::from(""),
                 Line::from(format!("  Dock {} onto … (at {})", small_name, small_loc)),
@@ -945,7 +945,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::Yellow)
                 } else { Style::default() };
                 let sc = &app.game.spacecraft[cand];
-                let loc = contract::destination_display_name(&sc.location);
+                let loc = contract::destination_display_name(sc.location.name());
                 lines.push(Line::from(Span::styled(
                     format!("{}{}  @ {}", marker, sc.name, loc),
                     style,

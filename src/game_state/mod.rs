@@ -70,7 +70,7 @@ pub struct Spacecraft {
     pub name: String,
     pub rocket: crate::rocket::Rocket,
     pub design: RocketDesign,
-    pub location: String,
+    pub location: crate::location::LocationId,
     #[serde(default)]
     pub rocket_project_id: RocketProjectId,
     /// Payloads still aboard (e.g. CSM in lunar orbit still carrying LEM).

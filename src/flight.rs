@@ -3,7 +3,7 @@ use serde::{Serialize, Deserialize};
 use crate::calendar::GameDate;
 use crate::contract::ContractId;
 use crate::launch::FlawActivation;
-use crate::location::DELTA_V_MAP;
+use crate::location::{LocationId, DELTA_V_MAP};
 use crate::rocket::{DesignPerformance, Rocket, RocketDesign};
 use crate::rocket_project::RocketProjectId;
 
@@ -74,8 +74,8 @@ pub enum FlightStatus {
 /// A leg of a flight route through the location graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlightLeg {
-    pub from: String,
-    pub to: String,
+    pub from: LocationId,
+    pub to: LocationId,
     /// What the burn must deliver: the transfer's Δv (drag included on
     /// an atmospheric ascent) plus, leaving a surface, the ascent's
     /// gravity loss (`ascent_gravity_cost`).
@@ -116,7 +116,7 @@ pub struct Flight {
     /// Runtime rocket instance with per-stage propellant tracking.
     pub rocket: Rocket,
     pub payloads: Vec<Payload>,
-    pub current_location: String,
+    pub current_location: LocationId,
     pub route: Vec<FlightLeg>,
     pub current_leg: usize,
     pub leg_days_remaining: u32,
@@ -197,10 +197,10 @@ impl Flight {
     }
 
     /// Final destination of this flight.
-    pub fn destination(&self) -> &str {
+    pub fn destination(&self) -> &'static str {
         self.route.last()
-            .map(|leg| leg.to.as_str())
-            .unwrap_or(&self.current_location)
+            .map_or(self.current_location, |leg| leg.to)
+            .name()
     }
 
     /// Total days remaining across all unfinished legs.
@@ -248,7 +248,7 @@ impl Flight {
                 .map(|gi| sim_rocket.group_remaining_delta_v(&sim_design, gi))
                 .collect();
 
-            sim_rocket.burn_sequential(&sim_design, leg.delta_v_cost, &leg.from);
+            sim_rocket.burn_sequential(&sim_design, leg.delta_v_cost, leg.from.name());
 
             let after: Vec<f64> = (0..n_groups)
                 .map(|gi| sim_rocket.group_remaining_delta_v(&sim_design, gi))
@@ -320,8 +320,8 @@ pub fn build_route(
             };
 
             legs.push(FlightLeg {
-                from: from.to_string(),
-                to: to.to_string(),
+                from: LocationId::of(from),
+                to: LocationId::of(to),
                 delta_v_cost: dv_cost,
                 burn_days,
                 coast_days,
@@ -391,8 +391,8 @@ pub fn build_route_for_rocket(
         };
 
         legs.push(FlightLeg {
-            from: from.to_string(),
-            to: to.to_string(),
+            from: LocationId::of(from),
+            to: LocationId::of(to),
             delta_v_cost: dv_cost,
             burn_days,
             coast_days,
@@ -441,7 +441,7 @@ mod tests {
         };
         // Payload mass on the inner rocket = 0 here; tests using nested
         // payloads sum manually.
-        let rocket = design.instantiate(RocketId(id), "earth_surface", 0.0);
+        let rocket = design.instantiate(RocketId(id), 0.0);
         (design, rocket)
     }
 
@@ -494,8 +494,8 @@ mod tests {
         let path = vec!["earth_surface", "leo"];
         let legs = build_route(&path, 500_000.0, 7_000_000.0, false);
         assert_eq!(legs.len(), 1);
-        assert_eq!(legs[0].from, "earth_surface");
-        assert_eq!(legs[0].to, "leo");
+        assert_eq!(legs[0].from.name(), "earth_surface");
+        assert_eq!(legs[0].to.name(), "leo");
         assert!(legs[0].delta_v_cost > 0.0);
         // A chemical ascent burns for a few minutes, so it occupies no whole
         // calendar days — and LEO has no coast either. That makes the leg
@@ -527,7 +527,7 @@ mod tests {
             stage_groups: vec![],
         };
         let rocket = design.instantiate(
-            crate::rocket::RocketId(1), "earth_surface", 100.0,
+            crate::rocket::RocketId(1), 100.0,
         );
         let flight = Flight {
             id: FlightId(1),
@@ -537,14 +537,14 @@ mod tests {
             design,
             rocket,
             payloads: vec![Payload::TestMass { mass_kg: 100.0 }],
-            current_location: "earth_surface".into(),
+            current_location: crate::location::LocationId::of("earth_surface"),
             route: vec![
                 FlightLeg {
-                    from: "earth_surface".into(), to: "leo".into(),
+                    from: crate::location::LocationId::of("earth_surface"), to: crate::location::LocationId::of("leo"),
                     delta_v_cost: 9400.0, burn_days: 1, coast_days: 0,
                 },
                 FlightLeg {
-                    from: "leo".into(), to: "gto".into(),
+                    from: crate::location::LocationId::of("leo"), to: crate::location::LocationId::of("gto"),
                     delta_v_cost: 2440.0, burn_days: 0, coast_days: 1,
                 },
             ],
@@ -664,7 +664,7 @@ mod tests {
             name: "TwoStage".into(),
             stage_groups: vec![vec![s1], vec![s2]],
         };
-        let rocket = design.instantiate(RocketId(1), "earth_surface", 5_000.0);
+        let rocket = design.instantiate(RocketId(1), 5_000.0);
 
         Flight {
             id: FlightId(1),
@@ -674,14 +674,14 @@ mod tests {
             design,
             rocket,
             payloads: vec![Payload::TestMass { mass_kg: 5_000.0 }],
-            current_location: "earth_surface".into(),
+            current_location: crate::location::LocationId::of("earth_surface"),
             route: vec![
                 FlightLeg {
-                    from: "earth_surface".into(), to: "leo".into(),
+                    from: crate::location::LocationId::of("earth_surface"), to: crate::location::LocationId::of("leo"),
                     delta_v_cost: 9_400.0, burn_days: 1, coast_days: 0,
                 },
                 FlightLeg {
-                    from: "leo".into(), to: "gto".into(),
+                    from: crate::location::LocationId::of("leo"), to: crate::location::LocationId::of("gto"),
                     delta_v_cost: 2_440.0, burn_days: 1, coast_days: 2,
                 },
             ],
@@ -803,7 +803,7 @@ mod tests {
         // burn_days should be larger on the Mars-side leg.
         use crate::rocket::RocketId;
         let design = ion_spacecraft_design(300_000.0);
-        let rocket = design.instantiate(RocketId(1), "earth_escape", 100.0);
+        let rocket = design.instantiate(RocketId(1), 100.0);
 
         // Path crossing the heliocentric backbone from Earth toward Mars.
         let path = vec!["earth_escape", "mars_transfer", "mars_capture"];
@@ -833,7 +833,7 @@ mod tests {
         assert!((legs[0].delta_v_cost - (edge + gravity)).abs() < 1e-6,
             "surface leg {:.0} should be edge {edge:.0} + gravity {gravity:.0}", legs[0].delta_v_cost);
 
-        let in_orbit = design.instantiate(crate::rocket::RocketId(2), "leo", 0.0);
+        let in_orbit = design.instantiate(crate::rocket::RocketId(2), 0.0);
         let legs = build_route_for_rocket(&["leo", "gto"], &design, &in_orbit, 0.0);
         let transfer = DELTA_V_MAP.transfer("leo", "gto").unwrap();
         let edge = transfer.delta_v_for(false, mass).unwrap_or_else(|| transfer.cost_for_mass(mass));
@@ -873,7 +873,7 @@ mod tests {
         let budget_left = perf.total_planner_dv() - route_dv;
         assert!(budget_left > 0.0);
 
-        let mut rocket = design.instantiate(RocketId(9), "earth_surface", payload);
+        let mut rocket = design.instantiate(RocketId(9), payload);
         let legs = build_route_for_rocket(&path, &design, &rocket, payload);
         assert_eq!(legs.len(), 1);
         let result = rocket.burn_sequential(&design, legs[0].delta_v_cost, "earth_surface");
@@ -891,7 +891,7 @@ mod tests {
         // flight, but the function itself should produce a coherent vec).
         use crate::rocket::RocketId;
         let design = ion_spacecraft_design(1.0); // 1 W panel for a 150 kW engine
-        let rocket = design.instantiate(RocketId(1), "leo", 0.0);
+        let rocket = design.instantiate(RocketId(1), 0.0);
         let path = vec!["leo", "meo"];
         let legs = build_route_for_rocket(&path, &design, &rocket, 0.0);
         assert_eq!(legs.len(), 1);

@@ -4,7 +4,7 @@
 /// An action in the delta-v planner.
 #[derive(Debug, Clone)]
 pub enum PlanAction {
-    Leg { from: String, to: String, to_display: String, dv_cost: f64 },
+    Leg { from: crate::location::LocationId, to: crate::location::LocationId, to_display: String, dv_cost: f64 },
     DropPayload { mass_dropped: f64 },
 }
 
@@ -42,10 +42,11 @@ pub struct DvPlannerState {
     pub source: PlannerSource,
     pub rocket: crate::rocket::Rocket,
     pub design: crate::rocket::RocketDesign,
-    pub current_location: String,
+    pub current_location: crate::location::LocationId,
     pub actions: Vec<PlanAction>,
-    /// Rocket snapshots before each action (for undo).
-    pub snapshots: Vec<(crate::rocket::Rocket, f64)>, // (rocket_state, payload_at_that_point)
+    /// Snapshots before each action (for undo): rocket state, payload at
+    /// that point, and where the vehicle was.
+    pub snapshots: Vec<(crate::rocket::Rocket, f64, crate::location::LocationId)>,
     /// Reachable destinations from current location.
     pub destinations: Vec<(String, String, f64)>, // (id, display, dv_cost)
     pub selected: usize,

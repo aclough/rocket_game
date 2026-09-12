@@ -740,8 +740,8 @@ mod tests {
         };
         let csm_design = make_design(1, "CSM");
         let lem_design = make_design(2, "LEM");
-        let lem_rocket = lem_design.instantiate(RocketId(2), "lunar_orbit", 0.0);
-        let csm_rocket = csm_design.instantiate(RocketId(1), "lunar_orbit", 0.0);
+        let lem_rocket = lem_design.instantiate(RocketId(2), 0.0);
+        let csm_rocket = csm_design.instantiate(RocketId(1), 0.0);
 
         let lem_payload = Payload::Spacecraft {
             deploy_at: Some("lunar_surface".into()),
@@ -756,7 +756,7 @@ mod tests {
             name: "CSM".into(),
             rocket: csm_rocket,
             design: csm_design,
-            location: "lunar_orbit".into(),
+            location: crate::location::LocationId::of("lunar_orbit"),
             rocket_project_id: RocketProjectId(1),
             payloads: vec![lem_payload],
         });

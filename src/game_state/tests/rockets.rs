@@ -60,7 +60,7 @@ fn test_flaw_scoping_by_stage_usage() {
 
     // Instantiate the rocket from the degraded design (as launch_rocket would)
     let rocket = sim.degraded_design.instantiate(
-        crate::rocket::RocketId(1), "leo", 0.0,
+        crate::rocket::RocketId(1), 0.0,
     );
 
     // Simulate that stages 1+2 are jettisoned (as they would be after LEO insertion)
@@ -85,7 +85,7 @@ fn test_flaw_scoping_by_stage_usage() {
         name: "TestCraft".into(),
         rocket,
         design: sim.degraded_design,
-        location: "leo".into(),
+        location: crate::location::LocationId::of("leo"),
         rocket_project_id: RocketProjectId(1),
         payloads: Vec::new(),
     };
@@ -152,7 +152,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
         None => vec![],
     };
     let rocket = sim.degraded_design.instantiate(
-        crate::rocket::RocketId(1), "earth_surface", 0.0,
+        crate::rocket::RocketId(1), 0.0,
     );
     let leg_days = route.first().map(|l| l.total_days()).unwrap_or(0);
 
@@ -164,7 +164,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
         design: sim.degraded_design,
         rocket,
         payloads: vec![],
-        current_location: "earth_surface".into(),
+        current_location: crate::location::LocationId::of("earth_surface"),
         route,
         current_leg: 0,
         leg_days_remaining: leg_days,
@@ -296,7 +296,7 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
     };
 
     // Instantiate at LEO (as if we've already launched)
-    let mut rocket = design.instantiate(RocketId(1), "leo", 0.0);
+    let mut rocket = design.instantiate(RocketId(1), 0.0);
 
     // Jettison groups 0 and 1 (already used for launch)
     for si in 0..rocket.stage_states[0].len() {

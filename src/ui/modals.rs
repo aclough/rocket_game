@@ -535,7 +535,7 @@ impl App {
                         let payload_mass: f64 = sc.payloads.iter().map(|p| p.mass_kg()).sum();
                         let rocket_mass = payload_mass + sc.design.total_mass_kg();
                         let destinations = reachable_destinations_multistage(
-                            &sc.location, remaining_dv, rocket_mass,
+                            sc.location.name(), remaining_dv, rocket_mass,
                             Some(&sc.rocket), Some(&sc.design),
                         );
                         if destinations.is_empty() {
@@ -748,7 +748,7 @@ impl App {
                         let payload_kg: f64 = state.payload_buffer.parse().unwrap_or(0.0);
                         let (start_id, _) = state.locations[state.selected_location];
                         let rocket = rp.design.instantiate(
-                            crate::rocket::RocketId(0), start_id, payload_kg,
+                            crate::rocket::RocketId(0), payload_kg,
                         );
                         let remaining_dv = rocket.remaining_delta_v(&rp.design);
                         let rocket_mass = rp.design.total_mass_kg() + payload_kg;
@@ -761,7 +761,7 @@ impl App {
                                 source: PlannerSource::Design { project_index: pi },
                                 rocket,
                                 design: rp.design.clone(),
-                                current_location: start_id.to_string(),
+                                current_location: crate::location::LocationId::of(start_id),
                                 actions: vec![],
                                 snapshots: vec![],
                                 destinations,
@@ -792,23 +792,22 @@ impl App {
                         if state.selected < num_dests {
                             let (dest_id, dest_display, dv_cost) =
                                 state.destinations[state.selected].clone();
-                            let from = state.current_location.clone();
+                            let from = state.current_location;
 
                             // Save snapshot for undo
-                            state.snapshots.push((state.rocket.clone(), state.payload_kg));
+                            state.snapshots.push((state.rocket.clone(), state.payload_kg, from));
 
                             // Burn propellant the way the flight will: the
                             // transfer plus, leaving a surface, the ascent's
                             // gravity loss; the Isp penalty rides on the burn.
                             let leg_cost = dv_cost
-                                + crate::flight::ascent_gravity_cost(&state.design, state.payload_kg, &from);
-                            let _ = state.rocket.burn_sequential(&state.design, leg_cost, &from);
-                            state.rocket.location = dest_id.clone();
-                            state.current_location = dest_id;
+                                + crate::flight::ascent_gravity_cost(&state.design, state.payload_kg, from.name());
+                            let _ = state.rocket.burn_sequential(&state.design, leg_cost, from.name());
+                            state.current_location = crate::location::LocationId::of(&dest_id);
 
                             state.actions.push(PlanAction::Leg {
                                 from,
-                                to: state.current_location.clone(),
+                                to: state.current_location,
                                 to_display: dest_display,
                                 dv_cost: leg_cost,
                             });
@@ -817,7 +816,7 @@ impl App {
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg() + state.payload_kg;
                             state.destinations = reachable_destinations_multistage(
-                                &state.current_location, remaining_dv, rocket_mass,
+                                state.current_location.name(), remaining_dv, rocket_mass,
                                 Some(&state.rocket), Some(&state.design),
                             );
                             state.selected = 0;
@@ -827,7 +826,7 @@ impl App {
                         // Drop payload
                         if state.payload_kg > 0.0 {
                             let mass = state.payload_kg;
-                            state.snapshots.push((state.rocket.clone(), state.payload_kg));
+                            state.snapshots.push((state.rocket.clone(), state.payload_kg, state.current_location));
                             state.payload_kg = 0.0;
                             state.rocket.payload_mass_kg = 0.0;
                             state.actions.push(PlanAction::DropPayload { mass_dropped: mass });
@@ -836,7 +835,7 @@ impl App {
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg();
                             state.destinations = reachable_destinations_multistage(
-                                &state.current_location, remaining_dv, rocket_mass,
+                                state.current_location.name(), remaining_dv, rocket_mass,
                                 Some(&state.rocket), Some(&state.design),
                             );
                             state.selected = state.selected.min(
@@ -846,17 +845,17 @@ impl App {
                     }
                     KeyCode::Char('u') => {
                         // Undo last action
-                        if let Some((prev_rocket, prev_payload)) = state.snapshots.pop() {
+                        if let Some((prev_rocket, prev_payload, prev_location)) = state.snapshots.pop() {
                             state.actions.pop();
                             state.rocket = prev_rocket;
                             state.payload_kg = prev_payload;
                             state.rocket.payload_mass_kg = prev_payload;
-                            state.current_location = state.rocket.location.clone();
+                            state.current_location = prev_location;
 
                             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
                             let rocket_mass = state.design.total_mass_kg() + state.payload_kg;
                             state.destinations = reachable_destinations_multistage(
-                                &state.current_location, remaining_dv, rocket_mass,
+                                state.current_location.name(), remaining_dv, rocket_mass,
                                 Some(&state.rocket), Some(&state.design),
                             );
                             state.selected = state.selected.min(
@@ -968,13 +967,13 @@ pub(super) mod help_tests {
         });
 
         // A spacecraft in orbit for the fly/dock/undock keys.
-        let rocket = design.instantiate(crate::rocket::RocketId(1), "leo", 0.0);
+        let rocket = design.instantiate(crate::rocket::RocketId(1), 0.0);
         game.spacecraft.push(crate::game_state::Spacecraft {
             id: crate::game_state::SpacecraftId(1),
             name: "Fixture Craft".into(),
             rocket,
             design,
-            location: "leo".into(),
+            location: crate::location::LocationId::of("leo"),
             rocket_project_id: rpid,
             payloads: Vec::new(),
         });

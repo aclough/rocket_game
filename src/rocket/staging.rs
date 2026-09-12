@@ -576,7 +576,7 @@ mod tests {
             stage_groups: vec![vec![core, srb.clone(), srb]],
         };
         let payload = 5_000.0;
-        let mut rocket = design.instantiate(RocketId(1), "earth_surface", payload);
+        let mut rocket = design.instantiate(RocketId(1), payload);
         let first_phase_dv = design.burn_phases(0, payload)[0].delta_v();
 
         // Burn a little past the boosters' phase.
@@ -707,7 +707,7 @@ mod tests {
         };
 
         let payload = 1_000.0;
-        let rocket = design.instantiate(RocketId(1), "earth_surface", payload);
+        let rocket = design.instantiate(RocketId(1), payload);
 
         // Fresh rocket should have same delta-v as design
         let design_dv = design.vacuum_delta_v(payload);
@@ -742,7 +742,7 @@ mod tests {
             stage_groups: vec![vec![s1], vec![s2]],
         };
 
-        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
+        let mut rocket = design.instantiate(RocketId(1), 1_000.0);
 
         assert!(rocket.jettison_stage(0, 0));
         assert!(!rocket.stage_states[0][0].attached);
@@ -819,7 +819,7 @@ mod tests {
             stage_groups: vec![vec![s1]],
         };
 
-        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
+        let mut rocket = design.instantiate(RocketId(1), 1_000.0);
         let initial_dv = rocket.remaining_delta_v(&design);
 
         let result = rocket.burn_sequential(&design, 1_000.0, "leo");
@@ -857,7 +857,7 @@ mod tests {
             stage_groups: vec![vec![s1], vec![s2]],
         };
 
-        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
+        let mut rocket = design.instantiate(RocketId(1), 1_000.0);
         let total_dv = rocket.remaining_delta_v(&design);
 
         // Burn for more than the first stage can provide — should cross into second stage
@@ -897,7 +897,7 @@ mod tests {
             stage_groups: vec![vec![s1]],
         };
 
-        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 1_000.0);
+        let mut rocket = design.instantiate(RocketId(1), 1_000.0);
         let total_dv = rocket.remaining_delta_v(&design);
 
         // Ask for way more than available

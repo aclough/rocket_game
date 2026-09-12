@@ -35,7 +35,7 @@ fn tiny_payload_spacecraft(
         stage_groups: vec![vec![stage]],
     };
     let nested_mass: f64 = nested.iter().map(|p| p.mass_kg()).sum();
-    let rocket = design.instantiate(RocketId(id), "earth_surface", nested_mass);
+    let rocket = design.instantiate(RocketId(id), nested_mass);
     Payload::Spacecraft {
         deploy_at: Some(deploy_at.into()),
         design,
@@ -60,7 +60,7 @@ fn arrive_test_flight(
         id: RocketDesignId(999), name: "CarrierStub".into(),
         stage_groups: vec![],
     };
-    let rocket = design.instantiate(RocketId(999), "earth_surface", 0.0);
+    let rocket = design.instantiate(RocketId(999), 0.0);
     let flight = Flight {
         id: FlightId(1),
         company: crate::flight::CompanyRef::Player,
@@ -69,10 +69,10 @@ fn arrive_test_flight(
         design,
         rocket,
         payloads,
-        current_location: destination.into(),
+        current_location: crate::location::LocationId::of(destination),
         route: vec![FlightLeg {
-            from: "earth_surface".into(),
-            to: destination.into(),
+            from: crate::location::LocationId::of("earth_surface"),
+            to: crate::location::LocationId::of(destination),
             delta_v_cost: 0.0, burn_days: 0, coast_days: 0,
         }],
         current_leg: 0,
@@ -105,7 +105,7 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
         id: RocketDesignId(999), name: "CarrierStub".into(),
         stage_groups: vec![],
     };
-    let rocket = design.instantiate(RocketId(999), "earth_surface", 0.0);
+    let rocket = design.instantiate(RocketId(999), 0.0);
     let events = gs.resolve_arrived_flight(Flight {
         id: FlightId(1),
         company: crate::flight::CompanyRef::Player,
@@ -114,9 +114,9 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
         design,
         rocket,
         payloads: vec![],
-        current_location: "leo".into(),
+        current_location: crate::location::LocationId::of("leo"),
         route: vec![FlightLeg {
-            from: "earth_surface".into(), to: "leo".into(),
+            from: crate::location::LocationId::of("earth_surface"), to: crate::location::LocationId::of("leo"),
             delta_v_cost: 0.0, burn_days: 0, coast_days: 0,
         }],
         current_leg: 0,
@@ -152,7 +152,7 @@ fn test_spacecraft_payload_deployed_on_arrival() {
     assert_eq!(gs.spacecraft.len(), 1, "Skylab should be in fleet");
     let sc = &gs.spacecraft[0];
     assert_eq!(sc.name, "Skylab");
-    assert_eq!(sc.location, "leo");
+    assert_eq!(sc.location.name(), "leo");
     assert!(sc.payloads.is_empty());
     assert!(events.iter().any(|e| matches!(
         e, crate::event::GameEvent::SpacecraftDeployed { spacecraft_name, .. }
@@ -173,7 +173,7 @@ fn test_csm_carrying_lem_keeps_lem_after_deployment() {
     assert_eq!(gs.spacecraft.len(), 1, "only CSM in fleet, LEM is its payload");
     let csm_sc = &gs.spacecraft[0];
     assert_eq!(csm_sc.name, "CSM");
-    assert_eq!(csm_sc.location, "lunar_orbit");
+    assert_eq!(csm_sc.location.name(), "lunar_orbit");
     assert_eq!(csm_sc.payloads.len(), 1);
     match &csm_sc.payloads[0] {
         Payload::Spacecraft { name, deploy_at, .. } => {
@@ -259,12 +259,12 @@ fn push_test_spacecraft(gs: &mut GameState, id: u64, name: &str, location: &str)
         id: RocketDesignId(id), name: name.into(),
         stage_groups: vec![vec![stage]],
     };
-    let rocket = design.instantiate(RocketId(id), location, 0.0);
+    let rocket = design.instantiate(RocketId(id), 0.0);
     gs.spacecraft.push(Spacecraft {
         id: SpacecraftId(id),
         name: name.into(),
         rocket, design,
-        location: location.into(),
+        location: crate::location::LocationId::of(location),
         rocket_project_id: RocketProjectId(id),
         payloads: Vec::new(),
     });
@@ -316,7 +316,7 @@ fn test_undock_restores_fleet_member() {
     let lem_idx = gs.spacecraft.iter()
         .position(|sc| sc.name == "LEM")
         .expect("LEM back in fleet");
-    assert_eq!(gs.spacecraft[lem_idx].location, "lunar_orbit");
+    assert_eq!(gs.spacecraft[lem_idx].location.name(), "lunar_orbit");
 }
 
 #[test]
@@ -447,10 +447,10 @@ fn test_mid_flight_stage_loss_destroys_vehicle() {
         id: RocketDesignId(1), name: "Doomed".into(),
         stage_groups: vec![vec![stage]],
     };
-    let rocket = design.instantiate(RocketId(1), "leo", 0.0);
+    let rocket = design.instantiate(RocketId(1), 0.0);
     gs.spacecraft.push(Spacecraft {
         id: SpacecraftId(1), name: "Doomed".into(),
-        rocket, design, location: "leo".into(),
+        rocket, design, location: crate::location::LocationId::of("leo"),
         rocket_project_id: RocketProjectId(0),
         payloads: Vec::new(),
     });
@@ -528,7 +528,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
     assert_eq!(leg_days, 0, "earth_surface -> leo is a same-day leg");
 
     let rocket = sim.degraded_design.instantiate(
-        crate::rocket::RocketId(1), "earth_surface", 0.0,
+        crate::rocket::RocketId(1), 0.0,
     );
 
     gs.active_flights.push(crate::flight::Flight {
@@ -539,7 +539,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
         design: sim.degraded_design,
         rocket,
         payloads: vec![],
-        current_location: "earth_surface".into(),
+        current_location: crate::location::LocationId::of("earth_surface"),
         route,
         current_leg: 0,
         leg_days_remaining: leg_days,
@@ -560,7 +560,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
         "a 0-day leg must complete on its launch day, not the day after",
     );
     assert_eq!(gs.spacecraft.len(), 1, "the persisting craft should be parked in orbit");
-    assert_eq!(gs.spacecraft[0].location, "leo");
+    assert_eq!(gs.spacecraft[0].location.name(), "leo");
     assert!(
         events.iter().any(|e| matches!(e, GameEvent::LaunchSuccess { .. })),
         "arrival should be reported by the tick that ran on the 1st, got {events:?}",

@@ -415,9 +415,92 @@ impl DeltaVMap {
 /// Global delta-v map instance
 pub static DELTA_V_MAP: LazyLock<DeltaVMap> = LazyLock::new(DeltaVMap::earth_moon);
 
+/// A location in [`DELTA_V_MAP`], by index (17_3_PHYSICS.md D3b). `Copy`
+/// and cheap to compare; the vehicle-side structs (flights, legs,
+/// spacecraft, the planner) hold one of these where they held the id
+/// string. Serialises as the id string, so saves stay readable and do
+/// not depend on table order; an id the map does not know is a load
+/// error, never a silent default. Authored content — contract and
+/// market destinations, balance TOML — keeps the string form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LocationId(u16);
+
+impl LocationId {
+    /// The location with this id, if the map has one.
+    pub fn parse(name: &str) -> Option<Self> {
+        DELTA_V_MAP.index_of(name).map(|i| LocationId(i as u16))
+    }
+
+    /// For ids the code itself names (`LocationId::of("earth_surface")`)
+    /// and for tests: panics on an unknown id, which is a bug, not data.
+    pub fn of(name: &str) -> Self {
+        Self::parse(name).unwrap_or_else(|| panic!("unknown location id {name:?}"))
+    }
+
+    /// Index into `DELTA_V_MAP.locations()`.
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    pub fn location(self) -> &'static Location {
+        DELTA_V_MAP.location_at(self.index()).expect("LocationId indexes the map")
+    }
+
+    /// The id string, as saves and the content data spell it.
+    pub fn name(self) -> &'static str {
+        self.location().id
+    }
+
+    pub fn surface(self) -> Option<&'static SurfaceProperties> {
+        match &self.location().location_type {
+            LocationType::Surface(props) => Some(props),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for LocationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl serde::Serialize for LocationId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for LocationId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        LocationId::parse(&name)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown location id {name:?}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `LocationId` is an index at runtime and the id string in a save.
+    #[test]
+    fn location_id_round_trips_as_its_name_and_rejects_strangers() {
+        let leo = LocationId::of("leo");
+        assert_eq!(leo.name(), "leo");
+        assert_eq!(leo.location().display_name, "Low Earth Orbit");
+        assert!(leo.surface().is_none());
+        assert!(LocationId::of("earth_surface").surface().is_some());
+        assert_eq!(LocationId::parse("leo"), Some(leo));
+        assert_eq!(LocationId::parse("narnia"), None);
+
+        let json = serde_json::to_string(&leo).unwrap();
+        assert_eq!(json, "\"leo\"", "saves spell a location by its id");
+        let back: LocationId = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, leo);
+        let err = serde_json::from_str::<LocationId>("\"narnia\"").unwrap_err();
+        assert!(err.to_string().contains("unknown location id"), "{err}");
+    }
 
     /// Reference mass for tests — produces exactly 300 m/s drag loss
     const REF_MASS: f64 = 500_000.0;

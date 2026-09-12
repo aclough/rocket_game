@@ -108,9 +108,8 @@ pub fn trip_power_along(
     let sun_au_at = |loc: &str| {
         DELTA_V_MAP.location(loc).map_or(1.0, |l| l.sun_distance_au())
     };
-    let origin = path.first().copied().unwrap_or("earth_surface");
 
-    let mut rocket = design.instantiate(crate::rocket::RocketId(0), origin, payload_kg);
+    let mut rocket = design.instantiate(crate::rocket::RocketId(0), payload_kg);
     let route = crate::flight::build_route_for_rocket(path, design, &rocket, payload_kg);
 
     // Every leg costs at least the day it closes on, so a route of N legs
@@ -123,16 +122,16 @@ pub fn trip_power_along(
         // at the far end, matching where the flight loop thinks the craft
         // is when it charges each one. A zero-day leg is just the close.
         let cruise_days = leg.total_days().saturating_sub(1);
-        let cruise_au = sun_au_at(&leg.from);
+        let cruise_au = sun_au_at(leg.from.name());
         for _ in 0..cruise_days {
             day += 1;
             if rocket.run_daily_power_tick(design, cruise_au) {
                 return TripPower { flight_days, dark_on_day: Some(day) };
             }
         }
-        rocket.burn_sequential(design, leg.delta_v_cost, &leg.from);
+        rocket.burn_sequential(design, leg.delta_v_cost, leg.from.name());
         day += 1;
-        if rocket.run_daily_power_tick(design, sun_au_at(&leg.to)) {
+        if rocket.run_daily_power_tick(design, sun_au_at(leg.to.name())) {
             return TripPower { flight_days, dark_on_day: Some(day) };
         }
     }

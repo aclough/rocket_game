@@ -266,13 +266,13 @@ fn test_reactor_flaw_activates_mid_flight() {
         id: RocketDesignId(1), name: "ReactorCraft".into(),
         stage_groups: vec![vec![stage]],
     };
-    let rocket = design.instantiate(RocketId(1), "leo", 0.0);
+    let rocket = design.instantiate(RocketId(1), 0.0);
     gs.spacecraft.push(Spacecraft {
         id: SpacecraftId(1),
         name: "ReactorCraft".into(),
         rocket,
         design,
-        location: "leo".into(),
+        location: crate::location::LocationId::of("leo"),
         rocket_project_id: RocketProjectId(0),
         payloads: Vec::new(),
     });
@@ -357,10 +357,10 @@ fn test_reactor_perflight_flaw_fires_at_flight_start() {
         id: RocketDesignId(1), name: "ReactorCraft".into(),
         stage_groups: vec![vec![stage]],
     };
-    let rocket = design.instantiate(RocketId(1), "leo", 0.0);
+    let rocket = design.instantiate(RocketId(1), 0.0);
     gs.spacecraft.push(Spacecraft {
         id: SpacecraftId(1), name: "ReactorCraft".into(),
-        rocket, design, location: "leo".into(),
+        rocket, design, location: crate::location::LocationId::of("leo"),
         rocket_project_id: RocketProjectId(0),
         payloads: Vec::new(),
     });

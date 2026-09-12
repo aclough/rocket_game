@@ -75,7 +75,6 @@ pub struct BurnResult {
 pub struct Rocket {
     pub id: RocketId,
     pub design_id: RocketDesignId,
-    pub location: String,
     pub payload_mass_kg: f64,
     pub stage_states: Vec<Vec<StageState>>,
 }
@@ -243,7 +242,7 @@ impl RocketDesign {
     }
 
     /// Create a Rocket instance from this design at a given location with a payload.
-    pub fn instantiate(&self, rocket_id: RocketId, location: &str, payload_mass_kg: f64) -> Rocket {
+    pub fn instantiate(&self, rocket_id: RocketId, payload_mass_kg: f64) -> Rocket {
         let stage_states = self.stage_groups.iter()
             .map(|group| {
                 group.iter().map(|stage| {
@@ -267,7 +266,6 @@ impl RocketDesign {
         Rocket {
             id: rocket_id,
             design_id: self.id,
-            location: location.to_string(),
             payload_mass_kg,
             stage_states,
         }

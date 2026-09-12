@@ -189,6 +189,27 @@ integrates the upper stage all the way to orbital velocity instead of
 stopping when the old model went level at 11 km, so the integrator does
 more steps. Its cost is the physics, not the index.)
 
+**Step 4b record.** `location::LocationId(u16)` as designed: `parse`
+(Option), `of` (panics — for ids the code names and for tests), `name`,
+`location`, `surface`, `index`; `Display` prints the id; serde writes
+and reads the id string, and an unknown id is a deserialize error
+(`location_id_round_trips_as_its_name_and_rejects_strangers`).
+Converted: `Flight::current_location`, `FlightLeg::{from, to}`,
+`Spacecraft::location`, `DvPlannerState::current_location` and the
+planner's `PlanAction::Leg`; the planner's undo snapshots carry the
+location the rocket used to carry. `Rocket::location` is gone and
+`RocketDesign::instantiate` lost its location argument (40 call sites,
+mostly tests). `Flight::destination()` returns the `&'static str` it
+always did, from the id. Left as strings, per 4c: contract, campaign,
+market and balance-TOML destinations, `LaunchRecord::destination`,
+`Payload::Spacecraft::deploy_at` (compared against a contract
+destination), and the `(id, display, dv)` destination lists the fly and
+planner modals build, which feed the string-taking `fly_spacecraft` /
+`launch_rocket`. Saves: the fields serialise exactly as before; the
+corpus has no flights or spacecraft in it, so the round trip is pinned
+by the unit test and `save.rs`'s docked-spacecraft test. Oracle
+byte-identical.
+
 ### Step 5 — D6: constants into `BalanceConfig`
 
 Three commits, most-tunable first, each with the test assertions that

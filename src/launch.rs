@@ -663,7 +663,7 @@ mod tests {
             .ascent.isp_fraction_by_group[0];
         assert!(frac < averaged && averaged < 1.0,
             "the climb averages the penalty: pad {frac:.4} < flown {averaged:.4} < 1");
-        let mut rocket = sim.degraded_design.instantiate(RocketId(1), "earth_surface", 0.0);
+        let mut rocket = sim.degraded_design.instantiate(RocketId(1), 0.0);
         let m0: f64 = sim.degraded_design.stage_groups.iter().flatten().map(|s| s.wet_mass_kg()).sum();
         let result = rocket.burn_sequential(&sim.degraded_design, 1_000.0, "earth_surface");
         let prop_used = 50_000.0 - rocket.stage_states[0][0].propellant_remaining_kg;

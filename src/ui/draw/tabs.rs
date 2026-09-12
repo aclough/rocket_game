@@ -634,13 +634,13 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
             let eta = flight.eta_days();
             let eta_str = if eta == 1 { "1 day".to_string() } else { format!("{} days", eta) };
             let remaining_dv = flight.rocket.remaining_delta_v(&flight.design);
-            let current_loc = contract::destination_display_name(&flight.current_location);
+            let current_loc = contract::destination_display_name(flight.current_location.name());
 
             // First line: rocket name, phase, current → next leg, final destination
             let total_legs = flight.route.len();
             let current_leg_num = (flight.current_leg + 1).min(total_legs);
             let next_hop = flight.route.get(flight.current_leg)
-                .map(|leg| contract::destination_display_name(&leg.to));
+                .map(|leg| contract::destination_display_name(leg.to.name()));
             let phase_prefix = flight.current_phase()
                 .map(|p| format!("{}: ", p.word()))
                 .unwrap_or_default();
@@ -701,7 +701,7 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
                 let stage_mass = flight.rocket.attached_mass_kg(&flight.design);
                 let payload_mass: f64 = flight.payloads.iter().map(|p| p.mass_kg()).sum();
                 let total_mass = stage_mass + payload_mass;
-                let sun_au = DELTA_V_MAP.location(&flight.current_location)
+                let sun_au = DELTA_V_MAP.location(flight.current_location.name())
                     .map_or(1.0, |l| l.sun_distance_au());
                 let avail_power = flight.design.power_for_engines_w(sun_au);
                 let thrust = flight.design.group_effective_thrust_n(gi, avail_power);
@@ -749,7 +749,7 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
         lines.push(Line::from("  (no spacecraft)"));
     } else {
         for sc in spacecraft.iter() {
-            let loc_name = contract::destination_display_name(&sc.location);
+            let loc_name = contract::destination_display_name(sc.location.name());
             let dv = sc.remaining_delta_v();
             let mut spans = vec![
                 Span::styled("  ◆ ", Style::default().fg(Color::Green)),
@@ -798,7 +798,7 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
                 let stage_mass = sc.rocket.attached_mass_kg(&sc.design);
                 let payload_mass: f64 = sc.payloads.iter().map(|p| p.mass_kg()).sum();
                 let total_mass = stage_mass + payload_mass;
-                let sun_au = DELTA_V_MAP.location(&sc.location)
+                let sun_au = DELTA_V_MAP.location(sc.location.name())
                     .map_or(1.0, |l| l.sun_distance_au());
                 let avail_power = sc.design.power_for_engines_w(sun_au);
                 let thrust = sc.design.group_effective_thrust_n(gi, avail_power);

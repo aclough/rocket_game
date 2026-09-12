@@ -368,7 +368,7 @@ mod tests {
             "and that mass reaches the design's totals",
         );
 
-        let mut rocket = design.instantiate(RocketId(1), "leo", 1000.0);
+        let mut rocket = design.instantiate(RocketId(1), 1000.0);
         assert!(
             !rocket.run_daily_power_tick(&design, 1.0),
             "the first day runs on the reserve",
@@ -383,7 +383,7 @@ mod tests {
     fn solar_panel_keeps_battery_topped_up_at_earth() {
         // A panel sized comfortably above housekeeping recharges battery.
         let design = powered_design(2000.0, 1.0);
-        let mut rocket = design.instantiate(RocketId(1), "leo", 0.0);
+        let mut rocket = design.instantiate(RocketId(1), 0.0);
         // Drain the battery a bit, then tick.
         rocket.stage_states[0][0].battery_kwd_remaining = 0.5;
         let supply = rocket.total_power_supply_w(&design, 1.0);
@@ -401,7 +401,7 @@ mod tests {
         // (Jupiter-ish). Panel output ≪ housekeeping → battery drains
         // each day; eventually empty → brownout.
         let design = powered_design(1000.0, 1.0);
-        let mut rocket = design.instantiate(RocketId(1), "leo", 0.0);
+        let mut rocket = design.instantiate(RocketId(1), 0.0);
         let mut browned_out = false;
         for _ in 0..100 {
             if rocket.run_daily_power_tick(&design, 5.0) {
@@ -434,7 +434,7 @@ mod tests {
             id: RocketDesignId(1), name: "Probe".into(),
             stage_groups: vec![vec![s1]],
         };
-        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 0.0);
+        let mut rocket = design.instantiate(RocketId(1), 0.0);
         for _ in 0..1000 {
             assert!(!rocket.run_daily_power_tick(&design, 30.0)); // way out
         }
@@ -552,7 +552,7 @@ mod tests {
         // No solar/RTG → free supply is 0 → fuel cell must cover the
         // housekeeping demand by burning propellant.
         let design = fuel_celled_hydrolox_stage(1_000.0, 5_000.0);
-        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 0.0);
+        let mut rocket = design.instantiate(RocketId(1), 0.0);
         let prop_before = rocket.stage_states[0][0].propellant_remaining_kg;
         let brownout = rocket.run_daily_power_tick(&design, 1.0);
         assert!(!brownout, "fuel cell should cover housekeeping");
@@ -581,7 +581,7 @@ mod tests {
             id: RocketDesignId(1), name: "IonCell".into(),
             stage_groups: vec![vec![stage]],
         };
-        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 0.0);
+        let mut rocket = design.instantiate(RocketId(1), 0.0);
         let prop_before = rocket.stage_states[0][0].propellant_remaining_kg;
         let brownout = rocket.run_daily_power_tick(&design, 1.0);
         assert!(brownout, "fuel cell shouldn't run on xenon → brownout");
@@ -594,7 +594,7 @@ mod tests {
     fn fuel_cell_with_empty_propellant_browns_out() {
         // Start with the stage's propellant near zero. Cell can't run.
         let design = fuel_celled_hydrolox_stage(1_000.0, 0.001);
-        let mut rocket = design.instantiate(RocketId(1), "earth_surface", 0.0);
+        let mut rocket = design.instantiate(RocketId(1), 0.0);
         let brownout = rocket.run_daily_power_tick(&design, 1.0);
         assert!(brownout, "no propellant → fuel cell idle → brownout");
     }

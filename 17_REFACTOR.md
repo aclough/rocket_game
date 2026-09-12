@@ -349,7 +349,7 @@ opportunity in the codebase.
   with every stage attached.
 - **Size/risk:** small / low.
 
-### D3. `location.rs`: string keys, linear scans, id parsing
+### ✅ D3. `location.rs`: string keys, linear scans, id parsing
 - **Where:** `DeltaVMap::earth_moon()` is 195 lines of data via
   builder helpers (fine as code, wrong file). `location()`,
   `transfer()`, `transfers_from()` are linear scans over `&'static str`;

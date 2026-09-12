@@ -79,7 +79,7 @@ impl GameState {
                 .design.clone();
             let rocket_id = crate::rocket::RocketId(self.next_rocket_id);
             self.next_rocket_id += 1;
-            let rocket = design.instantiate(rocket_id, "earth_surface", 0.0);
+            let rocket = design.instantiate(rocket_id, 0.0);
             payloads.push(Payload::Spacecraft {
                 deploy_at: Some(destination.clone()),
                 design,
@@ -225,9 +225,7 @@ impl GameState {
             match path {
                 Some((path, _)) => {
                     let sim_rocket = sim.degraded_design.instantiate(
-                        crate::rocket::RocketId(0),
-                        "earth_surface",
-                        total_payload_kg,
+                        crate::rocket::RocketId(0), total_payload_kg,
                     );
                     crate::flight::build_route_for_rocket(
                         &path, &sim.degraded_design, &sim_rocket, total_payload_kg,
@@ -244,7 +242,7 @@ impl GameState {
         let rocket_instance_id = RocketId(self.next_rocket_id);
         self.next_rocket_id += 1;
         let rocket_instance = sim.degraded_design.instantiate(
-            rocket_instance_id, "earth_surface", total_payload_kg,
+            rocket_instance_id, total_payload_kg,
         );
 
         let leg_days = route.first().map(|l| l.total_days()).unwrap_or(0);
@@ -261,7 +259,7 @@ impl GameState {
             design: sim.degraded_design,
             rocket: rocket_instance,
             payloads,
-            current_location: "earth_surface".to_string(),
+            current_location: crate::location::LocationId::of("earth_surface"),
             route,
             current_leg: 0,
             leg_days_remaining: leg_days,
@@ -316,7 +314,7 @@ impl GameState {
         ended.sort_by_key(|&(i, _)| std::cmp::Reverse(i));
         for (i, end) in ended {
             let flight = self.active_flights.remove(i);
-            let location = crate::contract::destination_display_name(&flight.current_location)
+            let location = crate::contract::destination_display_name(flight.current_location.name())
                 .to_string();
             match end {
                 FlightEnd::Arrived => {
@@ -548,7 +546,7 @@ impl GameState {
                 name: rocket_name,
                 rocket: rocket_instance,
                 design: design_clone,
-                location: dest_for_spacecraft,
+                location: crate::location::LocationId::of(&dest_for_spacecraft),
                 rocket_project_id: flight.rocket_project_id,
                 payloads: remaining_payloads,
             });
@@ -571,7 +569,7 @@ impl GameState {
                     name,
                     rocket,
                     design,
-                    location: destination.clone(),
+                    location: crate::location::LocationId::of(&destination),
                     rocket_project_id,
                     payloads: nested_payloads,
                 });
@@ -600,7 +598,7 @@ impl GameState {
         // Refuse the flight if the active group's electric engines
         // can't produce thrust at the spacecraft's current location.
         let sun_au_at_takeoff = crate::location::DELTA_V_MAP
-            .location(&sc.location)
+            .location(sc.location.name())
             .map_or(1.0, |l| l.sun_distance_au());
         let avail_power = sc.design.power_for_engines_w(sun_au_at_takeoff);
         let first_group_thrust = sc.design
@@ -612,7 +610,7 @@ impl GameState {
 
         let path = crate::location::DELTA_V_MAP
             .shortest_path_for_rocket(
-                &sc.location, destination, &sc.design, payload_mass,
+                sc.location.name(), destination, &sc.design, payload_mass,
             );
         let route = match path {
             Some((path, _)) => crate::flight::build_route_for_rocket(
@@ -682,7 +680,7 @@ impl GameState {
         // the larger's index has shifted down by one.
         let small = self.spacecraft.remove(small_idx);
         let adjusted_large = if small_idx < large_idx { large_idx - 1 } else { large_idx };
-        let location = small.location.clone();
+        let location = small.location;
         let small_name = small.name.clone();
         let large_name = self.spacecraft[adjusted_large].name.clone();
 
@@ -699,7 +697,7 @@ impl GameState {
         let evt = GameEvent::SpacecraftDocked {
             small: small_name,
             large: large_name,
-            location: crate::contract::destination_display_name(&location).to_string(),
+            location: crate::contract::destination_display_name(location.name()).to_string(),
         };
         self.log(evt);
         true
@@ -717,7 +715,7 @@ impl GameState {
         );
         if !is_spacecraft { return false; }
 
-        let location = self.spacecraft[carrier_idx].location.clone();
+        let location = self.spacecraft[carrier_idx].location;
         let carrier_name = self.spacecraft[carrier_idx].name.clone();
         let payload = self.spacecraft[carrier_idx].payloads.remove(payload_idx);
         let crate::flight::Payload::Spacecraft {
@@ -731,7 +729,7 @@ impl GameState {
         self.next_rocket_id += 1;
         self.spacecraft.push(Spacecraft {
             id: sc_id, name, rocket, design,
-            location: location.clone(),
+            location,
             rocket_project_id,
             payloads: nested_payloads,
         });
@@ -739,7 +737,7 @@ impl GameState {
         let evt = GameEvent::SpacecraftUndocked {
             payload: payload_name,
             carrier: carrier_name,
-            location: crate::contract::destination_display_name(&location).to_string(),
+            location: crate::contract::destination_display_name(location.name()).to_string(),
         };
         self.log(evt);
         true
@@ -763,7 +761,7 @@ impl GameState {
         let mut browned_out: Vec<usize> = Vec::new();
         for (i, sc) in self.spacecraft.iter_mut().enumerate() {
             let sun_au = crate::location::DELTA_V_MAP
-                .location(&sc.location)
+                .location(sc.location.name())
                 .map_or(1.0, |l| l.sun_distance_au());
             if sc.rocket.run_daily_power_tick(&sc.design, sun_au) {
                 browned_out.push(i);
@@ -773,7 +771,7 @@ impl GameState {
             let sc = self.spacecraft.remove(i);
             let evt = GameEvent::PowerLost {
                 rocket_name: sc.name,
-                location: crate::contract::destination_display_name(&sc.location)
+                location: crate::contract::destination_display_name(sc.location.name())
                     .to_string(),
             };
             self.emit(events, evt);
@@ -951,18 +949,17 @@ fn tick_flight(
 
     if flight.leg_days_remaining == 0 {
         let leg = flight.route.get(flight.current_leg)
-            .map(|l| (l.delta_v_cost, l.from.clone(), l.to.clone()));
+            .map(|l| (l.delta_v_cost, l.from, l.to));
         if let Some((dv_cost, from, to)) = leg {
             // Leg complete — consume propellant for this leg.
-            let burn_result = flight.rocket.burn_sequential(&flight.design, dv_cost, &from);
-            flight.current_location = to.clone();
-            flight.rocket.location = to;
+            let burn_result = flight.rocket.burn_sequential(&flight.design, dv_cost, from.name());
+            flight.current_location = to;
 
             // Flow separation on an atmospheric leg, at pad pressure: only
             // the first burned group faces it; upper groups fire at
             // altitude, and a group already checked on the pad isn't
             // checked again.
-            let ambient = crate::location::DELTA_V_MAP.surface_properties(&from)
+            let ambient = crate::location::DELTA_V_MAP.surface_properties(from.name())
                 .filter(|p| p.has_atmosphere)
                 .map_or(0.0, |p| p.ambient_pressure_pa);
             if ambient > 0.0 {
@@ -1048,13 +1045,13 @@ fn tick_flight(
     // its default battery, so nothing is exempt. Runs last, so a leg
     // completed this tick is charged at the location it *reached*.
     let sun_au = crate::location::DELTA_V_MAP
-        .location(&flight.current_location)
+        .location(flight.current_location.name())
         .map_or(1.0, |l| l.sun_distance_au());
     if flight.rocket.run_daily_power_tick(&flight.design, sun_au) {
         flight.status = FlightStatus::Stranded;
         events.push(GameEvent::PowerLost {
             rocket_name: flight.rocket_name.clone(),
-            location: crate::contract::destination_display_name(&flight.current_location).to_string(),
+            location: crate::contract::destination_display_name(flight.current_location.name()).to_string(),
         });
         return Some(FlightEnd::Stranded);
     }
