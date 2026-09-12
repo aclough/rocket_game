@@ -127,6 +127,68 @@ wrong functions were untangled on the way. Oracle byte-identical.
   as before, which insertion-order adjacency guarantees. Measure with
   `compute_timing` (today: `compute` 28 µs, `max_payload_to` 2.8 ms).
 
+**Step 4 staging (after your Q4 answer).** The `LocationId` newtype
+touches every struct that holds a location string and the save format,
+so step 4 lands in parts, each oracle-identical:
+
+- **4a — the index.** `DeltaVMap::from_parts(locations, transfers)`
+  builds the id → index map, the adjacency lists (transfer indices per
+  origin, insertion order, so equal-cost ties resolve as before), a
+  per-goal heuristic cache (`OnceLock` slots; the graph is a static),
+  and each `Location`'s `sun_distance_au` field from the parent-body
+  table and the `_transfer`/`_escape` rule, once. `location()`,
+  `transfer()`, `transfers_from()` keep their signatures and become
+  O(1)/O(degree); one Dijkstra body with an edge-cost closure serves
+  `shortest_path` and `shortest_path_constrained`; the three heap-state
+  structs become one `SearchState` plus the A*'s own.
+- **4b — `LocationId` on the vehicle side.** The newtype design, for
+  your check before it is built:
+  `pub struct LocationId(u16)` — an index into `DELTA_V_MAP`, `Copy`,
+  `Eq`, `Hash`, `Display` (the id string), serialised **as the id
+  string** so saves stay readable and don't depend on table order;
+  loading an unknown id is a save error, not a silent default.
+  `LocationId::parse(&str) -> Option<LocationId>`, `id.name() ->
+  &'static str`, `id.location() -> &Location`,
+  `id.surface() -> Option<&SurfaceProperties>`. Fields converted:
+  `Flight::current_location`, `FlightLeg::{from, to}`,
+  `Spacecraft::location`, `DvPlannerState::current_location`; the map
+  API gains `LocationId` overloads and the string ones stay for the
+  content-data callers. `Rocket::location` is **dropped**: it is
+  written in two places and read in one (the planner modal copying it
+  back to the state it just set it from), and the owner — flight,
+  spacecraft, planner state — is the source of truth (A-section rule).
+- **4c — content data**, later and only if wanted: `Contract::destination`,
+  `Campaign::destination`, `MarketDestination::location_id`,
+  `DestinationCapability::location_id` (balance TOML),
+  `LaunchRecord::destination`. These are authored identifiers that
+  live in TOML and the archetype literals; converting them means
+  parsing at load in every one of those places for little gain.
+  Proposed: leave as strings.
+
+USER:
+
+**Step 4a record.** `DeltaVMap::from_parts` derives the id → index
+map, the adjacency lists and each location's `sun_distance_au` (the
+suffix rule now runs once, at construction); `index_of`, `location`,
+`transfer` and `transfers_from` are O(1)/O(degree) with their old
+signatures; `shortest_path` and `shortest_path_constrained` share one
+`dijkstra` with an edge-cost closure; `SearchState` replaces the two
+identical heap wrappers (the A* keeps its own richer state); the A*
+heuristic is computed once per goal into a `OnceLock` slot on the map
+(`heuristic_to`). Oracle byte-identical — ties resolve as before
+because adjacency keeps insertion order.
+
+| | Before 4a (D7 commit) | After 4a |
+|---|---|---|
+| `DesignPerformance::compute` | 51.7 µs | 51.7 µs (untouched) |
+| `max_payload_to` | 4.18 ms | 0.92 ms |
+| 200-seed × 8-year simulate | 7.8 s | 3.6 s |
+
+(`compute` itself went 28 → 52 µs at D7, not here: the pitch program
+integrates the upper stage all the way to orbital velocity instead of
+stopping when the old model went level at 11 km, so the integrator does
+more steps. Its cost is the physics, not the index.)
+
 ### Step 5 — D6: constants into `BalanceConfig`
 
 Three commits, most-tunable first, each with the test assertions that

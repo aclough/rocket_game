@@ -13,7 +13,7 @@ fn loc_orbit(
 ) -> Location {
     Location {
         id, display_name: display, short_name: short,
-        location_type: LocationType::Orbit, parent_body: parent,
+        location_type: LocationType::Orbit, parent_body: parent, sun_distance_au: 0.0,
     }
 }
 
@@ -22,7 +22,7 @@ fn loc_lagrange(
 ) -> Location {
     Location {
         id, display_name: display, short_name: short,
-        location_type: LocationType::LagrangePoint, parent_body: parent,
+        location_type: LocationType::LagrangePoint, parent_body: parent, sun_distance_au: 0.0,
     }
 }
 
@@ -39,6 +39,7 @@ fn loc_surface(
             ambient_pressure_pa: ambient, scale_height_m: scale_height,
         }),
         parent_body: parent,
+        sun_distance_au: 0.0,
     }
 }
 
@@ -321,9 +322,6 @@ impl DeltaVMap {
         add_ground_pair(&mut transfers, "deimos_surface", "deimos_orbit",
             4.0, 0, false, None);
 
-        DeltaVMap {
-            locations,
-            transfers,
-        }
+        DeltaVMap::from_parts(locations, transfers)
     }
 }

@@ -12,9 +12,9 @@ pub use ascent::{
     LEGACY_GRAVITY_TURN, PITCH_KICK_RAD, PITCH_SCHEDULE_PRESSURE_PA,
 };
 
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::cmp::Ordering;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 /// Physical properties of a surface (planet or moon)
 #[derive(Debug, Clone)]
@@ -78,6 +78,10 @@ pub struct Location {
     pub short_name: &'static str,
     pub location_type: LocationType,
     pub parent_body: &'static str,
+    /// Mean heliocentric distance in AU, set once by
+    /// [`DeltaVMap::from_parts`] from the parent-body table (see
+    /// [`Location::sun_distance_au`]). Builders leave it 0.
+    pub sun_distance_au: f64,
 }
 
 /// Mean heliocentric distance in AU for a parent body. Used for
@@ -104,12 +108,17 @@ pub fn parent_body_sun_distance_au(parent: &str) -> f64 {
 }
 
 impl Location {
-    /// Distance from the Sun in AU. Heliocentric "X_transfer" and
-    /// "X_escape" nodes (parent_body = "sun") look up X's heliocentric
+    /// Distance from the Sun in AU, for solar flux at this node.
+    pub fn sun_distance_au(&self) -> f64 {
+        self.sun_distance_au
+    }
+
+    /// The rule the field is filled from. Heliocentric "X_transfer" and
+    /// "X_escape" nodes (parent_body = "sun") take X's heliocentric
     /// distance so the burn at that node sees the right solar flux —
     /// e.g. `mars_transfer` reports 1.52 AU even though it's filed
     /// under the Sun. Everything else uses its parent body.
-    pub fn sun_distance_au(&self) -> f64 {
+    fn derive_sun_distance_au(&self) -> f64 {
         if self.parent_body == "sun" {
             if let Some(prefix) = self.id.strip_suffix("_transfer") {
                 let d = parent_body_sun_distance_au(prefix);
@@ -182,34 +191,45 @@ impl Transfer {
     }
 }
 
-/// The delta-v map: a directed graph of locations connected by transfers
+/// The delta-v map: a directed graph of locations connected by transfers.
+///
+/// Built once by [`DeltaVMap::from_parts`], which derives everything the
+/// searches need from the two lists (17_3_PHYSICS.md D3): an id → index
+/// map, adjacency lists in transfer insertion order (so equal-cost
+/// paths tie-break as they always did), and a slot per goal for the A*
+/// heuristic, filled on first use.
 pub struct DeltaVMap {
     locations: Vec<Location>,
     transfers: Vec<Transfer>,
+    index: HashMap<&'static str, usize>,
+    /// Indices into `transfers` leaving each location, insertion order.
+    adjacency: Vec<Vec<usize>>,
+    /// `heuristic_to(goal)` results, computed once per goal.
+    heuristics: Vec<OnceLock<Vec<f64>>>,
 }
 
-/// Helper for Dijkstra's algorithm
+/// A node on a search heap, cheapest first.
 #[derive(Debug)]
-struct DijkstraState {
-    cost: f64,
-    node_index: usize,
+pub(crate) struct SearchState {
+    pub cost: f64,
+    pub node: usize,
 }
 
-impl PartialEq for DijkstraState {
+impl PartialEq for SearchState {
     fn eq(&self, other: &Self) -> bool {
-        self.cost == other.cost && self.node_index == other.node_index
+        self.cost == other.cost && self.node == other.node
     }
 }
 
-impl Eq for DijkstraState {}
+impl Eq for SearchState {}
 
-impl PartialOrd for DijkstraState {
+impl PartialOrd for SearchState {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for DijkstraState {
+impl Ord for SearchState {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse ordering for min-heap
         other.cost.partial_cmp(&self.cost).unwrap_or(Ordering::Equal)
@@ -217,9 +237,34 @@ impl Ord for DijkstraState {
 }
 
 impl DeltaVMap {
+    /// Assemble the map from its data, deriving the index, the adjacency
+    /// lists, the heuristic slots and each location's solar distance.
+    pub(crate) fn from_parts(mut locations: Vec<Location>, transfers: Vec<Transfer>) -> Self {
+        for loc in &mut locations {
+            loc.sun_distance_au = loc.derive_sun_distance_au();
+        }
+        let index: HashMap<&'static str, usize> =
+            locations.iter().enumerate().map(|(i, l)| (l.id, i)).collect();
+        assert_eq!(index.len(), locations.len(), "location ids must be unique");
+        let mut adjacency = vec![Vec::new(); locations.len()];
+        for (ti, t) in transfers.iter().enumerate() {
+            let from = *index.get(t.from)
+                .unwrap_or_else(|| panic!("transfer from unknown location {}", t.from));
+            assert!(index.contains_key(t.to), "transfer to unknown location {}", t.to);
+            adjacency[from].push(ti);
+        }
+        let heuristics = (0..locations.len()).map(|_| OnceLock::new()).collect();
+        DeltaVMap { locations, transfers, index, adjacency, heuristics }
+    }
+
+    /// The index of a location id, as `location_at` counts.
+    pub fn index_of(&self, id: &str) -> Option<usize> {
+        self.index.get(id).copied()
+    }
+
     /// Look up a location by ID
     pub fn location(&self, id: &str) -> Option<&Location> {
-        self.locations.iter().find(|l| l.id == id)
+        self.index_of(id).map(|i| &self.locations[i])
     }
 
     /// Get all locations
@@ -227,14 +272,61 @@ impl DeltaVMap {
         &self.locations
     }
 
-    /// Get all transfers originating from a location
+    /// Get all transfers originating from a location, in the order they
+    /// were added.
     pub fn transfers_from(&self, id: &str) -> Vec<&Transfer> {
-        self.transfers.iter().filter(|t| t.from == id).collect()
+        self.index_of(id)
+            .map(|i| self.adjacency[i].iter().map(|&ti| &self.transfers[ti]).collect())
+            .unwrap_or_default()
     }
 
     /// Get a direct transfer between two locations (if one exists)
     pub fn transfer(&self, from: &str, to: &str) -> Option<&Transfer> {
-        self.transfers.iter().find(|t| t.from == from && t.to == to)
+        let i = self.index_of(from)?;
+        self.adjacency[i].iter().map(|&ti| &self.transfers[ti]).find(|t| t.to == to)
+    }
+
+    /// Lower-bound delta-v from every node to `goal_idx`, computed once
+    /// per goal: Dijkstra backwards over a best-case graph where each
+    /// transfer costs `min(delta_v, low_thrust_delta_v)` with drag
+    /// stripped (drag only adds cost). The A* heuristic.
+    pub(crate) fn heuristic_to(&self, goal_idx: usize) -> &[f64] {
+        self.heuristics[goal_idx].get_or_init(|| self.compute_heuristic(goal_idx))
+    }
+
+    fn compute_heuristic(&self, goal_idx: usize) -> Vec<f64> {
+        let n = self.locations.len();
+        let mut h = vec![f64::INFINITY; n];
+        h[goal_idx] = 0.0;
+
+        // Reverse adjacency: for each node `to`, incoming `(from, cheapest_dv)`,
+        // one entry per (from, to) pair — the first transfer between them,
+        // as `transfer()` answers.
+        let mut incoming: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+        for (to_idx, to) in self.locations.iter().enumerate() {
+            for (from_idx, from) in self.locations.iter().enumerate() {
+                if let Some(t) = self.transfer(from.id, to.id) {
+                    let cheap = t.low_thrust_delta_v
+                        .map(|lt| lt.min(t.delta_v))
+                        .unwrap_or(t.delta_v);
+                    incoming[to_idx].push((from_idx, cheap));
+                }
+            }
+        }
+
+        let mut heap = BinaryHeap::new();
+        heap.push(SearchState { cost: 0.0, node: goal_idx });
+        while let Some(SearchState { cost, node }) = heap.pop() {
+            if cost > h[node] { continue; }
+            for &(from_idx, edge) in &incoming[node] {
+                let next = cost + edge;
+                if next < h[from_idx] {
+                    h[from_idx] = next;
+                    heap.push(SearchState { cost: next, node: from_idx });
+                }
+            }
+        }
+        h
     }
 
     /// Get surface properties for a location (None if not a surface)
@@ -249,60 +341,7 @@ impl DeltaVMap {
     /// `rocket_mass_kg` is used to compute atmospheric drag losses.
     /// Returns (path_of_location_ids, total_cost) or None if no path exists.
     pub fn shortest_path(&self, from: &str, to: &str, rocket_mass_kg: f64) -> Option<(Vec<&'static str>, f64)> {
-        let from_idx = self.locations.iter().position(|l| l.id == from)?;
-        let to_idx = self.locations.iter().position(|l| l.id == to)?;
-
-        let n = self.locations.len();
-        let mut dist = vec![f64::INFINITY; n];
-        let mut prev = vec![None; n];
-        let mut heap = BinaryHeap::new();
-
-        dist[from_idx] = 0.0;
-        heap.push(DijkstraState {
-            cost: 0.0,
-            node_index: from_idx,
-        });
-
-        while let Some(DijkstraState { cost, node_index }) = heap.pop() {
-            if node_index == to_idx {
-                break;
-            }
-
-            if cost > dist[node_index] {
-                continue;
-            }
-
-            let loc_id = self.locations[node_index].id;
-            for transfer in self.transfers_from(loc_id) {
-                if let Some(next_idx) = self.locations.iter().position(|l| l.id == transfer.to) {
-                    let next_cost = cost + transfer.cost_for_mass(rocket_mass_kg);
-                    if next_cost < dist[next_idx] {
-                        dist[next_idx] = next_cost;
-                        prev[next_idx] = Some(node_index);
-                        heap.push(DijkstraState {
-                            cost: next_cost,
-                            node_index: next_idx,
-                        });
-                    }
-                }
-            }
-        }
-
-        if dist[to_idx].is_infinite() {
-            return None;
-        }
-
-        // Reconstruct path
-        let mut path = Vec::new();
-        let mut current = to_idx;
-        while let Some(p) = prev[current] {
-            path.push(self.locations[current].id);
-            current = p;
-        }
-        path.push(self.locations[from_idx].id);
-        path.reverse();
-
-        Some((path, dist[to_idx]))
+        self.dijkstra(from, to, |t| Some(t.cost_for_mass(rocket_mass_kg)))
     }
 
     /// Find shortest path with engine capability constraint.
@@ -311,8 +350,17 @@ impl DeltaVMap {
     pub fn shortest_path_constrained(
         &self, from: &str, to: &str, rocket_mass_kg: f64, low_thrust: bool,
     ) -> Option<(Vec<&'static str>, f64)> {
-        let from_idx = self.locations.iter().position(|l| l.id == from)?;
-        let to_idx = self.locations.iter().position(|l| l.id == to)?;
+        self.dijkstra(from, to, |t| t.delta_v_for(low_thrust, rocket_mass_kg))
+    }
+
+    /// Dijkstra over the graph with `edge_cost` pricing each transfer
+    /// (`None` = not usable). Returns the path as location ids and its
+    /// cost, or `None` when the goal is unreachable.
+    fn dijkstra(
+        &self, from: &str, to: &str, edge_cost: impl Fn(&Transfer) -> Option<f64>,
+    ) -> Option<(Vec<&'static str>, f64)> {
+        let from_idx = self.index_of(from)?;
+        let to_idx = self.index_of(to)?;
 
         let n = self.locations.len();
         let mut dist = vec![f64::INFINITY; n];
@@ -320,23 +368,21 @@ impl DeltaVMap {
         let mut heap = BinaryHeap::new();
 
         dist[from_idx] = 0.0;
-        heap.push(DijkstraState { cost: 0.0, node_index: from_idx });
+        heap.push(SearchState { cost: 0.0, node: from_idx });
 
-        while let Some(DijkstraState { cost, node_index }) = heap.pop() {
-            if node_index == to_idx { break; }
-            if cost > dist[node_index] { continue; }
+        while let Some(SearchState { cost, node }) = heap.pop() {
+            if node == to_idx { break; }
+            if cost > dist[node] { continue; }
 
-            let loc_id = self.locations[node_index].id;
-            for transfer in self.transfers_from(loc_id) {
-                if let Some(dv) = transfer.delta_v_for(low_thrust, rocket_mass_kg) {
-                    if let Some(next_idx) = self.locations.iter().position(|l| l.id == transfer.to) {
-                        let next_cost = cost + dv;
-                        if next_cost < dist[next_idx] {
-                            dist[next_idx] = next_cost;
-                            prev[next_idx] = Some(node_index);
-                            heap.push(DijkstraState { cost: next_cost, node_index: next_idx });
-                        }
-                    }
+            for &ti in &self.adjacency[node] {
+                let transfer = &self.transfers[ti];
+                let Some(dv) = edge_cost(transfer) else { continue };
+                let Some(next_idx) = self.index_of(transfer.to) else { continue };
+                let next_cost = cost + dv;
+                if next_cost < dist[next_idx] {
+                    dist[next_idx] = next_cost;
+                    prev[next_idx] = Some(node);
+                    heap.push(SearchState { cost: next_cost, node: next_idx });
                 }
             }
         }

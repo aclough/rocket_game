@@ -131,64 +131,6 @@ fn try_class(
 
 // ─── Heuristic precomputation: reverse Dijkstra from goal ─────────────
 
-#[derive(Debug)]
-struct DijkState {
-    cost: f64,
-    node: usize,
-}
-impl PartialEq for DijkState {
-    fn eq(&self, o: &Self) -> bool { self.cost == o.cost && self.node == o.node }
-}
-impl Eq for DijkState {}
-impl PartialOrd for DijkState {
-    fn partial_cmp(&self, o: &Self) -> Option<Ordering> { Some(self.cmp(o)) }
-}
-impl Ord for DijkState {
-    fn cmp(&self, o: &Self) -> Ordering {
-        o.cost.partial_cmp(&self.cost).unwrap_or(Ordering::Equal)
-    }
-}
-
-/// Lower-bound dv from each node to `goal_idx`. Uses a "best-case" graph
-/// where each transfer's cost is `min(delta_v, low_thrust_delta_v)` with
-/// atmospheric drag stripped (drag only adds cost; atmospheric edges are
-/// surface-leaf edges anyway).
-fn compute_heuristic(map: &DeltaVMap, goal_idx: usize) -> Vec<f64> {
-    let n = map.location_count();
-    let mut h = vec![f64::INFINITY; n];
-    h[goal_idx] = 0.0;
-
-    // Reverse adjacency: for each node `to`, list incoming `(from, cheapest_dv)`.
-    let mut incoming: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
-    #[allow(clippy::needless_range_loop)] // from/to index pairs read clearer symmetric
-    for to_idx in 0..n {
-        let to_id = map.location_at(to_idx).unwrap().id;
-        for from_idx in 0..n {
-            let from_id = map.location_at(from_idx).unwrap().id;
-            if let Some(t) = map.transfer(from_id, to_id) {
-                let cheap = t.low_thrust_delta_v
-                    .map(|lt| lt.min(t.delta_v))
-                    .unwrap_or(t.delta_v);
-                incoming[to_idx].push((from_idx, cheap));
-            }
-        }
-    }
-
-    let mut heap = BinaryHeap::new();
-    heap.push(DijkState { cost: 0.0, node: goal_idx });
-    while let Some(DijkState { cost, node }) = heap.pop() {
-        if cost > h[node] { continue; }
-        for &(from_idx, edge) in &incoming[node] {
-            let next = cost + edge;
-            if next < h[from_idx] {
-                h[from_idx] = next;
-                heap.push(DijkState { cost: next, node: from_idx });
-            }
-        }
-    }
-    h
-}
-
 // ─── A* search ───────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -355,10 +297,10 @@ impl DeltaVMap {
         initial_dv_left: f64,
         perf: &DesignPerformance,
     ) -> Option<(Vec<&'static str>, f64)> {
-        let from_idx = self.locations().iter().position(|l| l.id == from)?;
-        let to_idx = self.locations().iter().position(|l| l.id == to)?;
+        let from_idx = self.index_of(from)?;
+        let to_idx = self.index_of(to)?;
 
-        let h = compute_heuristic(self, to_idx);
+        let h = self.heuristic_to(to_idx);
         if h[from_idx].is_infinite() {
             return None;
         }
@@ -412,10 +354,7 @@ impl DeltaVMap {
 
             let loc_id = self.location_at(state.loc_idx).unwrap().id;
             for transfer in self.transfers_from(loc_id) {
-                let next_idx = match self.locations().iter().position(|l| l.id == transfer.to) {
-                    Some(i) => i,
-                    None => continue,
-                };
+                let Some(next_idx) = self.index_of(transfer.to) else { continue };
 
                 for class in [ThrustClass::HighThrust, ThrustClass::LowThrust] {
                     let outcome = match try_class(
@@ -606,9 +545,8 @@ mod tests {
         // ≤ relation against `shortest_path` (which uses real edge dvs and
         // includes drag), ensuring admissibility against the planner's
         // actual cost function.
-        let goal_idx = DELTA_V_MAP.locations().iter()
-            .position(|l| l.id == "lunar_surface").unwrap();
-        let h = compute_heuristic(&DELTA_V_MAP, goal_idx);
+        let goal_idx = DELTA_V_MAP.index_of("lunar_surface").unwrap();
+        let h = DELTA_V_MAP.heuristic_to(goal_idx);
         for (i, loc) in DELTA_V_MAP.locations().iter().enumerate() {
             if let Some((_, true_dv)) = DELTA_V_MAP.shortest_path(
                 loc.id, "lunar_surface", 500_000.0,
