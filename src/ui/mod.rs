@@ -1,3 +1,4 @@
+pub mod cursor;
 pub mod draw;
 pub mod keys;
 pub mod next_steps;
@@ -9,6 +10,8 @@ mod planner;
 mod tabs;
 #[cfg(test)]
 mod render_smoke;
+
+use cursor::{clamp_cursor, cursor_down, cursor_up};
 
 pub use designer::{DesignerMode, RocketDesignerState};
 pub use planner::{DvPlannerState, PlanAction, PlannerSetupField, PlannerSetupState, PlannerSource};
@@ -575,6 +578,27 @@ impl App {
         }
     }
 
+    /// How many rows the content pane of `tab` lists — the bound the
+    /// cursor moves inside. Zero for the tabs that scroll text instead.
+    /// Each list tab's rows come from the same collection its pane
+    /// draws, in the same order.
+    pub fn list_len_for(&self, tab: Tab) -> usize {
+        let company = &self.game.player_company;
+        match tab {
+            // The visible (non-Proposed) count: selected_item indexes
+            // the displayed list.
+            Tab::Engines => company.visible_engine_projects().count(),
+            Tab::Reactors => company.visible_reactor_projects().count(),
+            Tab::Rockets => company.visible_rocket_projects().count(),
+            // The cursor walks the drawn tree, which holds one row per
+            // order — same length, different order.
+            Tab::Manufacturing => company.manufacturing.orders.len(),
+            Tab::Contracts => self.game.available_contracts.len() + company.active_contracts.len(),
+            Tab::Launches => company.manufacturing.inventory.rockets.len(),
+            _ => 0,
+        }
+    }
+
     fn handle_up(&mut self) {
         match self.focused_pane {
             FocusedPane::Sidebar => {
@@ -585,13 +609,10 @@ impl App {
                 }
             }
             FocusedPane::Content => {
-                match self.current_tab() {
-                    tab if tab.is_list_tab() => {
-                        self.selected_item = self.selected_item.saturating_sub(1);
-                    }
-                    _ => {
-                        self.content_scroll = self.content_scroll.saturating_sub(1);
-                    }
+                if self.current_tab().is_list_tab() {
+                    cursor_up(&mut self.selected_item);
+                } else {
+                    self.content_scroll = self.content_scroll.saturating_sub(1);
                 }
             }
         }
@@ -607,55 +628,12 @@ impl App {
                 }
             }
             FocusedPane::Content => {
-                match self.current_tab() {
-                    Tab::Engines => {
-                        // Bound by the visible (non-Proposed) count, since
-                        // selected_item indexes the displayed list.
-                        let max = self.game.player_company.visible_engine_projects()
-                            .count().saturating_sub(1);
-                        if self.selected_item < max {
-                            self.selected_item += 1;
-                        }
-                    }
-                    Tab::Reactors => {
-                        let max = self.game.player_company.visible_reactor_projects()
-                            .count().saturating_sub(1);
-                        if self.selected_item < max {
-                            self.selected_item += 1;
-                        }
-                    }
-                    Tab::Rockets => {
-                        let max = self.game.player_company.visible_rocket_projects()
-                            .count().saturating_sub(1);
-                        if self.selected_item < max {
-                            self.selected_item += 1;
-                        }
-                    }
-                    Tab::Manufacturing => {
-                        // The cursor walks the drawn tree, which holds one
-                        // row per order — same length, different order.
-                        let max = self.game.player_company.manufacturing.orders.len().saturating_sub(1);
-                        if self.selected_item < max {
-                            self.selected_item += 1;
-                        }
-                    }
-                    Tab::Contracts => {
-                        let avail = self.game.available_contracts.len();
-                        let accepted = self.game.player_company.active_contracts.len();
-                        let max = (avail + accepted).saturating_sub(1);
-                        if self.selected_item < max {
-                            self.selected_item += 1;
-                        }
-                    }
-                    Tab::Launches => {
-                        let max = self.game.player_company.manufacturing.inventory.rockets.len().saturating_sub(1);
-                        if self.selected_item < max {
-                            self.selected_item += 1;
-                        }
-                    }
-                    _ => {
-                        self.content_scroll += 1;
-                    }
+                let tab = self.current_tab();
+                if tab.is_list_tab() {
+                    let len = self.list_len_for(tab);
+                    cursor_down(&mut self.selected_item, len);
+                } else {
+                    self.content_scroll += 1;
                 }
             }
         }

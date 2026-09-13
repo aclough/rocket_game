@@ -54,9 +54,7 @@ impl App {
                         // three shouldn't move the selection at all.
                         let remaining = self.game.player_company
                             .visible_projects(target.kind()).count();
-                        if self.selected_item >= remaining {
-                            self.selected_item = remaining.saturating_sub(1);
-                        }
+                        clamp_cursor(&mut self.selected_item, remaining);
                     }
                     Err(_) => {
                         self.status_message = Some("Could not retire that design".into());
@@ -134,8 +132,8 @@ impl App {
                 let catalog_len = self.game.player_company.third_party_catalog.len();
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Up => { if *selected > 0 { *selected -= 1; } }
-                    KeyCode::Down => { if *selected + 1 < catalog_len { *selected += 1; } }
+                    KeyCode::Up => cursor_up(selected),
+                    KeyCode::Down => cursor_down(selected, catalog_len),
                     KeyCode::Enter => {
                         let idx = *selected;
                         let date = self.game.date;
@@ -181,14 +179,8 @@ impl App {
                     KeyCode::Esc | KeyCode::Char('r') | KeyCode::Char('R') => {
                         self.exit_modal();
                     }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        *selected = selected.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if *selected + 1 < market_ids.len() {
-                            *selected += 1;
-                        }
-                    }
+                    KeyCode::Up | KeyCode::Char('k') => cursor_up(selected),
+                    KeyCode::Down | KeyCode::Char('j') => cursor_down(selected, market_ids.len()),
                     KeyCode::Char(' ') | KeyCode::Enter => {
                         if let Some(&id) = market_ids.get(*selected) {
                             let rule = self.game.player_company.bid_rules
@@ -219,13 +211,8 @@ impl App {
                     KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('H') => {
                         self.exit_modal();
                     }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        *scroll = scroll.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Char('j')
-                        if *scroll + 1 < len => {
-                            *scroll += 1;
-                        }
+                    KeyCode::Up | KeyCode::Char('k') => cursor_up(scroll),
+                    KeyCode::Down | KeyCode::Char('j') => cursor_down(scroll, len),
                     _ => {}
                 }
             }
@@ -235,12 +222,8 @@ impl App {
                     KeyCode::Esc | KeyCode::Char('p') | KeyCode::Char('P') => {
                         self.exit_modal();
                     }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        *selected = selected.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') if *selected + 1 < len => {
-                        *selected += 1;
-                    }
+                    KeyCode::Up | KeyCode::Char('k') => cursor_up(selected),
+                    KeyCode::Down | KeyCode::Char('j') => cursor_down(selected, len),
                     KeyCode::Enter | KeyCode::Char('b') | KeyCode::Char('B') => {
                         let sel = *selected;
                         let Some(c) = self.game.active_campaigns.get(sel) else {
@@ -356,12 +339,8 @@ impl App {
                 let total_rows = num_contracts + num_spacecraft;
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Up => {
-                        if *cursor > 0 { *cursor -= 1; }
-                    }
-                    KeyCode::Down => {
-                        if *cursor + 1 < total_rows { *cursor += 1; }
-                    }
+                    KeyCode::Up => cursor_up(cursor),
+                    KeyCode::Down => cursor_down(cursor, total_rows),
                     KeyCode::Char(' ') => {
                         if *cursor < num_contracts {
                             contract_picks[*cursor] = !contract_picks[*cursor];
@@ -393,25 +372,13 @@ impl App {
                 }
             }
             InputMode::FlySelectSpacecraft { selected } => {
-                let selected = *selected;
                 let num_spacecraft = self.game.spacecraft.len();
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Up => {
-                        if selected > 0 {
-                            if let InputMode::FlySelectSpacecraft { selected: s } = &mut self.input_mode {
-                                *s -= 1;
-                            }
-                        }
-                    }
-                    KeyCode::Down => {
-                        if selected + 1 < num_spacecraft {
-                            if let InputMode::FlySelectSpacecraft { selected: s } = &mut self.input_mode {
-                                *s += 1;
-                            }
-                        }
-                    }
+                    KeyCode::Up => cursor_up(selected),
+                    KeyCode::Down => cursor_down(selected, num_spacecraft),
                     KeyCode::Enter => {
+                        let selected = *selected;
                         let sc = &self.game.spacecraft[selected];
                         let remaining_dv = sc.remaining_delta_v();
                         // Use the live sum of carried payload masses rather than
@@ -439,25 +406,13 @@ impl App {
             }
             InputMode::FlySelectDestination { spacecraft_index, destinations, selected, .. } => {
                 let spacecraft_index = *spacecraft_index;
-                let selected = *selected;
                 let num_destinations = destinations.len();
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Up => {
-                        if selected > 0 {
-                            if let InputMode::FlySelectDestination { selected: s, .. } = &mut self.input_mode {
-                                *s -= 1;
-                            }
-                        }
-                    }
-                    KeyCode::Down => {
-                        if selected + 1 < num_destinations {
-                            if let InputMode::FlySelectDestination { selected: s, .. } = &mut self.input_mode {
-                                *s += 1;
-                            }
-                        }
-                    }
+                    KeyCode::Up => cursor_up(selected),
+                    KeyCode::Down => cursor_down(selected, num_destinations),
                     KeyCode::Enter => {
+                        let selected = *selected;
                         if let InputMode::FlySelectDestination { destinations, .. } = &self.input_mode {
                             let dest_id = destinations[selected].0.clone();
                             self.game.fly_spacecraft(spacecraft_index, &dest_id);
@@ -469,17 +424,13 @@ impl App {
                 }
             }
             InputMode::DockSelectSmall { selected } => {
-                let selected = *selected;
                 let num = self.game.spacecraft.len();
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Up => if let InputMode::DockSelectSmall { selected: s } = &mut self.input_mode {
-                        if *s > 0 { *s -= 1; }
-                    },
-                    KeyCode::Down => if let InputMode::DockSelectSmall { selected: s } = &mut self.input_mode {
-                        if *s + 1 < num { *s += 1; }
-                    },
+                    KeyCode::Up => cursor_up(selected),
+                    KeyCode::Down => cursor_down(selected, num),
                     KeyCode::Enter => {
+                        let selected = *selected;
                         // Build candidate list: other spacecraft at the
                         // same location as the chosen "small" one.
                         let small_loc = &self.game.spacecraft[selected].location;
@@ -502,17 +453,13 @@ impl App {
             }
             InputMode::DockSelectLarge { small_idx, candidates, selected } => {
                 let small_idx = *small_idx;
-                let selected = *selected;
                 let num = candidates.len();
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Up => if let InputMode::DockSelectLarge { selected: s, .. } = &mut self.input_mode {
-                        if *s > 0 { *s -= 1; }
-                    },
-                    KeyCode::Down => if let InputMode::DockSelectLarge { selected: s, .. } = &mut self.input_mode {
-                        if *s + 1 < num { *s += 1; }
-                    },
+                    KeyCode::Up => cursor_up(selected),
+                    KeyCode::Down => cursor_down(selected, num),
                     KeyCode::Enter => {
+                        let selected = *selected;
                         let large_idx = candidates[selected];
                         if self.game.dock_spacecraft(small_idx, large_idx) {
                             self.status_message = Some("Docked".into());
@@ -525,17 +472,13 @@ impl App {
                 }
             }
             InputMode::UndockSelectCarrier { candidates, selected } => {
-                let selected = *selected;
                 let num = candidates.len();
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Up => if let InputMode::UndockSelectCarrier { selected: s, .. } = &mut self.input_mode {
-                        if *s > 0 { *s -= 1; }
-                    },
-                    KeyCode::Down => if let InputMode::UndockSelectCarrier { selected: s, .. } = &mut self.input_mode {
-                        if *s + 1 < num { *s += 1; }
-                    },
+                    KeyCode::Up => cursor_up(selected),
+                    KeyCode::Down => cursor_down(selected, num),
                     KeyCode::Enter => {
+                        let selected = *selected;
                         let carrier_idx = candidates[selected];
                         let payload_indices: Vec<usize> = self.game.spacecraft[carrier_idx]
                             .payloads.iter().enumerate()
@@ -556,17 +499,13 @@ impl App {
             }
             InputMode::UndockSelectPayload { carrier_idx, payload_indices, selected } => {
                 let carrier_idx = *carrier_idx;
-                let selected = *selected;
                 let num = payload_indices.len();
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Up => if let InputMode::UndockSelectPayload { selected: s, .. } = &mut self.input_mode {
-                        if *s > 0 { *s -= 1; }
-                    },
-                    KeyCode::Down => if let InputMode::UndockSelectPayload { selected: s, .. } = &mut self.input_mode {
-                        if *s + 1 < num { *s += 1; }
-                    },
+                    KeyCode::Up => cursor_up(selected),
+                    KeyCode::Down => cursor_down(selected, num),
                     KeyCode::Enter => {
+                        let selected = *selected;
                         let payload_idx = payload_indices[selected];
                         if self.game.undock_payload(carrier_idx, payload_idx) {
                             self.status_message = Some("Undocked".into());
@@ -590,30 +529,18 @@ impl App {
                     }
                     KeyCode::Up => {
                         match state.active_field {
-                            PlannerSetupField::Design => {
-                                if state.selected_project > 0 {
-                                    state.selected_project -= 1;
-                                }
-                            }
-                            PlannerSetupField::Location => {
-                                if state.selected_location > 0 {
-                                    state.selected_location -= 1;
-                                }
-                            }
+                            PlannerSetupField::Design => cursor_up(&mut state.selected_project),
+                            PlannerSetupField::Location => cursor_up(&mut state.selected_location),
                             PlannerSetupField::Payload => {}
                         }
                     }
                     KeyCode::Down => {
                         match state.active_field {
                             PlannerSetupField::Design => {
-                                if state.selected_project + 1 < state.eligible_projects.len() {
-                                    state.selected_project += 1;
-                                }
+                                cursor_down(&mut state.selected_project, state.eligible_projects.len());
                             }
                             PlannerSetupField::Location => {
-                                if state.selected_location + 1 < state.locations.len() {
-                                    state.selected_location += 1;
-                                }
+                                cursor_down(&mut state.selected_location, state.locations.len());
                             }
                             PlannerSetupField::Payload => {}
                         }
@@ -662,16 +589,8 @@ impl App {
                 let num_dests = state.destinations.len();
                 match key {
                     KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Up => {
-                        if state.selected > 0 {
-                            state.selected -= 1;
-                        }
-                    }
-                    KeyCode::Down => {
-                        if state.selected + 1 < num_dests {
-                            state.selected += 1;
-                        }
-                    }
+                    KeyCode::Up => cursor_up(&mut state.selected),
+                    KeyCode::Down => cursor_down(&mut state.selected, num_dests),
                     KeyCode::Enter => {
                         // Select destination — simulate the burn
                         if state.selected < num_dests {
@@ -723,9 +642,7 @@ impl App {
                                 state.current_location.name(), remaining_dv, rocket_mass,
                                 Some(&state.rocket), Some(&state.design),
                             );
-                            state.selected = state.selected.min(
-                                state.destinations.len().saturating_sub(1),
-                            );
+                            clamp_cursor(&mut state.selected, state.destinations.len());
                         }
                     }
                     KeyCode::Char('u') => {
@@ -743,9 +660,7 @@ impl App {
                                 state.current_location.name(), remaining_dv, rocket_mass,
                                 Some(&state.rocket), Some(&state.design),
                             );
-                            state.selected = state.selected.min(
-                                state.destinations.len().saturating_sub(1),
-                            );
+                            clamp_cursor(&mut state.selected, state.destinations.len());
                         }
                     }
                     _ => {}

@@ -211,11 +211,16 @@ impl App {
                 self.exit_modal();
             }
             KeyCode::Up => {
-                cursor = cursor.saturating_sub(1);
+                cursor_up(&mut cursor);
                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
             }
+            KeyCode::Enter if cursor == 0 => {
+                self.input_mode = InputMode::ReactorEditorField {
+                    project_id, cursor, field: EditorField::Name, buffer: name,
+                };
+            }
             KeyCode::Down => {
-                if cursor + 1 < ROW_COUNT { cursor += 1; }
+                cursor_down(&mut cursor, ROW_COUNT);
                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
             }
             KeyCode::Enter if cursor == 0 => {
@@ -315,11 +320,16 @@ impl App {
                 self.exit_modal();
             }
             KeyCode::Up => {
-                cursor = cursor.saturating_sub(1);
+                cursor_up(&mut cursor);
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
+            KeyCode::Enter if cursor == 0 => {
+                self.input_mode = InputMode::EngineEditorField {
+                    project_id, cursor, field: EditorField::Name, buffer: name, state,
+                };
+            }
             KeyCode::Down => {
-                if cursor + 1 < row_count { cursor += 1; }
+                cursor_down(&mut cursor, row_count);
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Enter if cursor == 0 => {
@@ -436,12 +446,8 @@ impl App {
                 self.input_mode = InputMode::RocketDesigner { state };
                 return;
             }
-            KeyCode::Up => {
-                cursor = cursor.saturating_sub(1);
-            }
-            KeyCode::Down => {
-                if cursor + 1 < n_total { cursor += 1; }
-            }
+            KeyCode::Up => cursor_up(&mut cursor),
+            KeyCode::Down => cursor_down(&mut cursor, n_total),
             KeyCode::Char(' ') => {
                 if cursor >= preset_start {
                     let pi = cursor - preset_start;

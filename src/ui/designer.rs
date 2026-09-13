@@ -804,13 +804,13 @@ impl App {
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Up => {
-                selected = selected.saturating_sub(1);
+                cursor_up(&mut selected);
                 self.input_mode = InputMode::RocketPickEngine {
                     state, target_index, inner_index, editing, booster, selected,
                 };
             }
             KeyCode::Down => {
-                if selected + 1 < total_rows { selected += 1; }
+                cursor_down(&mut selected, total_rows);
                 self.input_mode = InputMode::RocketPickEngine {
                     state, target_index, inner_index, editing, booster, selected,
                 };
@@ -973,13 +973,13 @@ impl App {
                 self.input_mode = InputMode::RocketDesigner { state };
             }
             KeyCode::Up => {
-                selected = selected.saturating_sub(1);
+                cursor_up(&mut selected);
                 self.input_mode = InputMode::RocketDesignerLocationPicker {
                     state, target, locations, selected,
                 };
             }
             KeyCode::Down => {
-                if selected + 1 < locations.len() { selected += 1; }
+                cursor_down(&mut selected, locations.len());
                 self.input_mode = InputMode::RocketDesignerLocationPicker {
                     state, target, locations, selected,
                 };

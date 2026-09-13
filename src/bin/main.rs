@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use rocket_tycoon::balance_config::BalanceConfig;
 use rocket_tycoon::game_state::GameState;
 use rocket_tycoon::save;
+use rocket_tycoon::ui::cursor::{cursor_down, cursor_up};
 use rocket_tycoon::ui::text_field::{edit_text_field, FieldEdit, FieldKind};
 use rocket_tycoon::ui::{with_terminal, App, Tui};
 
@@ -79,14 +80,8 @@ fn startup_loop(terminal: &mut Tui, balance: BalanceConfig) -> io::Result<(GameS
                     KeyCode::Char('q') => {
                         return Err(io::Error::new(io::ErrorKind::Interrupted, "quit"));
                     }
-                    KeyCode::Up => {
-                        selected = selected.saturating_sub(1);
-                    }
-                    KeyCode::Down => {
-                        if selected + 1 < menu_len {
-                            selected += 1;
-                        }
-                    }
+                    KeyCode::Up => cursor_up(&mut selected),
+                    KeyCode::Down => cursor_down(&mut selected, menu_len),
                     KeyCode::Enter => {
                         if selected == 0 {
                             // New Game

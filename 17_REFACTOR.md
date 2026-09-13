@@ -455,7 +455,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
 
 > Plan: `17_4_UI.md` (step 0 render smoke test, then F4, F2, F3, F1, F6).
 
-### F1. ~20 hand-rolled Up/Down cursor pairs
+### ✅ F1. ~20 hand-rolled Up/Down cursor pairs
 - **Where:** `ui/mod.rs` at 2141, 2195, 2233, 2249, 2379, 2415, 2461,
   2496, 2523, 2547, 2573, 2612, 2673, 3188, 3366, 3508, 3614, 3742,
   3865-3940 (six copies of the bound lookup in `handle_up`/
