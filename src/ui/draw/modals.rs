@@ -191,20 +191,8 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             ];
             render_modal(frame, modal_area, " New Rocket Design ", lines);
         }
-        InputMode::BidEntry { contract_index, buffer } => {
-            let name = app.game.available_contracts
-                .get(*contract_index)
-                .map(|c| c.name.clone())
-                .unwrap_or_default();
-            let lines = vec![
-                Line::from(""),
-                Line::from(format!("  {}", name)),
-                Line::from(""),
-                Line::from("  Enter sealed bid in $M (Enter to submit, Esc to cancel):"),
-                Line::from(""),
-                Line::from(format!("  > {}█  ($M)", buffer)),
-            ];
-            render_modal(frame, modal_area, " Place Bid ", lines);
+        InputMode::BidEntry { contract_index, buffer, basis } => {
+            draw_bid_entry_modal(frame, app, *contract_index, buffer, basis, area);
         }
         InputMode::BidRules { selected } => {
             let mut lines = vec![
@@ -909,4 +897,76 @@ pub(super) fn draw_confirm_retire_modal(
     };
     frame.render_widget(Clear, modal_area);
     render_modal(frame, modal_area, " Retire design ", lines);
+}
+
+/// The Place Bid modal: what the mission is, when bids close, which
+/// rocket would fly it and what that costs, then the field, prefilled
+/// with the rule engine's price. A first-time bidder should be able to
+/// press Enter and have bid something sane.
+fn draw_bid_entry_modal(
+    frame: &mut Frame,
+    app: &App,
+    contract_index: usize,
+    buffer: &str,
+    basis: &crate::game_state::BidBasis,
+    screen: Rect,
+) {
+    use crate::game_state::CostBasis;
+    // Its own box: the default modal is 60% of the screen, which at 80
+    // columns clips the cost line. Every line here is under 50 chars.
+    let w = 60u16.min(screen.width.saturating_sub(4));
+    let h = 18u16.min(screen.height.saturating_sub(2));
+    let area = Rect {
+        x: screen.x + (screen.width.saturating_sub(w)) / 2,
+        y: screen.y + (screen.height.saturating_sub(h)) / 2,
+        width: w, height: h,
+    };
+    frame.render_widget(Clear, area);
+    let Some(c) = app.game.available_contracts.get(contract_index) else {
+        render_modal(frame, area, " Place Bid ", vec![Line::from("  (contract gone)")]);
+        return;
+    };
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(format!("  {}", c.name), Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(format!(
+            "  {} to {}",
+            format_kg(c.payload_kg),
+            crate::contract::destination_display_name(&c.destination),
+        )),
+    ];
+    if let Some(close) = c.bid_deadline {
+        lines.push(Line::from(format!("  Bids close {} (today {})", close, app.game.date)));
+    }
+    lines.push(Line::from(""));
+    match (&basis.rocket, basis.cost) {
+        (Some(rocket), Some((cost, how))) => {
+            lines.push(Line::from(format!("  Your rocket:    {}", rocket)));
+            let how = match how {
+                CostBasis::BuildHistory => "mean of your last builds",
+                CostBasis::MaterialEstimate => "materials for a first build",
+            };
+            lines.push(Line::from(format!("  Marginal cost:  {}", format_money(cost))));
+            lines.push(hint_line(format!("                  ({how})")));
+        }
+        _ => {
+            lines.push(Line::from(Span::styled(
+                "  No design of yours can lift this yet.",
+                Style::default().fg(Color::Red),
+            )));
+        }
+    }
+    if let Some(s) = basis.suggested {
+        lines.push(Line::from(format!(
+            "  Suggested:      ${}M  (cost × {:.2})", crate::ui::millions_text(s), 1.0 + basis.margin,
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(format!("  Bid: > {}█  ($M)", buffer)));
+    lines.push(Line::from(""));
+    lines.push(hint_line("  The customer's budget is hidden. Higher bids"));
+    lines.push(hint_line("  win less often; the award is sealed until"));
+    lines.push(hint_line("  the bid date."));
+    lines.push(hint_line("  [Enter] Submit  [Esc] Cancel"));
+    render_modal(frame, area, " Place Bid ", lines);
 }

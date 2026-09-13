@@ -107,7 +107,7 @@ fn designer_state(app: &App) -> Box<RocketDesignerState> {
 }
 
 /// Every modal the fixture can reach, named.
-fn modes(app: &App) -> Vec<(&'static str, InputMode)> {
+fn modes(app: &App, bid_basis: crate::game_state::BidBasis) -> Vec<(&'static str, InputMode)> {
     let company = &app.game.player_company;
     let epid = company.engine_projects[0].project_id;
     let rpid = company.reactor_projects[0].project_id;
@@ -142,7 +142,7 @@ fn modes(app: &App) -> Vec<(&'static str, InputMode)> {
         }),
         ("third party", InputMode::SelectThirdParty { selected: 0 }),
         ("rocket name", InputMode::RocketName { buffer: "Smoke".into() }),
-        ("bid entry", InputMode::BidEntry { contract_index: 0, buffer: "12".into() }),
+        ("bid entry", InputMode::BidEntry { contract_index: 0, buffer: "12".into(), basis: bid_basis }),
         ("bid rules", InputMode::BidRules { selected: 0 }),
         ("award history", InputMode::AwardHistory { scroll: 0 }),
         ("campaigns", InputMode::Campaigns { selected: 0 }),
@@ -209,7 +209,8 @@ fn every_tab_and_modal_renders_at_both_widths() {
         }
     }
     app.active_tab = Tab::Contracts;
-    let modes = modes(&app);
+    let bid_basis = app.game.bid_basis(0);
+    let modes = modes(&app, bid_basis);
     for (name, mode) in modes {
         app.input_mode = mode;
         for &(w, h) in &sizes {

@@ -42,6 +42,13 @@ pub enum HelpScope {
     RocketDesigner,
 }
 
+/// A dollar amount as the `$M` text a bid field holds: two decimals
+/// with trailing zeros dropped, so $21,500,000 reads "21.5".
+pub fn millions_text(amount: f64) -> String {
+    let s = format!("{:.2}", amount / 1_000_000.0);
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 impl InputMode {
     /// The rocket designer with nothing open over it.
     pub fn designer(state: Box<RocketDesignerState>) -> InputMode {
@@ -208,7 +215,7 @@ pub enum InputMode {
     /// Typing rocket name.
     RocketName { buffer: String },
     /// Entering a sealed bid (in $M) on an available solicitation.
-    BidEntry { contract_index: usize, buffer: String },
+    BidEntry { contract_index: usize, buffer: String, basis: crate::game_state::BidBasis },
     /// Editing standing per-market bid rules (enable + margin). The
     /// rule engine auto-bids marginal cost × (1 + margin) daily.
     BidRules { selected: usize },

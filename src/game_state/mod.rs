@@ -18,6 +18,7 @@ pub use crate::company::{Company, BidRule, MonthlyFinancials};
 mod advance;
 mod flight_ops;
 mod market_ops;
+pub use market_ops::{BidBasis, CostBasis};
 mod tech_ops;
 
 /// Game simulation speed.

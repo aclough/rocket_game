@@ -343,6 +343,56 @@ impl Company {
             + balance.work.rocket_integration_work(total_stages) * rocket_learning
     }
 
+    /// What one more rocket of this design would cost in materials if
+    /// every part were built from scratch today: the same per-order
+    /// formulas `order_rocket_build` charges (engine, tank and assembly,
+    /// integration, each under its current learning-curve multiplier),
+    /// with contracted engines at their purchase price. Labour accrues
+    /// during the build and is not in this figure, so once a rocket has
+    /// been built the recorded marginal cost is the better number; this
+    /// is for pricing a bid before the first one exists.
+    pub fn estimated_build_cost(
+        &self, project: &RocketProject, balance: &BalanceConfig,
+    ) -> f64 {
+        let prices = &balance.costs.resource_prices;
+        let rocket_prior = *self.rocket_build_counts
+            .get(&project.design.id).unwrap_or(&0);
+        let rocket_learning = balance.work.learning_curve_multiplier(rocket_prior);
+
+        // The pipeline counts each engine it orders before pricing the
+        // next, so the learning curve moves within one build.
+        let mut engine_priors: HashMap<crate::engine_project::EngineProjectId, u32> =
+            self.engine_build_counts.clone();
+
+        let mut total = 0.0;
+        for group in &project.design.stage_groups {
+            for stage in group {
+                for _unit in 0..stage.engine_count {
+                    total += match self.engine_source_for_id(stage.engine.id) {
+                        Some(EngineSource::PlayerDesign(ep_id)) => self.engine_projects.iter()
+                            .find(|ep| ep.project_id == ep_id)
+                            .map_or(0.0, |ep| {
+                                let prior = engine_priors.entry(ep_id).or_insert(0);
+                                let learning = balance.work.learning_curve_multiplier(*prior);
+                                *prior += 1;
+                                crate::resources::engine_material_cost(
+                                    ep.spec.preset, ep.design.cycle, stage.engine.mass_kg,
+                                    prices, &balance.engine_materials,
+                                ) * learning
+                            }),
+                        Some(EngineSource::Contracted(ce_id)) => self.contracted_engines.iter()
+                            .find(|ce| ce.id == ce_id)
+                            .map_or(0.0, |ce| ce.purchase_cost_per_unit),
+                        None => 0.0,
+                    };
+                }
+                total += (crate::resources::tank_material_cost(stage.structural_mass_kg, prices)
+                    + crate::resources::stage_assembly_cost(prices)) * rocket_learning;
+            }
+        }
+        total + crate::resources::rocket_integration_cost(prices) * rocket_learning
+    }
+
     /// Drop rush jobs with nothing left to rush.
     ///
     /// The usual retirement is on the `RocketIntegrated` event — the rush

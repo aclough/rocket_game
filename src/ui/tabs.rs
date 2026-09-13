@@ -358,14 +358,18 @@ impl App {
                 }
                 if self.game.available_contracts[self.selected_item].is_solicitation() {
                     // Sealed bid: open the price-entry modal, seeded
-                    // with any pending bid so it can be revised.
+                    // with any pending bid so it can be revised, else
+                    // with the price the rule engine would name.
+                    let basis = self.game.bid_basis(self.selected_item);
                     let buffer = self.game.available_contracts[self.selected_item]
                         .player_bid
-                        .map(|b| format!("{}", b / 1_000_000.0))
+                        .or(basis.suggested)
+                        .map(millions_text)
                         .unwrap_or_default();
                     self.enter_modal(InputMode::BidEntry {
                         contract_index: self.selected_item,
                         buffer,
+                        basis,
                     });
                 } else {
                     // Pre-priced contract (campaign mission / legacy
@@ -972,6 +976,61 @@ mod contract_table_render_tests {
             .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
             .collect();
         (lines, buf)
+    }
+
+    /// B on a solicitation opens Place Bid with the rule engine's price
+    /// already in the field and the rocket and its cost on screen —
+    /// the first-time bidder can press Enter.
+    #[test]
+    fn b_opens_place_bid_prefilled_with_the_suggested_price() {
+        let mut balance = crate::balance_config::BalanceConfig::default();
+        balance.competitor.enabled = false;
+        let mut game = crate::game_state::GameState::with_balance("Bid Test".into(), 5, balance.clone());
+        let dino = crate::competitor::realize_dinosoar(&game.seed, &balance);
+        game.player_company.rocket_projects = dino.company.rocket_projects.clone();
+        game.player_company.engine_projects = dino.company.engine_projects.clone();
+        let rocket_name = game.player_company.rocket_projects[0].design.name.clone();
+        game.available_contracts.push(crate::contract::Contract {
+            id: crate::contract::ContractId(700),
+            name: "Prefill-1".into(),
+            destination: "leo".into(),
+            payload_kg: 500.0,
+            payment: 0.0,
+            deadline: game.date.add_days(300),
+            status: crate::contract::ContractStatus::Available,
+            market_id: crate::contract::MARKET_RIDESHARE,
+            campaign_id: None,
+            bid_deadline: Some(game.date.add_days(5)),
+            budget_ceiling: 50_000_000.0,
+            player_bid: None,
+        });
+        let expected = game.bid_basis(0).suggested.expect("a capable design suggests a price");
+
+        let mut app = App::new(game);
+        app.active_tab = Tab::Contracts;
+        app.focused_pane = FocusedPane::Content;
+        app.selected_item = 0;
+        app.handle_key(KeyCode::Char('b'));
+        match &app.input_mode {
+            InputMode::BidEntry { buffer, basis, .. } => {
+                assert_eq!(*buffer, crate::ui::millions_text(expected));
+                assert_eq!(basis.rocket.as_deref(), Some(rocket_name.as_str()));
+            }
+            other => panic!("expected Place Bid, got {other:?}"),
+        }
+        let text = crate::ui::modals::help_tests::render(&app, 120, 40);
+        assert!(text.contains("Marginal cost"), "the modal names the cost");
+        for (w, h) in [(80u16, 30u16), (120, 40)] {
+            let t = crate::ui::modals::help_tests::render(&app, w, h);
+            assert!(t.contains("the bid date."), "at {w} cols the hint is not clipped");
+            assert!(t.contains("(materials for a first build)"), "at {w} cols the basis is not clipped");
+        }
+        assert!(text.contains(&rocket_name), "and the rocket");
+        assert!(text.contains("materials for a first build"), "and where the figure comes from");
+
+        // Enter bids exactly the suggestion.
+        app.handle_key(KeyCode::Enter);
+        assert_eq!(app.game.available_contracts[0].player_bid, Some(expected));
     }
 
     /// Contracts whose names differ wildly in length — the case that

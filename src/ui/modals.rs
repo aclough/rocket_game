@@ -139,7 +139,7 @@ impl App {
                     _ => {}
                 }
             }
-            InputMode::BidEntry { contract_index, buffer } => {
+            InputMode::BidEntry { contract_index, buffer, .. } => {
                 let index = *contract_index;
                 match edit_text_field(key, buffer, FieldKind::Number) {
                     FieldEdit::Continue => {}

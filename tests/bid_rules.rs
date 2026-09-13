@@ -24,10 +24,8 @@
 //! test control. See `tests/bidding.rs` and `tests/competitor_dino.rs`
 //! for the sibling patterns this borrows from.
 
-use rocket_tycoon::balance_config::BalanceConfig;
-use rocket_tycoon::competitor::realize_dinosoar;
 use rocket_tycoon::contract::{
-    Contract, ContractId, ContractStatus, MarketId, MARKET_GEO_COMSATS, MARKET_RIDESHARE,
+    Contract, ContractId, ContractStatus, MARKET_GEO_COMSATS, MARKET_RIDESHARE,
 };
 use rocket_tycoon::event::GameEvent;
 use rocket_tycoon::game_state::{BidRule, GameState};
@@ -35,51 +33,13 @@ use rocket_tycoon::policy::policy_by_name;
 use rocket_tycoon::rocket_perf::max_payload_to;
 
 mod common;
-use common::{advance_through, temp_save_path};
-
-/// A fresh game with the scripted competitor disabled (so the player
-/// is the sole bidder) and DinoSoar's realized "Brontosaur IV"
-/// project + engines + 3-rocket inventory grafted onto the player
-/// company. Gives the rule engine a real, physics-capable Testing
-/// design to bid with, without waiting on R&D.
-fn game_with_capable_player(seed: u64) -> GameState {
-    let mut balance = BalanceConfig::default();
-    balance.competitor.enabled = false;
-    let mut gs = GameState::with_balance("Test".into(), seed, balance.clone());
-    let dino = realize_dinosoar(&gs.seed, &balance);
-    gs.player_company.rocket_projects = dino.company.rocket_projects.clone();
-    gs.player_company.engine_projects = dino.company.engine_projects.clone();
-    gs.player_company.manufacturing.inventory.rockets =
-        dino.company.manufacturing.inventory.rockets.clone();
-    gs
-}
+use common::{advance_through, game_with_capable_player, inject_contract, temp_save_path};
 
 /// design_id / project_id of the borrowed "Brontosaur IV" project —
 /// always `rocket_projects[0]` since it's the only project grafted on.
 fn borrowed_design_ids(gs: &GameState) -> (rocket_tycoon::rocket::RocketDesignId, rocket_tycoon::rocket_project::RocketProjectId) {
     let rp = &gs.player_company.rocket_projects[0];
     (rp.design.id, rp.project_id)
-}
-
-/// Inject a bare-bones LEO solicitation (500 kg, generous ceiling,
-/// bid window closing in 5 days) into `market_id`, under full test
-/// control. Returns its index (always the back of the vec).
-fn inject_contract(gs: &mut GameState, id: u64, name: &str, market_id: MarketId) -> usize {
-    gs.available_contracts.push(Contract {
-        id: ContractId(id),
-        name: name.into(),
-        destination: "leo".into(),
-        payload_kg: 500.0,
-        payment: 0.0,
-        deadline: gs.date.add_days(300),
-        status: ContractStatus::Available,
-        market_id,
-        campaign_id: None,
-        bid_deadline: Some(gs.date.add_days(5)),
-        budget_ceiling: 50_000_000.0,
-        player_bid: None,
-    });
-    gs.available_contracts.len() - 1
 }
 
 

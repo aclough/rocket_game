@@ -797,6 +797,22 @@ fn nominal_build_days_matches_the_orders_the_pipeline_queues() {
         "estimate {estimate} vs pipeline {}", critical + integration);
 }
 
+/// The bid-time cost estimate is the order pipeline's own material
+/// total: what `order_rocket_build` charges for a first build from
+/// scratch, to the dollar.
+#[test]
+fn estimated_build_cost_matches_the_order_the_pipeline_charges() {
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
+    setup_buildable_rocket(&mut gs);
+    assert!(gs.player_company.manufacturing.inventory.engines.is_empty(),
+        "premise: nothing in stock, so the order builds every part");
+    let estimate = gs.player_company
+        .estimated_build_cost(&gs.player_company.rocket_projects[0], &gs.balance);
+    let (charged, _) = gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
+    assert!((estimate - charged).abs() < 1e-6, "estimate {estimate} vs charged {charged}");
+    assert!(estimate > 0.0);
+}
+
 /// It's a critical path, not a total: a second stage that finishes sooner
 /// changes nothing, and one that finishes later sets the pace.
 #[test]

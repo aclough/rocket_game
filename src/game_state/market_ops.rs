@@ -8,7 +8,31 @@ use crate::event::GameEvent;
 use crate::rocket_project::RocketProjectId;
 
 use super::*;
+use crate::company::BidRule;
 use crate::seed::WorldQuery;
+
+/// Where a marginal-cost figure comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostBasis {
+    /// The mean of the design's last five recorded builds.
+    BuildHistory,
+    /// Materials for a first build, from the order formulas; labour
+    /// is not in it.
+    MaterialEstimate,
+}
+
+/// The facts the Place Bid modal shows; see `GameState::bid_basis`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BidBasis {
+    /// The cheapest design that can fly the mission, by name.
+    pub rocket: Option<String>,
+    /// That design's marginal cost and its basis.
+    pub cost: Option<(f64, CostBasis)>,
+    /// The market's standing margin (the rule's, or the default).
+    pub margin: f64,
+    /// `round_price(cost × (1 + margin))`, the rule engine's price.
+    pub suggested: Option<f64>,
+}
 
 /// Who a sealed auction went to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,6 +435,53 @@ impl GameState {
             }
         }
         (capable_projects, best_cost)
+    }
+
+    /// What a bidder wants in front of them before naming a price for
+    /// `available_contracts[index]`: the cheapest design that can fly
+    /// it, that design's marginal cost and where the figure comes from,
+    /// the market's standing margin, and the price the rule engine would
+    /// bid (`round_price(cost × (1 + margin))`). Missing pieces are
+    /// `None` rather than guesses.
+    pub fn bid_basis(&mut self, index: usize) -> BidBasis {
+        let Some(c) = self.available_contracts.get(index) else {
+            return BidBasis::default();
+        };
+        let (destination, payload_kg, market_id) = (c.destination.clone(), c.payload_kg, c.market_id);
+        let margin = self.player_company.bid_rules.get(&market_id)
+            .map_or(BidRule::default().margin, |r| r.margin);
+        let (capable, _) = self.player_capable_cost(&destination, payload_kg);
+
+        // Cheapest capable design; built ones by their record, unbuilt
+        // ones by estimate, so a first bid still has a number to stand on.
+        let mut best: Option<(String, f64, CostBasis)> = None;
+        for rp in &self.player_company.rocket_projects {
+            if !capable.contains(&rp.project_id) {
+                continue;
+            }
+            let (cost, basis) = match self.player_company.rocket_cost_history.get(&rp.design.id) {
+                Some(h) if !h.is_empty() => {
+                    let recent = &h[h.len().saturating_sub(5)..];
+                    (recent.iter().sum::<f64>() / recent.len() as f64, CostBasis::BuildHistory)
+                }
+                _ => (
+                    self.player_company.estimated_build_cost(rp, &self.balance),
+                    CostBasis::MaterialEstimate,
+                ),
+            };
+            if best.as_ref().is_none_or(|(_, b, _)| cost < *b) {
+                best = Some((rp.design.name.clone(), cost, basis));
+            }
+        }
+        match best {
+            Some((rocket, cost, basis)) => BidBasis {
+                rocket: Some(rocket),
+                cost: Some((cost, basis)),
+                margin,
+                suggested: Some(contract::round_price(cost * (1.0 + margin))),
+            },
+            None => BidBasis { rocket: None, cost: None, margin, suggested: None },
+        }
     }
 
     pub(super) fn run_bid_rules(&mut self, events: &mut Vec<GameEvent>) {
