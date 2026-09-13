@@ -270,7 +270,7 @@ mod tests {
     use super::*;
     use crate::rocket::*;
     use crate::stage::*;
-    use crate::rocket::test_fixtures::*;
+    use crate::test_util::*;
 
     #[test]
     fn test_compute_stage_stats_two_stage() {

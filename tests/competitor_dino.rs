@@ -24,11 +24,9 @@ use rocket_tycoon::contract::{Contract, ContractId, ContractStatus, MARKET_GEO_C
 use rocket_tycoon::event::GameEvent;
 use rocket_tycoon::game_state::GameState;
 
-/// Build a fresh game under default balance (competitor enabled) at
-/// `seed`.
-fn fresh_game(seed: u64) -> GameState {
-    GameState::with_balance("Test".into(), seed, BalanceConfig::default())
-}
+mod common;
+use common::{advance_through, fresh_game, temp_save_path};
+
 
 /// Inject a GEO Comsats solicitation with a `bid_close` deadline and
 /// `ceiling` budget, well inside DinoSoar's capability table (gto,
@@ -59,27 +57,6 @@ fn inject_geo_solicitation(
     gs.available_contracts.len() - 1
 }
 
-/// Advance days one at a time, collecting every event fired, until
-/// `gs.date` exceeds `deadline` (inclusive of the day resolution
-/// fires). Panics if resolution doesn't happen within `max_days` — a
-/// generous cap so a bug that skips resolution fails loudly instead
-/// of looping forever.
-fn advance_through(gs: &mut GameState, deadline: rocket_tycoon::calendar::GameDate, max_days: u32) -> Vec<GameEvent> {
-    let mut all = Vec::new();
-    for _ in 0..max_days {
-        // A tick does its work under the date the clock reads *now* and only
-        // rolls over at the end, so bids resolve on the first tick that
-        // *runs* past the deadline. Test the date the body ran under —
-        // `gs.date` alone is already a day ahead and would return before the
-        // resolving tick ever happened.
-        let ran_on = gs.date;
-        all.extend(gs.advance_day());
-        if ran_on > deadline {
-            return all;
-        }
-    }
-    panic!("resolution did not happen within {max_days} days of deadline {deadline}");
-}
 
 /// Rig every rocket flaw on every inventory rocket of DinoSoar's
 /// design to a fixed activation chance, so the next abstract launch
@@ -493,14 +470,6 @@ fn dino_never_wins_year1_rideshare_200_seeds() {
 // 8. Save/load round-trip, including pre-M3 backfill.
 // ---------------------------------------------------------------
 
-fn temp_save_path(tag: &str) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join("rocket_tycoon_test");
-    std::fs::create_dir_all(&dir).unwrap();
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    dir.join(format!("competitor_dino_{tag}_{}_{n}.json", std::process::id()))
-}
 
 #[test]
 fn competitor_survives_save_load() {
@@ -516,7 +485,7 @@ fn competitor_survives_save_load() {
     let before_rocket_count = before.company.manufacturing.inventory.rockets.len();
     let before_scheduled = before.scheduled_launches.len();
 
-    let path = temp_save_path("roundtrip");
+    let path = temp_save_path("competitor_dino_roundtrip");
     rocket_tycoon::save::save_game(&gs, &path).expect("seed 108: save should succeed");
     let loaded = rocket_tycoon::save::load_game(&path).expect("seed 108: load should succeed");
 
@@ -539,7 +508,7 @@ fn competitor_survives_save_load() {
     // manually clear it) gets DinoSoar realized fresh on load.
     let mut backfill_source = loaded;
     backfill_source.competitors.clear();
-    let path2 = temp_save_path("backfill");
+    let path2 = temp_save_path("competitor_dino_backfill");
     rocket_tycoon::save::save_game(&backfill_source, &path2).expect("seed 108: second save should succeed");
     let reloaded = rocket_tycoon::save::load_game(&path2).expect("seed 108: second load should succeed");
     assert_eq!(

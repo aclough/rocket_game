@@ -520,9 +520,7 @@ mod field_tests {
     use crate::engine_project::{EngineProject, EngineProjectId, MAX_SCALE};
 
     fn app_with_engine() -> (App, EngineProjectId) {
-        let mut game = crate::game_state::GameState::new(
-            "Field Test".into(), 200_000_000.0, 5,
-        );
+        let mut game = crate::game_state::GameState::new("Field Test".into(), 5);
         let ep = EngineProject::new(
             EngineProjectId(1), EngineId(1), "Family".into(),
             EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0,

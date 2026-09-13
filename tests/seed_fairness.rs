@@ -104,7 +104,7 @@ fn assert_year1_floor(seed: u64) {
 fn assert_year1_reference_bid_wins(seed: u64) {
     use rocket_tycoon::event::GameEvent;
 
-    let mut gs = GameState::with_balance("Probe".into(), seed, BalanceConfig::default());
+    let mut gs = GameState::new("Probe".into(), seed);
     let start_year = gs.date.year;
 
     // Find the first achievable solicitation.

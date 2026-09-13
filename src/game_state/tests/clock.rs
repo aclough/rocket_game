@@ -4,12 +4,12 @@ use super::*;
 
 #[test]
 fn test_new_game_state() {
-    let gs = GameState::new("SpaceCorp".into(), 200_000_000.0, 42);
+    let gs = GameState::new("SpaceCorp".into(), 42);
     assert_eq!(gs.date, GameDate::default_start());
     assert_eq!(gs.player_company.name, "SpaceCorp");
     // The founding team is free, so the player starts with the full
     // amount the welcome screen quotes them.
-    assert_eq!(gs.player_company.money, 200_000_000.0);
+    assert_eq!(gs.player_company.money, gs.balance.costs.starting_money);
     assert_eq!(gs.speed, GameSpeed::Paused);
     assert_eq!(gs.elapsed_days(), 0);
     // Should have GameStarted event
@@ -20,7 +20,7 @@ fn test_new_game_state() {
 
 #[test]
 fn test_advance_day() {
-    let mut gs = GameState::new("Test".into(), 100.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100.0, 1);
     let events = gs.advance_day();
     assert_eq!(gs.date, GameDate::new(2001, 1, 2));
     assert_eq!(gs.elapsed_days(), 1);
@@ -39,7 +39,7 @@ fn test_advance_day() {
 
 #[test]
 fn test_advance_to_new_month() {
-    let mut gs = GameState::new("Test".into(), 100.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100.0, 1);
     // 31 ticks cover Jan 1 through Jan 31, leaving the clock reading Feb 1.
     for _ in 0..31 {
         gs.advance_day();
@@ -54,7 +54,7 @@ fn test_advance_to_new_month() {
 
 #[test]
 fn test_toggle_pause() {
-    let mut gs = GameState::new("Test".into(), 100.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100.0, 1);
     assert_eq!(gs.speed, GameSpeed::Paused);
 
     gs.toggle_pause();
@@ -70,7 +70,7 @@ fn test_toggle_pause() {
 
 #[test]
 fn test_toggle_pause_remembers_speed() {
-    let mut gs = GameState::new("Test".into(), 100.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100.0, 1);
     gs.set_speed(GameSpeed::VeryFast);
     assert_eq!(gs.speed, GameSpeed::VeryFast);
 
@@ -84,7 +84,7 @@ fn test_toggle_pause_remembers_speed() {
 
 #[test]
 fn test_set_speed() {
-    let mut gs = GameState::new("Test".into(), 100.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100.0, 1);
     gs.set_speed(GameSpeed::Fast);
     assert_eq!(gs.speed, GameSpeed::Fast);
     gs.set_speed(GameSpeed::VeryFast);
@@ -99,7 +99,7 @@ fn test_speed_tick_ms() {
 
 #[test]
 fn test_elapsed_days_after_year() {
-    let mut gs = GameState::new("Test".into(), 100.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100.0, 1);
     for _ in 0..365 {
         gs.advance_day();
     }
@@ -109,7 +109,7 @@ fn test_elapsed_days_after_year() {
 
 #[test]
 fn test_salary_deduction() {
-    let mut gs = GameState::new("Test".into(), 1_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000.0, 1);
     gs.player_company.hire_team("Alpha".into(), &gs.balance);
     // Now has 2 teams (1 free founding team + Alpha, who was billed)
 
@@ -124,7 +124,7 @@ fn test_salary_deduction() {
 
 #[test]
 fn test_negative_money_allowed() {
-    let mut gs = GameState::new("Test".into(), 100_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100_000.0, 1);
     // Starts with 1 free founding team, money = 100K
     assert_eq!(gs.player_company.money, 100_000.0);
     gs.player_company.hire_team("Alpha".into(), &gs.balance); // -150K

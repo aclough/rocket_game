@@ -27,7 +27,7 @@ fn market(gs: &GameState, id: crate::contract::MarketId) -> &crate::contract::Ma
 #[test]
 fn war_surges_the_reconnaissance_market() {
     use crate::contract::MARKET_NSSL;
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
     let before = market(&gs, MARKET_NSSL);
     let base_rep = before.rep_target;
     let base_vol = before.effective_volume(1.0, gs.date);
@@ -50,7 +50,7 @@ fn war_surges_the_reconnaissance_market() {
 #[test]
 fn asat_debris_hits_low_orbits_and_spares_high_ones() {
     use crate::contract::{MARKET_GEO_COMSATS, MARKET_LEO_CONSTELLATION};
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
 
     let leo_before = market(&gs, MARKET_LEO_CONSTELLATION).effective_volume(1.0, gs.date);
     let geo_before = market(&gs, MARKET_GEO_COMSATS).effective_volume(1.0, gs.date);
@@ -74,7 +74,7 @@ fn asat_debris_hits_low_orbits_and_spares_high_ones() {
 #[test]
 fn the_reconnaissance_market_is_exempt_from_its_own_debris() {
     use crate::contract::MARKET_NSSL;
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
     force_shift(&mut gs, crate::geopolitics::GeopoliticalShift::WarBegins);
     let at_war = market(&gs, MARKET_NSSL).effective_volume(1.0, gs.date);
 
@@ -90,7 +90,7 @@ fn the_reconnaissance_market_is_exempt_from_its_own_debris() {
 #[test]
 fn peace_lifts_the_war_modifiers() {
     use crate::contract::{MARKET_LEO_CONSTELLATION, MARKET_NSSL};
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
     let leo_base = market(&gs, MARKET_LEO_CONSTELLATION).effective_volume(1.0, gs.date);
     let nro_base = market(&gs, MARKET_NSSL).effective_volume(1.0, gs.date);
 
@@ -116,7 +116,7 @@ fn peace_lifts_the_war_modifiers() {
 #[test]
 fn a_war_without_asat_leaves_no_debris_and_no_boom() {
     use crate::contract::MARKET_LEO_CONSTELLATION;
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
     let base = market(&gs, MARKET_LEO_CONSTELLATION).effective_volume(1.0, gs.date);
 
     force_shift(&mut gs, crate::geopolitics::GeopoliticalShift::WarBegins);
@@ -133,7 +133,7 @@ fn a_war_without_asat_leaves_no_debris_and_no_boom() {
 #[test]
 fn suppressing_an_orbit_removes_launches_rather_than_moving_them() {
     use crate::contract::{MarketModifier, MARKET_NSSL};
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
     let m = gs.markets.iter_mut().find(|m| m.id == MARKET_NSSL).unwrap();
     let before = m.effective_volume(1.0, gs.date);
 

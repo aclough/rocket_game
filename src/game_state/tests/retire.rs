@@ -13,7 +13,7 @@ use super::*;
 fn retiring_hides_a_rocket_but_keeps_its_id_resolvable() {
     use crate::company::ProjectRef;
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
 
     assert_eq!(gs.player_company.visible_rocket_projects().count(), 1);
@@ -31,7 +31,7 @@ fn retiring_hides_a_rocket_but_keeps_its_id_resolvable() {
 fn retiring_a_rocket_releases_teams_and_clears_auto_build() {
     use crate::company::ProjectRef;
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     gs.player_company.hire_team("T1".into(), &gs.balance);
     gs.player_company.hire_team("T2".into(), &gs.balance);
@@ -57,7 +57,7 @@ fn retiring_a_rocket_cancels_its_integration_and_stage_orders() {
     use crate::company::ProjectRef;
     use crate::manufacturing::ManufacturingOrderType;
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).expect("orders a build");
 
@@ -85,7 +85,7 @@ fn an_engine_order_shared_with_a_live_rocket_survives_its_retirement() {
     use crate::manufacturing::ManufacturingOrderType;
     use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
 
     // A second project on the same design, so both use the same engines.
@@ -125,7 +125,7 @@ fn engine_orders_needed_by_nothing_live_are_cancelled_with_their_rocket() {
     use crate::company::ProjectRef;
     use crate::manufacturing::ManufacturingOrderType;
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).expect("orders a build");
     assert!(gs.player_company.manufacturing.orders.iter()
@@ -148,7 +148,7 @@ fn retiring_an_engine_a_live_rocket_uses_is_refused_and_names_it() {
     use crate::company::{RetireRefusal, ProjectRef};
     use crate::engine_project::EngineProjectId;
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     let rocket_name = gs.player_company.rocket_projects[0].design.name.clone();
 
@@ -176,7 +176,7 @@ fn retiring_an_engine_a_live_rocket_uses_is_refused_and_names_it() {
 fn a_retired_design_stops_being_bid_capable() {
     use crate::company::ProjectRef;
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
 
     let before = gs.capable_projects_for("leo", 1000.0);
@@ -192,7 +192,7 @@ fn a_retired_design_stops_being_bid_capable() {
 fn a_retired_rocket_is_never_built_again() {
     use crate::company::ProjectRef;
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
@@ -212,7 +212,7 @@ fn retiring_a_reactor_hides_it_without_touching_stages() {
     use crate::company::ProjectRef;
     use crate::reactor::{EnrichmentLevel, DEFAULT_SCALE};
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let pid = gs.player_company.start_proposed_reactor(
         "Pebble".into(), DEFAULT_SCALE, EnrichmentLevel::Leu, &gs.balance);
     gs.player_company.promote_proposed(ProjectRef::Reactor(pid)).expect("promotes");
@@ -230,7 +230,7 @@ fn retiring_a_reactor_hides_it_without_touching_stages() {
 fn a_design_can_only_be_retired_once() {
     use crate::company::{RetireRefusal, ProjectRef};
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     gs.player_company.retire(ProjectRef::Rocket(rp_id)).expect("retires");
 
@@ -243,7 +243,7 @@ fn a_design_can_only_be_retired_once() {
 fn the_plan_shown_matches_what_retiring_does() {
     use crate::company::ProjectRef;
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     gs.player_company.hire_team("T1".into(), &gs.balance);
     assert!(gs.player_company.add_team(rocket_ref(&gs, 0)));
@@ -262,7 +262,7 @@ fn the_plan_shown_matches_what_retiring_does() {
 fn a_rocket_already_built_still_flies_after_its_design_retires() {
     use crate::company::ProjectRef;
 
-    let mut gs = GameState::new("Test".into(), 500_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 500_000_000.0, 1);
     let rp_id = setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).expect("orders a build");
     run_manufacturing_to_rocket(&mut gs);

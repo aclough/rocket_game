@@ -23,7 +23,7 @@ fn push_contract(gs: &mut GameState, id: u64, destination: &str) -> usize {
 
 #[test]
 fn test_build_launch_payloads_empty_is_leo_test_mass() {
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+    let mut gs = GameState::new("Test".into(), 1);
     let (dest, payloads) = gs.build_launch_payloads(&[], &[]).unwrap();
     assert_eq!(dest, "leo");
     assert_eq!(payloads.len(), 1);
@@ -32,7 +32,7 @@ fn test_build_launch_payloads_empty_is_leo_test_mass() {
 
 #[test]
 fn test_build_launch_payloads_shared_destination() {
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+    let mut gs = GameState::new("Test".into(), 1);
     let a = push_contract(&mut gs, 1, "gto");
     let b = push_contract(&mut gs, 2, "gto");
     let (dest, payloads) = gs.build_launch_payloads(&[a, b], &[]).unwrap();
@@ -43,7 +43,7 @@ fn test_build_launch_payloads_shared_destination() {
 
 #[test]
 fn test_build_launch_payloads_conflicting_destinations() {
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+    let mut gs = GameState::new("Test".into(), 1);
     let a = push_contract(&mut gs, 1, "leo");
     let b = push_contract(&mut gs, 2, "gto");
     let err = gs.build_launch_payloads(&[a, b], &[]).unwrap_err();
@@ -55,7 +55,7 @@ fn test_build_launch_payloads_validates_before_consuming() {
     // One real spacecraft in inventory plus one bogus id: the call
     // must fail AND leave the real spacecraft in inventory (validate
     // everything before taking anything).
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+    let mut gs = GameState::new("Test".into(), 1);
     let (design, engine_projects) = make_three_stage_design();
     gs.player_company.engine_projects = engine_projects;
     let rp = RocketProject::new(

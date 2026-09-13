@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn test_save_and_load_roundtrip() {
         let path = temp_path();
-        let mut state = GameState::new("TestCorp".into(), 200_000_000.0, 42);
+        let mut state = GameState::new("TestCorp".into(), 42);
 
         // Advance a few days to have some state
         for _ in 0..5 {
@@ -490,7 +490,7 @@ mod tests {
         use crate::project::ImprovementId;
         use serde_json::{json, Value};
 
-        let mut state = GameState::new("Mig Co".into(), 200_000_000.0, 42);
+        let mut state = GameState::new("Mig Co".into(), 42);
         let balance = state.balance.clone();
         state.player_company.start_engine_project(
             "Old".into(), EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, None, &balance,
@@ -604,7 +604,7 @@ mod tests {
     fn v2_event_log_migrates_to_project_events() {
         use serde_json::json;
 
-        let state = GameState::new("Log Co".into(), 200_000_000.0, 42);
+        let state = GameState::new("Log Co".into(), 42);
         let mut raw = serde_json::to_value(&state).unwrap();
         raw.as_object_mut().unwrap().insert("save_version".into(), json!(2));
         let date = json!({ "year": 2001, "month": 3, "day": 4 });
@@ -720,7 +720,7 @@ mod tests {
         use crate::stage::{Stage, StageId};
 
         let path = temp_path();
-        let mut state = GameState::new("PayloadCorp".into(), 100.0, 7);
+        let mut state = GameState::with_money("PayloadCorp".into(), 100.0, 7);
 
         let make_design = |id: u64, name: &str| -> RocketDesign {
             let engine = EngineDesign {
@@ -812,7 +812,7 @@ mod autosave_tests {
     #[test]
     fn autosave_fills_every_slot_before_reusing_one() {
         let dir = temp_dir("fill");
-        let game = GameState::new("Rotate Co".into(), 100.0, 1);
+        let game = GameState::with_money("Rotate Co".into(), 100.0, 1);
         for expected in 1..=AUTOSAVE_SLOTS {
             assert_eq!(next_autosave_slot_in(&dir, "Rotate Co"), expected);
             autosave_in(&dir, &game).expect("autosave should succeed");
@@ -830,7 +830,7 @@ mod autosave_tests {
     #[test]
     fn a_full_rotation_replaces_the_oldest() {
         let dir = temp_dir("oldest");
-        let game = GameState::new("Rotate Co".into(), 100.0, 1);
+        let game = GameState::with_money("Rotate Co".into(), 100.0, 1);
         for _ in 1..=AUTOSAVE_SLOTS {
             autosave_in(&dir, &game).unwrap();
         }
@@ -862,7 +862,7 @@ mod autosave_tests {
     #[test]
     fn autosaves_load_back() {
         let dir = temp_dir("roundtrip");
-        let mut game = GameState::new("Rotate Co".into(), 100.0, 5);
+        let mut game = GameState::with_money("Rotate Co".into(), 100.0, 5);
         for _ in 0..70 {
             game.advance_day();
         }

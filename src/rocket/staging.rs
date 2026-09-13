@@ -380,7 +380,7 @@ mod tests {
     use crate::engine::*;
     use crate::propellant::Propellant;
     use crate::stage::*;
-    use crate::rocket::test_fixtures::*;
+    use crate::test_util::*;
 
     #[test]
     fn test_two_stage_sequential_delta_v() {

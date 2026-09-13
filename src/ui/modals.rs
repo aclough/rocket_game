@@ -679,9 +679,7 @@ pub(super) mod help_tests {
     /// design built from that engine, and one finished rocket in
     /// inventory. Used by the retire tests too.
     pub(in crate::ui) fn app() -> App {
-        let mut game = crate::game_state::GameState::new(
-            "Help Test".into(), 200_000_000.0, 7,
-        );
+        let mut game = crate::game_state::GameState::new("Help Test".into(), 7);
         let bal = game.balance.clone();
         let company = &mut game.player_company;
 
@@ -967,7 +965,7 @@ mod onboarding_tests {
     }
 
     fn fresh() -> crate::game_state::GameState {
-        crate::game_state::GameState::new("Onboard Co".into(), 200_000_000.0, 7)
+        crate::game_state::GameState::new("Onboard Co".into(), 7)
     }
 
     /// A new company opens on the orientation screen; any key dismisses

@@ -30,7 +30,6 @@
 
 use std::path::PathBuf;
 
-use rocket_tycoon::balance_config::BalanceConfig;
 use rocket_tycoon::calendar::GameDate;
 use rocket_tycoon::game_state::GameState;
 use rocket_tycoon::policy::{BasicPolicy, CompanyPolicy};
@@ -125,7 +124,7 @@ fn a_save_without_markets_gets_the_markets_of_its_seed() {
     let state = load(&out);
     let _ = std::fs::remove_file(&out);
 
-    let fresh = GameState::with_balance("Corpus Co".into(), seed, BalanceConfig::default());
+    let fresh = GameState::new("Corpus Co".into(), seed);
     assert!(!state.markets.is_empty(), "{era}: markets were realized on load");
     assert_eq!(
         state.markets, fresh.markets,
@@ -142,7 +141,7 @@ fn a_save_without_markets_gets_the_markets_of_its_seed() {
 fn retired_survives_a_round_trip() {
     use rocket_tycoon::company::ProjectRef;
 
-    let mut gs = GameState::new("RoundTrip".into(), 200_000_000.0, 3);
+    let mut gs = GameState::new("RoundTrip".into(), 3);
     gs.player_company.start_engine_project(
         "Old Faithful".into(),
         rocket_tycoon::engine::EngineCycle::GasGenerator,
@@ -200,7 +199,7 @@ fn generate_corpus_snapshot() {
     assert!(!out.exists(), "{} already exists; eras are never regenerated", out.display());
 
     let mut policy = BasicPolicy::new();
-    let mut gs = GameState::with_balance("Corpus Co".into(), 42, BalanceConfig::default());
+    let mut gs = GameState::new("Corpus Co".into(), 42);
     let end = GameDate::new(gs.date.year + 3, 1, 1);
     while gs.date < end {
         policy.act(&mut gs);

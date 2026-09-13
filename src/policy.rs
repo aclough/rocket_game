@@ -520,7 +520,7 @@ mod tests {
 
     fn run(seed: u64, days: u32) -> (GameState, BasicPolicy) {
         let mut policy = BasicPolicy::new();
-        let mut gs = GameState::new("BotCorp".into(), 200_000_000.0, seed);
+        let mut gs = GameState::new("BotCorp".into(), seed);
         for _ in 0..days {
             policy.act(&mut gs);
             gs.advance_day();

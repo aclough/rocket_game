@@ -184,7 +184,7 @@ fn expiry_applies_market_severity_end_to_end() {
 
     // COTS: harsh multiplier.
     {
-        let mut gs = GameState::with_balance("Test".into(), 42, BalanceConfig::default());
+        let mut gs = GameState::new("Test".into(), 42);
         let deadline = gs.date;
         gs.player_company.active_contracts.push(Contract {
             id: rocket_tycoon::contract::ContractId(9001),
@@ -218,7 +218,7 @@ fn expiry_applies_market_severity_end_to_end() {
 
     // Gov science: lenient multiplier.
     {
-        let mut gs = GameState::with_balance("Test2".into(), 43, BalanceConfig::default());
+        let mut gs = GameState::new("Test2".into(), 43);
         let deadline = gs.date;
         gs.player_company.active_contracts.push(Contract {
             id: rocket_tycoon::contract::ContractId(9002),

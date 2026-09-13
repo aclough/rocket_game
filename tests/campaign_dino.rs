@@ -31,12 +31,11 @@ use rocket_tycoon::contract::{
     MARKET_GEO_COMSATS, MARKET_RIDESHARE,
 };
 use rocket_tycoon::event::GameEvent;
-use rocket_tycoon::game_state::{GameSpeed, GameState};
+use rocket_tycoon::game_state::GameSpeed;
 
-/// A fresh game under default balance (DinoSoar enabled) at `seed`.
-fn fresh_game(seed: u64) -> GameState {
-    GameState::new("Test".into(), 200_000_000.0, seed)
-}
+mod common;
+use common::{fresh_game, temp_save_path};
+
 
 /// Build a contested GEO Comsats campaign: gto, 5,000 kg (comfortably
 /// under DinoSoar's 13,500 kg gto cap), a $200M hidden per-mission
@@ -64,14 +63,6 @@ fn contested_campaign(id: u64, name: &str, bid_deadline: GameDate, next_issue_da
     }
 }
 
-fn temp_save_path(tag: &str) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join("rocket_tycoon_test");
-    std::fs::create_dir_all(&dir).unwrap();
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    dir.join(format!("campaign_dino_{tag}_{}_{n}.json", std::process::id()))
-}
 
 // ---------------------------------------------------------------
 // 1. Dino outbids an expensive player.
@@ -550,7 +541,7 @@ fn competitor_won_campaign_save_roundtrip() {
         .clone();
     let before_scheduled_len = gs.competitors[0].scheduled_launches.len();
 
-    let path = temp_save_path("roundtrip");
+    let path = temp_save_path("campaign_dino_roundtrip");
     rocket_tycoon::save::save_game(&gs, &path).expect("seed 7106: save should succeed");
     let loaded = rocket_tycoon::save::load_game(&path).expect("seed 7106: load should succeed");
 

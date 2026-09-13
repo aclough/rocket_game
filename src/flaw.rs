@@ -540,11 +540,9 @@ fn gaussian_sample(mean: f64, stddev: f64, rng: &mut StdRng) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{test_rng};
     use rand::SeedableRng;
 
-    fn test_rng() -> StdRng {
-        StdRng::seed_from_u64(42)
-    }
 
     fn cfg() -> FlawsConfig {
         FlawsConfig::default()

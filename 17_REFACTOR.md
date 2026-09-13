@@ -552,7 +552,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
   field names for serde compatibility.
 - **Size/risk:** medium / low.
 
-### G2. Duplicated test fixtures
+### ✅ G2. Duplicated test fixtures
 - **Where:** `temp_save_path` ×3 in `tests/`, `advance_through` ×2
   (identical including a 6-line comment), `fresh_game` ×2,
   `kerolox_engine` ×3 in `src/`, `fn bal()` ×4, `test_rng()` ×4, 26

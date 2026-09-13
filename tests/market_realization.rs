@@ -169,7 +169,7 @@ fn realization_is_deterministic() {
 fn game_state_markets_match_realization() {
     let archetypes = default_archetypes();
     for seed_value in [1u64, 7, 42] {
-        let gs = GameState::with_balance("Test".into(), seed_value, BalanceConfig::default());
+        let gs = GameState::new("Test".into(), seed_value);
         let seed = GameSeed::new(seed_value);
         let expected: Vec<_> = realize_markets(&seed, &archetypes)
             .into_iter()

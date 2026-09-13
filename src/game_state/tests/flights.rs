@@ -98,7 +98,7 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
     use crate::flight::{Flight, FlightId, FlightLeg, FlightStatus};
     use crate::rocket::{RocketDesign, RocketId};
 
-    let mut gs = GameState::new("Test".into(), 1_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000.0, 42);
     let reason = "Turbopump seal failure (+2 more) — 3% delta-v shortfall";
 
     let design = RocketDesign {
@@ -146,7 +146,7 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
 #[test]
 fn test_spacecraft_payload_deployed_on_arrival() {
     // Skylab-style: Saturn V drops a station as a Spacecraft at LEO.
-    let mut gs = GameState::new("Test".into(), 1_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000.0, 42);
     let skylab = tiny_payload_spacecraft(1, "Skylab", "leo", vec![]);
     let events = arrive_test_flight(&mut gs, "leo", vec![skylab]);
     assert_eq!(gs.spacecraft.len(), 1, "Skylab should be in fleet");
@@ -165,7 +165,7 @@ fn test_csm_carrying_lem_keeps_lem_after_deployment() {
     // Apollo-style: CSM is deployed at lunar_orbit carrying LEM as its
     // own payload. The LEM stays *with* CSM (in CSM.payloads), not
     // separately in the fleet, until CSM later flies somewhere.
-    let mut gs = GameState::new("Test".into(), 1_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000.0, 42);
     let lem = tiny_payload_spacecraft(2, "LEM", "lunar_surface", vec![]);
     let csm = tiny_payload_spacecraft(1, "CSM", "lunar_orbit", vec![lem]);
     arrive_test_flight(&mut gs, "lunar_orbit", vec![csm]);
@@ -190,7 +190,7 @@ fn test_multiple_payloads_at_same_destination() {
     // arrival handler must pay both contracts.
     use crate::contract::{Contract, ContractId, ContractStatus};
     use crate::calendar::GameDate;
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
     let starting_money = gs.player_company.money;
     let contract_a = Contract {
         id: ContractId(1), name: "A".into(),
@@ -273,7 +273,7 @@ fn push_test_spacecraft(gs: &mut GameState, id: u64, name: &str, location: &str)
 
 #[test]
 fn test_dock_combines_two_spacecraft() {
-    let mut gs = GameState::new("T".into(), 1.0, 0);
+    let mut gs = GameState::with_money("T".into(), 1.0, 0);
     let csm = push_test_spacecraft(&mut gs, 1, "CSM", "lunar_orbit");
     let lem = push_test_spacecraft(&mut gs, 2, "LEM", "lunar_orbit");
     // Dock LEM onto CSM.
@@ -293,7 +293,7 @@ fn test_dock_combines_two_spacecraft() {
 
 #[test]
 fn test_dock_rejects_different_locations() {
-    let mut gs = GameState::new("T".into(), 1.0, 0);
+    let mut gs = GameState::with_money("T".into(), 1.0, 0);
     let a = push_test_spacecraft(&mut gs, 1, "A", "leo");
     let b = push_test_spacecraft(&mut gs, 2, "B", "lunar_orbit");
     assert!(!gs.dock_spacecraft(a, b),
@@ -304,7 +304,7 @@ fn test_dock_rejects_different_locations() {
 
 #[test]
 fn test_undock_restores_fleet_member() {
-    let mut gs = GameState::new("T".into(), 1.0, 0);
+    let mut gs = GameState::with_money("T".into(), 1.0, 0);
     let csm = push_test_spacecraft(&mut gs, 1, "CSM", "lunar_orbit");
     let lem = push_test_spacecraft(&mut gs, 2, "LEM", "lunar_orbit");
     assert!(gs.dock_spacecraft(lem, csm));
@@ -323,7 +323,7 @@ fn test_undock_restores_fleet_member() {
 fn test_dock_then_fly_keeps_payload_aboard() {
     // After docking with deploy_at = None, flying the carrier should
     // not auto-detach the docked payload.
-    let mut gs = GameState::new("T".into(), 1.0, 0);
+    let mut gs = GameState::with_money("T".into(), 1.0, 0);
     let csm = push_test_spacecraft(&mut gs, 1, "CSM", "lunar_orbit");
     let lem = push_test_spacecraft(&mut gs, 2, "LEM", "lunar_orbit");
     gs.dock_spacecraft(lem, csm);
@@ -346,7 +346,7 @@ fn test_dock_then_fly_keeps_payload_aboard() {
 fn test_undock_with_nested_payloads() {
     // Build a chain: A docked into B, B docked into C. Undock B from C
     // and confirm A is still nested in B.
-    let mut gs = GameState::new("T".into(), 1.0, 0);
+    let mut gs = GameState::with_money("T".into(), 1.0, 0);
     let _a = push_test_spacecraft(&mut gs, 1, "A", "leo");
     let _b = push_test_spacecraft(&mut gs, 2, "B", "leo");
     let _c = push_test_spacecraft(&mut gs, 3, "C", "leo");
@@ -370,7 +370,7 @@ fn test_undock_with_nested_payloads() {
 fn test_save_and_load_with_docked_spacecraft() {
     // Round-trip a docked configuration through save/load.
     use crate::save::{save_game, load_game};
-    let mut gs = GameState::new("DockCorp".into(), 1.0, 99);
+    let mut gs = GameState::with_money("DockCorp".into(), 1.0, 99);
     let csm = push_test_spacecraft(&mut gs, 1, "CSM", "lunar_orbit");
     let lem = push_test_spacecraft(&mut gs, 2, "LEM", "lunar_orbit");
     gs.dock_spacecraft(lem, csm);
@@ -406,7 +406,7 @@ fn test_mid_flight_stage_loss_destroys_vehicle() {
     use crate::rocket::{RocketDesign, RocketId};
     use crate::stage::{Stage, StageId};
 
-    let mut gs = GameState::new("Reactor Flight".into(), 200_000_000.0, 9);
+    let mut gs = GameState::new("Reactor Flight".into(), 9);
     let reactor_id = ReactorId(50);
     let mut rproj = ReactorProject::new(
         ReactorProjectId(1), reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu,
@@ -504,7 +504,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
     // than browning it out).
     design.stage_groups[2][0].power_sources = vec![PowerSource::new_battery(BATTERY_KWD)];
 
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 42);
+    let mut gs = GameState::new("Test".into(), 42);
     gs.player_company.engine_projects = engine_projects;
     assert_eq!(gs.date, GameDate::new(2001, 1, 1), "fixture premise: games start on the 1st");
 

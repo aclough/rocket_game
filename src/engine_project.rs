@@ -669,16 +669,10 @@ fn improvement_description(cycle: EngineCycle, kind: &EngineImprovementKind, pic
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{bal, test_rng};
     use crate::flaw::Flaw;
-    use rand::SeedableRng;
 
-    fn test_rng() -> StdRng {
-        StdRng::seed_from_u64(42)
-    }
 
-    fn bal() -> BalanceConfig {
-        BalanceConfig::default()
-    }
 
     fn create_test_project() -> EngineProject {
         EngineProject::new(

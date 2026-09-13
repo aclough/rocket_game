@@ -301,7 +301,7 @@ mod tests {
     use crate::engine::*;
     use crate::propellant::Propellant;
     use crate::stage::*;
-    use crate::rocket::test_fixtures::*;
+    use crate::test_util::*;
 
     fn powered_design(panel_w: f64, battery_kwd: f64) -> RocketDesign {
         use crate::power::PowerSource;

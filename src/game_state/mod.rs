@@ -261,7 +261,15 @@ pub(crate) fn realize_world_markets(
 }
 
 impl GameState {
-    pub fn new(company_name: String, starting_money: f64, seed_value: u64) -> Self {
+    /// A new game under the default balance, starting money included.
+    pub fn new(company_name: String, seed_value: u64) -> Self {
+        Self::with_balance(company_name, seed_value, BalanceConfig::default())
+    }
+
+    /// Tests only: a game under the default balance with a chosen
+    /// bankroll, for the cases where money is the thing under test
+    /// (a $1 company that cannot launch, a $5B one that never waits).
+    pub fn with_money(company_name: String, starting_money: f64, seed_value: u64) -> Self {
         Self::with_balance_and_money(
             company_name, starting_money, seed_value, BalanceConfig::default(),
         )

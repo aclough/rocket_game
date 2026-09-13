@@ -10,7 +10,7 @@ fn test_reactor_proposed_lifecycle() {
     use crate::reactor::EnrichmentLevel;
     use crate::reactor_project::ReactorDesignStatus;
 
-    let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100_000_000.0, 1);
     let pid = gs.player_company.start_proposed_reactor(
         "Draft".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
     );
@@ -40,7 +40,7 @@ fn test_reactor_proposed_lifecycle() {
 #[test]
 fn test_reactor_proposed_can_be_deleted() {
     use crate::reactor::EnrichmentLevel;
-    let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100_000_000.0, 1);
     let pid = gs.player_company.start_proposed_reactor(
         "Cancelled".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
     );
@@ -53,7 +53,7 @@ fn test_reactor_proposed_can_be_deleted() {
 #[test]
 fn test_reactor_team_helpers() {
     use crate::reactor::EnrichmentLevel;
-    let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100_000_000.0, 1);
     let _pid = gs.player_company.start_proposed_reactor(
         "Mk1".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
     );
@@ -76,7 +76,7 @@ fn test_installable_reactors_filter() {
     use crate::reactor::EnrichmentLevel;
     use crate::reactor_project::ReactorDesignStatus;
 
-    let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100_000_000.0, 1);
     let pid = gs.player_company.start_proposed_reactor(
         "Mk1".into(), 1.0, EnrichmentLevel::Leu, &gs.balance,
     );
@@ -103,7 +103,7 @@ fn test_reactor_project_advances_to_testing() {
         ReactorDesignStatus, ReactorProject, ReactorProjectId,
     };
 
-    let mut gs = GameState::new("Reactor Test".into(), 100_000_000.0, 7);
+    let mut gs = GameState::with_money("Reactor Test".into(), 100_000_000.0, 7);
     let mut project = ReactorProject::new(
         ReactorProjectId(1),
         ReactorId(1),
@@ -146,7 +146,7 @@ fn test_reactor_tech_deficiencies_apply_and_revise() {
     use crate::reactor_project::{ReactorDesignStatus, ReactorProject, ReactorProjectId};
     use crate::technology::TECH_FISSION_REACTOR;
 
-    let mut gs = GameState::new("Reactor Test".into(), 100_000_000.0, 7);
+    let mut gs = GameState::with_money("Reactor Test".into(), 100_000_000.0, 7);
     let mut project = ReactorProject::new(
         ReactorProjectId(1), ReactorId(1), "Mk1 Reactor".into(), 1.0, EnrichmentLevel::Leu,
         &crate::balance_config::BalanceConfig::default(),
@@ -221,7 +221,7 @@ fn test_reactor_flaw_activates_mid_flight() {
     use crate::rocket::{RocketDesign, RocketId};
     use crate::stage::{Stage, StageId};
 
-    let mut gs = GameState::new("Reactor Flight".into(), 200_000_000.0, 11);
+    let mut gs = GameState::new("Reactor Flight".into(), 11);
 
     // A reactor project carrying a guaranteed PerDay endurance flaw.
     let reactor_id = ReactorId(50);
@@ -316,7 +316,7 @@ fn test_reactor_perflight_flaw_fires_at_flight_start() {
     use crate::rocket::{RocketDesign, RocketId};
     use crate::stage::{Stage, StageId};
 
-    let mut gs = GameState::new("Reactor Flight".into(), 200_000_000.0, 5);
+    let mut gs = GameState::new("Reactor Flight".into(), 5);
     let reactor_id = ReactorId(50);
     let mut rproj = ReactorProject::new(
         ReactorProjectId(1), reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu,
@@ -384,7 +384,7 @@ fn test_reactor_flaw_discovery_and_revision_through_daily_loop() {
     use crate::reactor::{EnrichmentLevel, ReactorId};
     use crate::reactor_project::{ReactorDesignStatus, ReactorProject, ReactorProjectId};
 
-    let mut gs = GameState::new("Reactor Test".into(), 100_000_000.0, 3);
+    let mut gs = GameState::with_money("Reactor Test".into(), 100_000_000.0, 3);
     let mut project = ReactorProject::new(
         ReactorProjectId(1), ReactorId(1), "Mk1 Reactor".into(), 1.0, EnrichmentLevel::Leu,
         &crate::balance_config::BalanceConfig::default(),

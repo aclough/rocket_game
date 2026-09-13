@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn test_hire_team() {
-    let mut gs = GameState::new("Test".into(), 1_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000.0, 1);
     // Starts with 1 team (from Company::new)
     assert_eq!(gs.player_company.team_count(), 1);
     gs.player_company.hire_team("Alpha".into(), &gs.balance);
@@ -15,7 +15,7 @@ fn test_hire_team() {
 
 #[test]
 fn test_start_engine_project() {
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+    let mut gs = GameState::new("Test".into(), 1);
     let evt = gs.player_company.start_engine_project(
         "Kestrel".into(),
         crate::engine::EngineCycle::GasGenerator,
@@ -29,7 +29,7 @@ fn test_start_engine_project() {
 
 #[test]
 fn test_team_assignment() {
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+    let mut gs = GameState::new("Test".into(), 1);
     // Starts with 1 team, hire another
     gs.player_company.hire_team("Alpha".into(), &gs.balance);
     gs.player_company.start_engine_project(
@@ -56,13 +56,13 @@ fn test_team_assignment() {
 
 #[test]
 fn test_third_party_catalog() {
-    let gs = GameState::new("Test".into(), 200_000_000.0, 42);
+    let gs = GameState::new("Test".into(), 42);
     assert_eq!(gs.player_company.third_party_catalog.len(), 3);
 }
 
 #[test]
 fn test_contract_third_party() {
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 42);
+    let mut gs = GameState::new("Test".into(), 42);
     let initial_money = gs.player_company.money;
     let date = gs.date;
     let seed = gs.seed.clone();
@@ -78,7 +78,7 @@ fn test_contract_third_party() {
 
 #[test]
 fn test_design_work_progresses() {
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+    let mut gs = GameState::new("Test".into(), 1);
     gs.player_company.hire_team("Alpha".into(), &gs.balance);
     gs.player_company.start_engine_project(
         "Kestrel".into(),
@@ -110,7 +110,7 @@ fn test_design_work_progresses() {
 #[test]
 fn test_cross_pool_engineering_team_steal() {
     use crate::reactor::EnrichmentLevel;
-    let mut gs = GameState::new("Test".into(), 100_000_000.0, 1);
+    let mut gs = GameState::with_money("Test".into(), 100_000_000.0, 1);
     // Hire two more teams so the engine project can carry a load
     // worth stealing from.
     gs.player_company.hire_team("Team 2".into(), &gs.balance);
@@ -162,7 +162,7 @@ fn test_cross_pool_engineering_team_steal() {
 
 #[test]
 fn test_cycle_auto_build_target_requires_testing_and_wraps() {
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 1);
+    let mut gs = GameState::new("Test".into(), 1);
     let (design, engine_projects) = make_three_stage_design();
     gs.player_company.engine_projects = engine_projects;
     let mut rp = RocketProject::new(RocketProjectId(1), design, &gs.balance.clone());

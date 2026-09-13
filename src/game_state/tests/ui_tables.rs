@@ -33,7 +33,7 @@ fn contract_rows_show_days_left_and_flag_overdue() {
 /// to say when a destination is reachable but not survivable.
 #[test]
 fn the_payload_table_flags_destinations_it_cannot_stay_alive_to_reach() {
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
     let (design, engine_projects) = make_three_stage_design();
     gs.player_company.engine_projects = engine_projects;
     assert!(
@@ -66,7 +66,7 @@ fn the_payload_table_flags_destinations_it_cannot_stay_alive_to_reach() {
 /// point of flagging it separately.
 #[test]
 fn power_flips_the_table_verdict_without_moving_the_payload() {
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
     let (bare, engine_projects) = make_three_stage_design();
     gs.player_company.engine_projects = engine_projects;
 

@@ -515,7 +515,7 @@ mod reactor_render_tests {
     /// reactor-flavored strings reach the buffer.
     #[test]
     fn reactors_pane_renders_full_detail() {
-        let mut game = crate::game_state::GameState::new("Render Test".into(), 100_000_000.0, 7);
+        let mut game = crate::game_state::GameState::with_money("Render Test".into(), 100_000_000.0, 7);
 
         let mut project = ReactorProject::new(
             ReactorProjectId(1), ReactorId(1), "Mk1 Reactor".into(), 1.0, EnrichmentLevel::Leu,
@@ -585,9 +585,7 @@ mod market_discovery_render_tests {
     /// accidental debug-format of a Market or archetype.
     #[test]
     fn contracts_pane_shows_realized_only() {
-        let mut game = crate::game_state::GameState::new(
-            "Render Test".into(), 100_000_000.0, 7,
-        );
+        let mut game = crate::game_state::GameState::with_money("Render Test".into(), 100_000_000.0, 7);
 
         // Inject a live campaign mission alongside whatever the first
         // month generated.
@@ -658,9 +656,7 @@ mod market_discovery_render_tests {
     /// market names with their enable state and margin.
     #[test]
     fn r_opens_bid_rules_and_space_toggles() {
-        let game = crate::game_state::GameState::new(
-            "Rules Test".into(), 100_000_000.0, 7,
-        );
+        let game = crate::game_state::GameState::with_money("Rules Test".into(), 100_000_000.0, 7);
         let first_active = game.markets.iter()
             .find(|m| m.active)
             .map(|m| (m.id, m.name.clone()))
@@ -706,9 +702,7 @@ mod market_discovery_render_tests {
     fn h_opens_award_history_showing_outcomes_only() {
         use crate::contract::{AwardOutcome, AwardRecord, MARKET_GEO_COMSATS};
 
-        let mut game = crate::game_state::GameState::new(
-            "History Test".into(), 100_000_000.0, 7,
-        );
+        let mut game = crate::game_state::GameState::with_money("History Test".into(), 100_000_000.0, 7);
         let mk = |name: &str, outcome: AwardOutcome| AwardRecord {
             date: game.date,
             market_id: MARKET_GEO_COMSATS,
@@ -768,9 +762,7 @@ mod market_discovery_render_tests {
     fn award_history_tags_block_awards() {
         use crate::contract::{AwardOutcome, AwardRecord, MARKET_GEO_COMSATS};
 
-        let mut game = crate::game_state::GameState::new(
-            "History Test".into(), 100_000_000.0, 7,
-        );
+        let mut game = crate::game_state::GameState::with_money("History Test".into(), 100_000_000.0, 7);
         game.award_history.push(AwardRecord {
             date: game.date,
             market_id: MARKET_GEO_COMSATS,
@@ -803,9 +795,7 @@ mod market_discovery_render_tests {
     fn p_opens_programs_modal_bids_and_hides_internals() {
         use crate::contract::{Campaign, CampaignId, CampaignStatus, MARKET_GEO_COMSATS};
 
-        let mut game = crate::game_state::GameState::new(
-            "Programs Test".into(), 100_000_000.0, 7,
-        );
+        let mut game = crate::game_state::GameState::with_money("Programs Test".into(), 100_000_000.0, 7);
         // Distinctive hidden numbers: if either renders anywhere the
         // leak assertions below trip.
         let mk = |id: u64, name: &str, status: CampaignStatus| Campaign {
@@ -908,7 +898,7 @@ mod engine_pane_tests {
     use crate::engine_project::EngineDesignStatus;
 
     fn engines_app() -> App {
-        let game = crate::game_state::GameState::new("Test".into(), 100_000_000.0, 1);
+        let game = crate::game_state::GameState::with_money("Test".into(), 100_000_000.0, 1);
         let mut app = App::new(game);
         app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Engines).unwrap();
         app.selected_item = 0;
@@ -1005,9 +995,7 @@ mod contract_table_render_tests {
     }
 
     fn app_with_contracts() -> App {
-        let mut game = crate::game_state::GameState::new(
-            "Column Test".into(), 100_000_000.0, 7,
-        );
+        let mut game = crate::game_state::GameState::with_money("Column Test".into(), 100_000_000.0, 7);
         game.available_contracts = contracts_with_varied_names();
         let mut app = App::new(game);
         app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();

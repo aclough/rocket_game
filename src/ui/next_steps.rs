@@ -151,7 +151,7 @@ mod tests {
     use crate::policy::{BasicPolicy, CompanyPolicy};
 
     fn new_game() -> GameState {
-        GameState::new("Steps Test".into(), 200_000_000.0, 7)
+        GameState::new("Steps Test".into(), 7)
     }
 
     #[test]

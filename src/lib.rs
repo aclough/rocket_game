@@ -37,3 +37,6 @@ pub mod sim;
 pub mod save;
 pub mod report;
 pub mod ui;
+
+#[cfg(test)]
+pub mod test_util;

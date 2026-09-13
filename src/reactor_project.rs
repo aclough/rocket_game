@@ -188,6 +188,7 @@ impl ReactorProject {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{bal};
     use crate::flaw::Flaw;
     use crate::project::WorkEvent;
     use rand::SeedableRng;
@@ -196,9 +197,6 @@ mod tests {
         StdRng::seed_from_u64(7)
     }
 
-    fn bal() -> BalanceConfig {
-        BalanceConfig::default()
-    }
 
     #[test]
     fn new_project_starts_in_design() {

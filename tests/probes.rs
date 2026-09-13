@@ -21,7 +21,6 @@ mod bidding_pipeline {
     //! project statuses, cost history, and every open solicitation with
     //! the capable-cost verdict the rule engine sees (M4 task 5).
 
-    use rocket_tycoon::balance_config::BalanceConfig;
     use rocket_tycoon::game_state::GameState;
     use rocket_tycoon::policy::BasicPolicy;
     use rocket_tycoon::policy::CompanyPolicy;
@@ -31,7 +30,7 @@ mod bidding_pipeline {
     /// solicitation with the capable-cost verdict the rule engine sees.
     fn dump_seed(seed: u64, days: u32) {
         let mut policy = BasicPolicy::new();
-        let mut gs = GameState::with_balance("Bot".into(), seed, BalanceConfig::default());
+        let mut gs = GameState::new("Bot".into(), seed);
         for _ in 0..days {
             policy.act(&mut gs);
             gs.advance_day();
@@ -100,7 +99,6 @@ mod dinosoar {
     //! re-derive competitor tuning (production_lines, margins, initial
     //! stock) after balance changes, and to eyeball a real save.
 
-    use rocket_tycoon::balance_config::BalanceConfig;
     use rocket_tycoon::event::GameEvent;
     use rocket_tycoon::game_state::GameState;
 
@@ -153,7 +151,7 @@ mod dinosoar {
         let mut agg_builds = Vec::new();
         let mut agg_fail = Vec::new();
         for seed in [1u64, 5, 10, 27, 51, 100, 150, 199] {
-            let mut gs = GameState::with_balance("Probe".into(), seed, BalanceConfig::default());
+            let mut gs = GameState::new("Probe".into(), seed);
             let mut awards = 0u32;
             let mut launches = 0u32;
             let mut failures = 0u32;
@@ -247,7 +245,7 @@ mod capability {
     fn capability_probe() {
         // The bot's template, as the step 0 record measured it (seed 42, day 730).
         let mut policy = BasicPolicy::new();
-        let mut game = GameState::new("Probe".into(), 200_000_000.0, 42);
+        let mut game = GameState::new("Probe".into(), 42);
         for _ in 0..730 {
             policy.act(&mut game);
             game.advance_day();
@@ -274,7 +272,7 @@ mod capability {
     #[ignore = "timing probe; run with --ignored --nocapture"]
     fn compute_timing() {
         let mut policy = BasicPolicy::new();
-        let mut game = GameState::new("Probe".into(), 200_000_000.0, 42);
+        let mut game = GameState::new("Probe".into(), 42);
         for _ in 0..730 {
             policy.act(&mut game);
             game.advance_day();
@@ -310,7 +308,7 @@ mod capability {
         use rocket_tycoon::location::DELTA_V_MAP;
         use rocket_tycoon::rocket::design_ascent;
         let mut policy = BasicPolicy::new();
-        let mut game = GameState::new("Probe".into(), 200_000_000.0, 42);
+        let mut game = GameState::new("Probe".into(), 42);
         for _ in 0..730 {
             policy.act(&mut game);
             game.advance_day();
@@ -399,7 +397,6 @@ mod campaigns {
     //! Campaign activity under the sim bot across many worlds —
     //! announcement, award and cancel rates for eyeballing spawn tuning.
 
-    use rocket_tycoon::balance_config::BalanceConfig;
     use rocket_tycoon::calendar::GameDate;
     use rocket_tycoon::game_state::GameState;
 
@@ -423,9 +420,7 @@ mod campaigns {
         let mut cancelled = 0u32;
 
         for seed in 1..=seeds {
-            let mut gs = GameState::with_balance(
-                "SimCorp".into(), seed, BalanceConfig::default(),
-            );
+            let mut gs = GameState::new("SimCorp".into(), seed);
             let mut policy = rocket_tycoon::policy::policy_by_name("basic").unwrap();
             let end = GameDate::new(gs.date.year + years, gs.date.month, gs.date.day);
             while gs.date < end {

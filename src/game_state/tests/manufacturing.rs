@@ -45,7 +45,7 @@ fn test_engine_build_accrues_labor_cost() {
 
 #[test]
 fn test_rocket_cost_history_includes_full_cost_at_completion() {
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
 
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
@@ -65,7 +65,7 @@ fn test_rocket_cost_history_includes_full_cost_at_completion() {
 #[test]
 fn test_engine_cost_history_populated_on_completion() {
     use crate::engine_project::EngineProjectId;
-    let mut gs = GameState::new("Test".into(), 1_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 1_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
 
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
@@ -89,7 +89,7 @@ fn test_engine_cost_history_populated_on_completion() {
 #[test]
 fn test_contracted_engine_build_count_increments_at_order_time() {
     use crate::engine_project::EngineProjectId;
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 42);
+    let mut gs = GameState::new("Test".into(), 42);
 
     let date = gs.date;
     let seed = gs.seed.clone();
@@ -158,7 +158,7 @@ fn run_manufacturing_to_idle(gs: &mut GameState) {
 #[test]
 fn a_rocket_build_uses_engines_already_in_stock() {
     use crate::engine_project::{EngineProjectId, EngineSource};
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     let src = EngineSource::PlayerDesign(EngineProjectId(1));
 
@@ -193,7 +193,7 @@ fn a_rocket_build_uses_engines_already_in_stock() {
 /// then order the rocket — still pays twice.
 #[test]
 fn a_rocket_build_counts_engines_still_being_built() {
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
 
     for _ in 0..4 {
@@ -215,7 +215,7 @@ fn a_rocket_build_counts_engines_still_being_built() {
 /// own full set.
 #[test]
 fn a_second_rocket_does_not_raid_the_first_rockets_engines() {
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
 
     for _ in 0..4 {
@@ -238,7 +238,7 @@ fn a_second_rocket_does_not_raid_the_first_rockets_engines() {
 fn a_rush_job_preempts_the_whole_floor() {
     use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     let (design2, _) = make_three_stage_design();
     let mut rp2 = RocketProject::new(
@@ -278,7 +278,7 @@ fn a_rush_job_preempts_the_whole_floor() {
 fn a_rush_reaches_the_engine_builds_holding_it_up() {
     use crate::rocket_project::RocketProjectId;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     // Hand-built engines, owned by no rocket — the case that defeated the
     // first design.
@@ -304,7 +304,7 @@ fn a_rush_reaches_the_engine_builds_holding_it_up() {
 fn two_rush_jobs_split_the_floor() {
     use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     let (design2, _) = make_three_stage_design();
     let mut rp2 = RocketProject::new(
@@ -339,7 +339,7 @@ fn two_rush_jobs_split_the_floor() {
 fn a_rush_clears_itself_when_the_rocket_is_built() {
     use crate::rocket_project::RocketProjectId;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
     gs.player_company.rush_projects.insert(RocketProjectId(1));
@@ -354,7 +354,7 @@ fn a_rush_clears_itself_when_the_rocket_is_built() {
 /// which is what keeps the balance baseline still.
 #[test]
 fn no_rush_means_the_old_round_robin() {
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
     for i in 0..6 {
@@ -378,7 +378,7 @@ fn no_rush_means_the_old_round_robin() {
 fn a_rush_retires_on_the_first_rocket_not_the_last() {
     use crate::rocket_project::RocketProjectId;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     // Two builds of the same rocket in flight at once.
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
@@ -410,7 +410,7 @@ fn a_rush_retires_on_the_first_rocket_not_the_last() {
 /// same invariant that bit the Ready Rockets list.
 #[test]
 fn the_manufacturing_tree_is_a_permutation_of_the_queue() {
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
     for _ in 0..2 {
@@ -431,7 +431,7 @@ fn the_manufacturing_tree_is_a_permutation_of_the_queue() {
 fn the_manufacturing_tree_nests_integration_stages_engines() {
     use crate::manufacturing::ManufacturingOrderType as T;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
     // One extra engine nobody ordered for a rocket.
@@ -473,7 +473,7 @@ fn the_manufacturing_tree_nests_integration_stages_engines() {
 fn rushed_orders_form_one_block_at_the_top() {
     use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     let (design2, _) = make_three_stage_design();
     let mut rp2 = RocketProject::new(
@@ -502,7 +502,7 @@ fn a_second_build_of_a_rushed_rocket_stays_in_the_ordinary_queue() {
     use crate::rocket_project::RocketProjectId;
     use crate::manufacturing::ManufacturingOrderType as T;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
     gs.player_company.rush_projects.insert(RocketProjectId(1));
@@ -528,7 +528,7 @@ fn a_rush_claims_the_engines_it_needs_and_no_more() {
     use crate::rocket_project::{RocketProject, RocketProjectId, RocketDesignStatus};
     use crate::manufacturing::ManufacturingOrderType as T;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     let (design2, _) = make_three_stage_design();
     let mut rp2 = RocketProject::new(
@@ -562,7 +562,7 @@ fn a_rush_claims_the_most_advanced_engines() {
     use crate::rocket_project::RocketProjectId;
     use crate::manufacturing::ManufacturingOrderType as T;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     // Hand-built engines first, so the rocket's own build queues none of
     // them and every candidate is ownerless.
@@ -591,7 +591,7 @@ fn a_rush_claims_the_most_advanced_engines() {
 fn each_build_keeps_its_own_stages() {
     use crate::manufacturing::ManufacturingOrderType as T;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
@@ -622,7 +622,7 @@ fn a_stage_only_claims_the_engines_it_still_needs() {
     use crate::engine_project::{EngineProjectId, EngineSource};
     use crate::manufacturing::ManufacturingOrderType as T;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     // Three Lifters on S1, one on S2 — put two on the shelf up front.
     for _ in 0..2 {
@@ -679,7 +679,7 @@ fn a_finished_integration_does_not_adopt_the_next_builds_stages() {
     use crate::rocket_project::RocketProjectId;
     use crate::manufacturing::ManufacturingOrderType as T;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
@@ -718,7 +718,7 @@ fn a_stage_already_in_inventory_does_not_claim_a_fresh_order() {
     use crate::rocket_project::RocketProjectId;
     use crate::manufacturing::{InventoryStage, ManufacturingOrderType as T};
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();
     gs.player_company.rush_projects.insert(RocketProjectId(1));
@@ -755,7 +755,7 @@ fn a_stage_already_in_inventory_does_not_claim_a_fresh_order() {
 fn nominal_build_days_matches_the_orders_the_pipeline_queues() {
     use crate::manufacturing::ManufacturingOrderType as T;
 
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     let estimate = gs.player_company
         .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);
@@ -801,7 +801,7 @@ fn nominal_build_days_matches_the_orders_the_pipeline_queues() {
 /// changes nothing, and one that finishes later sets the pace.
 #[test]
 fn nominal_build_days_follows_the_slowest_stage_not_the_sum() {
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
 
     let base = gs.player_company
@@ -839,7 +839,7 @@ fn nominal_build_days_follows_the_slowest_stage_not_the_sum() {
 /// which is a real reason to buy one rather than design your own.
 #[test]
 fn contracted_engines_add_no_build_time() {
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     let with_own_engines = gs.player_company
         .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);
@@ -868,7 +868,7 @@ fn contracted_engines_add_no_build_time() {
 /// the next one take", not "how long did the first one take".
 #[test]
 fn nominal_build_days_reflects_the_learning_curve() {
-    let mut gs = GameState::new("Test".into(), 5_000_000_000.0, 42);
+    let mut gs = GameState::with_money("Test".into(), 5_000_000_000.0, 42);
     setup_buildable_rocket(&mut gs);
     let first = gs.player_company
         .nominal_build_days(&gs.player_company.rocket_projects[0], &gs.balance);

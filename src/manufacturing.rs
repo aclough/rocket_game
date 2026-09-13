@@ -621,16 +621,14 @@ impl Manufacturing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::balance_config::{BalanceConfig, CostsConfig};
+    use crate::test_util::{bal};
+    use crate::balance_config::CostsConfig;
     use crate::engine_project::EngineProjectId;
 
     fn test_source() -> EngineSource {
         EngineSource::PlayerDesign(EngineProjectId(1))
     }
 
-    fn bal() -> BalanceConfig {
-        BalanceConfig::default()
-    }
 
     fn costs() -> CostsConfig {
         CostsConfig::default()

@@ -301,53 +301,10 @@ impl RocketDesign {
 }
 
 #[cfg(test)]
-pub(crate) mod test_fixtures {
-    use crate::engine::*;
-    use crate::propellant::Propellant;
-
-    pub fn kerolox_engine(id: u64, thrust: f64, mass: f64, isp: f64) -> EngineDesign {
-        EngineDesign {
-            id: EngineId(id),
-            name: format!("Engine-{}", id),
-            cycle: EngineCycle::GasGenerator,
-            thrust_n: thrust,
-            mass_kg: mass,
-            isp_s: isp,
-            exit_pressure_pa: 70_000.0,
-            needs_atmosphere: false,
-            propellant_mix: vec![
-                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
-                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
-            ],
-            power_draw_w: 0.0,
-        }
-    }
-
-    pub fn solid_engine(id: u64, thrust: f64, mass: f64, isp: f64) -> EngineDesign {
-        EngineDesign {
-            id: EngineId(id),
-            name: format!("SRB-{}", id),
-            cycle: EngineCycle::PressureFed,
-            thrust_n: thrust,
-            mass_kg: mass,
-            isp_s: isp,
-            exit_pressure_pa: 100_000.0,
-            needs_atmosphere: false,
-            propellant_mix: vec![
-                PropellantFraction { propellant: Propellant::SolidMix, mass_fraction: 1.0 },
-            ],
-            power_draw_w: 0.0,
-        }
-    }
-
-    // --- Sequential staging tests ---
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::stage::*;
-    use crate::rocket::test_fixtures::*;
+    use crate::test_util::*;
 
     #[test]
     fn test_total_mass() {

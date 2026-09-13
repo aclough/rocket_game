@@ -50,7 +50,7 @@ fn test_flaw_scoping_by_stage_usage() {
     assert!(sim.flaw_rolled_groups.contains(&0));
 
     // --- Part 2: Create a spacecraft at LEO and fly to GTO ---
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 42);
+    let mut gs = GameState::new("Test".into(), 42);
     gs.player_company.engine_projects = engine_projects;
     // Reset flaw discovery for the fly phase
     for ep in &mut gs.player_company.engine_projects {
@@ -131,7 +131,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
 
     let (design, engine_projects) = make_three_stage_design();
 
-    let mut gs = GameState::new("Test".into(), 200_000_000.0, 42);
+    let mut gs = GameState::new("Test".into(), 42);
     gs.player_company.engine_projects = engine_projects;
 
     // Simulate launch to get degraded design

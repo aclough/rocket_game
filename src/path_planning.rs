@@ -405,25 +405,13 @@ impl DeltaVMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{kerolox_engine};
     use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
     use crate::location::DELTA_V_MAP;
     use crate::propellant::Propellant;
     use crate::rocket::{RocketDesign, RocketDesignId};
     use crate::stage::{Stage, StageId};
 
-    fn kerolox_engine(id: u64, thrust: f64, mass: f64, isp: f64) -> EngineDesign {
-        EngineDesign {
-            id: EngineId(id), name: format!("KE-{}", id),
-            cycle: EngineCycle::GasGenerator,
-            thrust_n: thrust, mass_kg: mass, isp_s: isp,
-            exit_pressure_pa: 70_000.0, needs_atmosphere: false,
-            propellant_mix: vec![
-                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
-                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
-            ],
-            power_draw_w: 0.0,
-        }
-    }
 
     fn ion_engine(id: u64, thrust: f64, mass: f64, isp: f64) -> EngineDesign {
         EngineDesign {

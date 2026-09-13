@@ -24,7 +24,7 @@ use crate::ui::{
 /// docking has a candidate), a rocket in flight to the Moon, a campaign
 /// soliciting bids, and one rocket in inventory to launch.
 fn rich_app() -> App {
-    let mut game = crate::game_state::GameState::new("Smoke Co".into(), 250_000_000.0, 11);
+    let mut game = crate::game_state::GameState::new("Smoke Co".into(), 11);
     let mut policy = BasicPolicy::new();
     for _ in 0..900 {
         policy.act(&mut game);

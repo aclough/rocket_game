@@ -24,10 +24,7 @@
 //! test control. See `tests/bidding.rs` and `tests/competitor_dino.rs`
 //! for the sibling patterns this borrows from.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use rocket_tycoon::balance_config::BalanceConfig;
-use rocket_tycoon::calendar::GameDate;
 use rocket_tycoon::competitor::realize_dinosoar;
 use rocket_tycoon::contract::{
     Contract, ContractId, ContractStatus, MarketId, MARKET_GEO_COMSATS, MARKET_RIDESHARE,
@@ -36,6 +33,9 @@ use rocket_tycoon::event::GameEvent;
 use rocket_tycoon::game_state::{BidRule, GameState};
 use rocket_tycoon::policy::policy_by_name;
 use rocket_tycoon::rocket_perf::max_payload_to;
+
+mod common;
+use common::{advance_through, temp_save_path};
 
 /// A fresh game with the scripted competitor disabled (so the player
 /// is the sole bidder) and DinoSoar's realized "Brontosaur IV"
@@ -82,26 +82,6 @@ fn inject_contract(gs: &mut GameState, id: u64, name: &str, market_id: MarketId)
     gs.available_contracts.len() - 1
 }
 
-/// Advance `gs` day by day (up to `max_days`), collecting every event
-/// fired, until `gs.date` passes `deadline`. Panics if that never
-/// happens, so a bug that skips resolution fails loudly instead of
-/// silently passing an empty-events test.
-fn advance_through(gs: &mut GameState, deadline: GameDate, max_days: u32) -> Vec<GameEvent> {
-    let mut all = Vec::new();
-    for _ in 0..max_days {
-        // A tick does its work under the date the clock reads *now* and only
-        // rolls over at the end, so bids resolve on the first tick that
-        // *runs* past the deadline. Test against the date the body ran
-        // under, not the post-tick one — the latter is already a day ahead
-        // and would return before the resolving tick ever happened.
-        let ran_on = gs.date;
-        all.extend(gs.advance_day());
-        if ran_on > deadline {
-            return all;
-        }
-    }
-    panic!("resolution did not happen within {max_days} days of deadline {deadline}");
-}
 
 /// `available_contracts` is re-sorted by market id every time the monthly
 /// block adds to it (`advance.rs`), and the first tick of a new game now runs
@@ -119,13 +99,6 @@ fn player_bid_for(gs: &GameState, name: &str) -> Option<f64> {
         .player_bid
 }
 
-fn temp_save_path(tag: &str) -> std::path::PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join("rocket_tycoon_test");
-    std::fs::create_dir_all(&dir).unwrap();
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    dir.join(format!("bid_rules_{tag}_{}_{n}.json", std::process::id()))
-}
 
 // ---------------------------------------------------------------
 // 1. Sanity: the borrowed design is actually capable of LEO.
@@ -474,7 +447,7 @@ fn rules_survive_save_load() {
         BidRule { enabled: false, margin: 1.25 },
     );
 
-    let path = temp_save_path("roundtrip");
+    let path = temp_save_path("bid_rules_roundtrip");
     rocket_tycoon::save::save_game(&gs, &path).expect("save should succeed");
     let loaded = rocket_tycoon::save::load_game(&path).expect("load should succeed");
 
@@ -526,7 +499,7 @@ fn policy_by_name_margin_syntax() {
 
 #[test]
 fn basic_policy_installs_rules() {
-    let mut gs = GameState::with_balance("Test".into(), 12, BalanceConfig::default());
+    let mut gs = GameState::new("Test".into(), 12);
     let mut policy = policy_by_name("basic").expect("basic policy should resolve");
     policy.act(&mut gs);
 

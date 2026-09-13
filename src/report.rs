@@ -333,7 +333,7 @@ mod tests {
     /// to fill, rather than printing "(none)" everywhere.
     fn game() -> GameState {
         use crate::policy::{BasicPolicy, CompanyPolicy};
-        let mut g = GameState::new("Report Co".into(), 200_000_000.0, 3);
+        let mut g = GameState::new("Report Co".into(), 3);
         let mut policy = BasicPolicy::new();
         for _ in 0..500 {
             policy.act(&mut g);
@@ -457,7 +457,7 @@ mod tests {
     /// panic on, and it's exactly when a new player hits a bug.
     #[test]
     fn a_brand_new_company_reports_without_panicking() {
-        let g = GameState::new("Day One".into(), 200_000_000.0, 1);
+        let g = GameState::new("Day One".into(), 1);
         let text = report(&g, None, None);
         assert!(text.contains("Day One"));
         assert!(text.contains("(none)"), "no projects yet, and that's fine");
