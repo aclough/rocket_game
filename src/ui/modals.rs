@@ -62,16 +62,8 @@ impl App {
                 }
             }
             InputMode::Help { .. } => {
-                // Any key dismisses. Returning to the designer restores
-                // its in-progress state rather than discarding the
-                // design the player was in the middle of.
-                let old_mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
-                match old_mode {
-                    InputMode::Help { scope: HelpScope::RocketDesigner(state) } => {
-                        self.input_mode = InputMode::RocketDesigner { state };
-                    }
-                    _ => self.exit_modal(),
-                }
+                // Any key dismisses.
+                self.exit_modal();
             }
             InputMode::ReactorEditor { .. }
             | InputMode::ReactorEditorField { .. } => {
@@ -288,44 +280,37 @@ impl App {
                             self.exit_modal();
                         } else {
                             let name = buffer.clone();
-                            self.input_mode = InputMode::RocketDesigner {
-                                state: Box::new(RocketDesignerState::new(name)),
-                            };
+                            self.input_mode = InputMode::designer(
+                                Box::new(RocketDesignerState::new(name)),
+                            );
                         }
                     }
                 }
             }
-            InputMode::RocketDesigner { .. }
-            | InputMode::RocketPickEngine { .. }
-            | InputMode::RocketPayloadInput { .. }
-            | InputMode::RocketDesignerLocationPicker { .. }
-            | InputMode::PowerEditor { .. } => {
-                // Extract all data from the enum variant before calling handlers,
-                // to avoid holding a mutable borrow on self.input_mode.
+            InputMode::RocketDesigner { .. } => {
+                // Take the state out before calling handlers, so none
+                // holds a borrow on self.input_mode; each puts it back.
                 let old_mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
-                match old_mode {
-                    InputMode::RocketDesigner { state } => {
-                        self.handle_rocket_designer_key(key, state);
+                let InputMode::RocketDesigner { state, sub } = old_mode else { unreachable!() };
+                match sub {
+                    DesignerSubMode::Main => self.handle_rocket_designer_key(key, state),
+                    DesignerSubMode::PickEngine(pick) => {
+                        self.handle_rocket_pick_engine_key(key, state, pick);
                     }
-                    InputMode::RocketPickEngine { state, target_index, inner_index, editing, booster, selected } => {
-                        self.handle_rocket_pick_engine_key(
-                            key, state, target_index, inner_index, editing, booster, selected,
-                        );
-                    }
-                    InputMode::RocketPayloadInput { state, buffer } => {
+                    DesignerSubMode::PayloadInput { buffer } => {
                         self.handle_rocket_payload_input_key(key, state, buffer);
                     }
-                    InputMode::RocketDesignerLocationPicker { state, target, locations, selected } => {
+                    DesignerSubMode::LocationPicker { target, locations, selected } => {
                         self.handle_rocket_designer_location_picker_key(
                             key, state, target, locations, selected,
                         );
                     }
-                    InputMode::PowerEditor { state, group_index, stage_index, cursor } => {
-                        self.handle_power_editor_key(
-                            key, state, group_index, stage_index, cursor,
-                        );
+                    DesignerSubMode::PowerEditor { group_index, stage_index, cursor } => {
+                        self.handle_power_editor_key(key, state, group_index, stage_index, cursor);
                     }
-                    _ => unreachable!(),
+                    // Any key closes help and returns to the design in
+                    // progress.
+                    DesignerSubMode::Help => self.input_mode = InputMode::designer(state),
                 }
             }
             InputMode::LaunchManifest {
@@ -928,7 +913,7 @@ pub(super) mod help_tests {
     fn help_in_the_designer_returns_to_the_designer() {
         let mut a = app();
         let state = Box::new(RocketDesignerState::new("Half Built".into()));
-        a.input_mode = InputMode::RocketDesigner { state };
+        a.input_mode = InputMode::designer(state);
 
         a.handle_key(KeyCode::Char('?'));
         let text = render(&a, 120, 44);
@@ -938,7 +923,7 @@ pub(super) mod help_tests {
 
         a.handle_key(KeyCode::Esc);
         match &a.input_mode {
-            InputMode::RocketDesigner { state } => {
+            InputMode::RocketDesigner { state, sub: DesignerSubMode::Main } => {
                 assert_eq!(state.rocket_name, "Half Built",
                     "the in-progress design must survive a help detour");
             }

@@ -286,7 +286,7 @@ impl App {
                 // Project disappeared (shouldn't happen) — bail back to
                 // wherever we came from.
                 match state {
-                    Some(s) => self.input_mode = InputMode::RocketDesigner { state: s },
+                    Some(s) => self.input_mode = InputMode::designer(s),
                     None => self.exit_modal(),
                 }
                 return;
@@ -301,7 +301,7 @@ impl App {
                 match state {
                     // From the rocket designer: return there (the engine
                     // stays as edited; it commits with the rocket).
-                    Some(s) => self.input_mode = InputMode::RocketDesigner { state: s },
+                    Some(s) => self.input_mode = InputMode::designer(s),
                     // Standalone: cancel the draft we created.
                     None => {
                         self.game.player_company.delete_proposed(ProjectRef::Engine(project_id));
@@ -415,7 +415,7 @@ impl App {
             .get(group_index)
             .and_then(|g| g.get(stage_index));
         if stage.is_none() {
-            self.input_mode = InputMode::RocketDesigner { state };
+            self.input_mode = InputMode::designer(state);
             return;
         }
         let n_equipped = state.stage_groups[group_index][stage_index]
@@ -443,7 +443,7 @@ impl App {
 
         match key {
             KeyCode::Esc => {
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
                 return;
             }
             KeyCode::Up => cursor_up(&mut cursor),
@@ -507,9 +507,9 @@ impl App {
                 }
             _ => {}
         }
-        self.input_mode = InputMode::PowerEditor {
-            state, group_index, stage_index, cursor,
-        };
+        self.input_mode = InputMode::designer_with(
+            state, DesignerSubMode::PowerEditor { group_index, stage_index, cursor },
+        );
     }
 }
 

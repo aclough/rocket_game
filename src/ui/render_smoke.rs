@@ -13,8 +13,8 @@ use crate::policy::{BasicPolicy, CompanyPolicy};
 use crate::rocket::RocketId;
 use crate::ui::modals::help_tests::render;
 use crate::ui::{
-    App, DvPlannerState, EditorField, HelpScope, InputMode, LocationPickerTarget, PlannerSetupField,
-    PlannerSetupState, PlannerSource, RocketDesignerState, Tab,
+    App, DesignerSubMode, DvPlannerState, EditorField, InputMode, LocationPickerTarget, PickSlot,
+    PlannerSetupField, PlannerSetupState, PlannerSource, RocketDesignerState, Tab,
 };
 
 /// One company with a bit of everything: the bot runs it for two and a
@@ -117,8 +117,8 @@ fn modes(app: &App) -> Vec<(&'static str, InputMode)> {
     let campaign_id = app.game.active_campaigns[0].id;
     let state = || designer_state(app);
     vec![
-        ("help", InputMode::Help { scope: HelpScope::Tab(0) }),
-        ("designer help", InputMode::Help { scope: HelpScope::RocketDesigner(state()) }),
+        ("help", InputMode::Help { tab: 0 }),
+        ("designer help", InputMode::designer_with(state(), DesignerSubMode::Help)),
         ("intro", InputMode::Intro),
         ("engine editor", InputMode::EngineEditor { project_id: epid, cursor: 1, state: None }),
         ("engine editor from designer", InputMode::EngineEditor { project_id: epid, cursor: 1, state: Some(state()) }),
@@ -142,18 +142,18 @@ fn modes(app: &App) -> Vec<(&'static str, InputMode)> {
         ("award history", InputMode::AwardHistory { scroll: 0 }),
         ("campaigns", InputMode::Campaigns { selected: 0 }),
         ("campaign bid", InputMode::CampaignBidEntry { campaign_id, selected: 0, buffer: "18".into() }),
-        ("designer", InputMode::RocketDesigner { state: state() }),
-        ("power editor", InputMode::PowerEditor { state: state(), group_index: 0, stage_index: 0, cursor: 0 }),
-        ("engine picker", InputMode::RocketPickEngine {
-            state: state(), target_index: None, inner_index: None, editing: false, booster: false, selected: 0,
-        }),
-        ("payload input", InputMode::RocketPayloadInput { state: state(), buffer: "500".into() }),
-        ("location picker", InputMode::RocketDesignerLocationPicker {
-            state: state(), target: LocationPickerTarget::LaunchSite, locations: locations.clone(), selected: 0,
-        }),
-        ("destination picker", InputMode::RocketDesignerLocationPicker {
-            state: state(), target: LocationPickerTarget::MissionDestination, locations: locations.clone(), selected: 3,
-        }),
+        ("designer", InputMode::designer(state())),
+        ("power editor", InputMode::designer_with(
+            state(), DesignerSubMode::PowerEditor { group_index: 0, stage_index: 0, cursor: 0 },
+        )),
+        ("engine picker", InputMode::designer_with(state(), DesignerSubMode::pick(PickSlot::Append))),
+        ("payload input", InputMode::designer_with(state(), DesignerSubMode::PayloadInput { buffer: "500".into() })),
+        ("location picker", InputMode::designer_with(state(), DesignerSubMode::LocationPicker {
+            target: LocationPickerTarget::LaunchSite, locations: locations.clone(), selected: 0,
+        })),
+        ("destination picker", InputMode::designer_with(state(), DesignerSubMode::LocationPicker {
+            target: LocationPickerTarget::MissionDestination, locations: locations.clone(), selected: 3,
+        })),
         ("launch manifest", InputMode::LaunchManifest {
             rocket_item_id: inventory_item, persist: false,
             contract_picks: vec![false; app.game.available_contracts.len()],
@@ -220,9 +220,54 @@ fn every_tab_and_modal_renders_at_both_widths() {
     }
     // And a few keys through the designer, which is where the last
     // regression was found.
-    app.input_mode = InputMode::RocketDesigner { state: designer_state(&app) };
+    app.input_mode = InputMode::designer(designer_state(&app));
     for key in [KeyCode::Down, KeyCode::Char('v'), KeyCode::Char('b'), KeyCode::Esc, KeyCode::Char('?')] {
         app.handle_key(key);
         let _ = render(&app, 120, 40);
     }
+    assert!(matches!(app.input_mode, InputMode::RocketDesigner { sub: DesignerSubMode::Help, .. }));
+    app.handle_key(KeyCode::Char('z'));
+    assert!(matches!(app.input_mode, InputMode::RocketDesigner { sub: DesignerSubMode::Main, .. }),
+        "any key closes the designer's help back into the designer");
+}
+
+/// The designer's sub-modals draw over the designer, not over the tabs
+/// behind it (17_4_UI.md Q1), and so does the engine editor opened from
+/// the designer's picker: the designer's title is still on screen under
+/// each of them.
+#[test]
+fn designer_sub_modals_draw_over_the_designer() {
+    let app0 = rich_app();
+    let mut app = rich_app();
+    let epid = app.game.player_company.engine_projects[0].project_id;
+    let locations: Vec<(&'static str, &'static str)> = crate::location::DELTA_V_MAP.locations()
+        .iter().map(|l| (l.id, l.display_name)).collect();
+    let title = "Rocket Designer: \"Smoke Design\"";
+    let subs = vec![
+        ("engine picker", DesignerSubMode::pick(PickSlot::Append)),
+        ("payload input", DesignerSubMode::PayloadInput { buffer: "500".into() }),
+        ("location picker", DesignerSubMode::LocationPicker {
+            target: LocationPickerTarget::LaunchSite, locations, selected: 0,
+        }),
+        ("power editor", DesignerSubMode::PowerEditor { group_index: 0, stage_index: 0, cursor: 0 }),
+        ("help", DesignerSubMode::Help),
+    ];
+    for (name, sub) in subs {
+        app.input_mode = InputMode::designer_with(designer_state(&app0), sub);
+        let screen = render(&app, 120, 40);
+        assert!(screen.contains(title), "{name}: the designer should be drawn behind it");
+    }
+    for (name, mode) in [
+        ("engine editor", InputMode::EngineEditor { project_id: epid, cursor: 0, state: Some(designer_state(&app0)) }),
+        ("engine name", InputMode::EngineEditorField {
+            project_id: epid, cursor: 0, field: EditorField::Name, buffer: "N".into(), state: Some(designer_state(&app0)),
+        }),
+    ] {
+        app.input_mode = mode;
+        let screen = render(&app, 120, 40);
+        assert!(screen.contains(title), "{name} from the designer: the designer should be drawn behind it");
+    }
+    // And a standalone engine editor does not drag the designer in.
+    app.input_mode = InputMode::EngineEditor { project_id: epid, cursor: 0, state: None };
+    assert!(!render(&app, 120, 40).contains(title));
 }

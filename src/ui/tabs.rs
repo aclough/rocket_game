@@ -238,7 +238,7 @@ impl App {
                 let state = Box::new(RocketDesignerState::from_existing(
                     project, &self.game.player_company,
                 ));
-                self.enter_modal(InputMode::RocketDesigner { state });
+                self.enter_modal(InputMode::designer(state));
             }
             (ProjectKind::Rocket, KeyCode::Char('m')) if index.is_some() => {
                 // Cycle auto-build target: 0 → 1 → 2 → 3 → 0

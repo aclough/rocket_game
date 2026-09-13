@@ -2,6 +2,7 @@
 //! `draw_modal`, one arm per `InputMode`.
 
 use super::*;
+use crate::ui::DesignerSubMode;
 
 /// The `?` reference. Shows the keys for wherever the player pressed
 /// it — the current tab, or the rocket designer — followed by the
@@ -18,7 +19,7 @@ pub(super) fn draw_help_modal(
             let tab = Tab::ALL.get(*idx).copied().unwrap_or(Tab::Overview);
             (format!("{} tab", tab.name()), keys::for_tab(tab))
         }
-        crate::ui::HelpScope::RocketDesigner(_) => (
+        crate::ui::HelpScope::RocketDesigner => (
             "Rocket designer".to_string(), keys::ROCKET_DESIGNER,
         ),
     };
@@ -139,9 +140,9 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Clear, modal_area);
 
     match &app.input_mode {
-        InputMode::Normal | InputMode::RocketDesigner { .. } => {}
-        InputMode::Help { scope } => {
-            draw_help_modal(frame, scope, area);
+        InputMode::Normal => {}
+        InputMode::Help { tab } => {
+            draw_help_modal(frame, &crate::ui::HelpScope::Tab(*tab), area);
         }
         InputMode::Intro => draw_intro_modal(frame, app, area),
         InputMode::ConfirmRetire { effects, .. } => {
@@ -376,23 +377,6 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(total),
             ];
             render_modal(frame, modal_area, " Block Bid ", lines);
-        }
-        InputMode::RocketPickEngine { state, selected, .. } => {
-            draw_rocket_pick_engine_modal(frame, app, state, *selected, modal_area);
-        }
-        InputMode::PowerEditor { state, group_index, stage_index, cursor } => {
-            draw_power_editor_modal(
-                frame, app, state, *group_index, *stage_index, *cursor, modal_area,
-            );
-        }
-        InputMode::RocketPayloadInput { buffer, .. } => {
-            let lines = vec![
-                Line::from(""),
-                Line::from("  Enter payload mass (kg):"),
-                Line::from(""),
-                Line::from(format!("  > {}█", buffer)),
-            ];
-            render_modal(frame, modal_area, " Set Payload ", lines);
         }
         InputMode::LaunchManifest {
             rocket_item_id, contract_picks, spacecraft_picks,
@@ -809,28 +793,51 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(hint_line("  [Enter] Confirm  [Esc] Cancel"));
             render_modal(frame, modal_area, " Undock — Pick Payload ", lines);
         }
-        InputMode::RocketDesignerLocationPicker { target, locations, selected, .. } => {
-            let title = match target {
-                crate::ui::LocationPickerTarget::LaunchSite => " Pick Launch Site ",
-                crate::ui::LocationPickerTarget::MissionDestination => " Pick Mission Destination ",
-            };
-            let mut lines = vec![Line::from("")];
-            // Visible window around the selected entry so long lists scroll.
-            let modal_inner_h = modal_area.height.saturating_sub(4) as usize;
-            let window = modal_inner_h.max(5);
-            let start = selected.saturating_sub(window / 2).min(locations.len().saturating_sub(window));
-            for (i, (_id, name)) in locations.iter().enumerate().skip(start).take(window) {
-                let marker = if i == *selected { " ▶ " } else { "   " };
-                let style = selected_style(i == *selected);
-                lines.push(Line::from(Span::styled(
-                    format!("{}{}", marker, name),
-                    style,
-                )));
+        InputMode::RocketDesigner { state, sub } => match sub {
+            DesignerSubMode::Main => {}
+            DesignerSubMode::Help => {
+                draw_help_modal(frame, &crate::ui::HelpScope::RocketDesigner, area);
             }
-            lines.push(Line::from(""));
-            lines.push(hint_line("  [↑↓] Move  [Enter] Confirm  [Esc] Cancel"));
-            render_modal(frame, modal_area, title, lines);
-        }
+            DesignerSubMode::PickEngine(pick) => {
+                draw_rocket_pick_engine_modal(frame, app, state, pick.selected, modal_area);
+            }
+            DesignerSubMode::PowerEditor { group_index, stage_index, cursor } => {
+                draw_power_editor_modal(
+                    frame, app, state, *group_index, *stage_index, *cursor, modal_area,
+                );
+            }
+            DesignerSubMode::PayloadInput { buffer } => {
+                let lines = vec![
+                    Line::from(""),
+                    Line::from("  Enter payload mass (kg):"),
+                    Line::from(""),
+                    Line::from(format!("  > {}█", buffer)),
+                ];
+                render_modal(frame, modal_area, " Set Payload ", lines);
+            }
+            DesignerSubMode::LocationPicker { target, locations, selected } => {
+                let title = match target {
+                    crate::ui::LocationPickerTarget::LaunchSite => " Pick Launch Site ",
+                    crate::ui::LocationPickerTarget::MissionDestination => " Pick Mission Destination ",
+                };
+                let mut lines = vec![Line::from("")];
+                // Visible window around the selected entry so long lists scroll.
+                let modal_inner_h = modal_area.height.saturating_sub(4) as usize;
+                let window = modal_inner_h.max(5);
+                let start = selected.saturating_sub(window / 2).min(locations.len().saturating_sub(window));
+                for (i, (_id, name)) in locations.iter().enumerate().skip(start).take(window) {
+                    let marker = if i == *selected { " ▶ " } else { "   " };
+                    let style = selected_style(i == *selected);
+                    lines.push(Line::from(Span::styled(
+                        format!("{}{}", marker, name),
+                        style,
+                    )));
+                }
+                lines.push(Line::from(""));
+                lines.push(hint_line("  [↑↓] Move  [Enter] Confirm  [Esc] Cancel"));
+                render_modal(frame, modal_area, title, lines);
+            }
+        },
     }
 }
 

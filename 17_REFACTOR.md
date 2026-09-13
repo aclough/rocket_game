@@ -519,7 +519,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
   `EngineCycle::display_name()`, one `fit` helper.
 - **Size/risk:** small / low. The byte-slice is a latent panic.
 
-### F6. Designer state threaded through six `InputMode` variants
+### ✅ F6. Designer state threaded through six `InputMode` variants
 - **Where:** `Box<RocketDesignerState>` is carried by `RocketPickEngine`,
   `RocketPayloadInput`, `RocketDesignerLocationPicker`, `PowerEditor`,
   `Help`, `EngineEditor`, so every key `mem::replace`s it out and

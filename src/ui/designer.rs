@@ -9,6 +9,68 @@ use crate::stage::{
     autosize_propellant, propellant_step, recompute_structural_masses, MIN_AUTOSIZED_PROPELLANT,
 };
 
+/// What the designer has open over itself (17_4_UI.md step 5 / F6).
+/// The design state stays on `InputMode::RocketDesigner`; these carry
+/// only the sub-modal's own cursor and buffer.
+#[derive(Debug, Clone)]
+pub enum DesignerSubMode {
+    /// Nothing: keys go to the designer.
+    Main,
+    /// The engine list for a stage slot.
+    PickEngine(EnginePick),
+    /// Typing the payload mass.
+    PayloadInput { buffer: String },
+    /// Picking the launch site or the mission destination.
+    LocationPicker {
+        target: LocationPickerTarget,
+        locations: Vec<(&'static str, &'static str)>,
+        selected: usize,
+    },
+    /// The per-stage power-source editor. Cursor walks a merged list of
+    /// equipped sources then presets to add; Space adds, X/Del removes.
+    PowerEditor { group_index: usize, stage_index: usize, cursor: usize },
+    /// The designer's key reference.
+    Help,
+}
+
+impl DesignerSubMode {
+    /// The engine picker for `slot`, cursor at the top.
+    pub fn pick(slot: PickSlot) -> DesignerSubMode {
+        DesignerSubMode::PickEngine(EnginePick { slot, selected: 0 })
+    }
+}
+
+/// Where a picked engine goes. Group 0 is the bottom of the stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickSlot {
+    /// A new group on top of the stack.
+    Append,
+    /// A new group at index `gi`; the groups from there up move up one.
+    InsertAt(usize),
+    /// A parallel (booster) stage in group `gi`.
+    BoosterFor(usize),
+    /// Replace stage `si` of group `gi`.
+    Replace(usize, usize),
+}
+
+impl PickSlot {
+    /// The group the engine will sit in, given the stack's current
+    /// group count — the bottom group gets the sea-level bell.
+    pub fn group_index(self, group_count: usize) -> usize {
+        match self {
+            PickSlot::Append => group_count,
+            PickSlot::InsertAt(gi) | PickSlot::BoosterFor(gi) | PickSlot::Replace(gi, _) => gi,
+        }
+    }
+}
+
+/// The engine picker: which slot it is filling and where its cursor is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnginePick {
+    pub slot: PickSlot,
+    pub selected: usize,
+}
+
 /// Whether the rocket designer is creating a brand-new design or
 /// modifying an existing project (post-Phase-3 tankage / power tweaks
 /// to a rocket the player has already started building).
@@ -339,10 +401,7 @@ fn apply_picked_engine_to_designer(
     state: &mut RocketDesignerState,
     source: EngineSource,
     engine: EngineDesign,
-    target_index: Option<usize>,
-    inner_index: Option<usize>,
-    editing: bool,
-    booster: bool,
+    slot: PickSlot,
 ) {
     let engine_count = 1u32;
     // Placeholder — the real load is solved once the stage is in place and
@@ -360,28 +419,27 @@ fn apply_picked_engine_to_designer(
     };
     state.next_stage_id += 1;
 
-    match (editing, booster, inner_index, target_index) {
-        (true, _, Some(ii), Some(gi)) => {
-            state.replace_stage(gi, ii, stage, source);
+    match slot {
+        PickSlot::Replace(gi, si) => {
+            state.replace_stage(gi, si, stage, source);
             state.selected_group = gi;
-            state.selected_inner = ii;
+            state.selected_inner = si;
         }
-        (false, true, _, Some(gi)) => {
+        PickSlot::BoosterFor(gi) => {
             state.push_to_group(gi, stage, source);
             state.selected_group = gi;
             state.selected_inner = state.stage_groups[gi].len() - 1;
         }
-        (false, false, _, Some(gi)) => {
+        PickSlot::InsertAt(gi) => {
             state.insert_new_group_at(gi, stage, source);
             state.selected_group = gi;
             state.selected_inner = 0;
         }
-        (false, false, _, None) => {
+        PickSlot::Append => {
             state.push_new_group(stage, source);
             state.selected_group = state.stage_groups.len() - 1;
             state.selected_inner = 0;
         }
-        _ => {}
     }
 
     rename_all_stages(&mut state.stage_groups);
@@ -408,48 +466,34 @@ impl App {
                 if flat > 0 {
                     state.select_flat(flat - 1);
                 }
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Down => {
                 let flat = state.flat_index();
                 if flat < state.total_stages() {
                     state.select_flat(flat + 1);
                 }
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Enter => {
                 if state.is_modify() {
                     self.status_message = Some(
                         "Stage layout fixed in Modify mode — only propellant / power editable".into());
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                 } else if state.on_add_slot() {
                     // Same as 'a' — add stage at end
                     if state.has_low_thrust_stage() {
                         self.status_message = Some(
                             "Low-thrust designs must be single-stage — carry as payload instead".into());
-                        self.input_mode = InputMode::RocketDesigner { state };
+                        self.input_mode = InputMode::designer(state);
                     } else {
-                        self.input_mode = InputMode::RocketPickEngine {
-                            state,
-                            target_index: None,
-                            inner_index: None,
-                            editing: false,
-                            booster: false,
-                            selected: 0,
-                        };
+                        self.input_mode = InputMode::designer_with(state, DesignerSubMode::pick(PickSlot::Append));
                     }
                 } else {
                     // Edit the selected inner stage
                     let gi = state.selected_group;
                     let si = state.selected_inner;
-                    self.input_mode = InputMode::RocketPickEngine {
-                        target_index: Some(gi),
-                        inner_index: Some(si),
-                        editing: true,
-                        booster: false,
-                        selected: 0,
-                        state,
-                    };
+                    self.input_mode = InputMode::designer_with(state, DesignerSubMode::pick(PickSlot::Replace(gi, si)));
                 }
             }
             KeyCode::Left => {
@@ -468,7 +512,7 @@ impl App {
                         recompute_structural_masses(&mut state.stage_groups);
                     }
                 }
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Right => {
                 // Increase engine count on selected inner stage
@@ -486,7 +530,7 @@ impl App {
                         recompute_structural_masses(&mut state.stage_groups);
                     }
                 }
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 // Increase propellant by thrust-scaled step (not for solid engines)
@@ -502,7 +546,7 @@ impl App {
                         recompute_structural_masses(&mut state.stage_groups);
                     }
                 }
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Char('-') => {
                 // Decrease propellant by thrust-scaled step (not for solid engines)
@@ -518,27 +562,20 @@ impl App {
                         recompute_structural_masses(&mut state.stage_groups);
                     }
                 }
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 // Add stage at end (new group)
                 if state.is_modify() {
                     self.status_message = Some(
                         "Stage layout fixed in Modify mode".into());
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                 } else if state.has_low_thrust_stage() {
                     self.status_message = Some(
                         "Low-thrust designs must be single-stage — carry as payload instead".into());
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                 } else {
-                    self.input_mode = InputMode::RocketPickEngine {
-                        state,
-                        target_index: None,
-                        inner_index: None,
-                        editing: false,
-                        booster: false,
-                        selected: 0,
-                    };
+                    self.input_mode = InputMode::designer_with(state, DesignerSubMode::pick(PickSlot::Append));
                 }
             }
             KeyCode::Char('w') | KeyCode::Char('W') => {
@@ -547,11 +584,11 @@ impl App {
                 if !state.on_add_slot() {
                     let group_index = state.selected_group;
                     let stage_index = state.selected_inner;
-                    self.input_mode = InputMode::PowerEditor {
-                        state, group_index, stage_index, cursor: 0,
-                    };
+                    self.input_mode = InputMode::designer_with(
+                        state, DesignerSubMode::PowerEditor { group_index, stage_index, cursor: 0 },
+                    );
                 } else {
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                 }
             }
             KeyCode::Char('i') | KeyCode::Char('I') => {
@@ -559,25 +596,18 @@ impl App {
                 if state.is_modify() {
                     self.status_message = Some(
                         "Stage layout fixed in Modify mode".into());
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                 } else if !state.on_add_slot() {
                     if state.has_low_thrust_stage() {
                         self.status_message = Some(
                             "Low-thrust designs must be single-stage — carry as payload instead".into());
-                        self.input_mode = InputMode::RocketDesigner { state };
+                        self.input_mode = InputMode::designer(state);
                     } else {
                         let idx = state.selected_group;
-                        self.input_mode = InputMode::RocketPickEngine {
-                            state,
-                            target_index: Some(idx),
-                            inner_index: None,
-                            editing: false,
-                            booster: false,
-                            selected: 0,
-                        };
+                        self.input_mode = InputMode::designer_with(state, DesignerSubMode::pick(PickSlot::InsertAt(idx)));
                     }
                 } else {
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                 }
             }
             KeyCode::Char('b') | KeyCode::Char('B') => {
@@ -585,31 +615,22 @@ impl App {
                 if state.is_modify() {
                     self.status_message = Some(
                         "Stage layout fixed in Modify mode".into());
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                 } else if !state.on_add_slot() {
                     if state.has_low_thrust_stage() {
                         self.status_message = Some(
                             "Low-thrust designs must be single-stage — carry as payload instead".into());
-                        self.input_mode = InputMode::RocketDesigner { state };
+                        self.input_mode = InputMode::designer(state);
                     } else {
                         let gi = state.selected_group;
-                        self.input_mode = InputMode::RocketPickEngine {
-                            state,
-                            target_index: Some(gi),
-                            inner_index: None,
-                            editing: false,
-                            booster: true,
-                            selected: 0,
-                        };
+                        self.input_mode = InputMode::designer_with(state, DesignerSubMode::pick(PickSlot::BoosterFor(gi)));
                     }
                 } else {
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                 }
             }
             KeyCode::Char('?') => {
-                self.input_mode = InputMode::Help {
-                    scope: HelpScope::RocketDesigner(state),
-                };
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::Help);
             }
             KeyCode::Char('v') | KeyCode::Char('V') => {
                 // Toggle the selected stage between the sea-level and
@@ -617,7 +638,7 @@ impl App {
                 // engine project — the nozzle is fitted at stage
                 // integration, so there is nothing extra to develop.
                 if state.on_add_slot() || state.stage_groups.is_empty() {
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                     return;
                 }
                 let gi = state.selected_group;
@@ -651,14 +672,14 @@ impl App {
                             "Third-party engines come with a fixed nozzle".into());
                     }
                 }
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Char('x') | KeyCode::Char('X') => {
                 // Remove selected inner stage
                 if state.is_modify() {
                     self.status_message = Some(
                         "Stage layout fixed in Modify mode".into());
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                     return;
                 }
                 if !state.on_add_slot() && !state.stage_groups.is_empty() {
@@ -686,14 +707,14 @@ impl App {
                         self.status_message = Some("Removed booster stage".into());
                     }
                 }
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Char('p') | KeyCode::Char('P') => {
                 // Set payload
-                self.input_mode = InputMode::RocketPayloadInput {
-                    buffer: format!("{}", state.payload_kg as u64),
-                    state,
-                };
+                let buffer = format!("{}", state.payload_kg as u64);
+                self.input_mode = InputMode::designer_with(
+                    state, DesignerSubMode::PayloadInput { buffer },
+                );
             }
             KeyCode::Char('l') | KeyCode::Char('L') => {
                 // Pick launch site
@@ -701,9 +722,9 @@ impl App {
                     .map(|loc| (loc.id, loc.display_name))
                     .collect();
                 let selected = locations.iter().position(|(id, _)| *id == state.launch_from).unwrap_or(0);
-                self.input_mode = InputMode::RocketDesignerLocationPicker {
-                    state, target: LocationPickerTarget::LaunchSite, locations, selected,
-                };
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::LocationPicker {
+                    target: LocationPickerTarget::LaunchSite, locations, selected,
+                });
             }
             KeyCode::Char('m') | KeyCode::Char('M') => {
                 // Pick mission destination
@@ -711,15 +732,15 @@ impl App {
                     .map(|loc| (loc.id, loc.display_name))
                     .collect();
                 let selected = locations.iter().position(|(id, _)| *id == state.destination).unwrap_or(0);
-                self.input_mode = InputMode::RocketDesignerLocationPicker {
-                    state, target: LocationPickerTarget::MissionDestination, locations, selected,
-                };
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::LocationPicker {
+                    target: LocationPickerTarget::MissionDestination, locations, selected,
+                });
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 // Done — finalize design
                 if state.stage_groups.is_empty() {
                     self.status_message = Some("Must add at least one stage".into());
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    self.input_mode = InputMode::designer(state);
                 } else if let DesignerMode::Modify { project_id } = state.mode {
                     // Modify mode: rewrite the existing project's
                     // stages and roll for a new flaw.
@@ -774,21 +795,16 @@ impl App {
                 self.status_message = Some("Rocket design cancelled".into());
             }
             _ => {
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
         }
     }
 
-    #[allow(clippy::too_many_arguments)] // constructor-style, callers read positionally with names at the call site
     pub(super) fn handle_rocket_pick_engine_key(
         &mut self,
         key: KeyCode,
         mut state: Box<RocketDesignerState>,
-        target_index: Option<usize>,
-        inner_index: Option<usize>,
-        editing: bool,
-        booster: bool,
-        mut selected: usize,
+        mut pick: EnginePick,
     ) {
         // Build combined engine list. The picker shows engines plus a
         // trailing "+ Design new engine…" row that opens the standard
@@ -801,25 +817,21 @@ impl App {
         match key {
             KeyCode::Esc => {
                 // Back to designer
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Up => {
-                cursor_up(&mut selected);
-                self.input_mode = InputMode::RocketPickEngine {
-                    state, target_index, inner_index, editing, booster, selected,
-                };
+                cursor_up(&mut pick.selected);
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::PickEngine(pick));
             }
             KeyCode::Down => {
-                cursor_down(&mut selected, total_rows);
-                self.input_mode = InputMode::RocketPickEngine {
-                    state, target_index, inner_index, editing, booster, selected,
-                };
+                cursor_down(&mut pick.selected, total_rows);
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::PickEngine(pick));
             }
             KeyCode::Char('e') | KeyCode::Char('E') => {
                 // Open the engine editor on the highlighted player engine.
                 // Only editable while Proposed, InDesign, or Revising.
-                if selected < num_engines {
-                    if let EngineSource::PlayerDesign(pid) = engines[selected].0 {
+                if pick.selected < num_engines {
+                    if let EngineSource::PlayerDesign(pid) = engines[pick.selected].0 {
                         let editable = self.game.player_company
                             .find_engine_project(pid)
                             .map(|ep| matches!(
@@ -843,12 +855,10 @@ impl App {
                             "Can't edit a third-party engine".into());
                     }
                 }
-                self.input_mode = InputMode::RocketPickEngine {
-                    state, target_index, inner_index, editing, booster, selected,
-                };
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::PickEngine(pick));
             }
             KeyCode::Enter => {
-                if selected == new_engine_idx {
+                if pick.selected == new_engine_idx {
                     // "Design new engine…" — create a Proposed engine
                     // with sensible defaults, apply it to the target
                     // stage as if the player had just picked it, then
@@ -872,9 +882,7 @@ impl App {
                         Some(id) => id,
                         None => {
                             self.status_message = Some("Failed to create engine".into());
-                            self.input_mode = InputMode::RocketPickEngine {
-                                state, target_index, inner_index, editing, booster, selected,
-                            };
+                            self.input_mode = InputMode::designer_with(state, DesignerSubMode::PickEngine(pick));
                             return;
                         }
                     };
@@ -883,15 +891,13 @@ impl App {
                     // player sees its effect as they edit. Re-use the
                     // same plumbing as the engine-pick branch by
                     // looking the engine back up.
-                    let group_index = target_index
-                        .unwrap_or(state.stage_groups.len());
+                    let group_index = pick.slot.group_index(state.stage_groups.len());
                     let engine = self.game.player_company
                         .find_engine_project(project_id)
                         .map(|ep| ep.design_variant(group_index > 0));
                     if let Some(engine) = engine {
                         apply_picked_engine_to_designer(
-                            &mut state, EngineSource::PlayerDesign(project_id),
-                            engine, target_index, inner_index, editing, booster,
+                            &mut state, EngineSource::PlayerDesign(project_id), engine, pick.slot,
                         );
                     }
                     self.input_mode = InputMode::EngineEditor {
@@ -899,41 +905,33 @@ impl App {
                     };
                 } else if num_engines == 0 {
                     self.status_message = Some("No engines available".into());
-                    self.input_mode = InputMode::RocketPickEngine {
-                        state, target_index, inner_index, editing, booster, selected,
-                    };
+                    self.input_mode = InputMode::designer_with(state, DesignerSubMode::PickEngine(pick));
                 } else {
-                    let (source, engine) = engines[selected].clone();
+                    let (source, engine) = engines[pick.selected].clone();
                     // Enforce: low-thrust engines may only appear in a
                     // single-stage design. The 'a'/'i'/'b'/Enter gates
                     // already block adding to a low-thrust design; this
                     // also catches editing a stage in a multi-stage
                     // design to a low-thrust engine.
                     let other_stages = state.total_stages()
-                        .saturating_sub(if editing { 1 } else { 0 });
+                        .saturating_sub(usize::from(matches!(pick.slot, PickSlot::Replace(..))));
                     if engine.is_low_thrust() && other_stages > 0 {
                         self.status_message = Some(
                             "Low-thrust engines must be in a single-stage design".into());
-                        self.input_mode = InputMode::RocketDesigner { state };
+                        self.input_mode = InputMode::designer(state);
                         return;
                     }
                     // Bottom group flies the sea-level bell, upper
                     // stages the vacuum one; [V] overrides per stage.
-                    let group_index = target_index
-                        .unwrap_or(state.stage_groups.len());
+                    let group_index = pick.slot.group_index(state.stage_groups.len());
                     let engine = self.engine_for_placement(
                         source, engine, group_index);
-                    apply_picked_engine_to_designer(
-                        &mut state, source, engine,
-                        target_index, inner_index, editing, booster,
-                    );
-                    self.input_mode = InputMode::RocketDesigner { state };
+                    apply_picked_engine_to_designer(&mut state, source, engine, pick.slot);
+                    self.input_mode = InputMode::designer(state);
                 }
             }
             _ => {
-                self.input_mode = InputMode::RocketPickEngine {
-                    state, target_index, inner_index, editing, booster, selected,
-                };
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::PickEngine(pick));
             }
         }
     }
@@ -946,16 +944,16 @@ impl App {
     ) {
         match edit_text_field(key, &mut buffer, FieldKind::Number) {
             FieldEdit::Continue => {
-                self.input_mode = InputMode::RocketPayloadInput { state, buffer };
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::PayloadInput { buffer });
             }
             FieldEdit::Commit => {
                 if let Ok(val) = buffer.parse::<f64>() {
                     state.payload_kg = val.max(0.0);
                 }
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             FieldEdit::Cancel => {
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
         }
     }
@@ -970,19 +968,15 @@ impl App {
     ) {
         match key {
             KeyCode::Esc => {
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Up => {
                 cursor_up(&mut selected);
-                self.input_mode = InputMode::RocketDesignerLocationPicker {
-                    state, target, locations, selected,
-                };
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::LocationPicker { target, locations, selected });
             }
             KeyCode::Down => {
                 cursor_down(&mut selected, locations.len());
-                self.input_mode = InputMode::RocketDesignerLocationPicker {
-                    state, target, locations, selected,
-                };
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::LocationPicker { target, locations, selected });
             }
             KeyCode::Enter => {
                 if let Some((id, _)) = locations.get(selected) {
@@ -991,12 +985,10 @@ impl App {
                         LocationPickerTarget::MissionDestination => state.destination = id,
                     }
                 }
-                self.input_mode = InputMode::RocketDesigner { state };
+                self.input_mode = InputMode::designer(state);
             }
             _ => {
-                self.input_mode = InputMode::RocketDesignerLocationPicker {
-                    state, target, locations, selected,
-                };
+                self.input_mode = InputMode::designer_with(state, DesignerSubMode::LocationPicker { target, locations, selected });
             }
         }
     }
@@ -1254,7 +1246,7 @@ mod autosize_tests {
             &mut st,
             EngineSource::PlayerDesign(crate::engine_project::EngineProjectId(2)),
             engine(2, 500_000.0, 440.0, 800.0, EngineCycle::Expander, Propellant::LH2),
-            None, None, false, false,
+            PickSlot::Append,
         );
         assert_eq!(st.stage_groups.len(), 2, "the new stage should be its own group");
 
@@ -1289,7 +1281,7 @@ mod autosize_tests {
             &mut st,
             EngineSource::PlayerDesign(crate::engine_project::EngineProjectId(2)),
             engine(2, 9_000_000.0, 300.0, 3_000.0, EngineCycle::GasGenerator, Propellant::RP1),
-            Some(0), None, false, false,
+            PickSlot::InsertAt(0),
         );
         assert_eq!(st.stage_groups.len(), 2, "the booster should be its own group");
         assert_eq!(st.stage_groups[1][0].propellant_mass_kg, 12_345.0,
@@ -1470,12 +1462,12 @@ mod nozzle_variant_tests {
         }
         state.selected_group = 0;
         state.selected_inner = 0;
-        app.input_mode = InputMode::RocketDesigner { state };
+        app.input_mode = InputMode::designer(state);
 
         app.handle_key(KeyCode::Char('v'));
 
         let state = match &app.input_mode {
-            InputMode::RocketDesigner { state } => state,
+            InputMode::RocketDesigner { state, .. } => state,
             other => panic!("should stay in the designer, got {other:?}"),
         };
         assert!(state.stage_groups[0][0].engine.is_vacuum_variant(),
@@ -1486,7 +1478,7 @@ mod nozzle_variant_tests {
         // And back again.
         app.handle_key(KeyCode::Char('v'));
         let state = match &app.input_mode {
-            InputMode::RocketDesigner { state } => state,
+            InputMode::RocketDesigner { state, .. } => state,
             other => panic!("should stay in the designer, got {other:?}"),
         };
         assert!(!state.stage_groups[0][0].engine.is_vacuum_variant(),
@@ -1553,12 +1545,12 @@ mod nozzle_variant_tests {
             },
             EngineSource::Contracted(crate::third_party::ContractedEngineId(1)),
         );
-        app.input_mode = InputMode::RocketDesigner { state };
+        app.input_mode = InputMode::designer(state);
 
         app.handle_key(KeyCode::Char('v'));
 
         let state = match &app.input_mode {
-            InputMode::RocketDesigner { state } => state,
+            InputMode::RocketDesigner { state, .. } => state,
             other => panic!("should stay in the designer, got {other:?}"),
         };
         assert!(!state.stage_groups[0][0].engine.is_vacuum_variant(),

@@ -37,7 +37,7 @@ use crate::launch::LaunchOutcome;
 use crate::location::DELTA_V_MAP;
 use crate::resources::format_money;
 use crate::rocket;
-use crate::ui::{App, FocusedPane, InputMode, RocketDesignerState, Tab};
+use crate::ui::{App, DesignerSubMode, FocusedPane, InputMode, RocketDesignerState, Tab};
 
 /// Deduplicated list of destinations served by the player's currently-active
 /// markets — including markets that haven't generated a contract this month.
@@ -66,10 +66,25 @@ pub(super) fn relevant_destinations(game: &crate::game_state::GameState) -> Vec<
 pub fn draw(frame: &mut Frame, app: &App) {
     let size = frame.area();
 
-    // Check if we're in the rocket designer — it replaces the full UI
-    if let InputMode::RocketDesigner { state } = &app.input_mode {
-        draw_rocket_designer_full(frame, app, state, size);
-        return;
+    // The rocket designer replaces the full UI, and whatever it has
+    // opened over itself — its pickers, the power editor, its help, and
+    // the engine editor reached from its picker — draws over the
+    // designer, not over the tabs behind it.
+    match &app.input_mode {
+        InputMode::RocketDesigner { state, sub } => {
+            draw_rocket_designer_full(frame, app, state, size);
+            if !matches!(sub, DesignerSubMode::Main) {
+                draw_modal(frame, app, size);
+            }
+            return;
+        }
+        InputMode::EngineEditor { state: Some(state), .. }
+        | InputMode::EngineEditorField { state: Some(state), .. } => {
+            draw_rocket_designer_full(frame, app, state, size);
+            draw_modal(frame, app, size);
+            return;
+        }
+        _ => {}
     }
 
     // Top-level layout: status bar, main area, event feed, help bar

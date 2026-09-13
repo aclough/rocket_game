@@ -13,7 +13,7 @@ mod render_smoke;
 
 use cursor::{clamp_cursor, cursor_down, cursor_up};
 
-pub use designer::{DesignerMode, RocketDesignerState};
+pub use designer::{DesignerMode, DesignerSubMode, EnginePick, PickSlot, RocketDesignerState};
 pub use planner::{DvPlannerState, PlanAction, PlannerSetupField, PlannerSetupState, PlannerSource};
 
 use std::io;
@@ -34,14 +34,24 @@ use crate::rocket_project::RocketDesignStatus;
 use crate::save;
 use crate::stage::{Stage, StageId};
 
-/// What the help modal is describing, and what to return to on Esc.
-#[derive(Debug, Clone)]
+/// What the help modal is describing: a tab, or the rocket designer
+/// (whose help is one of its own sub-modes, so its state stays put).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelpScope {
-    /// Opened from a normal tab view.
     Tab(usize),
-    /// Opened from inside the rocket designer — its state rides along
-    /// so Esc puts the player back where they were.
-    RocketDesigner(Box<RocketDesignerState>),
+    RocketDesigner,
+}
+
+impl InputMode {
+    /// The rocket designer with nothing open over it.
+    pub fn designer(state: Box<RocketDesignerState>) -> InputMode {
+        InputMode::RocketDesigner { state, sub: DesignerSubMode::Main }
+    }
+
+    /// The rocket designer with `sub` open over it.
+    pub fn designer_with(state: Box<RocketDesignerState>, sub: DesignerSubMode) -> InputMode {
+        InputMode::RocketDesigner { state, sub }
+    }
 }
 
 /// Which pane has keyboard focus.
@@ -147,12 +157,9 @@ impl EditorField {
 #[derive(Debug, Clone)]
 pub enum InputMode {
     Normal,
-    /// Keybinding reference. `scope` remembers what to describe: the
-    /// tab that was open, or the rocket designer, whose state travels
-    /// with the modal so Esc returns to it.
-    Help {
-        scope: HelpScope,
-    },
+    /// Keybinding reference for the tab that was open. (The designer's
+    /// help is `RocketDesigner { sub: Help }`.)
+    Help { tab: usize },
     /// One-screen orientation, shown once at the start of a new game.
     /// Dismissed by any key and never shown again — it is not stored in
     /// the save, so it cannot reappear on load.
@@ -218,41 +225,12 @@ pub enum InputMode {
         selected: usize,
         buffer: String,
     },
-    /// Persistent rocket designer screen.
-    RocketDesigner { state: Box<RocketDesignerState> },
-    /// Per-stage power-source editor opened from the rocket designer.
-    /// Cursor walks a merged list of "equipped sources" then "presets to
-    /// add"; Space adds a preset, X/Del removes an equipped source, Esc
-    /// returns to the designer.
-    PowerEditor {
+    /// The rocket designer, full screen, with whatever it has opened
+    /// over itself. The design in progress lives here and nowhere else;
+    /// every sub-mode draws over the designer.
+    RocketDesigner {
         state: Box<RocketDesignerState>,
-        group_index: usize,
-        stage_index: usize,
-        cursor: usize,
-    },
-    /// Picking an engine for a new or replacement stage.
-    RocketPickEngine {
-        state: Box<RocketDesignerState>,
-        target_index: Option<usize>,   // group index
-        inner_index: Option<usize>,    // inner stage index (for editing specific stage)
-        editing: bool,
-        booster: bool,                 // adding parallel stage to existing group
-        selected: usize,
-    },
-    /// Typing a payload mass (kg).
-    RocketPayloadInput {
-        state: Box<RocketDesignerState>,
-        buffer: String,
-    },
-    /// Picking a launch site or mission destination for the rocket
-    /// designer. The picker lists every location in the delta-v map;
-    /// `target` controls which RocketDesignerState field is updated on
-    /// confirm.
-    RocketDesignerLocationPicker {
-        state: Box<RocketDesignerState>,
-        target: LocationPickerTarget,
-        locations: Vec<(&'static str, &'static str)>,
-        selected: usize,
+        sub: DesignerSubMode,
     },
     /// Building the launch manifest: pick contracts and/or inventory
     /// rockets (as Spacecraft payloads) to fly together. Empty manifest =
@@ -544,7 +522,7 @@ impl App {
             KeyCode::F(12) => self.write_report(),
             KeyCode::Char('?') => {
                 self.enter_modal(InputMode::Help {
-                    scope: HelpScope::Tab(self.active_tab),
+                    tab: self.active_tab,
                 });
             }
             KeyCode::Char(' ') => self.game.toggle_pause(),
