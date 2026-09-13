@@ -64,11 +64,8 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
     let perf = (!state.stage_groups.is_empty())
         .then(|| rocket::DesignPerformance::compute(&temp_design, state.payload_kg, state.launch_from));
     let mission_line = if state.stage_groups.is_empty() {
-        Line::from(Span::styled(
-            format!("  Mission: {} → {}    (add a stage to see feasibility)",
-                launch_display, destination_display),
-            Style::default().fg(Color::DarkGray),
-        ))
+        hint_line(format!("  Mission: {} → {}    (add a stage to see feasibility)",
+                launch_display, destination_display))
     } else {
         let plan = DELTA_V_MAP.plan_mission(
             state.launch_from, state.destination, &temp_design, state.payload_kg,
@@ -228,11 +225,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                 format!("{:>5}", burn_str)
             };
 
-            let style = if selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
+            let style = selected_style(selected);
 
             // Stage name: S1 for single-stage groups, S1a/S1b for multi-stage
             let stage_label = RocketDesignerState::stage_name(gi, si, group_len);
@@ -275,13 +268,10 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                 } else {
                     format!("{} src", stage.power_sources.len())
                 };
-                lines.push(Line::from(Span::styled(
-                    format!(
+                lines.push(hint_line(format!(
                         "{}      power: {}, {:.0}/{:.0} W @ 1AU, {:.2} kWd",
                         group_indent, fitted, supply, demand, battery,
-                    ),
-                    Style::default().fg(Color::DarkGray),
-                )));
+                    )));
             }
 
             // Show losses sub-line after the last inner stage of a group
@@ -298,10 +288,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                         loss_parts.push(format!("nozzle: -{:.0}", s.overexpansion_loss));
                     }
                     if !loss_parts.is_empty() {
-                        lines.push(Line::from(Span::styled(
-                            format!("{}                 ({})", group_indent, loss_parts.join("  ")),
-                            Style::default().fg(Color::DarkGray),
-                        )));
+                        lines.push(hint_line(format!("{}                 ({})", group_indent, loss_parts.join("  "))));
                     }
                 }
 
@@ -440,12 +427,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
     } else {
         format!(" Rocket Designer: \"{}\" ", state.rocket_name)
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .style(Style::default().fg(Color::Yellow));
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
+    render_modal(frame, area, title, lines);
 }
 
 pub(super) fn draw_rocket_pick_engine_modal(
@@ -485,11 +467,7 @@ pub(super) fn draw_rocket_pick_engine_modal(
     for (i, (source, design)) in engines.iter().enumerate() {
         let marker = if i == selected { "▶" } else { " " };
         let tag = status_tag(source);
-        let style = if i == selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
+        let style = selected_style(i == selected);
         lines.push(Line::from(Span::styled(
             format!("  {} {}{}  {}  {:.0}s  {}",
                 marker, design.name, tag,
@@ -519,10 +497,5 @@ pub(super) fn draw_rocket_pick_engine_modal(
         Style::default().fg(Color::Cyan),
     )));
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Pick Engine ")
-        .style(Style::default().fg(Color::Yellow));
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
+    render_modal(frame, area, " Pick Engine ", lines);
 }

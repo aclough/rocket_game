@@ -466,7 +466,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
   `clamp(len)`; one `list_len_for(tab)` shared with the draw side.
 - **Size/risk:** medium / low.
 
-### F2. 13 copies of the same list-modal rendering in `draw_modal`
+### ✅ F2. 13 copies of the same list-modal rendering in `draw_modal`
 - **Where:** marker + Yellow style + lines + DarkGray hint + bordered
   block + `Paragraph`: `draw.rs:2721, 2792, 2896, 3195, 3247, 3290,
   3323, 3358, 3403, 3435, 3465, 3497, 3532, 3866, 4200`. 38

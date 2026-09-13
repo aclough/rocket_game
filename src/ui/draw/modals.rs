@@ -38,10 +38,7 @@ pub(super) fn draw_help_modal(
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         )));
         if bs.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "    (nothing beyond the keys below)",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(hint_line("    (nothing beyond the keys below)"));
         }
         for b in bs {
             lines.push(Line::from(vec![
@@ -80,12 +77,7 @@ pub(super) fn draw_help_modal(
     };
 
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Keys ")
-        .style(Style::default().fg(Color::Yellow));
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
+    render_modal(frame, area, " Keys ", lines);
 }
 
 /// One-screen orientation on a new game. Deliberately short: it says
@@ -139,11 +131,7 @@ pub(super) fn draw_intro_modal(frame: &mut Frame, app: &App, screen: Rect) {
     };
 
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Welcome ")
-        .style(Style::default().fg(Color::Yellow));
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    render_modal(frame, area, " Welcome ", lines);
 }
 
 pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
@@ -185,11 +173,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             ];
             for (i, entry) in catalog.iter().enumerate() {
                 let marker = if i == *selected { "▶" } else { " " };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
+                let style = selected_style(i == *selected);
                 lines.push(Line::from(Span::styled(
                     format!(
                         "  {} {}  {:.0}kN  {:.0}s  {}/unit",
@@ -202,12 +186,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     style,
                 )));
             }
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Contract Third-Party Engine ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Contract Third-Party Engine ", lines);
         }
         InputMode::RocketName { buffer } => {
             let lines = vec![
@@ -216,12 +195,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(""),
                 Line::from(format!("  > {}█", buffer)),
             ];
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" New Rocket Design ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " New Rocket Design ", lines);
         }
         InputMode::BidEntry { contract_index, buffer } => {
             let name = app.game.available_contracts
@@ -236,12 +210,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(""),
                 Line::from(format!("  > {}█  ($M)", buffer)),
             ];
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Place Bid ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Place Bid ", lines);
         }
         InputMode::BidRules { selected } => {
             let mut lines = vec![
@@ -274,12 +243,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             if markets.is_empty() {
                 lines.push(Line::from("  (no active markets)"));
             }
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Bid Rules ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Bid Rules ", lines);
         }
         InputMode::AwardHistory { scroll } => {
             let mut lines = vec![
@@ -339,12 +303,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             if app.game.award_history.is_empty() {
                 lines.push(Line::from("  (no awards observed yet — bid on a solicitation)"));
             }
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Award History ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Award History ", lines);
         }
         InputMode::Campaigns { selected } => {
             let mut lines = vec![
@@ -398,12 +357,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             if app.game.active_campaigns.is_empty() {
                 lines.push(Line::from("  (no active programs — announcements appear in Events)"));
             }
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Programs ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Programs ", lines);
         }
         InputMode::CampaignBidEntry { campaign_id, buffer, .. } => {
             let (name, missions) = app.game.active_campaigns.iter()
@@ -427,12 +381,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(format!("  > {}█  ($M per mission)", buffer)),
                 Line::from(total),
             ];
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Block Bid ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Block Bid ", lines);
         }
         InputMode::RocketPickEngine { state, selected, .. } => {
             draw_rocket_pick_engine_modal(frame, app, state, *selected, modal_area);
@@ -449,12 +398,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(""),
                 Line::from(format!("  > {}█", buffer)),
             ];
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Set Payload ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Set Payload ", lines);
         }
         InputMode::LaunchManifest {
             rocket_item_id, contract_picks, spacecraft_picks,
@@ -514,18 +458,11 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let mut row = 0usize;
 
             if !contracts.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "  ── Contracts ──",
-                    Style::default().fg(Color::DarkGray),
-                )));
+                lines.push(hint_line("  ── Contracts ──"));
                 for (i, c) in contracts.iter().enumerate() {
                     let mark = if *cursor == row { " ▶ " } else { "   " };
                     let check = if contract_picks[i] { "[✓]" } else { "[ ]" };
-                    let style = if *cursor == row {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default()
-                    };
+                    let style = selected_style(*cursor == row);
                     // No destination here: every contract name is built as
                     // "<something> to <destination>", so spelling it out
                     // again just reads as "… to LEO → Low Earth Orbit". The
@@ -542,18 +479,11 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             }
 
             if !spacecraft_item_ids.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "  ── Spacecraft Payloads ──",
-                    Style::default().fg(Color::DarkGray),
-                )));
+                lines.push(hint_line("  ── Spacecraft Payloads ──"));
                 for (i, item_id) in spacecraft_item_ids.iter().enumerate() {
                     let mark = if *cursor == row { " ▶ " } else { "   " };
                     let check = if spacecraft_picks[i] { "[✓]" } else { "[ ]" };
-                    let style = if *cursor == row {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default()
-                    };
+                    let style = selected_style(*cursor == row);
                     let (name, mass) = inventory.rockets.iter()
                         .find(|r| r.item_id == *item_id)
                         .and_then(|r| {
@@ -575,17 +505,9 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from("  (no contracts or spacecraft available — Enter for test launch)"));
             }
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  [Space] toggle  [Enter] launch  [Esc] cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(hint_line("  [Space] toggle  [Enter] launch  [Esc] cancel"));
 
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Launch Manifest ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Launch Manifest ", lines);
         }
         InputMode::LaunchResult { record } => {
             let mut lines = vec![
@@ -626,17 +548,9 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from(""));
             }
 
-            lines.push(Line::from(Span::styled(
-                "  Press any key to continue",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(hint_line("  Press any key to continue"));
 
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Launch Result ")
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Launch Result ", lines);
         }
         InputMode::PlannerSetup { state } => {
             use crate::ui::{PlannerSetupField};
@@ -656,11 +570,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             for (i, &pi) in state.eligible_projects.iter().enumerate() {
                 let rp = &app.game.player_company.rocket_projects[pi];
                 let marker = if i == state.selected_project { " ▶ " } else { "   " };
-                let style = if i == state.selected_project && state.active_field == PlannerSetupField::Design {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                };
+                let style = selected_style(i == state.selected_project && state.active_field == PlannerSetupField::Design);
                 lines.push(Line::from(Span::styled(
                     format!("  {}{}", marker, rp.design.name),
                     style,
@@ -697,11 +607,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(Span::styled("  Start Location:", loc_label)));
             for (i, (_, display_name)) in state.locations.iter().enumerate() {
                 let marker = if i == state.selected_location { " ▶ " } else { "   " };
-                let style = if i == state.selected_location && state.active_field == PlannerSetupField::Location {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                };
+                let style = selected_style(i == state.selected_location && state.active_field == PlannerSetupField::Location);
                 lines.push(Line::from(Span::styled(
                     format!("  {}{}", marker, display_name),
                     style,
@@ -709,17 +615,9 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             }
 
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  [Tab] Switch field  [Enter] Start  [Esc] Cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(hint_line("  [Tab] Switch field  [Enter] Start  [Esc] Cancel"));
 
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Δv Planner Setup ")
-                .style(Style::default().fg(Color::Cyan));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Δv Planner Setup ", lines);
         }
         InputMode::DvPlanner { state } => {
             let remaining_dv = state.rocket.remaining_delta_v(&state.design);
@@ -737,10 +635,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
 
             // Show planned route so far
             if !state.actions.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "  Route:",
-                    Style::default().fg(Color::DarkGray),
-                )));
+                lines.push(hint_line("  Route:"));
                 for action in &state.actions {
                     match action {
                         crate::ui::PlanAction::Leg { to_display, dv_cost, .. } => {
@@ -760,20 +655,13 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             }
 
             // Destinations
-            lines.push(Line::from(Span::styled(
-                "  Destinations:",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(hint_line("  Destinations:"));
             if state.destinations.is_empty() {
                 lines.push(Line::from("  (no reachable destinations)"));
             } else {
                 for (i, (_, display_name, dv_cost)) in state.destinations.iter().enumerate() {
                     let marker = if i == state.selected { " ▶ " } else { "   " };
-                    let style = if i == state.selected {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default()
-                    };
+                    let style = selected_style(i == state.selected);
                     let dv_after = remaining_dv - dv_cost;
                     lines.push(Line::from(vec![
                         Span::styled(format!("{}{}", marker, display_name), style),
@@ -786,17 +674,9 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             }
 
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  [Enter] Go  [D] Drop payload  [U] Undo  [Esc] Close",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(hint_line("  [Enter] Go  [D] Drop payload  [U] Undo  [Esc] Close"));
 
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Δv Planner ")
-                .style(Style::default().fg(Color::Cyan));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Δv Planner ", lines);
         }
         InputMode::FlySelectSpacecraft { selected } => {
             let mut lines = vec![
@@ -806,11 +686,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             ];
             for (i, sc) in app.game.spacecraft.iter().enumerate() {
                 let marker = if i == *selected { " ▶ " } else { "   " };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                };
+                let style = selected_style(i == *selected);
                 let dv = sc.remaining_delta_v();
                 lines.push(Line::from(vec![
                     Span::styled(format!("{}{}", marker, sc.name), style),
@@ -821,16 +697,8 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 ]));
             }
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  [Enter] Select  [Esc] Cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Fly Spacecraft ")
-                .style(Style::default().fg(Color::Cyan));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            lines.push(hint_line("  [Enter] Select  [Esc] Cancel"));
+            render_modal(frame, modal_area, " Fly Spacecraft ", lines);
         }
         InputMode::FlySelectDestination { destinations, remaining_dv, selected, .. } => {
             let mut lines = vec![
@@ -842,11 +710,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             ];
             for (i, (_, display_name, dv_cost)) in destinations.iter().enumerate() {
                 let marker = if i == *selected { " ▶ " } else { "   " };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                };
+                let style = selected_style(i == *selected);
                 let dv_after = remaining_dv - dv_cost;
                 lines.push(Line::from(vec![
                     Span::styled(
@@ -867,12 +731,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     ),
                 ]));
             }
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Fly Spacecraft ")
-                .style(Style::default().fg(Color::Cyan));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            render_modal(frame, modal_area, " Fly Spacecraft ", lines);
         }
         InputMode::DockSelectSmall { selected } => {
             let mut lines = vec![
@@ -882,9 +741,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             ];
             for (i, sc) in app.game.spacecraft.iter().enumerate() {
                 let marker = if i == *selected { " ▶ " } else { "   " };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow)
-                } else { Style::default() };
+                let style = selected_style(i == *selected);
                 let loc = contract::destination_display_name(sc.location.name());
                 lines.push(Line::from(Span::styled(
                     format!("{}{}  @ {}", marker, sc.name, loc),
@@ -892,15 +749,8 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 )));
             }
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  [Enter] Select  [Esc] Cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
-            let block = Block::default().borders(Borders::ALL)
-                .title(" Dock — Pick Spacecraft ")
-                .style(Style::default().fg(Color::Cyan));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            lines.push(hint_line("  [Enter] Select  [Esc] Cancel"));
+            render_modal(frame, modal_area, " Dock — Pick Spacecraft ", lines);
         }
         InputMode::DockSelectLarge { small_idx, candidates, selected } => {
             let small_name = &app.game.spacecraft[*small_idx].name;
@@ -913,9 +763,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             ];
             for (i, &cand) in candidates.iter().enumerate() {
                 let marker = if i == *selected { " ▶ " } else { "   " };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow)
-                } else { Style::default() };
+                let style = selected_style(i == *selected);
                 let sc = &app.game.spacecraft[cand];
                 lines.push(Line::from(Span::styled(
                     format!("{}{}", marker, sc.name),
@@ -923,15 +771,8 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 )));
             }
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  [Enter] Confirm  [Esc] Cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
-            let block = Block::default().borders(Borders::ALL)
-                .title(" Dock — Pick Carrier ")
-                .style(Style::default().fg(Color::Cyan));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            lines.push(hint_line("  [Enter] Confirm  [Esc] Cancel"));
+            render_modal(frame, modal_area, " Dock — Pick Carrier ", lines);
         }
         InputMode::UndockSelectCarrier { candidates, selected } => {
             let mut lines = vec![
@@ -941,9 +782,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             ];
             for (i, &cand) in candidates.iter().enumerate() {
                 let marker = if i == *selected { " ▶ " } else { "   " };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow)
-                } else { Style::default() };
+                let style = selected_style(i == *selected);
                 let sc = &app.game.spacecraft[cand];
                 let loc = contract::destination_display_name(sc.location.name());
                 lines.push(Line::from(Span::styled(
@@ -952,15 +791,8 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 )));
             }
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  [Enter] Select  [Esc] Cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
-            let block = Block::default().borders(Borders::ALL)
-                .title(" Undock — Pick Carrier ")
-                .style(Style::default().fg(Color::Cyan));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            lines.push(hint_line("  [Enter] Select  [Esc] Cancel"));
+            render_modal(frame, modal_area, " Undock — Pick Carrier ", lines);
         }
         InputMode::UndockSelectPayload { carrier_idx, payload_indices, selected } => {
             let carrier = &app.game.spacecraft[*carrier_idx];
@@ -971,9 +803,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             ];
             for (i, &pi) in payload_indices.iter().enumerate() {
                 let marker = if i == *selected { " ▶ " } else { "   " };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow)
-                } else { Style::default() };
+                let style = selected_style(i == *selected);
                 if let crate::flight::Payload::Spacecraft { name, .. } = &carrier.payloads[pi] {
                     lines.push(Line::from(Span::styled(
                         format!("{}{}", marker, name),
@@ -982,15 +812,8 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  [Enter] Confirm  [Esc] Cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
-            let block = Block::default().borders(Borders::ALL)
-                .title(" Undock — Pick Payload ")
-                .style(Style::default().fg(Color::Cyan));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            lines.push(hint_line("  [Enter] Confirm  [Esc] Cancel"));
+            render_modal(frame, modal_area, " Undock — Pick Payload ", lines);
         }
         InputMode::RocketDesignerLocationPicker { target, locations, selected, .. } => {
             let title = match target {
@@ -1004,24 +827,15 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let start = selected.saturating_sub(window / 2).min(locations.len().saturating_sub(window));
             for (i, (_id, name)) in locations.iter().enumerate().skip(start).take(window) {
                 let marker = if i == *selected { " ▶ " } else { "   " };
-                let style = if i == *selected {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else { Style::default() };
+                let style = selected_style(i == *selected);
                 lines.push(Line::from(Span::styled(
                     format!("{}{}", marker, name),
                     style,
                 )));
             }
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  [↑↓] Move  [Enter] Confirm  [Esc] Cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
-            let block = Block::default().borders(Borders::ALL)
-                .title(title)
-                .style(Style::default().fg(Color::Yellow));
-            let paragraph = Paragraph::new(lines).block(block);
-            frame.render_widget(paragraph, modal_area);
+            lines.push(hint_line("  [↑↓] Move  [Enter] Confirm  [Esc] Cancel"));
+            render_modal(frame, modal_area, title, lines);
         }
     }
 }
@@ -1074,14 +888,8 @@ pub(super) fn draw_confirm_retire_modal(
         lines.push(Line::from(""));
     }
 
-    lines.push(Line::from(Span::styled(
-        "  Rockets already built keep flying, and it stays",
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(Span::styled(
-        "  on past launch records. This can't be undone.",
-        Style::default().fg(Color::DarkGray),
-    )));
+    lines.push(hint_line("  Rockets already built keep flying, and it stays"));
+    lines.push(hint_line("  on past launch records. This can't be undone."));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  [Y] Retire    [Esc] Cancel",
@@ -1100,9 +908,5 @@ pub(super) fn draw_confirm_retire_modal(
         height,
     };
     frame.render_widget(Clear, modal_area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(" Retire design ");
-    frame.render_widget(Paragraph::new(lines).block(block), modal_area);
+    render_modal(frame, modal_area, " Retire design ", lines);
 }

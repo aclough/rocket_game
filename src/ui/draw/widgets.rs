@@ -1,7 +1,42 @@
-//! Shared widgets: the inline gauges the manufacturing tab and the
+//! Shared widgets: the one way a modal is framed and its rows marked
+//! (17_4_UI.md F2), and the inline gauges the manufacturing tab and the
 //! editors draw over their text lines.
 
 use super::*;
+
+/// Every modal's border and title colour. Pickers used to be Cyan and
+/// confirmations Yellow for no stated reason; now one accent.
+pub(super) const MODAL_ACCENT: Color = Color::Yellow;
+
+/// The bordered, titled block every modal draws in.
+pub(super) fn modal_block(title: impl Into<String>) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .title(title.into())
+        .style(Style::default().fg(MODAL_ACCENT))
+}
+
+/// Draw `lines` as a modal titled `title` over `area`.
+pub(super) fn render_modal(frame: &mut Frame, area: Rect, title: impl Into<String>, lines: Vec<Line<'static>>) {
+    frame.render_widget(Paragraph::new(lines).block(modal_block(title)), area);
+}
+
+/// How a list row reads when the cursor is on it: bold in the accent.
+/// Selection in the contracts table is a background instead, because
+/// there the foreground already carries readiness; modal rows carry
+/// nothing else, so the accent is free to mean "this one".
+pub(super) fn selected_style(selected: bool) -> Style {
+    if selected {
+        Style::default().fg(MODAL_ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    }
+}
+
+/// The key hint at the foot of a modal.
+pub(super) fn hint_line(text: impl Into<String>) -> Line<'static> {
+    Line::from(Span::styled(text.into(), Style::default().fg(Color::DarkGray)))
+}
 
 /// Minimum gauge width.
 pub(super) const MIN_GAUGE_WIDTH: u16 = 12;

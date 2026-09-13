@@ -36,14 +36,11 @@ pub(super) fn draw_engine_editor_modal(
     };
 
     let mut lines = vec![
-        Line::from(Span::styled(
-            format!(" Status: {}{}", ep.status.label(), match &ep.status {
+        hint_line(format!(" Status: {}{}", ep.status.label(), match &ep.status {
                 crate::engine_project::EngineDesignStatus::Proposed { .. } => " (new draft)",
                 crate::engine_project::EngineDesignStatus::Testing { .. } => " (read-only)",
                 _ => "",
-            }),
-            Style::default().fg(Color::DarkGray),
-        )),
+            })),
         Line::from(""),
     ];
 
@@ -75,17 +72,14 @@ pub(super) fn draw_engine_editor_modal(
     // Live + baseline derived stats.
     lines.push(Line::from(""));
     if let Some(b) = baseline {
-        lines.push(Line::from(Span::styled(
-            format!(" Baseline ({:?} / {}):  thrust {}  mass {}  Isp {}",
+        lines.push(hint_line(format!(" Baseline ({:?} / {}):  thrust {}  mass {}  Isp {}",
                 ep.design.cycle, ep.spec.preset.name(),
                 format_thrust_n(b.thrust_n), format_kg(b.mass_kg),
                 if b.vacuum_only {
                     format!("{:.0} s", b.isp_vac_s)
                 } else {
                     format!("{:.0} s SL / {:.0} s vac", b.isp_sl_s, b.isp_vac_s)
-                }),
-            Style::default().fg(Color::DarkGray),
-        )));
+                })));
     }
     lines.push(Line::from(format!(
         " Scaled:    thrust {}  mass {}  Isp {}  power {}",
@@ -131,12 +125,7 @@ pub(super) fn draw_engine_editor_modal(
         )));
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Engine Editor ")
-        .style(Style::default().fg(Color::Yellow));
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
+    render_modal(frame, area, " Engine Editor ", lines);
 }
 
 pub(super) fn draw_reactor_editor_modal(
@@ -195,10 +184,7 @@ pub(super) fn draw_reactor_editor_modal(
     );
 
     let mut lines = vec![
-        Line::from(Span::styled(
-            format!(" Status: {}", status_label),
-            Style::default().fg(Color::DarkGray),
-        )),
+        hint_line(format!(" Status: {}", status_label)),
         Line::from(""),
         Line::from(Span::styled(
             format!(" {} Name:  {}", row_label(0), rp.design.name),
@@ -261,12 +247,7 @@ pub(super) fn draw_reactor_editor_modal(
         )));
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Reactor Editor ")
-        .style(Style::default().fg(Color::Yellow));
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
+    render_modal(frame, area, " Reactor Editor ", lines);
 }
 
 pub(super) fn draw_power_editor_modal(
@@ -343,25 +324,17 @@ pub(super) fn draw_power_editor_modal(
     let mut row = 0usize;
 
     // Equipped sources
-    lines.push(Line::from(Span::styled(
-        "  ── Equipped ──",
-        Style::default().fg(Color::DarkGray),
-    )));
+    lines.push(hint_line("  ── Equipped ──"));
     if n_equipped == 0 {
-        lines.push(Line::from(Span::styled(
-            format!(
+        lines.push(hint_line(format!(
                 "    (none fitted — flying the default battery, {battery_kwd:.2} kWd, \
                  about {:.0} day of housekeeping)",
                 crate::power::DEFAULT_BATTERY_DAYS,
-            ),
-            Style::default().fg(Color::DarkGray),
-        )));
+            )));
     }
     for src in &stage.power_sources {
         let mark = if cursor == row { " ▶ " } else { "   " };
-        let style = if cursor == row {
-            Style::default().fg(Color::Yellow)
-        } else { Style::default() };
+        let style = selected_style(cursor == row);
         lines.push(Line::from(Span::styled(
             format!("{}{}", mark, source_summary(src)),
             style,
@@ -372,15 +345,10 @@ pub(super) fn draw_power_editor_modal(
 
     // Player-researched reactors (installable when Testing+).
     if !player_reactors.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  ── Player Reactors ──",
-            Style::default().fg(Color::DarkGray),
-        )));
+        lines.push(hint_line("  ── Player Reactors ──"));
         for rp in &player_reactors {
             let mark = if cursor == row { " ▶ " } else { "   " };
-            let style = if cursor == row {
-                Style::default().fg(Color::Yellow)
-            } else { Style::default() };
+            let style = selected_style(cursor == row);
             lines.push(Line::from(Span::styled(
                 format!(
                     "{}{}  ({}, {})",
@@ -396,15 +364,10 @@ pub(super) fn draw_power_editor_modal(
     }
 
     // Add presets
-    lines.push(Line::from(Span::styled(
-        "  ── Add ──",
-        Style::default().fg(Color::DarkGray),
-    )));
+    lines.push(hint_line("  ── Add ──"));
     for preset in presets {
         let mark = if cursor == row { " ▶ " } else { "   " };
-        let style = if cursor == row {
-            Style::default().fg(Color::Yellow)
-        } else { Style::default() };
+        let style = selected_style(cursor == row);
         lines.push(Line::from(Span::styled(
             format!("{}{}", mark, preset.label),
             style,
@@ -412,15 +375,7 @@ pub(super) fn draw_power_editor_modal(
         row += 1;
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  [↑↓] Navigate  [Space] Add  [+/-] Resize Panel  [X/Del] Remove  [Esc] Done",
-        Style::default().fg(Color::DarkGray),
-    )));
+    lines.push(hint_line("  [↑↓] Navigate  [Space] Add  [+/-] Resize Panel  [X/Del] Remove  [Esc] Done"));
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" Power Editor — {} ", stage_label))
-        .style(Style::default().fg(Color::Cyan));
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
+    render_modal(frame, area, format!(" Power Editor — {} ", stage_label), lines);
 }
