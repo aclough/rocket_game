@@ -713,7 +713,7 @@ pub(super) mod help_tests {
                 power_sources: Vec::new(),
             }]],
         };
-        company.start_rocket_project(design.clone(), &bal);
+        company.start_rocket_project(design.name.clone(), design.stage_groups.clone(), &bal);
         let rpid = company.rocket_projects[0].project_id;
         company.manufacturing.inventory.rockets.push(
             crate::manufacturing::InventoryRocket {

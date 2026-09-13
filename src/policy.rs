@@ -15,7 +15,6 @@ use crate::engine::EngineCycle;
 use crate::engine_project::{EngineDesignStatus, EngineProjectId, PropellantPreset};
 use crate::flight::Payload;
 use crate::game_state::GameState;
-use crate::rocket::{RocketDesign, RocketDesignId};
 use crate::project::{ProjectKind, ProjectRef};
 use crate::rocket_project::{RocketDesignStatus, RocketProjectId};
 use crate::stage::{Stage, StageId};
@@ -282,7 +281,7 @@ impl BasicPolicy {
     /// Two booster engines under 90 t and a 15 t upper stage put it back
     /// at ~3.4 t to LEO; GEO stays lower (~200 kg vs 380) because the
     /// upper stage now pays real gravity on the way up.
-    fn build_template(&self, game: &GameState) -> Option<RocketDesign> {
+    fn build_template(&self, game: &GameState) -> Option<(String, Vec<Vec<Stage>>)> {
         let company = &game.player_company;
         let booster = company.engine_projects.iter()
             .find(|p| Some(p.project_id) == self.booster)?;
@@ -326,21 +325,17 @@ impl BasicPolicy {
         s1.power_sources.push(crate::power::solar_panel_for_stage_demand(&s1));
         s2.power_sources.push(crate::power::solar_panel_for_stage_demand(&s2));
 
-        Some(RocketDesign {
-            id: RocketDesignId(company.next_rocket_project_id),
-            name: "BLV-1".into(),
-            stage_groups: vec![vec![s1], vec![s2]],
-        })
+        Some(("BLV-1".into(), vec![vec![s1], vec![s2]]))
     }
 
     fn maybe_design_rocket(&mut self, game: &mut GameState) {
         if self.rocket.is_some() || game.player_company.money < MONEY_FLOOR {
             return;
         }
-        let Some(design) = self.build_template(game) else {
+        let Some((name, stage_groups)) = self.build_template(game) else {
             return;
         };
-        if let Some(evt) = game.player_company.start_rocket_project(design, &game.balance) {
+        if let Some(evt) = game.player_company.start_rocket_project(name, stage_groups, &game.balance) {
             game.log(evt);
             self.rocket = game.player_company.rocket_projects.last()
                 .map(|p| p.project_id);

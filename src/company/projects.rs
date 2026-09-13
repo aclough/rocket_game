@@ -161,10 +161,22 @@ impl Company {
         seen
     }
 
-    pub fn start_rocket_project(&mut self, design: RocketDesign, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
+    /// Start a rocket project for a design. The design's id is the
+    /// project's id, minted here — callers hand over the name and the
+    /// stages, not an identity.
+    pub fn start_rocket_project(
+        &mut self,
+        name: String,
+        stage_groups: Vec<Vec<crate::stage::Stage>>,
+        balance_cfg: &BalanceConfig,
+    ) -> Option<GameEvent> {
         let project_id = RocketProjectId(self.next_rocket_project_id);
         self.next_rocket_project_id += 1;
-        let name = design.name.clone();
+        let design = RocketDesign {
+            id: crate::rocket::RocketDesignId(project_id.0),
+            name: name.clone(),
+            stage_groups,
+        };
         let project = RocketProject::new(project_id, design, balance_cfg);
         self.rocket_projects.push(project);
         Some(GameEvent::project(crate::project::ProjectKind::Rocket, name, ProjectEvent::DesignStarted))

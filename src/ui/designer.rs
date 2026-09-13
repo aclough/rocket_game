@@ -1040,16 +1040,9 @@ impl App {
 
     /// Create a rocket project from the designer flow.
     pub(super) fn create_rocket_project(&mut self, name: String, stage_groups: Vec<Vec<Stage>>) {
-        use crate::rocket::{RocketDesign, RocketDesignId};
-
-        let design_id = RocketDesignId(self.game.player_company.next_rocket_project_id);
-        let design = RocketDesign {
-            id: design_id,
-            name: name.clone(),
-            stage_groups,
-        };
-
-        if let Some(evt) = self.game.player_company.start_rocket_project(design, &self.game.balance) {
+        if let Some(evt) = self.game.player_company
+            .start_rocket_project(name.clone(), stage_groups, &self.game.balance)
+        {
             self.game.log(evt);
             self.status_message = Some(format!("Started rocket design: {}", name));
         }
