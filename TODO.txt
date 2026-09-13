@@ -1,7 +1,6 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
-[] Show temas on unexapnded engine, reactor, rocket views
-[] Hotkeys for power menu
+[] Show teams on unexapnded engine, reactor, rocket views
 [] Better money onboarding
 [] Better solid UI
 

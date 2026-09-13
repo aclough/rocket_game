@@ -93,16 +93,22 @@ not committed to until then.
 Vertical loops, each individually shippable. Order should be revisited
 against player feedback.
 
+- Entry, Descent, and Landing features with as much detail and risk as launch
+  has right now.  Heat shields, parachuets, and retropropulsion.  Reusable
+  rocket stages.
+- Animations for launch and landing.
+- Rework technilogical unlocks.
 - **Propellant depot loop** — depot module, fuel-delivery contracts,
   refuel in orbit. Smallest in-space-economy step; reuses flight
   system nearly as-is.
+- **Comms constellation loop** — recurring service revenue
+  (Starlink/Iridium-style), mostly launch-side.
+- **Humans in space system** — Life support, consumables, crew morale.
+- **Tourism loop** — demand strongly tied to safety record; first
+  crew-adjacent content.
 - **Probe & survey loop** — probes + seed-determined resource maps and
   conditions. Extends the discovery pillar beyond markets; feeds
   mining later.
-- **Comms constellation loop** — recurring service revenue
-  (Starlink/Iridium-style), mostly launch-side.
-- **Tourism loop** — demand strongly tied to safety record; first
-  crew-adjacent content.
 - **Competitor depth** — more rivals; competitors with real
   R&D/manufacturing simulation, tech-copying visibility, reputation
   races. Also COTS-style sources that deliberately split awards across
@@ -110,9 +116,6 @@ against player feedback.
 - **Stations & outposts** — modular construction, labs, in-space
   manufacturing, mining (each of these is its own sub-loop; do not
   attempt as one milestone).
-- **Crew system** — hiring, training, risk; trust-gated missions.
-  (Absorbs TODO: crew support and modules; gov't trust gates;
-  prestige/trust reputation split.)
 - **Routes automation** — standing missions instead of one-off
   planning.
 - **Flight-model depth** — propellant boiloff; mid-route payload
