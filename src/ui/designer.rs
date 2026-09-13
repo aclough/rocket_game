@@ -230,8 +230,9 @@ impl RocketDesignerState {
 /// `engine_sources[gi][si]` always describe the same stage, so we walk
 /// them in parallel.
 pub(super) fn sync_stages_to_projects(state: &mut RocketDesignerState, company: &crate::game_state::Company) {
-    for (group, sources) in state.stage_groups.iter_mut()
+    for (gi, (group, sources)) in state.stage_groups.iter_mut()
         .zip(state.engine_sources.iter())
+        .enumerate()
     {
         for (stage, source) in group.iter_mut().zip(sources.iter()) {
             if let EngineSource::PlayerDesign(pid) = source {
@@ -240,8 +241,19 @@ pub(super) fn sync_stages_to_projects(state: &mut RocketDesignerState, company: 
                 {
                     // Keep the nozzle this stage was built around —
                     // editing the engine family must not silently swap
-                    // an upper stage back to a sea-level bell.
-                    stage.engine = ep.design_variant(stage.engine.is_vacuum_variant());
+                    // an upper stage back to a sea-level bell. But only a
+                    // family that *offered* a choice recorded one: if the
+                    // stage's engine came from a vacuum-only family (the
+                    // editor was paged through expander and back), its
+                    // flag says nothing, and the stage gets the default
+                    // for its position — sea level on the pad, vacuum
+                    // above.
+                    let want_vacuum = if crate::engine_project::design_has_nozzle_choice(&stage.engine) {
+                        stage.engine.is_vacuum_variant()
+                    } else {
+                        gi > 0
+                    };
+                    stage.engine = ep.design_variant(want_vacuum);
                 }
             }
         }
@@ -1389,6 +1401,58 @@ mod nozzle_variant_tests {
         assert!(!first.is_vacuum_variant(), "bottom group lights at sea level");
         assert!(second.is_vacuum_variant(), "stages above it fly vacuum bells");
         assert!(second.isp_s > first.isp_s);
+    }
+
+    /// Paging the engine editor's cycle through a vacuum-only family and
+    /// back must not leave the first stage with a vacuum bell: the
+    /// expander step overwrites the stage engine's flag, so the sync
+    /// falls back to the stage's position rather than trusting it.
+    #[test]
+    fn paging_through_a_vacuum_only_cycle_does_not_strand_the_first_stage_in_vacuum() {
+        let (mut app, pid) = app_with_engine();
+        let mut state = Box::new(RocketDesignerState::new("Two Stage".into()));
+        {
+            let ep = app.game.player_company.find_engine_project(pid).unwrap();
+            for gi in 0..2 {
+                let stage = Stage {
+                    id: StageId(gi as u64 + 1), name: format!("S{}", gi + 1),
+                    engine: ep.design_variant(gi > 0), engine_count: 1,
+                    propellant_mass_kg: 10_000.0, structural_mass_kg: 1_000.0,
+                    fairing: None, power_sources: Vec::new(),
+                };
+                state.push_new_group(stage, EngineSource::PlayerDesign(pid));
+            }
+        }
+        assert!(!state.stage_groups[0][0].engine.is_vacuum_variant());
+
+        // Editor: GasGenerator -> Expander (vacuum only) ...
+        let balance = app.game.balance.clone();
+        app.game.player_company.find_engine_project_mut(pid).unwrap()
+            .apply_edit("Family".into(), EngineCycle::Expander, PropellantPreset::Kerolox, 1.0, &balance);
+        sync_stages_to_projects(&mut state, &app.game.player_company);
+        assert!(state.stage_groups[0][0].engine.is_vacuum_variant(),
+            "an expander family has only the vacuum form");
+
+        // ... and back to GasGenerator.
+        app.game.player_company.find_engine_project_mut(pid).unwrap()
+            .apply_edit("Family".into(), EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, &balance);
+        sync_stages_to_projects(&mut state, &app.game.player_company);
+        assert!(!state.stage_groups[0][0].engine.is_vacuum_variant(),
+            "back on a family with a choice, the first stage is sea-level again");
+        assert!(state.stage_groups[1][0].engine.is_vacuum_variant(),
+            "and the upper stage keeps its vacuum bell");
+
+        // A deliberate vacuum bell on the first stage survives an edit
+        // that stays within a family with a choice.
+        {
+            let ep = app.game.player_company.find_engine_project(pid).unwrap();
+            state.stage_groups[0][0].engine = ep.design_variant(true);
+        }
+        app.game.player_company.find_engine_project_mut(pid).unwrap()
+            .apply_edit("Family".into(), EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.5, &balance);
+        sync_stages_to_projects(&mut state, &app.game.player_company);
+        assert!(state.stage_groups[0][0].engine.is_vacuum_variant(),
+            "a chosen vacuum bell is kept across a scale edit");
     }
 
     /// [V] swaps the selected stage's bell, and only that stage's.

@@ -53,7 +53,7 @@ pub fn generate_starter_engines(_seed: &GameSeed) -> Vec<ThirdPartyEngine> {
                 mass_kg: 35.0,
                 isp_s: 245.0,
                 exit_pressure_pa: 70_000.0, // sea-level optimized SRM
-                needs_atmosphere: false,
+                needs_atmosphere: true,
                 propellant_mix: vec![
                     PropellantFraction { propellant: Propellant::SolidMix, mass_fraction: 1.0 },
                 ],
@@ -73,7 +73,7 @@ pub fn generate_starter_engines(_seed: &GameSeed) -> Vec<ThirdPartyEngine> {
                 mass_kg: 1_220.0,
                 isp_s: 297.0,
                 exit_pressure_pa: 80_000.0, // sea-level optimized kerolox
-                needs_atmosphere: false,
+                needs_atmosphere: true,
                 propellant_mix: vec![
                     PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.73 },
                     PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.27 },

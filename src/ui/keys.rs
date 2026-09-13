@@ -160,10 +160,10 @@ const LAUNCHES: &[KeyBinding] = &[
 /// Keys inside the full-screen rocket designer.
 ///
 /// The footer can't carry all fifteen, so the five that are either
-/// self-evident from the display (`↑ ↓`) or rarely reached for are
-/// modal-only. That selection matches the footer this replaced, which
-/// was hand-written in `draw.rs` and had drifted out of the table's
-/// reach.
+/// self-evident from the display (`↑ ↓`), set once per design like the
+/// payload, launch site and destination, or rarely reached for are
+/// modal-only. Boosters are part of laying out the stack, so `B` rides
+/// in the footer with `A`.
 pub const ROCKET_DESIGNER: &[KeyBinding] = &[
     always("↑ ↓", None, "Select a stage"),
     always("Enter", Some("[Enter] Engine"), "Change this stage's engine"),
@@ -172,10 +172,10 @@ pub const ROCKET_DESIGNER: &[KeyBinding] = &[
     always("V", Some("[V] Nozzle"), "Swap the sea-level and vacuum nozzle"),
     always("A", Some("[A] Add"), "Add a stage on top"),
     always("I", None, "Insert a stage below the selected one"),
-    always("B", None, "Add a booster alongside the selected stage"),
+    always("B", Some("[B] Boost"), "Add a booster alongside the selected stage"),
     always("W", Some("[W] Power"), "Power sources for this stage"),
     always("X", Some("[X] Rem"), "Remove this stage"),
-    always("P", Some("[P] Payload"), "Set the payload mass"),
+    always("P", None, "Set the payload mass"),
     always("L", None, "Choose the launch site"),
     always("M", None, "Choose the mission destination"),
     always("D", Some("[D] Done"), "Done — commit the design"),

@@ -176,14 +176,16 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                 }
                 _ => "",
             };
-            // Which bell this stage flies. Vacuum-only engines say
-            // nothing — there's no choice to communicate.
+            // Which bell this stage flies. An engine family with no
+            // sea-level bell (expander, electric, nuclear thermal, sail)
+            // says so, because a player putting one under a first stage
+            // has nothing to toggle and should be told why.
             let nozzle = match state.engine_sources.get(gi).and_then(|g| g.get(si)) {
                 Some(EngineSource::PlayerDesign(pid)) => {
                     let has_choice = app.game.player_company
                         .find_engine_project(*pid)
                         .is_some_and(|ep| ep.has_nozzle_choice());
-                    if !has_choice { "" }
+                    if !has_choice { " vac-only" }
                     else if stage.engine.is_vacuum_variant() { " vac" }
                     else { " SL" }
                 }

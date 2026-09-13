@@ -161,6 +161,27 @@ impl EngineBaseline {
     }
 }
 
+/// The preset whose propellant mix this design carries, if any — the
+/// way back from a built engine to the family it came from.
+pub fn preset_for_mix(mix: &[crate::engine::PropellantFraction]) -> Option<PropellantPreset> {
+    [
+        PropellantPreset::Kerolox, PropellantPreset::Hydrolox, PropellantPreset::Methalox,
+        PropellantPreset::Hypergolic, PropellantPreset::Solid, PropellantPreset::Hydrogen,
+        PropellantPreset::Xenon, PropellantPreset::Photon,
+    ]
+    .into_iter()
+    .find(|p| p.propellant_mix() == mix)
+}
+
+/// Whether a built engine's family offered a sea-level bell at all: false
+/// for expander, electric, solar-sail and nuclear-thermal families, whose
+/// `is_vacuum_variant` says nothing about what anyone chose.
+pub fn design_has_nozzle_choice(design: &EngineDesign) -> bool {
+    preset_for_mix(&design.propellant_mix)
+        .and_then(|preset| engine_baseline(design.cycle, preset))
+        .is_some_and(|b| !b.vacuum_only)
+}
+
 /// Get the baseline engine parameters for a (cycle, propellant) combination.
 ///
 /// These are the "middle of the range" values at scale 1.0.

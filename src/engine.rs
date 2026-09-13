@@ -40,7 +40,7 @@ impl EngineCycle {
 }
 
 /// A single propellant component in the engine's mix.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PropellantFraction {
     pub propellant: Propellant,
     pub mass_fraction: f64,
