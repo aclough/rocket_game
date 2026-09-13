@@ -724,7 +724,7 @@ fn a_stage_already_in_inventory_does_not_claim_a_fresh_order() {
     gs.player_company.rush_projects.insert(RocketProjectId(1));
 
     // S2 (group 1) is already built and sitting on the shelf.
-    let item_id = gs.player_company.manufacturing.next_inventory_id();
+    let item_id = gs.player_company.manufacturing.next_inventory_id.mint();
     gs.player_company.manufacturing.inventory.stages.push(InventoryStage {
         item_id,
         rocket_project_id: RocketProjectId(1),

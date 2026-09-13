@@ -284,7 +284,7 @@ fn gate_blocks_overcommitment() {
     );
 
     // Push a second rocket onto the shelf and advance another day.
-    let item_id = gs.player_company.manufacturing.next_inventory_id();
+    let item_id = gs.player_company.manufacturing.next_inventory_id.mint();
     let mut extra = gs.player_company.manufacturing.inventory.rockets[0].clone();
     extra.item_id = item_id;
     gs.player_company.manufacturing.inventory.rockets.push(extra);

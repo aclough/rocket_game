@@ -184,7 +184,7 @@ impl Company {
                                 .find(|ep| ep.project_id == ep_id)
                             {
                                 let engine_prior = *self.engine_build_counts.get(&ep_id).unwrap_or(&0);
-                                let order_id = self.manufacturing.next_order_id();
+                                let order_id = self.manufacturing.next_order_id.mint();
                                 let order = ManufacturingOrder::new_engine(
                                     order_id,
                                     EngineSource::PlayerDesign(ep_id),
@@ -211,7 +211,7 @@ impl Company {
                                 .find(|ce| ce.id == ce_id)
                             {
                                 total_cost += ce.purchase_cost_per_unit;
-                                let item_id = self.manufacturing.next_inventory_id();
+                                let item_id = self.manufacturing.next_inventory_id.mint();
                                 self.manufacturing.inventory.engines.push(InventoryEngine {
                                     item_id,
                                     source: EngineSource::Contracted(ce_id),
@@ -230,7 +230,7 @@ impl Company {
                 }
 
                 // Queue stage build order
-                let order_id = self.manufacturing.next_order_id();
+                let order_id = self.manufacturing.next_order_id.mint();
                 let stage_label = if group.len() == 1 {
                     format!("{}", gi + 1)
                 } else {
@@ -256,7 +256,7 @@ impl Company {
         let total_stages: u32 = rp.design.stage_groups.iter()
             .map(|g| g.len() as u32)
             .sum();
-        let order_id = self.manufacturing.next_order_id();
+        let order_id = self.manufacturing.next_order_id.mint();
         let integration_order = ManufacturingOrder::new_integration(
             order_id,
             rocket_project_id,
@@ -314,7 +314,7 @@ impl Company {
         let improvements: Vec<_> = ep.improvements.iter().filter(|i| i.actualized).cloned().collect();
         let engine_prior = *self.engine_build_counts.get(&ep_id).unwrap_or(&0);
 
-        let order_id = self.manufacturing.next_order_id();
+        let order_id = self.manufacturing.next_order_id.mint();
         let order = ManufacturingOrder::new_engine(
             order_id,
             EngineSource::PlayerDesign(ep_id),
@@ -437,8 +437,7 @@ impl Company {
             return None;
         }
 
-        let id = ContractedEngineId(self.next_contracted_engine_id);
-        self.next_contracted_engine_id += 1;
+        let id = self.next_contracted_engine_id.mint();
         let name = entry.design.name.clone();
 
         let flaws = third_party::generate_third_party_flaws(

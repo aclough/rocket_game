@@ -6,8 +6,7 @@ use super::*;
 impl Company {
     /// Put an engineering team on the roster without charging for it.
     pub(super) fn enroll_team(&mut self, name: String, balance_cfg: &BalanceConfig) {
-        let id = TeamId(self.next_team_id);
-        self.next_team_id += 1;
+        let id = self.next_team_id.mint();
         let team = EngineeringTeam::new(id, name, balance_cfg.costs.engineering_monthly_salary);
         self.teams.push(team);
     }
@@ -47,8 +46,7 @@ impl Company {
     /// Hire a manufacturing team.
     pub fn hire_manufacturing_team(&mut self, name: String, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
         self.debit(balance_cfg.costs.manufacturing_hiring_cost);
-        let id = TeamId(self.next_team_id);
-        self.next_team_id += 1;
+        let id = self.next_team_id.mint();
         let team = ManufacturingTeam::new(id, name.clone(), balance_cfg.costs.manufacturing_monthly_salary);
         self.manufacturing_teams.push(team);
         Some(GameEvent::ManufacturingTeamHired { name })

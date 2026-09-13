@@ -4,11 +4,10 @@
 
 
 use crate::engine_project::EngineSource;
-use crate::flight::{Flight, FlightId, FlightStatus, Payload};
+use crate::flight::{Flight, FlightStatus, Payload};
 use crate::event::{GameEvent, ProjectEvent};
 use crate::project::ProjectKind;
 use crate::launch::{self, FlawOwner, FlawRoll, FlawTables, LaunchRecord, LaunchOutcome};
-use crate::rocket::RocketId;
 
 use super::*;
 
@@ -77,8 +76,7 @@ impl GameState {
                 .find(|rp| rp.project_id == inv_rocket.rocket_project_id)
                 .expect("validated above")
                 .design.clone();
-            let rocket_id = crate::rocket::RocketId(self.next_rocket_id);
-            self.next_rocket_id += 1;
+            let rocket_id = self.next_rocket_id.mint();
             let rocket = design.instantiate(rocket_id, 0.0);
             payloads.push(Payload::Spacecraft {
                 deploy_at: Some(destination.clone()),
@@ -236,12 +234,10 @@ impl GameState {
             }
         };
 
-        let flight_id = FlightId(self.next_flight_id);
-        self.next_flight_id += 1;
+        let flight_id = self.next_flight_id.mint();
 
         // Instantiate a Rocket with per-stage propellant tracking
-        let rocket_instance_id = RocketId(self.next_rocket_id);
-        self.next_rocket_id += 1;
+        let rocket_instance_id = self.next_rocket_id.mint();
         let rocket_instance = sim.degraded_design.instantiate(
             rocket_instance_id, total_payload_kg,
         );
@@ -541,8 +537,7 @@ impl GameState {
         self.player_company.launch_history.push(record);
 
         if persist {
-            let sc_id = SpacecraftId(self.next_rocket_id);
-            self.next_rocket_id += 1;
+            let sc_id = self.next_spacecraft_id.mint();
             self.spacecraft.push(Spacecraft {
                 id: sc_id,
                 name: rocket_name,
@@ -559,8 +554,7 @@ impl GameState {
             if let Payload::Spacecraft {
                 design, rocket, nested_payloads, rocket_project_id, name, ..
             } = payload {
-                let sc_id = SpacecraftId(self.next_rocket_id);
-                self.next_rocket_id += 1;
+                let sc_id = self.next_spacecraft_id.mint();
                 let evt = GameEvent::SpacecraftDeployed {
                     spacecraft_name: name.clone(),
                     location: dest_display.to_string(),
@@ -629,8 +623,7 @@ impl GameState {
             return;
         }
 
-        let flight_id = FlightId(self.next_flight_id);
-        self.next_flight_id += 1;
+        let flight_id = self.next_flight_id.mint();
 
         let leg_days = route.first().map(|l| l.total_days()).unwrap_or(0);
         let dest_display = crate::contract::destination_display_name(destination);
@@ -727,8 +720,7 @@ impl GameState {
         };
         let payload_name = name.clone();
 
-        let sc_id = SpacecraftId(self.next_rocket_id);
-        self.next_rocket_id += 1;
+        let sc_id = self.next_spacecraft_id.mint();
         self.spacecraft.push(Spacecraft {
             id: sc_id, name, rocket, design,
             location,

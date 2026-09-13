@@ -18,8 +18,8 @@ use crate::balance_config::BalanceConfig;
 use crate::calendar::GameDate;
 use crate::contract::{Contract, ContractId};
 use crate::engine::{EngineDesign, EngineCycle, EngineId, PropellantFraction};
-use crate::engine_project::{EngineProject, EngineDesignStatus, EngineProjectId, PropellantPreset};
-use crate::flaw::{Flaw, FlawId, FlawConsequence, FlawTrigger};
+use crate::engine_project::{EngineProject, EngineDesignStatus, PropellantPreset};
+use crate::flaw::{Flaw, FlawConsequence, FlawTrigger};
 use crate::game_state::Company;
 use crate::manufacturing::InventoryRocket;
 use crate::propellant::Propellant;
@@ -206,8 +206,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
     };
 
     for (design, complexity) in [(booster_engine.clone(), 12u32), (upper_engine.clone(), 8u32)] {
-        let project_id = EngineProjectId(company.next_project_id);
-        company.next_project_id += 1;
+        let project_id = company.next_project_id.mint();
         company.engine_projects.push(EngineProject {
             auto_revise: crate::flaw::auto_revise_default(),
             retired: false,
@@ -221,7 +220,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             complexity,
             nre_cost: 0.0,
             improvements: Vec::new(),
-            next_improvement_id: 0,
+            next_improvement_id: crate::id::IdAllocator::default(),
             cumulative_testing_work: 0.0,
             tech_deficiency_ids: Vec::new(),
             technology_id: None,
@@ -263,7 +262,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
     // failure rate. Never discovered, never revised — DinoSoar does
     // no R&D.
     let flaw = Flaw {
-        id: FlawId(company.next_flaw_id),
+        id: company.next_flaw_id.mint(),
         description: "Booster core separation ordnance defect".into(),
         consequence: FlawConsequence::StageLoss,
         activation_chance: failure_rate,
@@ -271,14 +270,12 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
         discovered: false,
         trigger: FlawTrigger::PerFlight,
     };
-    company.next_flaw_id += 1;
 
     let mut project = RocketProject::new(
-        RocketProjectId(company.next_rocket_project_id),
+        company.next_rocket_project_id.mint(),
         design,
         balance,
     );
-    company.next_rocket_project_id += 1;
     project.status = RocketDesignStatus::Testing { work_completed: 0.0 };
     project.flaws = vec![flaw.clone()];
     let rocket_project_id = project.project_id;
@@ -291,7 +288,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
     // The incumbent starts with vehicles on the shelf, valued at the
     // catalog estimate (no build history yet for these).
     for _ in 0..cfg.initial_stock {
-        let item_id = company.manufacturing.next_inventory_id();
+        let item_id = company.manufacturing.next_inventory_id.mint();
         company.manufacturing.inventory.rockets.push(InventoryRocket {
             item_id,
             rocket_project_id,
@@ -387,7 +384,7 @@ mod tests {
         let scarce = d.compute_bid(&contract, &cfg, &seed).expect("bids with stock");
         // Deepen the shelf: more stock, thinner margin.
         for _ in 0..6 {
-            let item_id = d.company.manufacturing.next_inventory_id();
+            let item_id = d.company.manufacturing.next_inventory_id.mint();
             let template = d.company.manufacturing.inventory.rockets[0].clone();
             d.company.manufacturing.inventory.rockets.push(InventoryRocket {
                 item_id, ..template

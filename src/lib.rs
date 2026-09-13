@@ -9,6 +9,7 @@ pub mod path_planning;
 pub mod calendar;
 pub mod event;
 pub mod seed;
+pub mod id;
 pub mod balance;
 pub mod balance_config;
 pub mod flaw;

@@ -156,7 +156,7 @@ mod tests {
         let mut proj = RocketProject::new(RocketProjectId(1), design, &bal());
         proj.teams_assigned = 4;
         let mut rng = test_rng();
-        let mut next_flaw_id = 0u64;
+        let mut next_flaw_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
 
         let work_needed = match &proj.status {
             RocketDesignStatus::InDesign { work_required, .. } => *work_required,
@@ -179,7 +179,7 @@ mod tests {
         let mut proj = RocketProject::new(RocketProjectId(1), design, &bal());
         proj.teams_assigned = 4;
         let mut rng = test_rng();
-        let mut next_flaw_id = 0u64;
+        let mut next_flaw_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
 
         // Advance to testing
         for _ in 0..200 {

@@ -60,7 +60,7 @@ fn spawn_draws_params_within_spec() {
         .fold(f64::NEG_INFINITY, f64::max);
     let dest_minimums: Vec<f64> = market.destinations.iter().map(|d| d.min_payload_kg).collect();
 
-    let mut next_campaign_id = 1u64;
+    let mut next_campaign_id = rocket_tycoon::id::IdAllocator::<rocket_tycoon::contract::CampaignId>::starting_at(1);
     for seed_value in 0..30u64 {
         let mut rng = StdRng::seed_from_u64(seed_value);
         let campaign = spawn_campaign(
@@ -142,7 +142,7 @@ fn block_buy_price_is_discounted() {
     };
     let current_date = GameDate::new(2001, 1, 1);
 
-    let mut next_campaign_id = 1u64;
+    let mut next_campaign_id = rocket_tycoon::id::IdAllocator::<rocket_tycoon::contract::CampaignId>::starting_at(1);
     for seed_value in 0..10u64 {
         let mut rng = StdRng::seed_from_u64(seed_value);
         let campaign = spawn_campaign(
@@ -163,7 +163,7 @@ fn missions_are_correlated_and_numbered() {
     let market = rideshare_market();
     let spec = rigged_spec();
     let current_date = GameDate::new(2001, 1, 1);
-    let mut next_campaign_id = 1u64;
+    let mut next_campaign_id = rocket_tycoon::id::IdAllocator::<rocket_tycoon::contract::CampaignId>::starting_at(1);
     let mut rng = StdRng::seed_from_u64(99);
     let campaign = spawn_campaign(
         &market, &spec, &mut rng, &mut next_campaign_id, current_date, 1.0, &[],
@@ -171,7 +171,7 @@ fn missions_are_correlated_and_numbered() {
     .expect("spawn_chance 1.0 must spawn");
 
     let deadline_window = (60u32, 150u32);
-    let mut next_contract_id = 1u64;
+    let mut next_contract_id = rocket_tycoon::id::IdAllocator::<rocket_tycoon::contract::ContractId>::starting_at(1);
     let mut working = campaign.clone();
     let mut contracts = Vec::new();
     let mut issue_dates = Vec::new();

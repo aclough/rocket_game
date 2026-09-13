@@ -541,7 +541,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
 
 > Plan: `17_5_G.md` (order G5, G4, G3, G2, G1; four questions to answer).
 
-### G1. ID counters: seven on `Company`, four on `GameState`, three idioms
+### ✅ G1. ID counters: seven on `Company`, four on `GameState`, three idioms
 - **Where:** `company.rs:154-166`; `game_state/mod.rs:147-191`;
   `manufacturing.rs:435-467` (already wrapped in methods). External
   code bumps raw fields (`competitor.rs:209, 266-281`,

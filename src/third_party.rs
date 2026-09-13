@@ -115,7 +115,7 @@ pub fn generate_third_party_flaws(
     complexity: u32,
     seed: &GameSeed,
     engine_name: &str,
-    next_flaw_id: &mut u64,
+    next_flaw_id: &mut crate::id::IdAllocator<crate::flaw::FlawId>,
     flaws_cfg: &crate::balance_config::FlawsConfig,
 ) -> Vec<Flaw> {
     let effective = (complexity / 8).max(1);
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn test_third_party_flaw_scaling() {
         let seed = GameSeed::new(42);
-        let mut next_flaw_id = 10000u64;
+        let mut next_flaw_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(10000);
 
         // Complexity 8 -> effective 1, should produce few flaws on average
         let mut total_flaws = 0;
@@ -169,8 +169,8 @@ mod tests {
     #[test]
     fn test_third_party_flaws_deterministic() {
         let seed = GameSeed::new(42);
-        let mut id1 = 10000u64;
-        let mut id2 = 10000u64;
+        let mut id1 = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(10000);
+        let mut id2 = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(10000);
         let f1 = generate_third_party_flaws(8, &seed, "RD-33K", &mut id1, &crate::balance_config::FlawsConfig::default());
         let f2 = generate_third_party_flaws(8, &seed, "RD-33K", &mut id2, &crate::balance_config::FlawsConfig::default());
         assert_eq!(f1.len(), f2.len());

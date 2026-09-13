@@ -145,7 +145,7 @@ pub fn generate_flaws(
     domain: FlawDomain,
     effective_complexity: u32,
     rng: &mut StdRng,
-    next_flaw_id: &mut u64,
+    next_flaw_id: &mut crate::id::IdAllocator<FlawId>,
     cfg: &FlawsConfig,
 ) -> Vec<Flaw> {
     let mean = effective_complexity as f64;
@@ -153,8 +153,7 @@ pub fn generate_flaws(
     let count = count_f.round().max(0.0) as u32;
 
     (0..count).map(|_| {
-        let id = FlawId(*next_flaw_id);
-        *next_flaw_id += 1;
+        let id = next_flaw_id.mint();
         let trigger = match domain.endurance_fraction(cfg) {
             Some(fraction) if rng.gen::<f64>() < fraction => FlawTrigger::PerDay,
             _ => FlawTrigger::PerFlight,
@@ -555,7 +554,7 @@ mod tests {
         let trials = 1000;
         for seed in 0..trials {
             let mut rng = StdRng::seed_from_u64(seed);
-            let mut next_id = 0u64;
+            let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
             let flaws = generate_flaws(FlawDomain::Engine(None), 7, &mut rng, &mut next_id, &cfg());
             total += flaws.len() as u32;
         }
@@ -570,7 +569,7 @@ mod tests {
         let mut found_zero = false;
         for seed in 0..1000 {
             let mut rng = StdRng::seed_from_u64(seed);
-            let mut next_id = 0u64;
+            let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
             let flaws = generate_flaws(FlawDomain::Engine(None), 2, &mut rng, &mut next_id, &cfg());
             if flaws.is_empty() {
                 found_zero = true;
@@ -583,18 +582,18 @@ mod tests {
     #[test]
     fn test_flaw_ids_are_sequential() {
         let mut rng = test_rng();
-        let mut next_id = 10u64;
+        let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(10);
         let flaws = generate_flaws(FlawDomain::Engine(None), 6, &mut rng, &mut next_id, &cfg());
         for (i, flaw) in flaws.iter().enumerate() {
             assert_eq!(flaw.id, FlawId(10 + i as u64));
         }
-        assert_eq!(next_id, 10 + flaws.len() as u64);
+        assert_eq!(next_id.next_raw(), 10 + flaws.len() as u64);
     }
 
     #[test]
     fn test_flaws_start_undiscovered() {
         let mut rng = test_rng();
-        let mut next_id = 0u64;
+        let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
         let flaws = generate_flaws(FlawDomain::Engine(None), 8, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert!(!flaw.discovered);
@@ -604,7 +603,7 @@ mod tests {
     #[test]
     fn test_activation_chance_in_range() {
         let mut rng = test_rng();
-        let mut next_id = 0u64;
+        let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
         let flaws = generate_flaws(FlawDomain::Engine(None), 9, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert!(flaw.activation_chance >= 0.0, "activation_chance should be non-negative");
@@ -616,7 +615,7 @@ mod tests {
     fn test_activation_chance_skewed_low() {
         // With random^2, most values should be below 0.5
         let mut rng = test_rng();
-        let mut next_id = 0u64;
+        let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
         let flaws = generate_flaws(FlawDomain::Engine(None), 100, &mut rng, &mut next_id, &cfg());
         let below_half = flaws.iter().filter(|f| f.activation_chance < 0.5).count();
         assert!(
@@ -629,7 +628,7 @@ mod tests {
     #[test]
     fn test_discovery_probability_bounded_by_sqrt_activation() {
         let mut rng = test_rng();
-        let mut next_id = 0u64;
+        let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
         let flaws = generate_flaws(FlawDomain::Engine(None), 9, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert!(
@@ -645,7 +644,7 @@ mod tests {
     #[test]
     fn test_roll_discoveries() {
         let mut rng = test_rng();
-        let mut next_id = 0u64;
+        let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
         let mut flaws = generate_flaws(FlawDomain::Engine(None), 8, &mut rng, &mut next_id, &cfg());
 
         // Force high discovery probability on first flaw for testing
@@ -725,7 +724,7 @@ mod tests {
     #[test]
     fn test_rocket_flaws_have_per_day() {
         let mut rng = test_rng();
-        let mut next_id = 0u64;
+        let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
         let flaws = generate_flaws(FlawDomain::Rocket, 10, &mut rng, &mut next_id, &cfg());
         let per_day_count = flaws.iter().filter(|f| f.trigger == FlawTrigger::PerDay).count();
         // With 30% chance and ~10 flaws, expect ~3 PerDay (allow 0-8 for randomness)
@@ -742,7 +741,7 @@ mod tests {
         let mut per_flight = 0usize;
         for seed in 0..200 {
             let mut rng = StdRng::seed_from_u64(seed);
-            let mut next_id = 0u64;
+            let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
             for flaw in generate_flaws(FlawDomain::Reactor, 10, &mut rng, &mut next_id, &cfg()) {
                 match flaw.trigger {
                     FlawTrigger::PerDay => per_day += 1,
@@ -763,7 +762,7 @@ mod tests {
         let trials = 1000;
         for seed in 0..trials {
             let mut rng = StdRng::seed_from_u64(seed);
-            let mut next_id = 0u64;
+            let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
             let flaws = generate_flaws(FlawDomain::Reactor, 8, &mut rng, &mut next_id, &cfg());
             total += flaws.len() as u32;
         }
@@ -774,19 +773,19 @@ mod tests {
     #[test]
     fn test_reactor_flaws_ids_sequential_and_undiscovered() {
         let mut rng = test_rng();
-        let mut next_id = 5u64;
+        let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(5);
         let flaws = generate_flaws(FlawDomain::Reactor, 9, &mut rng, &mut next_id, &cfg());
         for (i, flaw) in flaws.iter().enumerate() {
             assert_eq!(flaw.id, FlawId(5 + i as u64));
             assert!(!flaw.discovered);
         }
-        assert_eq!(next_id, 5 + flaws.len() as u64);
+        assert_eq!(next_id.next_raw(), 5 + flaws.len() as u64);
     }
 
     #[test]
     fn test_engine_flaws_all_per_flight() {
         let mut rng = test_rng();
-        let mut next_id = 0u64;
+        let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
         let flaws = generate_flaws(FlawDomain::Engine(None), 10, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert_eq!(flaw.trigger, FlawTrigger::PerFlight,

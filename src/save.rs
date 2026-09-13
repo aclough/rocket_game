@@ -117,6 +117,12 @@ fn sanitize(state: &mut GameState) {
             &state.seed, &state.balance, crate::calendar::GameDate::default_start(),
         );
     }
+
+    // Spacecraft ids were minted from the rocket counter before they had
+    // their own; a save from then loads the allocator at zero. Move it
+    // past every spacecraft the save holds (idempotent on a current save).
+    let highest = state.spacecraft.iter().map(|s| s.id.0).max().unwrap_or(0);
+    state.next_spacecraft_id.ensure_past(highest);
 }
 
 /// Version-gated shape migrations on the untyped JSON, applied in
@@ -516,7 +522,7 @@ mod tests {
                     actualized,
                 });
             }
-            ep.next_improvement_id = 2;
+            ep.next_improvement_id = crate::id::IdAllocator::starting_at(2);
             ep.status = EngineDesignStatus::Revising {
                 remaining_flaw_ids: vec![FlawId(11), FlawId(12)],
                 remaining_improvement_ids: vec![ImprovementId(1)],
@@ -547,7 +553,7 @@ mod tests {
 
         assert_eq!(loaded.save_version, SAVE_VERSION);
         let ep = &loaded.player_company.engine_projects[0];
-        assert_eq!(ep.next_improvement_id, 2);
+        assert_eq!(ep.next_improvement_id.next_raw(), 2);
         assert_eq!(ep.improvements[0].id, ImprovementId(0));
         assert_eq!(ep.improvements[1].id, ImprovementId(1));
         match &ep.status {

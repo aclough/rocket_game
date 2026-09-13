@@ -785,7 +785,7 @@ mod tests {
         let mut proj = create_test_project();
         proj.teams_assigned = 1;
         let mut rng = test_rng();
-        let mut next_flaw_id = 0u64;
+        let mut next_flaw_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
 
         let work_needed = match &proj.status {
             EngineDesignStatus::InDesign { work_required, .. } => *work_required,
@@ -809,7 +809,7 @@ mod tests {
         let mut proj = create_test_project();
         assert_eq!(proj.teams_assigned, 0);
         let mut rng = test_rng();
-        let mut next_flaw_id = 0u64;
+        let mut next_flaw_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
 
         for _ in 0..100 {
             let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
@@ -833,8 +833,8 @@ mod tests {
 
         let mut rng1 = test_rng();
         let mut rng2 = test_rng();
-        let mut id1 = 0u64;
-        let mut id2 = 100u64;
+        let mut id1 = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
+        let mut id2 = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(100);
 
         // After 10 days, proj2 should have more work done
         for _ in 0..10 {
@@ -860,7 +860,7 @@ mod tests {
         let mut proj = create_test_project();
         proj.teams_assigned = 4;
         let mut rng = test_rng();
-        let mut next_flaw_id = 0u64;
+        let mut next_flaw_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
 
         // Fast-forward to testing
         for _ in 0..300 {

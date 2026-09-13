@@ -45,6 +45,7 @@ use crate::rocket_project::{RocketProject, RocketProjectId};
 use crate::seed::GameSeed;
 
 use crate::balance_config::BalanceConfig;
+use crate::id::IdAllocator;
 
 use crate::team::{EngineeringTeam, ManufacturingTeam, TeamId};
 
@@ -64,19 +65,19 @@ pub struct MonthlyFinancials {
 pub struct Company {
     pub name: String,
     pub money: f64,
-    pub next_team_id: u64,
-    pub next_engine_id: u64,
-    pub next_project_id: u64,
-    pub next_flaw_id: u64,
-    pub next_rocket_project_id: u64,
-    pub next_contracted_engine_id: u64,
+    pub next_team_id: IdAllocator<TeamId>,
+    pub next_engine_id: IdAllocator<EngineId>,
+    pub next_project_id: IdAllocator<EngineProjectId>,
+    pub next_flaw_id: IdAllocator<crate::flaw::FlawId>,
+    pub next_rocket_project_id: IdAllocator<RocketProjectId>,
+    pub next_contracted_engine_id: IdAllocator<ContractedEngineId>,
     /// Allocator for `ReactorProjectId`.
     #[serde(default)]
-    pub next_reactor_project_id: u64,
+    pub next_reactor_project_id: IdAllocator<crate::reactor_project::ReactorProjectId>,
     /// Allocator for `ReactorId` (the design's identity, used like
     /// `next_engine_id` for engine designs).
     #[serde(default)]
-    pub next_reactor_id: u64,
+    pub next_reactor_id: IdAllocator<crate::reactor::ReactorId>,
     pub teams: Vec<EngineeringTeam>,
     pub manufacturing_teams: Vec<ManufacturingTeam>,
     pub engine_projects: Vec<EngineProject>,
@@ -160,14 +161,14 @@ impl Company {
         let mut company = Company {
             name,
             money: starting_money,
-            next_team_id: 1,
-            next_engine_id: 1,
-            next_project_id: 1,
-            next_flaw_id: 1,
-            next_rocket_project_id: 1,
-            next_contracted_engine_id: 1,
-            next_reactor_project_id: 1,
-            next_reactor_id: 1,
+            next_team_id: IdAllocator::starting_at(1),
+            next_engine_id: IdAllocator::starting_at(1),
+            next_project_id: IdAllocator::starting_at(1),
+            next_flaw_id: IdAllocator::starting_at(1),
+            next_rocket_project_id: IdAllocator::starting_at(1),
+            next_contracted_engine_id: IdAllocator::starting_at(1),
+            next_reactor_project_id: IdAllocator::starting_at(1),
+            next_reactor_id: IdAllocator::starting_at(1),
             teams: Vec::new(),
             manufacturing_teams: Vec::new(),
             engine_projects: Vec::new(),

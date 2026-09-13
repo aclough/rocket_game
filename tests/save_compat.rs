@@ -64,7 +64,14 @@ fn every_era_loads_and_is_playable() {
         );
         assert!(
             !state.markets.is_empty(),
-            "{era}: markets are present (defaulted for pre-M2 saves)",
+            "{era}: markets are present (realized for pre-M2 saves)",
+        );
+        // Spacecraft ids had no allocator of their own before G1; the
+        // loader must leave it past every spacecraft in the save.
+        let highest = state.spacecraft.iter().map(|s| s.id.0).max().unwrap_or(0);
+        assert!(
+            state.next_spacecraft_id.next_raw() > highest,
+            "{era}: the spacecraft allocator sits past every spacecraft",
         );
 
         // The real proof it's playable: it ticks without panicking and

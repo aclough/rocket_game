@@ -9,6 +9,7 @@ use crate::flight::Flight;
 use crate::event::{EventLog, GameEvent};
 use crate::rocket::RocketDesign;
 use crate::rocket_project::RocketProjectId;
+use crate::id::IdAllocator;
 use crate::seed::GameSeed;
 use crate::balance_config::BalanceConfig;
 
@@ -161,16 +162,21 @@ pub struct GameState {
     pub available_contracts: Vec<Contract>,
     /// Next contract ID counter.
     #[serde(default = "default_next_contract_id")]
-    pub next_contract_id: u64,
+    pub next_contract_id: IdAllocator<contract::ContractId>,
     /// Flights currently in transit.
     #[serde(default)]
     pub active_flights: Vec<Flight>,
     /// Next flight ID counter.
     #[serde(default = "default_next_flight_id")]
-    pub next_flight_id: u64,
+    pub next_flight_id: IdAllocator<crate::flight::FlightId>,
     /// Next rocket instance ID counter.
     #[serde(default = "default_next_rocket_id")]
-    pub next_rocket_id: u64,
+    pub next_rocket_id: IdAllocator<crate::rocket::RocketId>,
+    /// Spacecraft ids; before this allocator they were minted from
+    /// `next_rocket_id`, so a save without it loads at zero and
+    /// `save::sanitize` moves it past every spacecraft it holds.
+    #[serde(default)]
+    pub next_spacecraft_id: IdAllocator<SpacecraftId>,
     /// Spacecraft persisted after arrival.
     #[serde(default)]
     pub spacecraft: Vec<Spacecraft>,
@@ -207,7 +213,7 @@ pub struct GameState {
     #[serde(default)]
     pub active_campaigns: Vec<contract::Campaign>,
     #[serde(default = "default_next_campaign_id")]
-    pub next_campaign_id: u64,
+    pub next_campaign_id: IdAllocator<contract::CampaignId>,
     /// Tunable balance parameters this game was created with. Saves
     /// remember their balance; old saves load with defaults.
     #[serde(default)]
@@ -233,10 +239,10 @@ pub struct GameState {
     pub trip_survival_cache: RefCell<HashMap<(u64, String, String, u64), bool>>,
 }
 
-fn default_next_contract_id() -> u64 { 1 }
-fn default_next_campaign_id() -> u64 { 1 }
-fn default_next_flight_id() -> u64 { 1 }
-fn default_next_rocket_id() -> u64 { 1 }
+fn default_next_contract_id() -> IdAllocator<contract::ContractId> { IdAllocator::starting_at(1) }
+fn default_next_campaign_id() -> IdAllocator<contract::CampaignId> { IdAllocator::starting_at(1) }
+fn default_next_flight_id() -> IdAllocator<crate::flight::FlightId> { IdAllocator::starting_at(1) }
+fn default_next_rocket_id() -> IdAllocator<crate::rocket::RocketId> { IdAllocator::starting_at(1) }
 /// Realize the archetype table for this world: presence rolls,
 /// volume/rate multipliers, growth rates, and weight tilts baked in.
 /// Absent and not-yet-emerged markets ride along inactive.
@@ -316,10 +322,11 @@ impl GameState {
             speed: GameSpeed::Paused,
             previous_speed: GameSpeed::Normal,
             available_contracts: Vec::new(),
-            next_contract_id: 1,
+            next_contract_id: IdAllocator::starting_at(1),
             active_flights: Vec::new(),
-            next_flight_id: 1,
-            next_rocket_id: 1,
+            next_flight_id: IdAllocator::starting_at(1),
+            next_rocket_id: IdAllocator::starting_at(1),
+            next_spacecraft_id: IdAllocator::starting_at(1),
             spacecraft: Vec::new(),
             economy,
             geopolitics,
@@ -328,7 +335,7 @@ impl GameState {
             competitors,
             award_history: Vec::new(),
             active_campaigns: Vec::new(),
-            next_campaign_id: 1,
+            next_campaign_id: IdAllocator::starting_at(1),
             technologies,
             balance,
             payload_capability_cache: RefCell::new(HashMap::new()),
@@ -419,8 +426,7 @@ impl GameState {
         let new_flaw = self.seed.contingent_rng.gen::<f64>()
             < self.balance.flaws.modification_flaw_prob;
         if new_flaw {
-            let id = crate::flaw::FlawId(self.player_company.next_flaw_id);
-            self.player_company.next_flaw_id += 1;
+            let id = self.player_company.next_flaw_id.mint();
             let trigger = if self.seed.contingent_rng.gen::<f64>()
                 < self.balance.flaws.rocket_endurance_fraction
             {

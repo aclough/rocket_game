@@ -431,8 +431,8 @@ impl Inventory {
 pub struct Manufacturing {
     pub orders: Vec<ManufacturingOrder>,
     pub inventory: Inventory,
-    pub next_order_id: u64,
-    pub next_inventory_id: u64,
+    pub next_order_id: crate::id::IdAllocator<ManufacturingOrderId>,
+    pub next_inventory_id: crate::id::IdAllocator<InventoryItemId>,
 }
 
 impl Default for Manufacturing {
@@ -446,23 +446,9 @@ impl Manufacturing {
         Manufacturing {
             orders: Vec::new(),
             inventory: Inventory::new(),
-            next_order_id: 1,
-            next_inventory_id: 1,
+            next_order_id: crate::id::IdAllocator::starting_at(1),
+            next_inventory_id: crate::id::IdAllocator::starting_at(1),
         }
-    }
-
-    /// Generate a new order ID.
-    pub fn next_order_id(&mut self) -> ManufacturingOrderId {
-        let id = ManufacturingOrderId(self.next_order_id);
-        self.next_order_id += 1;
-        id
-    }
-
-    /// Generate a new inventory item ID.
-    pub fn next_inventory_id(&mut self) -> InventoryItemId {
-        let id = InventoryItemId(self.next_inventory_id);
-        self.next_inventory_id += 1;
-        id
     }
 
     /// Total manufacturing teams assigned across all orders.
@@ -511,7 +497,7 @@ impl Manufacturing {
         // Handle completed orders (in reverse to preserve indices)
         for &i in completed_indices.iter().rev() {
             let order = self.orders.remove(i);
-            let item_id = self.next_inventory_id();
+            let item_id = self.next_inventory_id.mint();
 
             // Inventory build_cost is the full attributed cost: this order's
             // accumulated material_cost (which already absorbed any consumed
@@ -714,7 +700,7 @@ mod tests {
     #[test]
     fn test_engine_build_completes() {
         let mut mfg = Manufacturing::new();
-        let id = mfg.next_order_id();
+        let id = mfg.next_order_id.mint();
         let mut order = ManufacturingOrder::new_engine(
             id, test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
@@ -769,7 +755,7 @@ mod tests {
     #[test]
     fn test_waiting_orders_dont_progress() {
         let mut mfg = Manufacturing::new();
-        let id = mfg.next_order_id();
+        let id = mfg.next_order_id.mint();
         let mut order = ManufacturingOrder::new_stage(
             id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0, &bal(),
         );
@@ -788,7 +774,7 @@ mod tests {
     #[test]
     fn test_unblocked_orders_progress() {
         let mut mfg = Manufacturing::new();
-        let id = mfg.next_order_id();
+        let id = mfg.next_order_id.mint();
         let mut order = ManufacturingOrder::new_stage(
             id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0, &bal(),
         );

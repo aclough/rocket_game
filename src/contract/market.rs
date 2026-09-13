@@ -313,7 +313,7 @@ impl Market {
 pub fn generate_market_contracts(
     market: &mut Market,
     rng: &mut StdRng,
-    next_contract_id: &mut u64,
+    next_contract_id: &mut crate::id::IdAllocator<ContractId>,
     current_date: GameDate,
     economy_modifier: f64,
     markets_cfg: &MarketsConfig,
@@ -379,7 +379,7 @@ pub(super) fn pick_destination<'a>(market: &'a Market, rng: &mut StdRng) -> Opti
 fn generate_single_contract(
     market: &Market,
     rng: &mut StdRng,
-    next_contract_id: &mut u64,
+    next_contract_id: &mut crate::id::IdAllocator<ContractId>,
     current_date: GameDate,
     rate_mult: f64,
     markets_cfg: &MarketsConfig,
@@ -406,8 +406,7 @@ fn generate_single_contract(
     let prefix = &market.name_prefixes[rng.gen_range(0..market.name_prefixes.len())];
     let name = format!("{} to {}", prefix, dest.display_name);
 
-    let id = ContractId(*next_contract_id);
-    *next_contract_id += 1;
+    let id = next_contract_id.mint();
 
     Some(Contract {
         id,
@@ -463,7 +462,7 @@ mod tests {
         let markets = initial_markets();
         let mut rng = make_rng();
         let date = GameDate::new(2001, 1, 1);
-        let mut next_id = 1u64;
+        let mut next_id = crate::id::IdAllocator::<ContractId>::starting_at(1);
 
         let mut geo = markets.iter().find(|m| m.id == MARKET_GEO_COMSATS).unwrap().clone();
         let cs = generate_market_contracts(&mut geo, &mut rng, &mut next_id, date, 1.0, &mcfg());
@@ -480,7 +479,7 @@ mod tests {
         let markets = initial_markets();
         let mut rng = make_rng();
         let date = GameDate::new(2001, 1, 1);
-        let mut next_id = 1u64;
+        let mut next_id = crate::id::IdAllocator::<ContractId>::starting_at(1);
         let cfg = mcfg();
 
         let mut geo = markets.iter().find(|m| m.id == MARKET_GEO_COMSATS).unwrap().clone();
@@ -590,7 +589,7 @@ mod tests {
         market.base_volume = 1.0;
         market.cadence = cadence;
         let mut rng = make_rng();
-        let mut next_id = 1u64;
+        let mut next_id = crate::id::IdAllocator::<ContractId>::starting_at(1);
         let mut counts = Vec::new();
         for m in 0..months {
             let date = GameDate::new(2001 + m / 12, m % 12 + 1, 1);
@@ -716,7 +715,7 @@ mod tests {
     fn test_contract_has_market_id() {
         let mut market = initial_markets()[2].clone(); // Rideshare
         let mut rng = make_rng();
-        let mut next_id = 1u64;
+        let mut next_id = crate::id::IdAllocator::<ContractId>::starting_at(1);
         let cs = generate_market_contracts(&mut market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 1.0, &mcfg());
         for c in &cs {
             assert_eq!(c.market_id, MARKET_RIDESHARE);
@@ -727,7 +726,7 @@ mod tests {
     fn test_inactive_market_generates_nothing() {
         let mut market = event_market_templates()[0].clone(); // COTS, inactive
         let mut rng = make_rng();
-        let mut next_id = 1u64;
+        let mut next_id = crate::id::IdAllocator::<ContractId>::starting_at(1);
         let cs = generate_market_contracts(&mut market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 1.0, &mcfg());
         assert!(cs.is_empty());
     }

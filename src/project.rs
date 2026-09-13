@@ -270,7 +270,7 @@ pub struct DesignProject<D: Designable> {
     pub improvements: Vec<Improvement<D::ImprovementKind>>,
     /// Allocator for `ImprovementId` on this project.
     #[serde(default)]
-    pub next_improvement_id: u64,
+    pub next_improvement_id: crate::id::IdAllocator<ImprovementId>,
     /// Cumulative work spent in testing (persists across revisions).
     #[serde(default)]
     pub cumulative_testing_work: f64,
@@ -318,7 +318,7 @@ impl<D: Designable> DesignProject<D> {
             complexity,
             nre_cost: 0.0,
             improvements: Vec::new(),
-            next_improvement_id: 0,
+            next_improvement_id: crate::id::IdAllocator::default(),
             cumulative_testing_work: 0.0,
             tech_deficiency_ids: Vec::new(),
             technology_id,
@@ -373,7 +373,7 @@ impl<D: Designable> DesignProject<D> {
     pub fn apply_daily_work(
         &mut self,
         rng: &mut StdRng,
-        next_flaw_id: &mut u64,
+        next_flaw_id: &mut crate::id::IdAllocator<crate::flaw::FlawId>,
         balance_cfg: &BalanceConfig,
     ) -> Vec<WorkEvent> {
         if self.teams_assigned == 0 {
@@ -412,8 +412,7 @@ impl<D: Designable> DesignProject<D> {
                         let chance = base_chance
                             * balance_cfg.flaws.improvement_decay.powi(self.improvements.len() as i32);
                         if rng.gen::<f64>() < chance {
-                            let id = ImprovementId(self.next_improvement_id);
-                            self.next_improvement_id += 1;
+                            let id = self.next_improvement_id.mint();
                             let improvement = self.design.roll_improvement(rng, id, balance_cfg);
                             events.push(WorkEvent::ImprovementDiscovered {
                                 description: format!("{}: {}", improvement.description, improvement.kind),

@@ -45,7 +45,7 @@ fn per_market_deadline_windows_honored() {
         market.cadence = rocket_tycoon::contract::Cadence::Steady;
 
         let mut rng = StdRng::seed_from_u64(7);
-        let mut next_id = 1u64;
+        let mut next_id = rocket_tycoon::id::IdAllocator::<rocket_tycoon::contract::ContractId>::starting_at(1);
         let mut generated = 0usize;
         for month in 0..6u32 {
             let date = current_date.add_days(month * 30);
@@ -90,7 +90,7 @@ fn global_deadline_fallback_used_when_unset() {
     market.cadence = rocket_tycoon::contract::Cadence::Steady;
 
     let mut rng = StdRng::seed_from_u64(11);
-    let mut next_id = 1u64;
+    let mut next_id = rocket_tycoon::id::IdAllocator::<rocket_tycoon::contract::ContractId>::starting_at(1);
     let contracts = generate_market_contracts(
         &mut market, &mut rng, &mut next_id, current_date, 1.0, &markets_cfg,
     );

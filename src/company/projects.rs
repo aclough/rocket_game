@@ -15,10 +15,8 @@ impl Company {
         technology_id: Option<crate::technology::TechnologyId>,
         balance_cfg: &BalanceConfig,
     ) -> Option<GameEvent> {
-        let project_id = EngineProjectId(self.next_project_id);
-        let engine_id = EngineId(self.next_engine_id);
-        self.next_project_id += 1;
-        self.next_engine_id += 1;
+        let project_id = self.next_project_id.mint();
+        let engine_id = self.next_engine_id.mint();
 
         let mut project = EngineProject::new(
             project_id, engine_id, name.clone(),
@@ -43,10 +41,8 @@ impl Company {
         technology_id: Option<crate::technology::TechnologyId>,
         balance_cfg: &BalanceConfig,
     ) -> Option<EngineProjectId> {
-        let project_id = EngineProjectId(self.next_project_id);
-        let engine_id = EngineId(self.next_engine_id);
-        self.next_project_id += 1;
-        self.next_engine_id += 1;
+        let project_id = self.next_project_id.mint();
+        let engine_id = self.next_engine_id.mint();
 
         let mut project = EngineProject::new_proposed(
             project_id, engine_id, name,
@@ -89,10 +85,8 @@ impl Company {
         enrichment: crate::reactor::EnrichmentLevel,
         balance_cfg: &BalanceConfig,
     ) -> crate::reactor_project::ReactorProjectId {
-        let project_id = crate::reactor_project::ReactorProjectId(self.next_reactor_project_id);
-        let reactor_id = crate::reactor::ReactorId(self.next_reactor_id);
-        self.next_reactor_project_id += 1;
-        self.next_reactor_id += 1;
+        let project_id = self.next_reactor_project_id.mint();
+        let reactor_id = self.next_reactor_id.mint();
         let project = crate::reactor_project::ReactorProject::new_proposed(
             project_id, reactor_id, name, scale, enrichment, balance_cfg,
         );
@@ -170,8 +164,7 @@ impl Company {
         stage_groups: Vec<Vec<crate::stage::Stage>>,
         balance_cfg: &BalanceConfig,
     ) -> Option<GameEvent> {
-        let project_id = RocketProjectId(self.next_rocket_project_id);
-        self.next_rocket_project_id += 1;
+        let project_id = self.next_rocket_project_id.mint();
         let design = RocketDesign {
             id: crate::rocket::RocketDesignId(project_id.0),
             name: name.clone(),

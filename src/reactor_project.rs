@@ -230,7 +230,7 @@ mod tests {
             &bal(),
         );
         p.teams_assigned = 2;
-        let mut next_flaw = 1u64;
+        let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
         let events = p.apply_daily_work(&mut rng(), &mut next_flaw, &bal());
         assert!(events.is_empty());
         assert!(matches!(p.status, ReactorDesignStatus::Proposed { .. }));
@@ -261,7 +261,7 @@ mod tests {
             &bal(),
         );
         p.teams_assigned = 4;
-        let mut next_flaw = 1u64;
+        let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
         let mut saw_complete = false;
         // Hard cap iterations so a runaway loop fails the test rather
         // than the process.
@@ -288,7 +288,7 @@ mod tests {
             );
             p.teams_assigned = 4;
             let mut r = StdRng::seed_from_u64(seed);
-            let mut next_flaw = 1u64;
+            let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
             for _ in 0..10_000 {
                 let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
                 if events.iter().any(|e| matches!(e, WorkEvent::DesignComplete)) {
@@ -311,7 +311,7 @@ mod tests {
         );
         p.teams_assigned = 4;
         let mut r = rng();
-        let mut next_flaw = 1u64;
+        let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
         // Advance to Testing.
         for _ in 0..10_000 {
             let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
@@ -363,7 +363,7 @@ mod tests {
         assert!(matches!(p.status, ReactorDesignStatus::Revising { .. }));
 
         let mut r = rng();
-        let mut next_flaw = 2u64;
+        let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(2);
         for _ in 0..50 {
             p.apply_daily_work(&mut r, &mut next_flaw, &bal());
             if matches!(p.status, ReactorDesignStatus::Testing { .. }) {
@@ -392,7 +392,7 @@ mod tests {
         p.teams_assigned = 4;
         assert!(p.start_revision());
         let mut r = rng();
-        let mut next_flaw = 1u64;
+        let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
         for _ in 0..50 {
             p.apply_daily_work(&mut r, &mut next_flaw, &bal());
             if matches!(p.status, ReactorDesignStatus::Testing { .. }) {
@@ -419,7 +419,7 @@ mod tests {
         p.teams_assigned = 4;
         p.start_revision();
         let mut r = rng();
-        let mut next_flaw = 1u64;
+        let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
         for _ in 0..50 {
             p.apply_daily_work(&mut r, &mut next_flaw, &bal());
             if matches!(p.status, ReactorDesignStatus::Testing { .. }) {
