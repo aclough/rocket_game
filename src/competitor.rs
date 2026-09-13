@@ -25,7 +25,7 @@ use crate::manufacturing::InventoryRocket;
 use crate::propellant::Propellant;
 use crate::rocket::{RocketDesign, RocketDesignId};
 use crate::rocket_project::{RocketProject, RocketDesignStatus, RocketProjectId};
-use crate::seed::GameSeed;
+use crate::seed::{GameSeed, WorldQuery};
 use crate::stage::{Fairing, Stage, StageId};
 
 /// A launch DinoSoar has committed to: the awarded contract and the
@@ -89,13 +89,13 @@ impl Competitor {
     ///
     /// bid = marginal cost × margin × margin_factor, where the margin
     /// relaxes from `margin_max` (one rocket left) toward `margin_min`
-    /// as free stock grows, jittered per `jitter_key` from the world
-    /// seed, and never below `bid_floor`.
+    /// as free stock grows, jittered per `jitter` from the world seed,
+    /// and never below `bid_floor`.
     fn scripted_bid(
         &self,
         destination: &str,
         payload_kg: f64,
-        jitter_key: &str,
+        jitter: WorldQuery<'_>,
         margin_factor: f64,
         balance: &BalanceConfig,
         seed: &GameSeed,
@@ -111,7 +111,7 @@ impl Competitor {
         let margin =
             (cfg.margin_min + (cfg.margin_max - cfg.margin_min) / free as f64) * margin_factor;
         let mut bid = self.marginal_cost(balance) * margin;
-        let mut rng = seed.world_query(jitter_key);
+        let mut rng = seed.world_query(jitter);
         let u: f64 = rng.gen();
         bid *= 1.0 + cfg.bid_jitter * (2.0 * u - 1.0);
         bid = bid.max(cfg.bid_floor);
@@ -123,7 +123,7 @@ impl Competitor {
         self.scripted_bid(
             &contract.destination,
             contract.payload_kg,
-            &format!("dino_bid_{}", contract.id.0),
+            WorldQuery::DinoBid(contract.id),
             1.0,
             balance,
             seed,
@@ -144,7 +144,7 @@ impl Competitor {
         self.scripted_bid(
             &campaign.destination,
             campaign.payload_kg,
-            &format!("dino_block_bid_{}", campaign.id.0),
+            WorldQuery::DinoBlockBid(campaign.id),
             1.0 - balance.competitor.block_discount,
             balance,
             seed,
@@ -160,7 +160,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
 
     // Seeded reliability: u^skew keeps most worlds near the base rate
     // and makes a battered ~95% DinoSoar rare.
-    let mut rng = seed.world_query("competitor_dinosoar");
+    let mut rng = seed.world_query(WorldQuery::DinoSoar);
     let u: f64 = rng.gen();
     let failure_rate = cfg.failure_base + cfg.failure_spread * u.powf(cfg.failure_skew);
 

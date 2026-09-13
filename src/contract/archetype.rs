@@ -3,6 +3,7 @@
 //! to its neighbours.
 
 use super::*;
+use crate::seed::WorldQuery;
 
 /// How and when an event-driven market enters the world mid-game.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -78,7 +79,7 @@ pub struct RealizedMarket {
 /// pre-archetype emergence query stream, so a given seed keeps the
 /// market presence and timing it had before this layer existed.
 pub fn realize_archetype(seed: &GameSeed, arch: &MarketArchetype) -> RealizedMarket {
-    let mut rng = seed.world_query(&arch.key);
+    let mut rng = seed.world_query(WorldQuery::MarketArchetype(&arch.key));
 
     let present = rng.gen::<f64>() < arch.presence_probability;
     let trigger_year = arch.emergence.as_ref().map(|e| {

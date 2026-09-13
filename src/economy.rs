@@ -3,7 +3,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::balance_config::EconomyConfig;
 use crate::calendar::GameDate;
-use crate::seed::GameSeed;
+use crate::seed::{GameSeed, WorldQuery};
 
 /// Economic conditions affecting the space launch market.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -68,7 +68,7 @@ impl Default for EconomicState {
 
 /// Generate the initial economic state for a new game.
 pub fn initial_state(seed: &GameSeed, start_date: GameDate, cfg: &EconomyConfig) -> EconomicState {
-    let mut rng = seed.world_query("economy_event_0");
+    let mut rng = seed.world_query(WorldQuery::EconomyEvent(0));
     let normal = cfg.condition(EconomicCondition::Normal);
     let (dur_lo, dur_hi) = (normal.duration_min_months, normal.duration_max_months);
     let duration_months = rng.gen_range(dur_lo..=dur_hi);
@@ -95,12 +95,11 @@ pub fn advance_economy(
     }
 
     let next_index = state.event_index + 1;
-    let query = format!("economy_event_{}", next_index);
-    let mut rng = seed.world_query(&query);
+    let mut rng = seed.world_query(WorldQuery::EconomyEvent(next_index));
 
     // Special case: event 1 is a dot-com crash ~50% of the time
     let next_condition = if next_index == 1 {
-        let mut dot_com_rng = seed.world_query("economy_dot_com");
+        let mut dot_com_rng = seed.world_query(WorldQuery::EconomyDotCom);
         if dot_com_rng.gen::<f64>() < cfg.dot_com_crash_chance {
             EconomicCondition::Recession
         } else {
@@ -239,7 +238,7 @@ mod tests {
         // Run many transitions from Recession, verify all are valid successors
         for s in 0..200 {
             let seed = GameSeed::new(s);
-            let mut rng = seed.world_query(&format!("test_recession_{}", s));
+            let mut rng = seed.world_query(WorldQuery::Test(&format!("test_recession_{}", s)));
             let next = roll_next_condition(EconomicCondition::Recession, &mut rng, &cfg());
             assert!(
                 matches!(next, EconomicCondition::Recovery | EconomicCondition::Slowdown | EconomicCondition::Recession),

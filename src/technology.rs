@@ -2,7 +2,7 @@ use rand::Rng;
 use serde::{Serialize, Deserialize};
 
 use crate::balance_config::TechnologyConfig;
-use crate::seed::GameSeed;
+use crate::seed::{GameSeed, WorldQuery};
 
 /// Unique identifier for a technology.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -147,8 +147,7 @@ fn generate_technology(
     difficulty: u32,
     domain: TechDomain,
 ) -> Technology {
-    let query = format!("tech_{}_deficiencies", id.0);
-    let mut rng = seed.world_query(&query);
+    let mut rng = seed.world_query(WorldQuery::TechDeficiencies(id));
 
     let deficiencies = generate_deficiencies(&mut rng, difficulty, id, domain, cfg);
 

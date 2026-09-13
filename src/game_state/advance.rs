@@ -11,6 +11,7 @@ use crate::engine_project::EngineSource;
 use crate::event::GameEvent;
 
 use super::*;
+use crate::seed::WorldQuery;
 
 impl GameState {
     /// Advance the game by one day. Returns events generated this tick.
@@ -190,10 +191,9 @@ impl GameState {
         let econ_mod = self.economy.modifier;
         let mut generated = 0u32;
         for market in self.markets.iter_mut() {
-            let query = format!(
-                "contracts_{}_{}_{}", self.date.year, self.date.month, market.id.0,
-            );
-            let mut rng = self.seed.world_query(&query);
+            let mut rng = self.seed.world_query(WorldQuery::MonthlyContracts {
+                year: self.date.year, month: self.date.month, market: market.id,
+            });
             let cs = contract::generate_market_contracts(
                 market, &mut rng, &mut self.next_contract_id,
                 self.date, econ_mod, &self.balance.markets,
@@ -222,8 +222,9 @@ impl GameState {
     /// for the years a rival spends flying it.
     fn announce_campaigns(&mut self, events: &mut Vec<GameEvent>) {
         let econ_mod = self.economy.modifier;
-        let campaign_query = format!("campaigns_{}_{}", self.date.year, self.date.month);
-        let mut campaign_rng = self.seed.world_query(&campaign_query);
+        let mut campaign_rng = self.seed.world_query(WorldQuery::MonthlyCampaigns {
+            year: self.date.year, month: self.date.month,
+        });
 
         let still_issuing: std::collections::HashSet<crate::contract::MarketId> =
             self.active_campaigns.iter()

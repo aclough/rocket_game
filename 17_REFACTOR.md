@@ -572,7 +572,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
   fold `retire_round_trip` into `save_compat.rs`.
 - **Size/risk:** small / none.
 
-### G4. `world_query` keys are ad-hoc strings with no registry
+### ✅ G4. `world_query` keys are ad-hoc strings with no registry
 - **Where:** `seed.rs:67` and 18 call sites building keys with
   `format!`. The world/contingent RNG split itself is clean and
   centralised. `docs/seed_effects.md` documents the keys by hand.

@@ -5,7 +5,7 @@ use crate::engine::{EngineDesign, EngineCycle, EngineId, PropellantFraction};
 use crate::engine_project::PropellantPreset;
 use crate::flaw::{self, Flaw};
 use crate::propellant::Propellant;
-use crate::seed::GameSeed;
+use crate::seed::{GameSeed, WorldQuery};
 
 /// Unique identifier for a contracted third-party engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -119,7 +119,7 @@ pub fn generate_third_party_flaws(
     flaws_cfg: &crate::balance_config::FlawsConfig,
 ) -> Vec<Flaw> {
     let effective = (complexity / 8).max(1);
-    let mut rng = seed.world_query(&format!("3p_flaws_{}", engine_name));
+    let mut rng = seed.world_query(WorldQuery::ThirdPartyFlaws(engine_name));
     flaw::generate_flaws(flaw::FlawDomain::Engine(None), effective, &mut rng, next_flaw_id, flaws_cfg)
 }
 

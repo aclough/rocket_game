@@ -8,6 +8,7 @@ use crate::event::GameEvent;
 use crate::rocket_project::RocketProjectId;
 
 use super::*;
+use crate::seed::WorldQuery;
 
 /// Who a sealed auction went to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,10 +63,9 @@ impl GameState {
                     .unwrap_or(global_window);
                 // Per-mission query: order-independent and stable
                 // across save/load.
-                let query = format!(
-                    "campaign_issue_{}_{}", campaign.id.0, campaign.missions_issued + 1,
+                let mut rng = self.seed.world_query(
+                    WorldQuery::CampaignIssue(campaign.id, campaign.missions_issued + 1),
                 );
-                let mut rng = self.seed.world_query(&query);
                 let mut c = contract::campaign_contract(
                     campaign, window, &mut rng, &mut self.next_contract_id, self.date,
                 );
@@ -707,7 +707,7 @@ impl GameState {
                 let Some((contract, rocket)) = taken else { continue };
 
                 let severity = self.market_failure_severity(contract.market_id);
-                let mut rng = self.seed.world_query(&format!("dino_launch_{}", contract.id.0));
+                let mut rng = self.seed.world_query(WorldQuery::DinoLaunch(contract.id));
                 let failed = rocket.rocket_flaws.iter()
                     .any(|fl| rng.gen::<f64>() < fl.activation_chance);
 
@@ -826,8 +826,7 @@ impl GameState {
             if tech.unlocked {
                 continue;
             }
-            let query = format!("tech_unlock_{}_{}", tech.id.0, self.date.year);
-            let mut rng = self.seed.world_query(&query);
+            let mut rng = self.seed.world_query(WorldQuery::TechUnlock(tech.id, self.date.year));
             let chance = self.balance.technology.unlock_chance(tech.difficulty);
             if rng.gen::<f64>() < chance {
                 tech.unlocked = true;

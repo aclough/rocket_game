@@ -16,7 +16,7 @@
 //! rate multipliers — plus, added for this, per-destination multipliers
 //! and a reputation-bar delta.
 //!
-//! Rolled from `world_query("geopolitics_<year>")`, so the whole arc is
+//! Rolled from `WorldQuery::Geopolitics(year)`, so the whole arc is
 //! fixed when the world is generated and survives save/load unchanged.
 
 use rand::Rng;
@@ -24,7 +24,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::balance_config::GeopoliticsConfig;
 use crate::calendar::GameDate;
-use crate::seed::GameSeed;
+use crate::seed::{GameSeed, WorldQuery};
 
 // The arc's rates and the market effects it carries are balance data:
 // `GeopoliticsConfig` (17_3_PHYSICS.md D6).
@@ -104,7 +104,7 @@ pub fn advance_geopolitics(
     year: u32,
     cfg: &GeopoliticsConfig,
 ) -> Option<GeopoliticalShift> {
-    let mut rng = seed.world_query(&format!("geopolitics_{year}"));
+    let mut rng = seed.world_query(WorldQuery::Geopolitics(year));
 
     match *state {
         Geopolitics::Peace => {
