@@ -182,7 +182,7 @@ impl App {
                 return;
             }
         };
-        let (name, scale, enrichment, is_proposed) = snap;
+        let (_, scale, enrichment, is_proposed) = snap;
 
         if cursor >= ROW_COUNT { cursor = ROW_COUNT - 1; }
 
@@ -213,18 +213,16 @@ impl App {
                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
             }
             KeyCode::Enter if cursor == 0 => {
+                // The field opens blank: typing a new name should not
+                // start with deleting the old one. Enter on an empty
+                // field keeps the current name.
                 self.input_mode = InputMode::ReactorEditorField {
-                    project_id, cursor, field: EditorField::Name, buffer: name,
+                    project_id, cursor, field: EditorField::Name, buffer: String::new(),
                 };
             }
             KeyCode::Down => {
                 cursor_down(&mut cursor, ROW_COUNT);
                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
-            }
-            KeyCode::Enter if cursor == 0 => {
-                self.input_mode = InputMode::ReactorEditorField {
-                    project_id, cursor, field: EditorField::Name, buffer: name,
-                };
             }
             KeyCode::Enter if cursor == 1 => {
                 self.input_mode = InputMode::ReactorEditorField {
@@ -322,18 +320,16 @@ impl App {
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Enter if cursor == 0 => {
+                // The field opens blank: typing a new name should not
+                // start with deleting the old one. Enter on an empty
+                // field keeps the current name.
                 self.input_mode = InputMode::EngineEditorField {
-                    project_id, cursor, field: EditorField::Name, buffer: name, state,
+                    project_id, cursor, field: EditorField::Name, buffer: String::new(), state,
                 };
             }
             KeyCode::Down => {
                 cursor_down(&mut cursor, row_count);
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
-            }
-            KeyCode::Enter if cursor == 0 => {
-                self.input_mode = InputMode::EngineEditorField {
-                    project_id, cursor, field: EditorField::Name, buffer: name, state,
-                };
             }
             KeyCode::Enter if cursor == 3 => {
                 self.input_mode = InputMode::EngineEditorField {
@@ -569,7 +565,9 @@ mod field_tests {
 
         app.input_mode = InputMode::EngineEditor { project_id: pid, cursor: 0, state: None };
         app.handle_key(KeyCode::Enter);
-        for _ in 0..10 { app.handle_key(KeyCode::Backspace); }
+        assert!(matches!(&app.input_mode,
+            InputMode::EngineEditorField { field: EditorField::Name, buffer, .. } if buffer.is_empty()),
+            "the name field opens blank");
         app.handle_key(KeyCode::Char(' '));
         app.handle_key(KeyCode::Enter);
         assert_eq!(app.game.player_company.find_engine_project(pid).unwrap().design.name, "Family");
