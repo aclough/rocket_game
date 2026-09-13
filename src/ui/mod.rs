@@ -1,6 +1,7 @@
 pub mod draw;
 pub mod keys;
 pub mod next_steps;
+pub mod text_field;
 mod designer;
 mod editors;
 mod modals;
@@ -115,6 +116,30 @@ fn input_timeout(
     }
 }
 
+/// The two typed fields the engine and reactor editors share: a free
+/// text name and a numeric scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorField {
+    Name,
+    Scale,
+}
+
+impl EditorField {
+    pub fn kind(self) -> text_field::FieldKind {
+        match self {
+            EditorField::Name => text_field::FieldKind::Text,
+            EditorField::Scale => text_field::FieldKind::Number,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EditorField::Name => "Name",
+            EditorField::Scale => "Scale",
+        }
+    }
+}
+
 /// Modal input state for new engine design flow.
 #[derive(Debug, Clone)]
 pub enum InputMode {
@@ -144,17 +169,12 @@ pub enum InputMode {
         cursor: usize,
         state: Option<Box<RocketDesignerState>>,
     },
-    /// Text-input sub-modal for the engine name.
-    EngineEditorNameInput {
+    /// Typing into one of the engine editor's fields (name or scale);
+    /// `cursor` is the editor row to return to.
+    EngineEditorField {
         project_id: crate::engine_project::EngineProjectId,
         cursor: usize,
-        buffer: String,
-        state: Option<Box<RocketDesignerState>>,
-    },
-    /// Numeric sub-modal for the engine scale.
-    EngineEditorScaleInput {
-        project_id: crate::engine_project::EngineProjectId,
-        cursor: usize,
+        field: EditorField,
         buffer: String,
         state: Option<Box<RocketDesignerState>>,
     },
@@ -166,14 +186,11 @@ pub enum InputMode {
         project_id: crate::reactor_project::ReactorProjectId,
         cursor: usize,
     },
-    ReactorEditorNameInput {
+    /// Typing into one of the reactor editor's fields (name or scale).
+    ReactorEditorField {
         project_id: crate::reactor_project::ReactorProjectId,
         cursor: usize,
-        buffer: String,
-    },
-    ReactorEditorScaleInput {
-        project_id: crate::reactor_project::ReactorProjectId,
-        cursor: usize,
+        field: EditorField,
         buffer: String,
     },
     /// Selecting from third-party catalog.

@@ -4,6 +4,7 @@
 //! in `stage.rs` (17_3_PHYSICS.md D5).
 
 use super::*;
+use super::text_field::{edit_text_field, FieldEdit, FieldKind};
 use crate::stage::{
     autosize_propellant, propellant_step, recompute_structural_masses, MIN_AUTOSIZED_PROPELLANT,
 };
@@ -943,26 +944,18 @@ impl App {
         mut state: Box<RocketDesignerState>,
         mut buffer: String,
     ) {
-        match key {
-            KeyCode::Esc => {
-                self.input_mode = InputMode::RocketDesigner { state };
+        match edit_text_field(key, &mut buffer, FieldKind::Number) {
+            FieldEdit::Continue => {
+                self.input_mode = InputMode::RocketPayloadInput { state, buffer };
             }
-            KeyCode::Enter => {
+            FieldEdit::Commit => {
                 if let Ok(val) = buffer.parse::<f64>() {
                     state.payload_kg = val.max(0.0);
                 }
                 self.input_mode = InputMode::RocketDesigner { state };
             }
-            KeyCode::Backspace => {
-                buffer.pop();
-                self.input_mode = InputMode::RocketPayloadInput { state, buffer };
-            }
-            KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
-                buffer.push(c);
-                self.input_mode = InputMode::RocketPayloadInput { state, buffer };
-            }
-            _ => {
-                self.input_mode = InputMode::RocketPayloadInput { state, buffer };
+            FieldEdit::Cancel => {
+                self.input_mode = InputMode::RocketDesigner { state };
             }
         }
     }

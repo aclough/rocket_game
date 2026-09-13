@@ -23,6 +23,16 @@ fn available_engine_cycles(game: &GameState) -> Vec<EngineCycle> {
     cycles
 }
 
+/// One arrow-key step of an editor's scale: ×√2 up or ÷√2 down, held
+/// inside the project kind's `[min, max]`.
+fn stepped_scale(scale: f64, up: bool, min: f64, max: f64) -> f64 {
+    if up {
+        (scale * std::f64::consts::SQRT_2).min(max)
+    } else {
+        (scale / std::f64::consts::SQRT_2).max(min)
+    }
+}
+
 impl App {
     /// Snapshot of an engine project for editor display + mutation.
     /// The nozzle variant is deliberately absent — it is chosen per
@@ -66,6 +76,69 @@ impl App {
         let (name, enrichment) = snap;
         if let Some(rp) = self.game.player_company.find_reactor_project_mut(project_id) {
             rp.apply_edit(name, scale, enrichment, &self.game.balance);
+        }
+    }
+
+    /// Enter on an engine editor field: a non-empty name renames the
+    /// project; a parseable scale is clamped to the engine range and
+    /// applied. Either way the designer's stages (if the editor was
+    /// opened from it) follow the project.
+    pub(super) fn commit_engine_field(
+        &mut self,
+        project_id: crate::engine_project::EngineProjectId,
+        field: EditorField,
+        buffer: &str,
+        state: &mut Option<Box<RocketDesignerState>>,
+    ) {
+        let changed = match field {
+            EditorField::Name => {
+                let new_name = buffer.trim().to_string();
+                if new_name.is_empty() { return; }
+                if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
+                    ep.design.name = new_name;
+                }
+                true
+            }
+            EditorField::Scale => match buffer.parse::<f64>() {
+                Ok(parsed) => {
+                    let clamped = parsed.clamp(
+                        crate::engine_project::MIN_SCALE, crate::engine_project::MAX_SCALE);
+                    self.apply_engine_scale(project_id, clamped);
+                    true
+                }
+                Err(_) => false,
+            },
+        };
+        if changed {
+            if let Some(s) = state.as_mut() {
+                sync_stages_to_projects(s, &self.game.player_company);
+            }
+        }
+    }
+
+    /// Enter on a reactor editor field; the reactor twin of
+    /// `commit_engine_field`, with no designer to keep in step.
+    pub(super) fn commit_reactor_field(
+        &mut self,
+        project_id: crate::reactor_project::ReactorProjectId,
+        field: EditorField,
+        buffer: &str,
+    ) {
+        match field {
+            EditorField::Name => {
+                let new_name = buffer.trim().to_string();
+                if new_name.is_empty() { return; }
+                if let Some(rp) = self.game.player_company.find_reactor_project_mut(project_id) {
+                    rp.design.name = new_name;
+                }
+            }
+            EditorField::Scale => {
+                if let Ok(parsed) = buffer.parse::<f64>() {
+                    let clamped = parsed.clamp(
+                        crate::reactor::MIN_SCALE, crate::reactor::MAX_SCALE);
+                    self.apply_reactor_scale(project_id, clamped);
+                }
+            }
         }
     }
 
@@ -146,24 +219,20 @@ impl App {
                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
             }
             KeyCode::Enter if cursor == 0 => {
-                self.input_mode = InputMode::ReactorEditorNameInput {
-                    project_id, cursor, buffer: name,
+                self.input_mode = InputMode::ReactorEditorField {
+                    project_id, cursor, field: EditorField::Name, buffer: name,
                 };
             }
             KeyCode::Enter if cursor == 1 => {
-                self.input_mode = InputMode::ReactorEditorScaleInput {
-                    project_id, cursor, buffer: format!("{:.2}", scale),
+                self.input_mode = InputMode::ReactorEditorField {
+                    project_id, cursor, field: EditorField::Scale, buffer: format!("{:.2}", scale),
                 };
             }
-            KeyCode::Right if cursor == 1 => {
-                let new_scale = (scale * std::f64::consts::SQRT_2)
-                    .min(crate::reactor::MAX_SCALE);
-                self.apply_reactor_scale(project_id, new_scale);
-                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
-            }
-            KeyCode::Left if cursor == 1 => {
-                let new_scale = (scale / std::f64::consts::SQRT_2)
-                    .max(crate::reactor::MIN_SCALE);
+            KeyCode::Left | KeyCode::Right if cursor == 1 => {
+                let new_scale = stepped_scale(
+                    scale, matches!(key, KeyCode::Right),
+                    crate::reactor::MIN_SCALE, crate::reactor::MAX_SCALE,
+                );
                 self.apply_reactor_scale(project_id, new_scale);
                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
             }
@@ -254,13 +323,14 @@ impl App {
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Enter if cursor == 0 => {
-                self.input_mode = InputMode::EngineEditorNameInput {
-                    project_id, cursor, buffer: name, state,
+                self.input_mode = InputMode::EngineEditorField {
+                    project_id, cursor, field: EditorField::Name, buffer: name, state,
                 };
             }
             KeyCode::Enter if cursor == 3 => {
-                self.input_mode = InputMode::EngineEditorScaleInput {
-                    project_id, cursor, buffer: format!("{:.2}", scale), state,
+                self.input_mode = InputMode::EngineEditorField {
+                    project_id, cursor, field: EditorField::Scale,
+                    buffer: format!("{:.2}", scale), state,
                 };
             }
             KeyCode::Left | KeyCode::Right if cursor == 1 => {
@@ -300,18 +370,11 @@ impl App {
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
-            KeyCode::Right if cursor == 3 => {
-                let new_scale = (scale * std::f64::consts::SQRT_2)
-                    .min(crate::engine_project::MAX_SCALE);
-                self.apply_engine_scale(project_id, new_scale);
-                if let Some(s) = state.as_mut() {
-                    sync_stages_to_projects(s, &self.game.player_company);
-                }
-                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
-            }
-            KeyCode::Left if cursor == 3 => {
-                let new_scale = (scale / std::f64::consts::SQRT_2)
-                    .max(crate::engine_project::MIN_SCALE);
+            KeyCode::Left | KeyCode::Right if cursor == 3 => {
+                let new_scale = stepped_scale(
+                    scale, matches!(key, KeyCode::Right),
+                    crate::engine_project::MIN_SCALE, crate::engine_project::MAX_SCALE,
+                );
                 self.apply_engine_scale(project_id, new_scale);
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company);
@@ -441,5 +504,72 @@ impl App {
         self.input_mode = InputMode::PowerEditor {
             state, group_index, stage_index, cursor,
         };
+    }
+}
+
+#[cfg(test)]
+mod field_tests {
+    use super::*;
+    use crate::engine::EngineId;
+    use crate::engine_project::{EngineProject, EngineProjectId, MAX_SCALE};
+
+    fn app_with_engine() -> (App, EngineProjectId) {
+        let mut game = crate::game_state::GameState::new(
+            "Field Test".into(), 200_000_000.0, 5,
+        );
+        let ep = EngineProject::new(
+            EngineProjectId(1), EngineId(1), "Family".into(),
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0,
+            &game.balance,
+        ).unwrap();
+        let pid = ep.project_id;
+        game.player_company.engine_projects.push(ep);
+        (App::new(game), pid)
+    }
+
+    fn scale_of(app: &App, pid: EngineProjectId) -> f64 {
+        app.game.player_company.find_engine_project(pid).unwrap().spec.scale
+    }
+
+    /// Enter on the scale row opens the field with the current scale;
+    /// typing a value and Enter applies it clamped to the engine
+    /// range and returns to the same row.
+    #[test]
+    fn typing_a_scale_applies_it_clamped_and_returns_to_the_row() {
+        let (mut app, pid) = app_with_engine();
+        app.input_mode = InputMode::EngineEditor { project_id: pid, cursor: 3, state: None };
+        app.handle_key(KeyCode::Enter);
+        match &app.input_mode {
+            InputMode::EngineEditorField { field: EditorField::Scale, buffer, .. } => {
+                assert_eq!(buffer, "1.00");
+            }
+            other => panic!("expected the scale field, got {other:?}"),
+        }
+        for k in [KeyCode::Backspace, KeyCode::Backspace, KeyCode::Backspace, KeyCode::Backspace,
+                  KeyCode::Char('9'), KeyCode::Char('x'), KeyCode::Char('9')] {
+            app.handle_key(k);
+        }
+        app.handle_key(KeyCode::Enter);
+        assert!(matches!(app.input_mode, InputMode::EngineEditor { cursor: 3, .. }));
+        assert_eq!(scale_of(&app, pid), MAX_SCALE, "99 (the x is filtered) clamps to the maximum");
+    }
+
+    /// Esc drops the typed value, and a renamed engine keeps its name
+    /// only when the field is not blank.
+    #[test]
+    fn esc_discards_and_a_blank_name_is_ignored() {
+        let (mut app, pid) = app_with_engine();
+        app.input_mode = InputMode::EngineEditor { project_id: pid, cursor: 3, state: None };
+        app.handle_key(KeyCode::Enter);
+        app.handle_key(KeyCode::Char('2'));
+        app.handle_key(KeyCode::Esc);
+        assert_eq!(scale_of(&app, pid), 1.0);
+
+        app.input_mode = InputMode::EngineEditor { project_id: pid, cursor: 0, state: None };
+        app.handle_key(KeyCode::Enter);
+        for _ in 0..10 { app.handle_key(KeyCode::Backspace); }
+        app.handle_key(KeyCode::Char(' '));
+        app.handle_key(KeyCode::Enter);
+        assert_eq!(app.game.player_company.find_engine_project(pid).unwrap().design.name, "Family");
     }
 }

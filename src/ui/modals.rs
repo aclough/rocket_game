@@ -2,8 +2,16 @@
 //! the delta-v planner. The single biggest match in the UI.
 
 use super::*;
-use super::designer::sync_stages_to_projects;
 use super::planner::reachable_destinations_multistage;
+use super::text_field::{edit_text_field, FieldEdit, FieldKind};
+
+/// A bid typed in $M, as dollars; `None` unless it is a positive number.
+fn parse_bid_millions(buffer: &str) -> Option<f64> {
+    match buffer.trim().parse::<f64>() {
+        Ok(m) if m > 0.0 => Some(m * 1_000_000.0),
+        _ => None,
+    }
+}
 
 impl App {
     pub(super) fn handle_input_mode_key(&mut self, key: KeyCode) {
@@ -68,77 +76,25 @@ impl App {
                 }
             }
             InputMode::ReactorEditor { .. }
-            | InputMode::ReactorEditorNameInput { .. }
-            | InputMode::ReactorEditorScaleInput { .. } => {
+            | InputMode::ReactorEditorField { .. } => {
                 let old_mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
                 match old_mode {
                     InputMode::ReactorEditor { project_id, cursor } => {
                         self.handle_reactor_editor_key(key, project_id, cursor);
                     }
-                    InputMode::ReactorEditorNameInput { project_id, cursor, mut buffer } => {
-                        match key {
-                            KeyCode::Esc => {
+                    InputMode::ReactorEditorField { project_id, cursor, field, mut buffer } => {
+                        match edit_text_field(key, &mut buffer, field.kind()) {
+                            FieldEdit::Continue => {
+                                self.input_mode = InputMode::ReactorEditorField {
+                                    project_id, cursor, field, buffer,
+                                };
+                            }
+                            FieldEdit::Commit => {
+                                self.commit_reactor_field(project_id, field, &buffer);
                                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
                             }
-                            KeyCode::Enter => {
-                                let new_name = buffer.trim().to_string();
-                                if !new_name.is_empty() {
-                                    if let Some(rp) = self.game.player_company
-                                        .find_reactor_project_mut(project_id)
-                                    {
-                                        rp.design.name = new_name;
-                                    }
-                                }
+                            FieldEdit::Cancel => {
                                 self.input_mode = InputMode::ReactorEditor { project_id, cursor };
-                            }
-                            KeyCode::Backspace => {
-                                buffer.pop();
-                                self.input_mode = InputMode::ReactorEditorNameInput {
-                                    project_id, cursor, buffer,
-                                };
-                            }
-                            KeyCode::Char(c) => {
-                                buffer.push(c);
-                                self.input_mode = InputMode::ReactorEditorNameInput {
-                                    project_id, cursor, buffer,
-                                };
-                            }
-                            _ => {
-                                self.input_mode = InputMode::ReactorEditorNameInput {
-                                    project_id, cursor, buffer,
-                                };
-                            }
-                        }
-                    }
-                    InputMode::ReactorEditorScaleInput { project_id, cursor, mut buffer } => {
-                        match key {
-                            KeyCode::Esc => {
-                                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
-                            }
-                            KeyCode::Enter => {
-                                if let Ok(parsed) = buffer.parse::<f64>() {
-                                    let clamped = parsed.clamp(
-                                        crate::reactor::MIN_SCALE, crate::reactor::MAX_SCALE);
-                                    self.apply_reactor_scale(project_id, clamped);
-                                }
-                                self.input_mode = InputMode::ReactorEditor { project_id, cursor };
-                            }
-                            KeyCode::Backspace => {
-                                buffer.pop();
-                                self.input_mode = InputMode::ReactorEditorScaleInput {
-                                    project_id, cursor, buffer,
-                                };
-                            }
-                            KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
-                                buffer.push(c);
-                                self.input_mode = InputMode::ReactorEditorScaleInput {
-                                    project_id, cursor, buffer,
-                                };
-                            }
-                            _ => {
-                                self.input_mode = InputMode::ReactorEditorScaleInput {
-                                    project_id, cursor, buffer,
-                                };
                             }
                         }
                     }
@@ -146,8 +102,7 @@ impl App {
                 }
             }
             InputMode::EngineEditor { .. }
-            | InputMode::EngineEditorNameInput { .. }
-            | InputMode::EngineEditorScaleInput { .. } => {
+            | InputMode::EngineEditorField { .. } => {
                 // Extract and dispatch separately to avoid holding a
                 // mutable borrow on self.input_mode while calling self
                 // methods.
@@ -156,76 +111,19 @@ impl App {
                     InputMode::EngineEditor { project_id, cursor, state } => {
                         self.handle_engine_editor_key(key, project_id, cursor, state);
                     }
-                    InputMode::EngineEditorNameInput { project_id, cursor, mut buffer, mut state } => {
-                        match key {
-                            KeyCode::Esc => {
+                    InputMode::EngineEditorField { project_id, cursor, field, mut buffer, mut state } => {
+                        match edit_text_field(key, &mut buffer, field.kind()) {
+                            FieldEdit::Continue => {
+                                self.input_mode = InputMode::EngineEditorField {
+                                    project_id, cursor, field, buffer, state,
+                                };
+                            }
+                            FieldEdit::Commit => {
+                                self.commit_engine_field(project_id, field, &buffer, &mut state);
                                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
                             }
-                            KeyCode::Enter => {
-                                let new_name = buffer.trim().to_string();
-                                if !new_name.is_empty() {
-                                    if let Some(ep) = self.game.player_company
-                                        .find_engine_project_mut(project_id)
-                                    {
-                                        ep.design.name = new_name;
-                                    }
-                                    if let Some(s) = state.as_mut() {
-                                        sync_stages_to_projects(s, &self.game.player_company);
-                                    }
-                                }
+                            FieldEdit::Cancel => {
                                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
-                            }
-                            KeyCode::Backspace => {
-                                buffer.pop();
-                                self.input_mode = InputMode::EngineEditorNameInput {
-                                    project_id, cursor, buffer, state,
-                                };
-                            }
-                            KeyCode::Char(c) => {
-                                buffer.push(c);
-                                self.input_mode = InputMode::EngineEditorNameInput {
-                                    project_id, cursor, buffer, state,
-                                };
-                            }
-                            _ => {
-                                self.input_mode = InputMode::EngineEditorNameInput {
-                                    project_id, cursor, buffer, state,
-                                };
-                            }
-                        }
-                    }
-                    InputMode::EngineEditorScaleInput { project_id, cursor, mut buffer, mut state } => {
-                        match key {
-                            KeyCode::Esc => {
-                                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
-                            }
-                            KeyCode::Enter => {
-                                if let Ok(parsed) = buffer.parse::<f64>() {
-                                    let clamped = parsed.clamp(
-                                        crate::engine_project::MIN_SCALE, crate::engine_project::MAX_SCALE);
-                                    self.apply_engine_scale(project_id, clamped);
-                                    if let Some(s) = state.as_mut() {
-                                        sync_stages_to_projects(s, &self.game.player_company);
-                                    }
-                                }
-                                self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
-                            }
-                            KeyCode::Backspace => {
-                                buffer.pop();
-                                self.input_mode = InputMode::EngineEditorScaleInput {
-                                    project_id, cursor, buffer, state,
-                                };
-                            }
-                            KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
-                                buffer.push(c);
-                                self.input_mode = InputMode::EngineEditorScaleInput {
-                                    project_id, cursor, buffer, state,
-                                };
-                            }
-                            _ => {
-                                self.input_mode = InputMode::EngineEditorScaleInput {
-                                    project_id, cursor, buffer, state,
-                                };
                             }
                         }
                     }
@@ -252,31 +150,26 @@ impl App {
                 }
             }
             InputMode::BidEntry { contract_index, buffer } => {
-                match key {
-                    KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Enter => {
-                        let index = *contract_index;
-                        let parsed = buffer.trim().parse::<f64>();
+                let index = *contract_index;
+                match edit_text_field(key, buffer, FieldKind::Number) {
+                    FieldEdit::Continue => {}
+                    FieldEdit::Cancel => { self.exit_modal(); }
+                    FieldEdit::Commit => {
+                        let bid = parse_bid_millions(buffer);
                         self.exit_modal();
-                        match parsed {
-                            Ok(m) if m > 0.0 => {
-                                let bid = m * 1_000_000.0;
+                        match bid {
+                            Some(bid) => {
                                 if let Some(evt) = self.game.place_bid(index, bid) {
                                     self.status_message = Some(format!("{}", evt));
                                 } else {
                                     self.status_message = Some("Could not place bid".into());
                                 }
                             }
-                            _ => {
+                            None => {
                                 self.status_message = Some("Bid must be a positive number of $M".into());
                             }
                         }
                     }
-                    KeyCode::Backspace => { buffer.pop(); }
-                    KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
-                        buffer.push(c);
-                    }
-                    _ => {}
                 }
             }
             InputMode::BidRules { selected } => {
@@ -377,41 +270,36 @@ impl App {
                 }
             }
             InputMode::CampaignBidEntry { campaign_id, selected, buffer } => {
-                match key {
-                    KeyCode::Esc => {
-                        self.input_mode = InputMode::Campaigns { selected: *selected };
+                let id = *campaign_id;
+                let back = *selected;
+                match edit_text_field(key, buffer, FieldKind::Number) {
+                    FieldEdit::Continue => {}
+                    FieldEdit::Cancel => {
+                        self.input_mode = InputMode::Campaigns { selected: back };
                     }
-                    KeyCode::Enter => {
-                        let id = *campaign_id;
-                        let back = *selected;
-                        let parsed = buffer.trim().parse::<f64>();
-                        match parsed {
-                            Ok(m) if m > 0.0 => {
-                                let bid = m * 1_000_000.0;
+                    FieldEdit::Commit => {
+                        match parse_bid_millions(buffer) {
+                            Some(bid) => {
                                 if let Some(evt) = self.game.place_campaign_bid(id, bid) {
                                     self.status_message = Some(format!("{}", evt));
                                 } else {
                                     self.status_message = Some("Could not place block bid".into());
                                 }
                             }
-                            _ => {
+                            None => {
                                 self.status_message =
                                     Some("Bid must be a positive number of $M per mission".into());
                             }
                         }
                         self.input_mode = InputMode::Campaigns { selected: back };
                     }
-                    KeyCode::Backspace => { buffer.pop(); }
-                    KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
-                        buffer.push(c);
-                    }
-                    _ => {}
                 }
             }
             InputMode::RocketName { buffer } => {
-                match key {
-                    KeyCode::Esc => { self.exit_modal(); }
-                    KeyCode::Enter => {
+                match edit_text_field(key, buffer, FieldKind::Text) {
+                    FieldEdit::Continue => {}
+                    FieldEdit::Cancel => { self.exit_modal(); }
+                    FieldEdit::Commit => {
                         if buffer.is_empty() {
                             self.status_message = Some("Name cannot be empty".into());
                             self.exit_modal();
@@ -422,9 +310,6 @@ impl App {
                             };
                         }
                     }
-                    KeyCode::Backspace => { buffer.pop(); }
-                    KeyCode::Char(c) => { buffer.push(c); }
-                    _ => {}
                 }
             }
             InputMode::RocketDesigner { .. }

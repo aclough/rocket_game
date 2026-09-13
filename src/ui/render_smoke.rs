@@ -13,7 +13,7 @@ use crate::policy::{BasicPolicy, CompanyPolicy};
 use crate::rocket::RocketId;
 use crate::ui::modals::help_tests::render;
 use crate::ui::{
-    App, DvPlannerState, HelpScope, InputMode, LocationPickerTarget, PlannerSetupField,
+    App, DvPlannerState, EditorField, HelpScope, InputMode, LocationPickerTarget, PlannerSetupField,
     PlannerSetupState, PlannerSource, RocketDesignerState, Tab,
 };
 
@@ -122,11 +122,19 @@ fn modes(app: &App) -> Vec<(&'static str, InputMode)> {
         ("intro", InputMode::Intro),
         ("engine editor", InputMode::EngineEditor { project_id: epid, cursor: 1, state: None }),
         ("engine editor from designer", InputMode::EngineEditor { project_id: epid, cursor: 1, state: Some(state()) }),
-        ("engine name", InputMode::EngineEditorNameInput { project_id: epid, cursor: 0, buffer: "Nam".into(), state: None }),
-        ("engine scale", InputMode::EngineEditorScaleInput { project_id: epid, cursor: 3, buffer: "1.5".into(), state: None }),
+        ("engine name", InputMode::EngineEditorField {
+            project_id: epid, cursor: 0, field: EditorField::Name, buffer: "Nam".into(), state: None,
+        }),
+        ("engine scale", InputMode::EngineEditorField {
+            project_id: epid, cursor: 3, field: EditorField::Scale, buffer: "1.5".into(), state: None,
+        }),
         ("reactor editor", InputMode::ReactorEditor { project_id: rpid, cursor: 0 }),
-        ("reactor name", InputMode::ReactorEditorNameInput { project_id: rpid, cursor: 0, buffer: "R".into() }),
-        ("reactor scale", InputMode::ReactorEditorScaleInput { project_id: rpid, cursor: 3, buffer: "2".into() }),
+        ("reactor name", InputMode::ReactorEditorField {
+            project_id: rpid, cursor: 0, field: EditorField::Name, buffer: "R".into(),
+        }),
+        ("reactor scale", InputMode::ReactorEditorField {
+            project_id: rpid, cursor: 1, field: EditorField::Scale, buffer: "2".into(),
+        }),
         ("third party", InputMode::SelectThirdParty { selected: 0 }),
         ("rocket name", InputMode::RocketName { buffer: "Smoke".into() }),
         ("bid entry", InputMode::BidEntry { contract_index: 0, buffer: "12".into() }),

@@ -479,7 +479,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
   `render_list_modal(frame, area, title, lines)`.
 - **Size/risk:** medium / low.
 
-### F3. Editor sub-modal state machines duplicated
+### ✅ F3. Editor sub-modal state machines duplicated
 - **Where:** `ReactorEditorNameInput` / `ReactorEditorScaleInput` /
   `EngineEditorNameInput` / `EngineEditorScaleInput`
   (`ui/mod.rs:1976-2138`): four ~35-line arms with identical

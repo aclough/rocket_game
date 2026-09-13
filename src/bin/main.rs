@@ -7,7 +7,11 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use rocket_tycoon::balance_config::BalanceConfig;
 use rocket_tycoon::game_state::GameState;
 use rocket_tycoon::save;
+use rocket_tycoon::ui::text_field::{edit_text_field, FieldEdit, FieldKind};
 use rocket_tycoon::ui::{with_terminal, App, Tui};
+
+/// The startup prompt stops accepting characters here.
+const MAX_COMPANY_NAME_LEN: usize = 30;
 
 enum StartupState {
     Menu,
@@ -100,27 +104,23 @@ fn startup_loop(terminal: &mut Tui, balance: BalanceConfig) -> io::Result<(GameS
                     _ => {}
                 },
                 StartupState::NameInput => match key.code {
-                    KeyCode::Enter => {
-                        let name = if company_name.trim().is_empty() {
-                            "SpaceCorp".to_string()
-                        } else {
-                            company_name.trim().to_string()
-                        };
-                        let seed: u64 = rand::random();
-                        return Ok((GameState::with_balance(name, seed, balance), true));
-                    }
-                    KeyCode::Esc => {
-                        state = StartupState::Menu;
-                        saves = save::list_saves(); // refresh
-                    }
-                    KeyCode::Backspace => {
-                        company_name.pop();
-                    }
-                    KeyCode::Char(c)
-                        if company_name.len() < 30 => {
-                            company_name.push(c);
+                    KeyCode::Char(_) if company_name.len() >= MAX_COMPANY_NAME_LEN => {}
+                    code => match edit_text_field(code, &mut company_name, FieldKind::Text) {
+                        FieldEdit::Continue => {}
+                        FieldEdit::Commit => {
+                            let name = if company_name.trim().is_empty() {
+                                "SpaceCorp".to_string()
+                            } else {
+                                company_name.trim().to_string()
+                            };
+                            let seed: u64 = rand::random();
+                            return Ok((GameState::with_balance(name, seed, balance), true));
                         }
-                    _ => {}
+                        FieldEdit::Cancel => {
+                            state = StartupState::Menu;
+                            saves = save::list_saves(); // refresh
+                        }
+                    },
                 },
             }
         }

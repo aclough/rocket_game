@@ -150,20 +150,14 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
         InputMode::EngineEditor { project_id, cursor, state } => {
             draw_engine_editor_modal(frame, app, *project_id, *cursor, None, state.is_none(), modal_area);
         }
-        InputMode::EngineEditorNameInput { project_id, cursor, buffer, state } => {
-            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some(("Name", buffer.clone())), state.is_none(), modal_area);
-        }
-        InputMode::EngineEditorScaleInput { project_id, cursor, buffer, state } => {
-            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some(("Scale", buffer.clone())), state.is_none(), modal_area);
+        InputMode::EngineEditorField { project_id, cursor, field, buffer, state } => {
+            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some((field.label(), buffer.clone())), state.is_none(), modal_area);
         }
         InputMode::ReactorEditor { project_id, cursor } => {
             draw_reactor_editor_modal(frame, app, *project_id, *cursor, None, modal_area);
         }
-        InputMode::ReactorEditorNameInput { project_id, cursor, buffer } => {
-            draw_reactor_editor_modal(frame, app, *project_id, *cursor, Some(("Name", buffer.clone())), modal_area);
-        }
-        InputMode::ReactorEditorScaleInput { project_id, cursor, buffer } => {
-            draw_reactor_editor_modal(frame, app, *project_id, *cursor, Some(("Scale", buffer.clone())), modal_area);
+        InputMode::ReactorEditorField { project_id, cursor, field, buffer } => {
+            draw_reactor_editor_modal(frame, app, *project_id, *cursor, Some((field.label(), buffer.clone())), modal_area);
         }
         InputMode::SelectThirdParty { selected } => {
             let catalog = &app.game.player_company.third_party_catalog;
