@@ -564,7 +564,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
 - **Size/risk:** medium / none. Fixture drift (`advance_through`'s
   subtle date logic in two places) is the real risk.
 
-### G3. Probe tests named after tasks
+### ✅ G3. Probe tests named after tasks
 - **Where:** `tests/task5_probe.rs`, `tests/dino_probe.rs` (both
   entirely `#[ignore]`), `measure_*` in `campaigns.rs:788` and
   `seed_fairness.rs:258`; `retire_round_trip.rs` is one 30-line test.

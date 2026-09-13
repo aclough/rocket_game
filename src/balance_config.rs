@@ -896,7 +896,7 @@ pub struct CompetitorConfig {
     /// pricing basis switches to actual cost history after the first
     /// build; a large gap makes prices jump). $36M → $39M in M4
     /// Task 4: the hydrolox material premium on its 6.6 t booster
-    /// engine raised measured marginal cost to ~$39M (dino_probe).
+    /// engine raised measured marginal cost to ~$39M (`probes::dinosoar`).
     pub catalog_cost: f64,
     /// Bid = marginal cost × margin. Margin relaxes from margin_max
     /// (one free rocket) toward margin_min as free stock grows.

@@ -133,6 +133,33 @@ fn a_save_without_markets_gets_the_markets_of_its_seed() {
     );
 }
 
+/// Retirement has to survive a reload — the flag is the whole feature,
+/// so losing it on load would quietly un-retire everything. (That a
+/// save written before the field existed still loads is what the
+/// corpus above proves; a hand-stripped save here would only show serde
+/// ignores unknown fields.)
+#[test]
+fn retired_survives_a_round_trip() {
+    use rocket_tycoon::company::ProjectRef;
+
+    let mut gs = GameState::new("RoundTrip".into(), 200_000_000.0, 3);
+    gs.player_company.start_engine_project(
+        "Old Faithful".into(),
+        rocket_tycoon::engine::EngineCycle::GasGenerator,
+        rocket_tycoon::engine_project::PropellantPreset::Kerolox,
+        1.0, None, &gs.balance,
+    );
+    let id = gs.player_company.engine_projects[0].project_id;
+    gs.player_company.retire(ProjectRef::Engine(id)).expect("retires");
+
+    let json = serde_json::to_string(&gs).expect("serializes");
+    let back: GameState = serde_json::from_str(&json).expect("deserializes");
+
+    assert!(back.player_company.engine_projects[0].retired,
+        "a retired design must still be retired after a reload");
+    assert_eq!(back.player_company.visible_engine_projects().count(), 0);
+}
+
 /// Loading is idempotent: save what you loaded, load it again, and
 /// nothing shifts. Catches a migration that isn't safe to re-run.
 #[test]
