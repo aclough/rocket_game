@@ -14,18 +14,34 @@ use serde::{Serialize, Deserialize};
 /// The contingent RNG is for in-game randomness that doesn't need to be reproducible
 /// across query orders (flaw rolls, explosion checks, etc.).
 ///
-/// Serialization: only the seed value is persisted. The contingent RNG is recreated on
-/// load. This is fine since contingent randomness is non-deterministic by design.
+/// Serialization: only the seed value is persisted, as `{"seed": N}`
+/// (`SeedRepr`), and loading goes through `GameSeed::new`, so a loaded
+/// seed's contingent RNG is the one a fresh game with that seed starts
+/// with. Contingent randomness is non-deterministic across play by
+/// design, so a reload restarting the stream is fine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "SeedRepr", into = "SeedRepr")]
 pub struct GameSeed {
     seed: u64,
-    #[serde(skip, default = "default_contingent_rng")]
     pub contingent_rng: StdRng,
 }
 
-fn default_contingent_rng() -> StdRng {
-    // Placeholder — overridden by the Deserialize impl's post-processing
-    StdRng::seed_from_u64(0)
+/// The wire form of a `GameSeed`.
+#[derive(Serialize, Deserialize)]
+struct SeedRepr {
+    seed: u64,
+}
+
+impl From<SeedRepr> for GameSeed {
+    fn from(repr: SeedRepr) -> Self {
+        GameSeed::new(repr.seed)
+    }
+}
+
+impl From<GameSeed> for SeedRepr {
+    fn from(seed: GameSeed) -> Self {
+        SeedRepr { seed: seed.seed }
+    }
 }
 
 impl GameSeed {
@@ -38,12 +54,6 @@ impl GameSeed {
     /// The raw seed value (for display/save).
     pub fn seed(&self) -> u64 {
         self.seed
-    }
-
-    /// Re-initialize the contingent RNG after deserialization.
-    /// Called automatically by save/load; world queries are unaffected (hash-derived).
-    pub fn fix_after_load(&mut self) {
-        self.contingent_rng = StdRng::seed_from_u64(self.seed.wrapping_add(1));
     }
 
     /// Get a deterministic RNG for a specific world question.
@@ -82,6 +92,18 @@ impl GameSeed {
 mod tests {
     use super::*;
     use rand::Rng;
+
+    /// The wire form is the bare seed, and a loaded seed's contingent
+    /// stream is a fresh game's, not a placeholder.
+    #[test]
+    fn a_seed_round_trips_with_a_live_contingent_rng() {
+        let json = serde_json::to_string(&GameSeed::new(7)).unwrap();
+        assert_eq!(json, r#"{"seed":7}"#);
+        let mut loaded: GameSeed = serde_json::from_str(&json).unwrap();
+        let mut fresh = GameSeed::new(7);
+        assert_eq!(loaded.seed(), 7);
+        assert_eq!(loaded.contingent_rng.gen::<u64>(), fresh.contingent_rng.gen::<u64>());
+    }
 
     #[test]
     fn test_same_question_same_answer() {

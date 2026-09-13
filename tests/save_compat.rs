@@ -106,6 +106,33 @@ fn loading_stamps_the_version_and_repairs_old_worlds() {
     }
 }
 
+/// A save from before markets existed loads with the markets its seed
+/// would always have had — the ones a new game on that seed realizes —
+/// not with unperturbed templates. Proven on a corpus save stripped of
+/// its `markets` field, since every era in the corpus carries one.
+#[test]
+fn a_save_without_markets_gets_the_markets_of_its_seed() {
+    let (era, path) = corpus().into_iter().next().unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(raw.as_object_mut().unwrap().remove("markets").is_some(), "{era} has markets");
+    let seed = raw["seed"]["seed"].as_u64().expect("the seed is on the wire as {{\"seed\": N}}");
+
+    let dir = std::env::temp_dir().join("rocket_tycoon_compat");
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join(format!("{era}-no-markets-{}.json", std::process::id()));
+    std::fs::write(&out, serde_json::to_string(&raw).unwrap()).unwrap();
+    let state = load(&out);
+    let _ = std::fs::remove_file(&out);
+
+    let fresh = GameState::with_balance("Corpus Co".into(), seed, BalanceConfig::default());
+    assert!(!state.markets.is_empty(), "{era}: markets were realized on load");
+    assert_eq!(
+        state.markets, fresh.markets,
+        "{era}: a repaired save has the markets a new game on seed {seed} has",
+    );
+}
+
 /// Loading is idempotent: save what you loaded, load it again, and
 /// nothing shifts. Catches a migration that isn't safe to re-run.
 #[test]

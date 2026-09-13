@@ -68,9 +68,6 @@ pub fn load_game(path: &Path) -> io::Result<GameState> {
     migrate_json(&mut raw, from);
     let mut state: GameState = serde_json::from_value(raw).map_err(invalid)?;
 
-    // Not serialized — rebuilt on every load regardless of version.
-    state.seed.fix_after_load();
-
     sanitize(&mut state);
     migrate(&mut state);
     // Saves from before the ledger, or written mid-month by an older
@@ -108,6 +105,16 @@ fn sanitize(state: &mut GameState) {
     if state.competitors.is_empty() && state.balance.competitor.enabled {
         state.competitors.push(
             crate::competitor::realize_dinosoar(&state.seed, &state.balance),
+        );
+    }
+
+    // A save from before markets existed gets the markets its seed
+    // would always have realized — the same call a new game makes,
+    // with the growth clock at the universal start date. (A serde
+    // default cannot do this: it has no seed.)
+    if state.markets.is_empty() {
+        state.markets = crate::game_state::realize_world_markets(
+            &state.seed, &state.balance, crate::calendar::GameDate::default_start(),
         );
     }
 }

@@ -184,7 +184,9 @@ pub struct GameState {
     #[serde(default)]
     pub geopolitics: crate::geopolitics::Geopolitics,
     /// Active launch markets that generate contracts.
-    #[serde(default = "default_markets")]
+    /// Empty only in a save from before markets existed; the loader's
+    /// `sanitize` realizes them from the seed (`realize_world_markets`).
+    #[serde(default)]
     pub markets: Vec<contract::Market>,
     /// Experimental technologies with seed-driven deficiencies.
     #[serde(default)]
@@ -235,10 +237,27 @@ fn default_next_contract_id() -> u64 { 1 }
 fn default_next_campaign_id() -> u64 { 1 }
 fn default_next_flight_id() -> u64 { 1 }
 fn default_next_rocket_id() -> u64 { 1 }
-fn default_markets() -> Vec<contract::Market> {
-    // Fallback for saves predating the markets field: unperturbed
-    // templates (no seed available in a serde default).
-    contract::default_archetypes().into_iter().map(|a| a.template).collect()
+/// Realize the archetype table for this world: presence rolls,
+/// volume/rate multipliers, growth rates, and weight tilts baked in.
+/// Absent and not-yet-emerged markets ride along inactive.
+/// Start-active markets begin their growth clock at `start`. Called
+/// by `GameState::new` and by the loader for a save that predates
+/// markets, so both get the markets this seed would always have had.
+pub(crate) fn realize_world_markets(
+    seed: &GameSeed,
+    balance: &BalanceConfig,
+    start: GameDate,
+) -> Vec<contract::Market> {
+    contract::realize_markets(seed, &balance.markets.archetypes)
+        .into_iter()
+        .map(|r| {
+            let mut m = r.market;
+            if m.active {
+                m.activation_date = Some(start);
+            }
+            m
+        })
+        .collect()
 }
 
 impl GameState {
@@ -271,21 +290,7 @@ impl GameState {
         let geopolitics = crate::geopolitics::Geopolitics::default();
         let technologies = crate::technology::generate_technologies(&seed, &balance.technology);
 
-        // Realize the archetype table for this world: presence rolls,
-        // volume/rate multipliers, growth rates, and weight tilts
-        // baked in. Absent and not-yet-emerged markets ride along
-        // inactive. Start-active markets begin their growth clock now.
-        let markets: Vec<contract::Market> =
-            contract::realize_markets(&seed, &balance.markets.archetypes)
-                .into_iter()
-                .map(|r| {
-                    let mut m = r.market;
-                    if m.active {
-                        m.activation_date = Some(start);
-                    }
-                    m
-                })
-                .collect();
+        let markets = realize_world_markets(&seed, &balance, start);
 
         let competitors = if balance.competitor.enabled {
             vec![crate::competitor::realize_dinosoar(&seed, &balance)]

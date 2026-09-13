@@ -539,6 +539,8 @@ refactor above easier to see. Proposed layouts are in the appendix.
 
 ## G. Infrastructure and tests
 
+> Plan: `17_5_G.md` (order G5, G4, G3, G2, G1; four questions to answer).
+
 ### G1. ID counters: seven on `Company`, four on `GameState`, three idioms
 - **Where:** `company.rs:154-166`; `game_state/mod.rs:147-191`;
   `manufacturing.rs:435-467` (already wrapped in methods). External
@@ -578,7 +580,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
   cross-checks the doc table.
 - **Size/risk:** small / low.
 
-### G5. Serde-default fallbacks doing work `sanitize()` could do with a seed
+### ✅ G5. Serde-default fallbacks doing work `sanitize()` could do with a seed
 - **Where:** `default_markets()` (`game_state/mod.rs:284`) produces
   unperturbed templates because serde has no seed, but `sanitize()`
   runs five lines later *with* the seed. `GameSeed` needs
