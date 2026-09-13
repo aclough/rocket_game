@@ -29,9 +29,11 @@ pub(super) fn push_project_row<D: Designable>(
             .map(|plan| plan.describe())
             .unwrap_or_default(),
     };
+    // Teams come right after the name: who is working on what is the
+    // first thing the pane has to answer, expanded or not.
     let line_text = format!(
-        "  {} {} (Rev {})  {}{}",
-        marker, project.design.name(), project.revision, status_str, extra,
+        "  {} {} (Rev {})  Teams: {}  {}{}",
+        marker, project.design.name(), project.revision, project.teams_assigned, status_str, extra,
     );
     let text_width = line_text.chars().count() as u16;
 
@@ -203,9 +205,8 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
             String::new()
         };
         lines.push(Line::from(format!(
-            "      Mass: {}    Teams: {}    Scale: {:.2}x    Auto-revise: {}{}",
+            "      Mass: {}    Scale: {:.2}x    Auto-revise: {}{}",
             format_kg(project.design.mass_kg),
-            project.teams_assigned,
             project.spec.scale,
             if project.auto_revise { "on" } else { "off" },
             power_str,
@@ -289,10 +290,7 @@ pub(super) fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border
             format_kg(d.radiator.mass_kg),
             d.material_cost / 1_000_000.0,
         )));
-        lines.push(Line::from(format!(
-            "      Teams: {}  NRE: {}",
-            project.teams_assigned, format_money(project.nre_cost),
-        )));
+        lines.push(Line::from(format!("      NRE: {}", format_money(project.nre_cost))));
         // Testing progress (once past design).
         if matches!(project.status, DesignStatus::Testing { .. } | DesignStatus::Revising { .. }) {
             lines.push(Line::from(format!("      Testing: {}", project.testing_level(&app.game.balance))));
@@ -351,8 +349,8 @@ pub(super) fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_
             .map(|s| s.engine_count)
             .sum();
         lines.push(Line::from(format!(
-            "      {} stages, {} engines    Teams: {}    Complexity: {}",
-            total_stages, total_engines, project.teams_assigned, project.complexity,
+            "      {} stages, {} engines    Complexity: {}",
+            total_stages, total_engines, project.complexity,
         )));
 
         // Show engines used per stage group
