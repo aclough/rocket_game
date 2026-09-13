@@ -6,6 +6,8 @@ mod editors;
 mod modals;
 mod planner;
 mod tabs;
+#[cfg(test)]
+mod render_smoke;
 
 pub use designer::{DesignerMode, RocketDesignerState};
 pub use planner::{DvPlannerState, PlanAction, PlannerSetupField, PlannerSetupState, PlannerSource};

@@ -408,28 +408,6 @@ opportunity in the codebase.
   cuts (things the sweep harness would actually vary) over physics
   constants that are design decisions.
 
----
-
-## E. Module splits (mechanical)
-
-All pure moves; low risk; each makes the corresponding thematic
-refactor above easier to see. Proposed layouts are in the appendix.
-
-| # | File | Lines | Split into | Notes |
-|---|------|-------|-----------|-------|
-| E1 ✅ | `ui/mod.rs` | 5780 | `ui/{tabs/*, designer/*, editors, modals, planner, format, widgets}` + `ui/tests/*` | 31% of the file is tests. `handle_input_mode_key` is 874 lines. |
-| E2 ✅ | `ui/draw.rs` | 4324 | same per-feature files as E1 | `draw_modal` is 885 lines, one match with 30 arms. Every feature is split across two files 1500 lines apart. |
-| E3 ✅ | `rocket.rs` | 2140 | `rocket/{mod, staging, power, stats, fingerprint}` | 47% tests. Falls along existing `// ───` banners. |
-| E4 ✅ | `company.rs` | 1889 | `company/{mod, projects, retire, production, floor, staffing, research}` | `retire.rs` and `floor.rs` are already self-contained with doc essays. |
-| E5 ✅ | `contract.rs` | 1714 | `contract/{mod, market, campaign, archetype, templates}` | ~600 lines are pure data literals. |
-| E6 ✅ | `game_state/tests.rs` | 3381 | `game_state/tests/{clock, rockets, manufacturing, flights, reactors, launch, geopolitics, retire}` | 94 tests, no inner modules. Two UI-table tests belong in `ui/draw.rs`. |
-| E7 ✅ | `rocket_project.rs` | 796 | move `max_payload_to`, `trip_power_along`, `survives_trip`, `payload_table*` (`:210-399`) to `rocket_perf.rs` | Vehicle performance analysis, not workflow. |
-| E8 ✅ | `location.rs` | 1380 | `location/{mod, graph_data}` | See D3. |
-
----
-
-## F. UI patterns
-
 ### ✅ D7. The ascent trajectory model is a pure gravity turn
 - **Where:** `location::simulate_ascent` — a 1° kick at 45 m/s, then
   `dθ/dt = g·cosθ/v − v·cosθ/r` with no pitch program or altitude
@@ -452,6 +430,30 @@ refactor above easier to see. Proposed layouts are in the appendix.
   200-seed run and the capability probe; the balance numbers will move
   and the bot template will need re-sizing. Belongs with D6 in a
   physics pass, not in the delta-v plan.
+
+---
+
+## E. Module splits (mechanical)
+
+All pure moves; low risk; each makes the corresponding thematic
+refactor above easier to see. Proposed layouts are in the appendix.
+
+| # | File | Lines | Split into | Notes |
+|---|------|-------|-----------|-------|
+| E1 ✅ | `ui/mod.rs` | 5780 | `ui/{tabs/*, designer/*, editors, modals, planner, format, widgets}` + `ui/tests/*` | 31% of the file is tests. `handle_input_mode_key` is 874 lines. |
+| E2 ✅ | `ui/draw.rs` | 4324 | same per-feature files as E1 | `draw_modal` is 885 lines, one match with 30 arms. Every feature is split across two files 1500 lines apart. |
+| E3 ✅ | `rocket.rs` | 2140 | `rocket/{mod, staging, power, stats, fingerprint}` | 47% tests. Falls along existing `// ───` banners. |
+| E4 ✅ | `company.rs` | 1889 | `company/{mod, projects, retire, production, floor, staffing, research}` | `retire.rs` and `floor.rs` are already self-contained with doc essays. |
+| E5 ✅ | `contract.rs` | 1714 | `contract/{mod, market, campaign, archetype, templates}` | ~600 lines are pure data literals. |
+| E6 ✅ | `game_state/tests.rs` | 3381 | `game_state/tests/{clock, rockets, manufacturing, flights, reactors, launch, geopolitics, retire}` | 94 tests, no inner modules. Two UI-table tests belong in `ui/draw.rs`. |
+| E7 ✅ | `rocket_project.rs` | 796 | move `max_payload_to`, `trip_power_along`, `survives_trip`, `payload_table*` (`:210-399`) to `rocket_perf.rs` | Vehicle performance analysis, not workflow. |
+| E8 ✅ | `location.rs` | 1380 | `location/{mod, graph_data}` | See D3. |
+
+---
+
+## F. UI patterns
+
+> Plan: `17_4_UI.md` (step 0 render smoke test, then F4, F2, F3, F1, F6).
 
 ### F1. ~20 hand-rolled Up/Down cursor pairs
 - **Where:** `ui/mod.rs` at 2141, 2195, 2233, 2249, 2379, 2415, 2461,
