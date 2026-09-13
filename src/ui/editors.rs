@@ -13,9 +13,7 @@ fn available_engine_cycles(game: &GameState) -> Vec<EngineCycle> {
         EngineCycle::StagedCombustion,
         EngineCycle::FullFlow,
     ];
-    if game.technologies.iter().any(|t|
-        t.id == crate::technology::TECH_NUCLEAR_THERMAL && t.unlocked
-    ) {
+    if game.tech_unlocked(crate::technology::TECH_NUCLEAR_THERMAL) {
         cycles.push(EngineCycle::NuclearThermal);
     }
     cycles.push(EngineCycle::ElectricPropulsion);

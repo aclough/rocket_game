@@ -776,8 +776,7 @@ pub(super) mod help_tests {
     /// actually contain the result.
     #[test]
     fn pane_hints_fit_and_always_offer_the_help_modal() {
-        let engines = Tab::ALL.iter()
-            .position(|t| matches!(t, Tab::Engines)).unwrap();
+        let engines = Tab::Engines;
         let mut a = app();
         a.active_tab = engines;
 
@@ -855,7 +854,7 @@ pub(super) mod help_tests {
     /// why `keys.rs` asks you to add both in one edit.
     #[test]
     fn documented_keys_still_do_something() {
-        for (ti, tab) in Tab::ALL.iter().enumerate() {
+        for tab in Tab::ALL {
             for binding in keys::for_tab(*tab) {
                 // Take the first key of a "B / A / Enter" style label.
                 let label = binding.keys.split(" / ").next().unwrap();
@@ -871,7 +870,7 @@ pub(super) mod help_tests {
                 };
 
                 let mut a = app();
-                a.active_tab = ti;
+                a.active_tab = *tab;
                 a.focused_pane = FocusedPane::Content;
                 let before = observable(&a);
                 a.handle_key(key);
@@ -890,7 +889,7 @@ pub(super) mod help_tests {
     #[test]
     fn question_mark_opens_help_for_the_current_tab() {
         let mut a = app();
-        a.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Launches).unwrap();
+        a.active_tab = Tab::Launches;
         a.handle_key(KeyCode::Char('?'));
 
         assert!(matches!(a.input_mode, InputMode::Help { .. }), "? should open help");
@@ -933,9 +932,9 @@ pub(super) mod help_tests {
     /// terminal — the reference is useless if it's cut off.
     #[test]
     fn help_fits_an_80_column_terminal() {
-        for (ti, tab) in Tab::ALL.iter().enumerate() {
+        for tab in Tab::ALL {
             let mut a = app();
-            a.active_tab = ti;
+            a.active_tab = *tab;
             a.handle_key(KeyCode::Char('?'));
             let text = render(&a, 80, 40);
             for line in text.lines() {

@@ -15,9 +15,8 @@ pub(super) fn draw_help_modal(
     use crate::ui::keys;
 
     let (context_name, bindings): (String, &[keys::KeyBinding]) = match scope {
-        crate::ui::HelpScope::Tab(idx) => {
-            let tab = Tab::ALL.get(*idx).copied().unwrap_or(Tab::Overview);
-            (format!("{} tab", tab.name()), keys::for_tab(tab))
+        crate::ui::HelpScope::Tab(tab) => {
+            (format!("{} tab", tab.name()), keys::for_tab(*tab))
         }
         crate::ui::HelpScope::RocketDesigner => (
             "Rocket designer".to_string(), keys::ROCKET_DESIGNER,

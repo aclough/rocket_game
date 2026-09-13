@@ -553,8 +553,8 @@ mod reactor_render_tests {
         game.player_company.reactor_projects.push(project);
 
         let mut app = App::new(game);
-        // Select the Reactors tab (index 2 in Tab::ALL) and the project.
-        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Reactors).unwrap();
+        // Select the Reactors tab and the project.
+        app.active_tab = Tab::Reactors;
         app.selected_item = 0;
 
         let backend = TestBackend::new(120, 50);
@@ -616,7 +616,7 @@ mod market_discovery_render_tests {
         game.active_campaigns.push(campaign);
 
         let mut app = App::new(game);
-        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.active_tab = Tab::Contracts;
         app.selected_item = 0;
 
         let backend = TestBackend::new(120, 50);
@@ -662,7 +662,7 @@ mod market_discovery_render_tests {
             .map(|m| (m.id, m.name.clone()))
             .expect("some market is active at start");
         let mut app = App::new(game);
-        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.active_tab = Tab::Contracts;
 
         app.handle_key(KeyCode::Char('r'));
         assert!(
@@ -725,7 +725,7 @@ mod market_discovery_render_tests {
         }));
 
         let mut app = App::new(game);
-        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.active_tab = Tab::Contracts;
         app.handle_key(KeyCode::Char('h'));
         assert!(
             matches!(app.input_mode, InputMode::AwardHistory { scroll: 0 }),
@@ -773,7 +773,7 @@ mod market_discovery_render_tests {
             outcome: AwardOutcome::PlayerWon { amount: 88_000_000.0 },
         });
         let mut app = App::new(game);
-        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.active_tab = Tab::Contracts;
         app.handle_key(KeyCode::Char('h'));
 
         let backend = TestBackend::new(140, 50);
@@ -824,7 +824,7 @@ mod market_discovery_render_tests {
         }));
 
         let mut app = App::new(game);
-        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.active_tab = Tab::Contracts;
         app.handle_key(KeyCode::Char('p'));
         assert!(
             matches!(app.input_mode, InputMode::Campaigns { selected: 0 }),
@@ -900,7 +900,7 @@ mod engine_pane_tests {
     fn engines_app() -> App {
         let game = crate::game_state::GameState::with_money("Test".into(), 100_000_000.0, 1);
         let mut app = App::new(game);
-        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Engines).unwrap();
+        app.active_tab = Tab::Engines;
         app.selected_item = 0;
         app
     }
@@ -998,7 +998,7 @@ mod contract_table_render_tests {
         let mut game = crate::game_state::GameState::with_money("Column Test".into(), 100_000_000.0, 7);
         game.available_contracts = contracts_with_varied_names();
         let mut app = App::new(game);
-        app.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Contracts).unwrap();
+        app.active_tab = Tab::Contracts;
         app.selected_item = 0;
         app
     }
@@ -1163,7 +1163,7 @@ mod retire_confirmation_tests {
 
     fn rockets_app() -> App {
         let mut a = app();
-        a.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Rockets).unwrap();
+        a.active_tab = Tab::Rockets;
         a.focused_pane = FocusedPane::Content;
         a.selected_item = 0;
         a
@@ -1248,7 +1248,7 @@ mod retire_confirmation_tests {
     #[test]
     fn a_blocked_engine_explains_itself_instead_of_asking() {
         let mut a = app();
-        a.active_tab = Tab::ALL.iter().position(|t| *t == Tab::Engines).unwrap();
+        a.active_tab = Tab::Engines;
         a.focused_pane = FocusedPane::Content;
         a.selected_item = 0;
 

@@ -267,6 +267,11 @@ pub(crate) fn realize_world_markets(
 }
 
 impl GameState {
+    /// Whether a technology has been unlocked in this world.
+    pub fn tech_unlocked(&self, id: crate::technology::TechnologyId) -> bool {
+        self.technologies.iter().any(|t| t.id == id && t.unlocked)
+    }
+
     /// A new game under the default balance, starting money included.
     pub fn new(company_name: String, seed_value: u64) -> Self {
         Self::with_balance(company_name, seed_value, BalanceConfig::default())

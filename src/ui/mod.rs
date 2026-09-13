@@ -38,7 +38,7 @@ use crate::stage::{Stage, StageId};
 /// (whose help is one of its own sub-modes, so its state stays put).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelpScope {
-    Tab(usize),
+    Tab(Tab),
     RocketDesigner,
 }
 
@@ -159,7 +159,7 @@ pub enum InputMode {
     Normal,
     /// Keybinding reference for the tab that was open. (The designer's
     /// help is `RocketDesigner { sub: Help }`.)
-    Help { tab: usize },
+    Help { tab: Tab },
     /// One-screen orientation, shown once at the start of a new game.
     /// Dismissed by any key and never shown again — it is not stored in
     /// the save, so it cannot reappear on load.
@@ -352,7 +352,7 @@ pub fn with_terminal<T>(body: impl FnOnce(&mut Tui) -> io::Result<T>) -> io::Res
 pub struct App {
     pub game: GameState,
     pub running: bool,
-    pub active_tab: usize,
+    pub active_tab: Tab,
     pub focused_pane: FocusedPane,
     pub content_scroll: usize,
     pub status_message: Option<String>,
@@ -378,7 +378,7 @@ impl App {
         App {
             game,
             running: true,
-            active_tab: 0,
+            active_tab: Tab::Overview,
             focused_pane: FocusedPane::Sidebar,
             content_scroll: 0,
             status_message: None,
@@ -413,7 +413,30 @@ impl App {
     }
 
     pub fn current_tab(&self) -> Tab {
-        Tab::ALL[self.active_tab]
+        self.active_tab
+    }
+
+    /// The tabs the sidebar shows, in order: every tab, except that
+    /// Reactors waits for the fission reactor technology — there is
+    /// nothing to design or install until then.
+    pub fn tabs(&self) -> Vec<Tab> {
+        let reactors = self.game.tech_unlocked(crate::technology::TECH_FISSION_REACTOR);
+        Tab::ALL.iter().copied()
+            .filter(|t| *t != Tab::Reactors || reactors)
+            .collect()
+    }
+
+    /// Move the sidebar selection `step` tabs along the visible list,
+    /// stopping at either end; the content pane starts over.
+    fn step_tab(&mut self, step: isize) {
+        let tabs = self.tabs();
+        let here = tabs.iter().position(|t| *t == self.active_tab).unwrap_or(0) as isize;
+        let there = (here + step).clamp(0, tabs.len() as isize - 1) as usize;
+        if tabs[there] != self.active_tab {
+            self.active_tab = tabs[there];
+            self.content_scroll = 0;
+            self.selected_item = 0;
+        }
     }
 
     /// Run the main application loop.
@@ -475,9 +498,7 @@ impl App {
 
                 // Switch to Events tab on critical events
                 if day_events.iter().any(|e| e.importance() == crate::event::EventImportance::Critical) {
-                    if let Some(idx) = Tab::ALL.iter().position(|t| matches!(t, Tab::Events)) {
-                        self.active_tab = idx;
-                    }
+                    self.active_tab = Tab::Events;
                 }
                 // A liftable program announcement already paused the
                 // game; open the programs modal on it so the block-bid
@@ -579,13 +600,7 @@ impl App {
 
     fn handle_up(&mut self) {
         match self.focused_pane {
-            FocusedPane::Sidebar => {
-                if self.active_tab > 0 {
-                    self.active_tab -= 1;
-                    self.content_scroll = 0;
-                    self.selected_item = 0;
-                }
-            }
+            FocusedPane::Sidebar => self.step_tab(-1),
             FocusedPane::Content => {
                 if self.current_tab().is_list_tab() {
                     cursor_up(&mut self.selected_item);
@@ -598,13 +613,7 @@ impl App {
 
     fn handle_down(&mut self) {
         match self.focused_pane {
-            FocusedPane::Sidebar => {
-                if self.active_tab + 1 < Tab::ALL.len() {
-                    self.active_tab += 1;
-                    self.content_scroll = 0;
-                    self.selected_item = 0;
-                }
-            }
+            FocusedPane::Sidebar => self.step_tab(1),
             FocusedPane::Content => {
                 let tab = self.current_tab();
                 if tab.is_list_tab() {
@@ -692,5 +701,56 @@ mod loop_timing_tests {
             input_timeout(GameSpeed::Normal, rate, Duration::from_millis(400)),
             Duration::ZERO,
         );
+    }
+}
+
+#[cfg(test)]
+mod sidebar_tests {
+    use super::*;
+    use crate::technology::TECH_FISSION_REACTOR;
+
+    fn unlock_fission(app: &mut App) {
+        app.game.technologies.iter_mut()
+            .find(|t| t.id == TECH_FISSION_REACTOR)
+            .expect("fission reactor technology exists")
+            .unlocked = true;
+    }
+
+    /// The Reactors tab waits for the fission reactor technology: a
+    /// fresh game's sidebar has no reactors entry, and stepping down from
+    /// Engines lands on Rockets; once the technology unlocks the tab is
+    /// back between them.
+    #[test]
+    fn reactors_tab_appears_when_fission_unlocks() {
+        let mut app = App::new(GameState::new("Sidebar".into(), 3));
+        assert!(!app.tabs().contains(&Tab::Reactors), "premise: fission starts locked");
+        assert_eq!(app.tabs().len(), Tab::ALL.len() - 1);
+
+        app.focused_pane = FocusedPane::Sidebar;
+        app.active_tab = Tab::Engines;
+        app.handle_key(KeyCode::Down);
+        assert_eq!(app.current_tab(), Tab::Rockets, "the hidden tab is skipped");
+        app.handle_key(KeyCode::Up);
+        assert_eq!(app.current_tab(), Tab::Engines);
+
+        unlock_fission(&mut app);
+        assert_eq!(app.tabs(), Tab::ALL.to_vec());
+        app.handle_key(KeyCode::Down);
+        assert_eq!(app.current_tab(), Tab::Reactors, "the tab is in its place once unlocked");
+    }
+
+    /// The sidebar stops at both ends and only resets the content pane
+    /// when it actually moves.
+    #[test]
+    fn sidebar_stops_at_the_ends() {
+        let mut app = App::new(GameState::new("Sidebar".into(), 3));
+        app.focused_pane = FocusedPane::Sidebar;
+        app.selected_item = 4;
+        app.handle_key(KeyCode::Up);
+        assert_eq!(app.current_tab(), Tab::Overview);
+        assert_eq!(app.selected_item, 4, "no move, no reset");
+        app.active_tab = Tab::Events;
+        app.handle_key(KeyCode::Down);
+        assert_eq!(app.current_tab(), Tab::Events);
     }
 }

@@ -30,6 +30,11 @@ fn rich_app() -> App {
         policy.act(&mut game);
         game.advance_day();
     }
+    // Fission is unlocked so the Reactors tab is in the sidebar.
+    game.technologies.iter_mut()
+        .find(|t| t.id == crate::technology::TECH_FISSION_REACTOR)
+        .expect("fission reactor technology exists")
+        .unlocked = true;
     let bal = game.balance.clone();
     let company = &mut game.player_company;
     assert!(!company.engine_projects.is_empty() && !company.rocket_projects.is_empty(),
@@ -117,7 +122,7 @@ fn modes(app: &App) -> Vec<(&'static str, InputMode)> {
     let campaign_id = app.game.active_campaigns[0].id;
     let state = || designer_state(app);
     vec![
-        ("help", InputMode::Help { tab: 0 }),
+        ("help", InputMode::Help { tab: Tab::Overview }),
         ("designer help", InputMode::designer_with(state(), DesignerSubMode::Help)),
         ("intro", InputMode::Intro),
         ("engine editor", InputMode::EngineEditor { project_id: epid, cursor: 1, state: None }),
@@ -191,8 +196,10 @@ fn modes(app: &App) -> Vec<(&'static str, InputMode)> {
 fn every_tab_and_modal_renders_at_both_widths() {
     let mut app = rich_app();
     let sizes = [(80u16, 30u16), (120, 40)];
-    for (ti, tab) in Tab::ALL.iter().enumerate() {
-        app.active_tab = ti;
+    let tabs = app.tabs();
+    assert_eq!(tabs.len(), Tab::ALL.len(), "fixture premise: every tab is visible");
+    for tab in tabs {
+        app.active_tab = tab;
         app.selected_item = 0;
         app.input_mode = InputMode::Normal;
         for &(w, h) in &sizes {
@@ -201,7 +208,7 @@ fn every_tab_and_modal_renders_at_both_widths() {
                 "{tab:?} at {w} cols drew nothing");
         }
     }
-    app.active_tab = Tab::ALL.iter().position(|t| matches!(t, Tab::Contracts)).unwrap_or(0);
+    app.active_tab = Tab::Contracts;
     let modes = modes(&app);
     for (name, mode) in modes {
         app.input_mode = mode;
@@ -213,7 +220,7 @@ fn every_tab_and_modal_renders_at_both_widths() {
     // The launches tab, in flight panel, and the spacecraft roster
     // have the most arithmetic behind them; scroll through them too.
     app.input_mode = InputMode::Normal;
-    app.active_tab = Tab::ALL.iter().position(|t| matches!(t, Tab::Launches)).unwrap_or(0);
+    app.active_tab = Tab::Launches;
     for item in 0..4 {
         app.selected_item = item;
         let _ = render(&app, 120, 40);

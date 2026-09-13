@@ -157,8 +157,8 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
     };
 
-    let items: Vec<ListItem> = Tab::ALL.iter().enumerate().map(|(i, tab)| {
-        let style = if i == app.active_tab {
+    let items: Vec<ListItem> = app.tabs().into_iter().map(|tab| {
+        let style = if tab == app.active_tab {
             highlight_style
         } else {
             Style::default().fg(Color::DarkGray)
