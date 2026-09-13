@@ -356,35 +356,14 @@ pub(super) fn draw_rockets_tab(frame: &mut Frame, app: &App, area: Rect, border_
         )));
 
         // Show engines used per stage group
-        let mut seen_engines: Vec<(String, u32)> = Vec::new();
-        for group in &project.design.stage_groups {
-            for stage in group {
-                let rev = company.engine_projects.iter()
-                    .find(|ep| ep.design.id == stage.engine.id)
-                    .map(|ep| ep.revision)
-                    .or_else(|| company.contracted_engines.iter()
-                        .find(|ce| ce.design.id == stage.engine.id)
-                        .map(|_| 0))
-                    .unwrap_or(0);
-                let key = format!("{} Rev {}", stage.engine.name, rev);
-                if let Some(entry) = seen_engines.iter_mut().find(|(k, _)| k == &key) {
-                    entry.1 += stage.engine_count;
-                } else {
-                    seen_engines.push((key, stage.engine_count));
-                }
-            }
-        }
+        let seen_engines = company.engine_usage(&project.design);
         let engine_list: Vec<String> = seen_engines.iter()
             .map(|(name, count)| format!("{}x{}", count, name))
             .collect();
         lines.push(Line::from(format!("      Engines: {}", engine_list.join(", "))));
 
-        // Initial acceleration at takeoff: stage 0, full propellant,
-        // 0 payload, 1 AU.
-        let avail_power = project.design.power_for_engines_w(1.0);
-        let initial_thrust = project.design.group_effective_thrust_n(0, avail_power);
-        let initial_mass = project.design.total_mass_kg();
-        let initial_accel = if initial_mass > 0.0 { initial_thrust / initial_mass } else { 0.0 };
+        // Initial acceleration at takeoff: 0 payload, 1 AU.
+        let initial_accel = project.design.initial_accel_m_s2(0.0, 1.0);
         // Usable Δv is the planner's figure: vacuum less the ascent's
         // gravity loss, the number the contract colours are judged by.
         let usable_dv = rocket::DesignPerformance::compute(&project.design, 0.0, "earth_surface")
@@ -580,7 +559,7 @@ pub(super) fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, b
 
 pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
     let game = &app.game;
-    let rockets = crate::ui::ready_rockets_in_display_order(&game.player_company);
+    let rockets = game.player_company.ready_rockets_in_display_order();
 
     let mut lines = vec![];
 
@@ -696,16 +675,10 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
 
             // Current acceleration of the active stage group (with the
             // power derate applied at the flight's current sun distance).
-            let active_group = flight.rocket.lowest_attached_group();
-            if let Some(gi) = active_group {
-                let stage_mass = flight.rocket.attached_mass_kg(&flight.design);
+            if flight.rocket.lowest_attached_group().is_some() {
                 let payload_mass: f64 = flight.payloads.iter().map(|p| p.mass_kg()).sum();
-                let total_mass = stage_mass + payload_mass;
-                let sun_au = DELTA_V_MAP.location(flight.current_location.name())
-                    .map_or(1.0, |l| l.sun_distance_au());
-                let avail_power = flight.design.power_for_engines_w(sun_au);
-                let thrust = flight.design.group_effective_thrust_n(gi, avail_power);
-                let accel = if total_mass > 0.0 { thrust / total_mass } else { 0.0 };
+                let sun_au = flight.current_location.location().sun_distance_au();
+                let accel = flight.rocket.current_accel_m_s2(&flight.design, payload_mass, sun_au);
                 lines.push(Line::from(Span::styled(
                     format!("      Accel: {}", format_accel(accel)),
                     Style::default().fg(Color::DarkGray),
@@ -793,16 +766,10 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
             // power derate applied at the spacecraft's current sun
             // distance — a Mars-bound ion craft will read lower than at
             // Earth).
-            let active_group = sc.rocket.lowest_attached_group();
-            if let Some(gi) = active_group {
-                let stage_mass = sc.rocket.attached_mass_kg(&sc.design);
+            if sc.rocket.lowest_attached_group().is_some() {
                 let payload_mass: f64 = sc.payloads.iter().map(|p| p.mass_kg()).sum();
-                let total_mass = stage_mass + payload_mass;
-                let sun_au = DELTA_V_MAP.location(sc.location.name())
-                    .map_or(1.0, |l| l.sun_distance_au());
-                let avail_power = sc.design.power_for_engines_w(sun_au);
-                let thrust = sc.design.group_effective_thrust_n(gi, avail_power);
-                let accel = if total_mass > 0.0 { thrust / total_mass } else { 0.0 };
+                let sun_au = sc.location.location().sun_distance_au();
+                let accel = sc.rocket.current_accel_m_s2(&sc.design, payload_mass, sun_au);
                 lines.push(Line::from(Span::styled(
                     format!("      Accel: {}", format_accel(accel)),
                     Style::default().fg(Color::DarkGray),

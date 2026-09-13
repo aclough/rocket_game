@@ -78,6 +78,13 @@ impl Stage {
         }
     }
 
+    /// Everything this stage's power sources supply at `sun_distance_au`.
+    pub fn supply_w(&self, sun_distance_au: f64) -> f64 {
+        self.effective_power_sources().iter()
+            .map(|p| self.source_supply_w(p, sun_distance_au))
+            .sum()
+    }
+
     /// Battery capacity (kilowatt-days) aboard this stage, the default
     /// battery included when nothing was fitted.
     pub fn battery_capacity_kwd(&self) -> f64 {

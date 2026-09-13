@@ -458,7 +458,7 @@ impl App {
                 let persist = matches!(key, KeyCode::Char('k') | KeyCode::Char('K'));
                 // Launch the selected rocket. Indexes the drawn order, not
                 // the inventory's build order.
-                let rockets = ready_rockets_in_display_order(&self.game.player_company);
+                let rockets = self.game.player_company.ready_rockets_in_display_order();
                 let Some(rocket) = rockets.get(self.selected_item) else {
                     self.status_message = Some("No rocket selected".into());
                     return;
@@ -478,7 +478,7 @@ impl App {
                 let contract_picks = vec![false; self.game.player_company.active_contracts.len()];
                 // Same order as the Ready Rockets list it was picked from.
                 let spacecraft_item_ids: Vec<_> =
-                    ready_rockets_in_display_order(&self.game.player_company)
+                    self.game.player_company.ready_rockets_in_display_order()
                         .into_iter()
                         .filter(|r| r.item_id != item_id)
                         .map(|r| r.item_id)
@@ -1100,7 +1100,6 @@ mod contract_table_render_tests {
 
 #[cfg(test)]
 mod ready_rocket_order_tests {
-    use super::*;
     use crate::company::Company;
     use crate::manufacturing::{InventoryItemId, InventoryRocket};
     use crate::rocket::RocketDesignId;
@@ -1136,7 +1135,7 @@ mod ready_rocket_order_tests {
         stock(&mut company, 4, "Atlas", 5);
         stock(&mut company, 5, "Atlas", 2);
 
-        let ordered: Vec<_> = ready_rockets_in_display_order(&company).iter()
+        let ordered: Vec<_> = company.ready_rockets_in_display_order().iter()
             .map(|r| (r.rocket_name.as_str(), r.revision, r.item_id.0))
             .collect();
         assert_eq!(ordered, vec![
@@ -1158,7 +1157,7 @@ mod ready_rocket_order_tests {
         stock(&mut company, 2, "Atlas", 2);
         stock(&mut company, 3, "Zephyr", 1);
 
-        let ordered = ready_rockets_in_display_order(&company);
+        let ordered = company.ready_rockets_in_display_order();
         assert_eq!(ordered.len(), company.manufacturing.inventory.rockets.len());
         let mut seen: Vec<u64> = ordered.iter().map(|r| r.item_id.0).collect();
         seen.sort_unstable();

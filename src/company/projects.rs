@@ -139,6 +139,28 @@ impl Company {
     }
 
     /// Start a new rocket design project. Returns the event if successful.
+    /// The engines a design uses, as "Name Rev N" with a count each, in
+    /// stage order: what the Rockets tab lists under a project.
+    pub fn engine_usage(&self, design: &RocketDesign) -> Vec<(String, u32)> {
+        let mut seen: Vec<(String, u32)> = Vec::new();
+        for stage in design.stage_groups.iter().flatten() {
+            let rev = self.engine_projects.iter()
+                .find(|ep| ep.design.id == stage.engine.id)
+                .map(|ep| ep.revision)
+                .or_else(|| self.contracted_engines.iter()
+                    .find(|ce| ce.design.id == stage.engine.id)
+                    .map(|_| 0))
+                .unwrap_or(0);
+            let key = format!("{} Rev {}", stage.engine.name, rev);
+            if let Some(entry) = seen.iter_mut().find(|(k, _)| k == &key) {
+                entry.1 += stage.engine_count;
+            } else {
+                seen.push((key, stage.engine_count));
+            }
+        }
+        seen
+    }
+
     pub fn start_rocket_project(&mut self, design: RocketDesign, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
         let project_id = RocketProjectId(self.next_rocket_project_id);
         self.next_rocket_project_id += 1;

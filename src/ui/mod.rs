@@ -30,26 +30,6 @@ use crate::rocket_project::RocketDesignStatus;
 use crate::save;
 use crate::stage::{Stage, StageId};
 
-/// The Ready Rockets list in the order it is drawn: grouped by rocket
-/// name, newest revision first, and build order within that.
-///
-/// `App::selected_item` indexes into *this* list on the Launches tab, so
-/// the draw side and the launch key have to agree on the order — hence
-/// one function rather than a sort in each. The underlying inventory is
-/// left in build order, which is what the competitor's stock lookup and
-/// the manufacturing pipeline expect.
-pub(crate) fn ready_rockets_in_display_order(
-    company: &crate::company::Company,
-) -> Vec<&crate::manufacturing::InventoryRocket> {
-    let mut rockets: Vec<_> = company.manufacturing.inventory.rockets.iter().collect();
-    rockets.sort_by(|a, b| {
-        a.rocket_name.cmp(&b.rocket_name)
-            .then(b.revision.cmp(&a.revision))
-            .then(a.item_id.0.cmp(&b.item_id.0))
-    });
-    rockets
-}
-
 /// What the help modal is describing, and what to return to on Esc.
 #[derive(Debug, Clone)]
 pub enum HelpScope {

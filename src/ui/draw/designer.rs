@@ -367,9 +367,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
         // Initial acceleration: stage 0 firing at 1 AU with all stages
         // attached and full propellant. Captures the power derate so
         // ion designs read low.
-        let avail_power = temp_design.power_for_engines_w(1.0);
-        let initial_thrust = temp_design.group_effective_thrust_n(0, avail_power);
-        let initial_accel = if total_mass > 0.0 { initial_thrust / total_mass } else { 0.0 };
+        let initial_accel = temp_design.initial_accel_m_s2(state.payload_kg, 1.0);
         lines.push(Line::from(format!(
             "  Initial accel: {}",
             format_accel(initial_accel),
@@ -378,16 +376,8 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
         // Electrical summary. Read-only for now; editing UI is a follow-up.
         // Compute supply at takeoff (1 AU) and housekeeping demand across
         // attached stages; show whether designs balance.
-        let mut total_housekeeping = 0.0;
-        let mut total_supply_1au = 0.0;
-        for group in &temp_design.stage_groups {
-            for stage in group {
-                total_housekeeping += stage.housekeeping_w();
-                for src in stage.effective_power_sources().iter() {
-                    total_supply_1au += stage.source_supply_w(src, 1.0);
-                }
-            }
-        }
+        let total_housekeeping = temp_design.total_housekeeping_w();
+        let total_supply_1au = temp_design.total_power_supply_w(1.0);
         let total_battery_kwd = temp_design.total_battery_kwd();
         // Endurance, not surplus, is what kills a mission: a craft with no
         // generation is fine for a same-day LEO drop and dead on the way to

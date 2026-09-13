@@ -153,9 +153,37 @@ impl Rocket {
     pub fn active_group(&self) -> Option<usize> {
         (0..self.stage_states.len()).find(|&gi| self.group_has_propellant(gi))
     }
+
+    /// Everything still attached plus `payload_kg`: the mass the next
+    /// burn has to move.
+    pub fn current_mass_kg(&self, design: &RocketDesign, payload_kg: f64) -> f64 {
+        self.attached_mass_kg(design) + payload_kg
+    }
+
+    /// Acceleration the lowest attached group can give the vehicle right
+    /// now, with electric engines derated by the design's power budget
+    /// at `sun_au` (17_4_UI.md F4: the figure the flight and spacecraft
+    /// panes quote). Zero with nothing attached.
+    pub fn current_accel_m_s2(&self, design: &RocketDesign, payload_kg: f64, sun_au: f64) -> f64 {
+        let Some(gi) = self.lowest_attached_group() else { return 0.0 };
+        let total_mass = self.current_mass_kg(design, payload_kg);
+        let avail_power = design.power_for_engines_w(sun_au);
+        let thrust = design.group_effective_thrust_n(gi, avail_power);
+        if total_mass > 0.0 { thrust / total_mass } else { 0.0 }
+    }
 }
 
 impl RocketDesign {
+    /// Acceleration off the pad: group 0 firing, every stage attached
+    /// and full, electric engines derated by the power budget at
+    /// `sun_au`, lifting the vehicle plus `payload_kg`.
+    pub fn initial_accel_m_s2(&self, payload_kg: f64, sun_au: f64) -> f64 {
+        let total_mass = self.total_mass_kg() + payload_kg;
+        let avail_power = self.power_for_engines_w(sun_au);
+        let thrust = self.group_effective_thrust_n(0, avail_power);
+        if total_mass > 0.0 { thrust / total_mass } else { 0.0 }
+    }
+
     /// Total wet mass of the entire vehicle (excluding payload).
     pub fn total_mass_kg(&self) -> f64 {
         self.stage_groups.iter()

@@ -70,6 +70,22 @@ impl Company {
     /// taken its engines out of inventory. Anything left over — standalone
     /// builds, or an order whose project has gone — sits at the top level
     /// in queue order.
+    /// The Ready Rockets list in the order the Launches tab draws it:
+    /// grouped by rocket name, newest revision first, and build order
+    /// within that. `App::selected_item` indexes into *this* list, so the
+    /// draw side and the launch key share it rather than each sorting.
+    /// The inventory itself stays in build order, which is what the
+    /// competitor's stock lookup and the manufacturing pipeline expect.
+    pub fn ready_rockets_in_display_order(&self) -> Vec<&crate::manufacturing::InventoryRocket> {
+        let mut rockets: Vec<_> = self.manufacturing.inventory.rockets.iter().collect();
+        rockets.sort_by(|a, b| {
+            a.rocket_name.cmp(&b.rocket_name)
+                .then(b.revision.cmp(&a.revision))
+                .then(a.item_id.0.cmp(&b.item_id.0))
+        });
+        rockets
+    }
+
     pub fn manufacturing_display_order(&self) -> Vec<MfgRow> {
         let orders = &self.manufacturing.orders;
         let mut placed = vec![false; orders.len()];

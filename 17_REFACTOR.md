@@ -492,7 +492,7 @@ refactor above easier to see. Proposed layouts are in the appendix.
   Continue`; collapse six editor variants to two.
 - **Size/risk:** medium / low.
 
-### F4. Business logic in `draw.rs`
+### ✅ F4. Business logic in `draw.rs`
 - **Where:** current mass and acceleration of an in-flight rocket
   computed in full twice (`draw.rs:1628-1657` for flights,
   `:1727-1756` for spacecraft); active-group scan at four sites;
