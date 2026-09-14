@@ -150,6 +150,9 @@ pub struct GameState {
     /// migrates and re-stamps it. See `save::SAVE_VERSION`.
     #[serde(default)]
     pub save_version: u32,
+    /// The guided start's place, if this game is guided.
+    #[serde(default)]
+    pub guide: Option<crate::guide::GuideState>,
     pub date: GameDate,
     pub start_date: GameDate,
     pub player_company: Company,
@@ -320,6 +323,7 @@ impl GameState {
 
         let mut state = GameState {
             save_version: crate::save::SAVE_VERSION,
+            guide: None,
             date: start,
             start_date: start,
             player_company: Company::new(company_name, starting_money, &seed, &balance),

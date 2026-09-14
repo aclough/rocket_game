@@ -84,15 +84,16 @@ pub(super) fn draw_help_modal(
 /// what the company is, what the first move is, and where the keys
 /// live. Everything else the player discovers, which is the point of
 /// the game.
-pub(super) fn draw_intro_modal(frame: &mut Frame, app: &App, screen: Rect) {
-    let name = &app.game.player_company.name;
+/// The orientation paragraphs both the intro and the guide's first
+/// popup open with.
+fn orientation_lines(app: &App) -> Vec<Line<'static>> {
+    let name = app.game.player_company.name.clone();
     let money = format_money(app.game.player_company.money);
-
-    let lines = vec![
+    vec![
         Line::from(""),
         Line::from(vec![
             Span::raw("  You are running "),
-            Span::styled(name.clone(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(format!(", a new rocket company with {money}.")),
         ]),
         Line::from(""),
@@ -105,6 +106,91 @@ pub(super) fn draw_intro_modal(frame: &mut Frame, app: &App, screen: Rect) {
         Line::from("  competitor. Bid too high and you lose the work; too low and"),
         Line::from("  you fly at a loss. Nobody tells you the customer's budget."),
         Line::from(""),
+    ]
+}
+
+/// A 68-column box centred on the screen, tall enough for `lines`.
+fn orientation_area(screen: Rect, lines: usize) -> Rect {
+    let h = (lines as u16 + 2).min(screen.height);
+    let w = 68u16.min(screen.width);
+    Rect {
+        x: screen.x + (screen.width.saturating_sub(w)) / 2,
+        y: screen.y + (screen.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    }
+}
+
+/// The guided start's popup: what was just done, and the step being
+/// introduced with its explanation and where to press what.
+pub(super) fn draw_guide_modal(
+    frame: &mut Frame,
+    app: &App,
+    achieved: Option<crate::guide::StepId>,
+    next: crate::guide::StepId,
+    screen: Rect,
+) {
+    use crate::ui::next_steps::step;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    match achieved {
+        None => lines.extend(orientation_lines(app)),
+        Some(done) => {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("  ✓ ", Style::default().fg(Color::Green)),
+                Span::styled((step(done).text)(&app.game), Style::default().fg(Color::Green)),
+            ]));
+            lines.push(Line::from(""));
+        }
+    }
+    let s = step(next);
+    let heading = if next == crate::guide::StepId::Graduate { "  Finally: " } else { "  Next: " };
+    lines.push(Line::from(vec![
+        Span::styled(heading, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled((s.text)(&app.game), Style::default().add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(""));
+    for l in s.explain {
+        lines.push(Line::from(format!("  {l}")));
+    }
+    lines.push(Line::from(""));
+    if next != crate::guide::StepId::Graduate {
+        lines.push(Line::from(Span::styled(
+            format!("  {} tab, press [{}]", s.tab, s.key),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
+    lines.push(hint_line(if next == crate::guide::StepId::Graduate {
+        "  Any key to finish."
+    } else {
+        "  Any key to close (the clock stays paused).  [Esc] Stop the guide"
+    }));
+    lines.push(Line::from(""));
+    let area = orientation_area(screen, lines.len());
+    frame.render_widget(Clear, area);
+    render_modal(frame, area, " Guide ", lines);
+}
+
+pub(super) fn draw_guide_stop_modal(frame: &mut Frame, screen: Rect) {
+    let lines = vec![
+        Line::from(""),
+        Line::from("  Stop the guide?"),
+        Line::from(""),
+        Line::from("  Next steps stay on the Overview tab either way."),
+        Line::from(""),
+        hint_line("  [Y] Stop   any other key goes back"),
+        Line::from(""),
+    ];
+    let mut area = orientation_area(screen, lines.len());
+    area.width = area.width.min(54);
+    area.x = screen.x + (screen.width.saturating_sub(area.width)) / 2;
+    frame.render_widget(Clear, area);
+    render_modal(frame, area, " Guide ", lines);
+}
+
+pub(super) fn draw_intro_modal(frame: &mut Frame, app: &App, screen: Rect) {
+    let mut lines = orientation_lines(app);
+    lines.extend(vec![
         Line::from(vec![
             Span::raw("  The "),
             Span::styled("Next steps", Style::default().fg(Color::Cyan)),
@@ -119,17 +205,9 @@ pub(super) fn draw_intro_modal(frame: &mut Frame, app: &App, screen: Rect) {
                 Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
-    ];
+    ]);
 
-    let h = (lines.len() as u16 + 2).min(screen.height);
-    let w = 68u16.min(screen.width);
-    let area = Rect {
-        x: screen.x + (screen.width.saturating_sub(w)) / 2,
-        y: screen.y + (screen.height.saturating_sub(h)) / 2,
-        width: w,
-        height: h,
-    };
-
+    let area = orientation_area(screen, lines.len());
     frame.render_widget(Clear, area);
     render_modal(frame, area, " Welcome ", lines);
 }
@@ -144,6 +222,8 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             draw_help_modal(frame, &crate::ui::HelpScope::Tab(*tab), area);
         }
         InputMode::Intro => draw_intro_modal(frame, app, area),
+        InputMode::Guide { achieved, next } => draw_guide_modal(frame, app, *achieved, *next, area),
+        InputMode::GuideStop { .. } => draw_guide_stop_modal(frame, area),
         InputMode::ConfirmRetire { effects, .. } => {
             draw_confirm_retire_modal(frame, effects, area);
         }

@@ -19,24 +19,7 @@ use crate::event::GameEvent;
 use crate::game_state::GameState;
 use crate::rocket_project::RocketDesignStatus;
 
-/// One row of the table; the guide's cursor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum StepId {
-    FirstEngine,
-    SecondEngine,
-    DesignRocket,
-    IdleTeams,
-    HireManufacturing,
-    OrderBuild,
-    ReviseFlaws,
-    PickSolicitation,
-    PlaceBid,
-    AwaitAward,
-    LostBid,
-    Launch,
-    ReadOutcome,
-    Graduate,
-}
+pub use crate::guide::StepId;
 
 /// How the guide knows a step is achieved.
 #[derive(Clone, Copy)]
@@ -45,7 +28,7 @@ pub enum Done {
     State(fn(&GameState) -> bool),
     /// One of the day's events says so.
     Event(fn(&GameEvent) -> bool),
-    /// The UI reports it (a modal opened, a key pressed on a result).
+    /// Never observed: the step's own popup is the end of the path.
     Ui,
 }
 
@@ -59,6 +42,10 @@ pub struct Step {
     pub explain: &'static [&'static str],
     /// Worth showing on the Overview now.
     pub applies: fn(&GameState) -> bool,
+    /// The guide may introduce this step: what it asks for is possible
+    /// now (engines out of design before the rocket, a rocket built
+    /// before a bid). The popup waits until this holds.
+    pub ready: fn(&GameState) -> bool,
     /// Part of the guided path (the rest are nags the panel raises
     /// when they come up).
     pub guided: bool,
@@ -72,12 +59,16 @@ pub const MAX_SHOWN: usize = 3;
 /// The facts every rule reads.
 struct Facts {
     committed_engines: usize,
+    /// Any committed engine still in design.
+    engines_in_design: bool,
     live_rockets: bool,
     design_ready: bool,
     has_stock: bool,
     building: bool,
     active_contracts: bool,
     flown: usize,
+    /// A contract has been flown (test-mass flights do not count).
+    flown_contract: bool,
     pending_bid: Option<(String, crate::calendar::GameDate)>,
     lost_last: bool,
 }
@@ -102,12 +93,15 @@ fn facts(game: &GameState) -> Facts {
         .is_some_and(|r| !matches!(r.outcome, AwardOutcome::PlayerWon { .. }));
     Facts {
         committed_engines: c.visible_engine_projects().count(),
+        engines_in_design: c.visible_engine_projects().any(|(_, ep)|
+            matches!(ep.status, crate::engine_project::EngineDesignStatus::InDesign { .. })),
         live_rockets: !live.is_empty(),
         design_ready,
         has_stock: !c.manufacturing.inventory.rockets.is_empty(),
         building: !c.manufacturing.orders.is_empty(),
         active_contracts: !c.active_contracts.is_empty(),
         flown: c.launch_history.len(),
+        flown_contract: c.launch_history.iter().any(|r| r.contract_id.is_some()),
         pending_bid,
         lost_last,
     }
@@ -130,16 +124,14 @@ fn text_of(id: StepId, game: &GameState) -> String {
         StepId::HireManufacturing => "Hire a manufacturing team — your design is ready to build".into(),
         StepId::OrderBuild => "Order a rocket build, or set an auto-build target".into(),
         StepId::ReviseFlaws => "Revise the flaws found in testing before you fly".into(),
-        StepId::PickSolicitation =>
+        StepId::PlaceBid =>
             "Bid on a contract — or fly a test mass to prove the vehicle".into(),
-        StepId::PlaceBid => "Bid a little above your marginal cost".into(),
         StepId::AwaitAward => match f.pending_bid {
             Some((name, date)) => format!("Your bid on {name} resolves {date} — let the clock run"),
             None => "Wait for the bid date".into(),
         },
         StepId::LostBid => "You were outbid — read Award History and bid again nearer the price".into(),
         StepId::Launch => "Launch — you have a vehicle and a customer waiting".into(),
-        StepId::ReadOutcome => "Read the launch result".into(),
         StepId::Graduate => "Set standing bid rules so bidding runs itself".into(),
     }
 }
@@ -164,6 +156,7 @@ pub const STEPS: &[Step] = &[
             "arrives with hidden flaws. That is normal.",
         ],
         applies: |g| facts(g).committed_engines == 0,
+        ready: |_| true,
         guided: true,
         done: Done::State(|g| facts(g).committed_engines >= 1),
     },
@@ -179,6 +172,7 @@ pub const STEPS: &[Step] = &[
             "so hire a second one (E) if you can afford it.",
         ],
         applies: |g| { let f = facts(g); f.committed_engines == 1 && !f.live_rockets },
+        ready: |_| true,
         guided: true,
         done: Done::State(|g| { let f = facts(g); f.committed_engines >= 2 || f.live_rockets }),
     },
@@ -193,7 +187,11 @@ pub const STEPS: &[Step] = &[
             "and to where. Set a payload (P) and destination (M) to",
             "see whether it reaches orbit, then press D when it does.",
         ],
-        applies: |g| { let f = facts(g); f.committed_engines >= 1 && !f.live_rockets },
+        // The bot designs its rocket once both engines are out of
+        // design, and so should the player: the designer sizes stages
+        // from the engines' figures, which are not final until then.
+        applies: |g| { let f = facts(g); f.committed_engines >= 2 && !f.engines_in_design && !f.live_rockets },
+        ready: |g| { let f = facts(g); f.committed_engines >= 2 && !f.engines_in_design },
         guided: true,
         done: Done::State(|g| facts(g).live_rockets),
     },
@@ -206,6 +204,7 @@ pub const STEPS: &[Step] = &[
         tab: "Engines", key: "N",
         explain: &[],
         applies: |g| g.player_company.unassigned_team_count() > 0 && facts(g).committed_engines > 0,
+        ready: |_| true,
         guided: false,
         done: Done::State(|g| g.player_company.unassigned_team_count() == 0),
     },
@@ -225,6 +224,7 @@ pub const STEPS: &[Step] = &[
             "until you have something to build.",
         ],
         applies: |g| facts(g).design_ready && g.player_company.manufacturing_teams.is_empty(),
+        ready: |g| facts(g).design_ready,
         guided: true,
         done: Done::State(|g| !g.player_company.manufacturing_teams.is_empty()),
     },
@@ -244,8 +244,11 @@ pub const STEPS: &[Step] = &[
             f.design_ready && !g.player_company.manufacturing_teams.is_empty()
                 && !f.has_stock && !f.building
         },
+        ready: |g| facts(g).design_ready && !g.player_company.manufacturing_teams.is_empty(),
         guided: true,
-        done: Done::State(|g| { let f = facts(g); f.has_stock || f.building }),
+        // Built, not merely ordered: the bid that follows needs a
+        // rocket that exists.
+        done: Done::State(|g| facts(g).has_stock),
     },
     // Flying an unrevised design nearly always ends in a fireball, and
     // the game never says so. Only worth raising while flaws are known
@@ -261,6 +264,7 @@ pub const STEPS: &[Step] = &[
             && p.discovered_flaw_count() > 0
             && !p.auto_revise
         ),
+        ready: |_| true,
         guided: false,
         done: Done::State(|g| !g.player_company.visible_rocket_projects().any(|(_, p)|
             matches!(p.status, RocketDesignStatus::Testing { .. })
@@ -269,36 +273,30 @@ pub const STEPS: &[Step] = &[
         )),
     },
     // --- The bidding arc. ---
+    // One step from "there are solicitations" to "a bid is in": the
+    // Place Bid modal carries the cost and the suggested price itself,
+    // and a popup cannot show while it is open, so a separate pricing
+    // step only ever arrived after the bid was placed.
     Step {
-        id: StepId::PickSolicitation,
-        text: text!(StepId::PickSolicitation),
+        id: StepId::PlaceBid,
+        text: text!(StepId::PlaceBid),
         tab: "Contracts", key: "B",
         explain: &[
             "Customers post solicitations on the Contracts tab: a",
             "payload, a destination, and the date bids close. Rows",
             "drawn white are ones a rocket of yours can lift. Pick",
-            "one and press B. Nothing is committed until you submit.",
+            "one and press B. The bid is sealed: the customer's",
+            "budget is hidden and a competitor is bidding too. The",
+            "modal shows your marginal cost and a suggested price a",
+            "little above it; too high loses the work, too low flies",
+            "at a loss. Enter submits.",
         ],
         applies: |g| {
             let f = facts(g);
             f.has_stock && !f.active_contracts && f.flown == 0
                 && f.pending_bid.is_none() && !f.lost_last
         },
-        guided: true,
-        done: Done::Ui,
-    },
-    Step {
-        id: StepId::PlaceBid,
-        text: text!(StepId::PlaceBid),
-        tab: "Contracts", key: "Enter",
-        explain: &[
-            "The bid is sealed: the customer's budget is hidden and a",
-            "competitor is bidding too. The modal shows your marginal",
-            "cost and a suggested price above it. Bid too high and",
-            "you lose the work; too low and you fly at a loss. Press",
-            "Enter to submit.",
-        ],
-        applies: |_| false,
+        ready: |g| facts(g).has_stock,
         guided: true,
         done: Done::Event(|e| matches!(e, GameEvent::BidPlaced { .. })),
     },
@@ -313,6 +311,7 @@ pub const STEPS: &[Step] = &[
             "customer's budget, which is then disclosed.",
         ],
         applies: |g| { let f = facts(g); f.pending_bid.is_some() && !f.active_contracts },
+        ready: |_| true,
         guided: true,
         done: Done::Event(|e| matches!(
             e,
@@ -337,42 +336,36 @@ pub const STEPS: &[Step] = &[
             f.has_stock && !f.active_contracts && f.flown == 0
                 && f.pending_bid.is_none() && f.lost_last
         },
+        ready: |_| true,
         guided: true,
-        done: Done::Event(|e| matches!(e, GameEvent::BidPlaced { .. })),
+        // A new bid moves on; so does a win on a bid still open.
+        done: Done::Event(|e| matches!(
+            e, GameEvent::BidPlaced { .. } | GameEvent::ContractAwarded { .. }
+        )),
     },
     Step {
         id: StepId::Launch,
         text: text!(StepId::Launch),
         tab: "Launches", key: "L",
         explain: &[
-            "You have a contract and a rocket. On the Launches tab",
-            "select the rocket and press L; the manifest lets you",
-            "pick the contract it flies. The flight resolves at once,",
-            "and every hidden flaw gets its chance to fire.",
+            "You won. On the Launches tab select the rocket and",
+            "press L: the launch manifest opens. Move to your",
+            "contract and press Space so it shows [✓] — that puts",
+            "the payload on the rocket. An empty manifest flies a",
+            "test mass and earns nothing. Enter launches.",
+            "The result comes at once, and every hidden flaw gets",
+            "its chance to fire. A success pays when the payload",
+            "arrives; a failure names the flaw, which testing and a",
+            "revision (R on the Rockets tab) fix before the next one.",
         ],
         applies: |g| { let f = facts(g); f.has_stock && f.active_contracts },
+        ready: |g| { let f = facts(g); f.has_stock && f.active_contracts },
         guided: true,
-        done: Done::Event(|e| matches!(
-            e,
-            GameEvent::LaunchSuccess { .. }
-            | GameEvent::LaunchPartialFailure { .. }
-            | GameEvent::LaunchFailure { .. }
-        )),
-    },
-    Step {
-        id: StepId::ReadOutcome,
-        text: text!(StepId::ReadOutcome),
-        tab: "Launches", key: "Enter",
-        explain: &[
-            "Read the result. A success pays on arrival; a failure",
-            "names the flaw that caused it, which testing and a",
-            "revision (R on the Rockets tab) fix before the next",
-            "flight. Either way you have flown a customer's payload,",
-            "and reputation follows.",
-        ],
-        applies: |_| false,
-        guided: true,
-        done: Done::Ui,
+        // A launch happens in a key handler, not a tick, so the record
+        // is the trigger — a *contract's* record, since a test-mass
+        // flight is not the step; the popup waits for the result modal
+        // to close.
+        done: Done::State(|g| facts(g).flown_contract),
     },
     Step {
         id: StepId::Graduate,
@@ -394,6 +387,7 @@ pub const STEPS: &[Step] = &[
                 && g.player_company.bid_rules.is_empty()
                 && g.player_company.auto_build_targets.is_empty()
         },
+        ready: |_| true,
         guided: true,
         done: Done::Ui,
     },
@@ -529,9 +523,8 @@ mod tests {
         let ids: Vec<StepId> = guided_steps().map(|s| s.id).collect();
         assert_eq!(ids, vec![
             StepId::FirstEngine, StepId::SecondEngine, StepId::DesignRocket,
-            StepId::HireManufacturing, StepId::OrderBuild, StepId::PickSolicitation,
-            StepId::PlaceBid, StepId::AwaitAward, StepId::LostBid, StepId::Launch,
-            StepId::ReadOutcome, StepId::Graduate,
+            StepId::HireManufacturing, StepId::OrderBuild, StepId::PlaceBid, StepId::AwaitAward, StepId::LostBid, StepId::Launch,
+            StepId::Graduate,
         ]);
         for s in STEPS {
             assert_eq!(step(s.id).id, s.id);

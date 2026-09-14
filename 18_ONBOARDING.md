@@ -50,13 +50,11 @@ guide walks the same table. Steps added for the bidding arc:
 
 | id | line | done when |
 |---|---|---|
-| PickSolicitation | Find a solicitation your rocket can lift and open it with B | a `BidEntry` was opened (event-free: `player_bid` set on any contract, or the guide sees the modal open) |
-| PlaceBid | Bid a little above your marginal cost; the customer's budget is hidden | a `BidPlaced` event |
+| PlaceBid | Bid on a contract: find a solicitation your rocket can lift, press B, price it from the modal's cost and suggestion | a `BidPlaced` event |
 | AwaitAward | Wait for the bid date — the clock runs, the award is sealed | `ContractAwarded`, `ContractAwardedToCompetitor` (with a player bid) or `BidRejected` fires |
 | LostBid (branch) | You lost — Award History (H) shows the winning price; bid again nearer it | next `BidPlaced` |
-| Launch | Launch the contract from the Launches tab | a launch record exists |
-| ReadOutcome | Read the result: payment, or the flaw that ended the flight | any key on the launch result |
-| Graduate | Standing bid rules (R) and auto-build (M) do this for you from now on | the player opens the bid-rules modal, or three days pass |
+| Launch | Launch the contract from the Launches tab; read the result | a launch record for a contract exists (the popup waits for the result modal to close) |
+| Graduate | Standing bid rules (R) and auto-build (m) do this for you from now on | closing its popup ends the guide |
 
 The explanation text lives in the table next to the line it expands,
 so it cannot go stale on its own.
@@ -220,6 +218,71 @@ loss branch taken when the bot's first bid loses (pick a seed where it
 does) and skipped when it wins; an unguided game never enters the
 modal; a guided save reloads at the same step. Gate: render smoke
 (every guide popup), full tests, clippy.
+
+**Step 4 record.** `guide.rs` (game level): `StepId` moved here from
+`next_steps.rs`, and `GuideState { current, ready }` on
+`GameState::guide` (`#[serde(default)]`; `None` = unguided, stopped or
+graduated). `ui/guide.rs`: `next_after(id, won)` is the path (the
+award branch, the `LostBid → AwaitAward` loop, `Graduate` ends it);
+`App::guide_observe(events)` checks the current step's `Done` and
+sets `ready` to the next step *not already achieved* (a player who
+did two things in one go is not shown the popup for the second);
+`guide_ui_done(id)` is the hook the bid-modal opener and the
+launch-result dismissal call; `guide_maybe_popup` shows the owed popup
+only when no other modal is open, pauses the clock and leaves it
+paused (Q3); Esc opens "Stop the guide?" and Y clears it. `Launch`
+became a state trigger (a launch record exists) because launching
+happens in a key handler, not a tick; a hand-placed bid's event is fed
+to the guide from the Place Bid handler for the same reason. The
+main loop's per-day block is `App::tick()` so tests can drive it. The
+guide's first popup carries the orientation paragraphs (shared with
+the intro) and the first step. The new-game screen gained "Guided
+start: [Yes] No", toggled with ←/→ or Tab, default Yes only when there
+are no saved games (Q1). Tests: an unguided game never shows the
+guide; the bot walks a guided game on twelve seeds and every popup
+appears once, in path order, each naming the step just done, with
+some seeds losing their first bid and some winning; steps done out of
+order are skipped and the clock stays paused; Esc asks before
+stopping; the guide's place survives a save. Smoke renders the first,
+a middle, the graduation and the stop popups at both widths. Oracle
+byte-identical, 654 tests, clippy clean.
+
+**Step 4 revision** (playtest: the popups ran ahead of the game). A
+popup fired when the previous step was *achieved*, so "design a
+rocket" came the moment the second engine project existed and "hire
+manufacturing" the moment the rocket project did. Each step now has a
+`ready` predicate the popup waits for: the rocket design waits until
+both engines have left In Design (the Overview's rule for that line
+agrees), the manufacturing hire until the rocket has, the bid until a
+rocket is *built* (ordering is no longer the build step's completion),
+and the launch until there is a contract and a rocket. The
+second-engine step still follows the first at once, since starting
+both in parallel is what the explanation and the bot do. An owed
+popup whose step the player already did is skipped at popup time as
+well. `ReadOutcome` folded into `Launch` (its paragraph now covers
+reading the result; the popup after a launch waits for the result
+modal to close anyway), and `Launch` completes on a *contract's*
+launch record, since the bot's test-mass flight had been satisfying
+it. The bot walk on twelve seeds then exposed one more real case:
+several bids open at once, so a win can arrive while the guide is on
+the lost-bid step — that step now accepts an award too and branches
+to the launch. New tests: popups wait for readiness; the bid step
+waits for a built rocket. 655 tests, clippy clean, oracle
+byte-identical.
+
+**Step 4 revision 2** (playtest: the pricing popup duplicated the bid
+one). Pressing B completed "pick a solicitation", but the "bid above
+marginal cost" popup could not show while the Place Bid modal was
+open, so it arrived after the bid was in — and the bid's own event
+was lost in the gap. The two steps are one, `PlaceBid` ("Bid on a
+contract"), whose paragraph covers picking the row and reading the
+modal, complete on the `BidPlaced` event; the modal already teaches
+the price. The `guide_ui_done` hook went with it: every step is now
+observed from the game state or the day's events, and `Done::Ui`
+remains only as the graduation popup's "nothing to observe". The
+launch step's paragraph, which follows a win, now says outright that
+the contract has to be put on the rocket in the manifest with Space
+(`[✓]`) before Enter, and that an empty manifest is a test flight.
 
 ## 3. Questions for you
 

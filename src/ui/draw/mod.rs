@@ -316,6 +316,8 @@ pub(super) fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
         format!(" {} ", msg)
     } else if matches!(app.input_mode, InputMode::Help { .. } | InputMode::Intro) {
         " Any key closes this ".to_string()
+    } else if matches!(app.input_mode, InputMode::Guide { .. }) {
+        " Any key closes this — the clock stays paused  [Esc] Stop the guide ".to_string()
     } else if !matches!(app.input_mode, InputMode::Normal) {
         " [Enter] Confirm  [Esc] Cancel  [↑↓] Select ".to_string()
     } else {

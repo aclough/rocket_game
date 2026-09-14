@@ -125,6 +125,14 @@ fn modes(app: &App, bid_basis: crate::game_state::BidBasis) -> Vec<(&'static str
         ("help", InputMode::Help { tab: Tab::Overview }),
         ("designer help", InputMode::designer_with(state(), DesignerSubMode::Help)),
         ("intro", InputMode::Intro),
+        ("guide first", InputMode::Guide { achieved: None, next: crate::guide::StepId::FirstEngine }),
+        ("guide step", InputMode::Guide {
+            achieved: Some(crate::guide::StepId::PlaceBid), next: crate::guide::StepId::AwaitAward,
+        }),
+        ("guide graduate", InputMode::Guide {
+            achieved: Some(crate::guide::StepId::Launch), next: crate::guide::StepId::Graduate,
+        }),
+        ("guide stop", InputMode::GuideStop { achieved: None, next: crate::guide::StepId::FirstEngine }),
         ("engine editor", InputMode::EngineEditor { project_id: epid, cursor: 1, state: None }),
         ("engine editor from designer", InputMode::EngineEditor { project_id: epid, cursor: 1, state: Some(state()) }),
         ("engine name", InputMode::EngineEditorField {

@@ -5,6 +5,7 @@ pub mod next_steps;
 pub mod text_field;
 mod designer;
 mod editors;
+mod guide;
 mod modals;
 mod planner;
 mod tabs;
@@ -13,6 +14,7 @@ mod render_smoke;
 
 use cursor::{clamp_cursor, cursor_down, cursor_up};
 
+pub use guide::next_after;
 pub use designer::{DesignerMode, DesignerSubMode, EnginePick, PickSlot, RocketDesignerState};
 pub use planner::{DvPlannerState, PlanAction, PlannerSetupField, PlannerSetupState, PlannerSource};
 
@@ -28,6 +30,7 @@ use ratatui::prelude::*;
 use crate::engine::{EngineCycle, EngineDesign};
 use crate::engine_project::{EngineDesignStatus, EngineSource, PropellantPreset};
 use crate::game_state::{GameSpeed, GameState};
+use crate::guide::StepId;
 use crate::location::DELTA_V_MAP;
 use crate::project::{ProjectKind, ProjectRef};
 use crate::rocket_project::RocketDesignStatus;
@@ -167,6 +170,11 @@ pub enum InputMode {
     /// Keybinding reference for the tab that was open. (The designer's
     /// help is `RocketDesigner { sub: Help }`.)
     Help { tab: Tab },
+    /// The guided start's popup: the step just done (none on the very
+    /// first) and the one being introduced.
+    Guide { achieved: Option<StepId>, next: StepId },
+    /// "Stop the guide?" — Y stops, anything else returns to the popup.
+    GuideStop { achieved: Option<StepId>, next: StepId },
     /// One-screen orientation, shown once at the start of a new game.
     /// Dismissed by any key and never shown again — it is not stored in
     /// the save, so it cannot reappear on load.
@@ -399,7 +407,11 @@ impl App {
     /// company; loading a save skips it.
     pub fn new_game(game: GameState) -> Self {
         let mut app = App::new(game);
-        app.input_mode = InputMode::Intro;
+        app.input_mode = match app.game.guide {
+            // The guide's first popup carries the orientation itself.
+            Some(g) => InputMode::Guide { achieved: None, next: g.current },
+            None => InputMode::Intro,
+        };
         app.game.speed = GameSpeed::Paused;
         app
     }
@@ -492,37 +504,7 @@ impl App {
 
             // Auto-advance when not paused
             if self.game.speed != GameSpeed::Paused && last_tick.elapsed() >= tick_rate {
-                let day_events = self.game.advance_day();
-
-                // Autosave at the top of each month. Saves are ~0.2 MB
-                // at eight game-years and the log is ring-buffered, so
-                // a monthly write costs nothing worth counting.
-                if day_events.iter().any(|e| matches!(
-                    e, crate::event::GameEvent::MonthStart,
-                )) {
-                    self.autosave();
-                }
-
-                // Switch to Events tab on critical events
-                if day_events.iter().any(|e| e.importance() == crate::event::EventImportance::Critical) {
-                    self.active_tab = Tab::Events;
-                }
-                // A liftable program announcement already paused the
-                // game; open the programs modal on it so the block-bid
-                // decision is one keypress away.
-                if matches!(self.input_mode, InputMode::Normal) {
-                    if let Some(crate::event::GameEvent::CampaignAnnounced { program, .. }) =
-                        day_events.iter().find(|e| matches!(
-                            e,
-                            crate::event::GameEvent::CampaignAnnounced { liftable: true, .. },
-                        ))
-                    {
-                        let selected = self.game.active_campaigns.iter()
-                            .position(|c| c.name == *program)
-                            .unwrap_or(0);
-                        self.enter_modal(InputMode::Campaigns { selected });
-                    }
-                }
+                self.tick();
                 last_tick = Instant::now();
             }
         }
@@ -530,7 +512,53 @@ impl App {
         Ok(())
     }
 
+    /// One game day and everything the UI does with it: the monthly
+    /// autosave, the jump to the Events tab on critical news, the
+    /// programs modal on a liftable announcement, and the guide's
+    /// bookkeeping. Public so tests can drive the loop without a
+    /// terminal.
+    pub fn tick(&mut self) {
+        let day_events = self.game.advance_day();
+
+        // Autosave at the top of each month. Saves are ~0.2 MB
+        // at eight game-years and the log is ring-buffered, so
+        // a monthly write costs nothing worth counting.
+        if day_events.iter().any(|e| matches!(
+            e, crate::event::GameEvent::MonthStart,
+        )) {
+            self.autosave();
+        }
+
+        // Switch to Events tab on critical events
+        if day_events.iter().any(|e| e.importance() == crate::event::EventImportance::Critical) {
+            self.active_tab = Tab::Events;
+        }
+        // A liftable program announcement already paused the
+        // game; open the programs modal on it so the block-bid
+        // decision is one keypress away.
+        if matches!(self.input_mode, InputMode::Normal) {
+            if let Some(crate::event::GameEvent::CampaignAnnounced { program, .. }) =
+                day_events.iter().find(|e| matches!(
+                    e,
+                    crate::event::GameEvent::CampaignAnnounced { liftable: true, .. },
+                ))
+            {
+                let selected = self.game.active_campaigns.iter()
+                    .position(|c| c.name == *program)
+                    .unwrap_or(0);
+                self.enter_modal(InputMode::Campaigns { selected });
+            }
+        }
+        self.guide_observe(&day_events);
+        self.guide_maybe_popup();
+    }
+
     fn handle_key(&mut self, key: KeyCode) {
+        self.handle_key_inner(key);
+        self.guide_after_input();
+    }
+
+    fn handle_key_inner(&mut self, key: KeyCode) {
         // Check if we're in an input mode first
         if !matches!(self.input_mode, InputMode::Normal) {
             self.handle_input_mode_key(key);

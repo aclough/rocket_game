@@ -65,6 +65,14 @@ impl App {
                 // Any key dismisses.
                 self.exit_modal();
             }
+            InputMode::Guide { achieved, next } => {
+                let (achieved, next) = (*achieved, *next);
+                self.handle_guide_key(key, achieved, next);
+            }
+            InputMode::GuideStop { achieved, next } => {
+                let (achieved, next) = (*achieved, *next);
+                self.handle_guide_stop_key(key, achieved, next);
+            }
             InputMode::ReactorEditor { .. }
             | InputMode::ReactorEditorField { .. } => {
                 let old_mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
@@ -151,6 +159,8 @@ impl App {
                             Some(bid) => {
                                 if let Some(evt) = self.game.place_bid(index, bid) {
                                     self.status_message = Some(format!("{}", evt));
+                                    // Placed by hand, so the tick never sees it.
+                                    self.guide_observe(&[evt]);
                                 } else {
                                     self.status_message = Some("Could not place bid".into());
                                 }

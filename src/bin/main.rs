@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
 use rocket_tycoon::balance_config::BalanceConfig;
 use rocket_tycoon::game_state::GameState;
+use rocket_tycoon::guide::GuideState;
 use rocket_tycoon::save;
 use rocket_tycoon::ui::cursor::{cursor_down, cursor_up};
 use rocket_tycoon::ui::text_field::{edit_text_field, FieldEdit, FieldKind};
@@ -16,7 +17,8 @@ const MAX_COMPANY_NAME_LEN: usize = 30;
 
 enum StartupState {
     Menu,
-    NameInput,
+    /// Company name, and whether to start guided (18_ONBOARDING.md).
+    NameInput { guided: bool },
 }
 
 fn main() -> io::Result<()> {
@@ -68,7 +70,7 @@ fn startup_loop(terminal: &mut Tui, balance: BalanceConfig) -> io::Result<(GameS
 
         terminal.draw(|frame| match &state {
             StartupState::Menu => draw_menu(frame, &saves, selected),
-            StartupState::NameInput => draw_name_input(frame, &company_name),
+            StartupState::NameInput { guided } => draw_name_input(frame, &company_name, *guided),
         })?;
 
         if let Event::Key(key) = event::read()? {
@@ -84,9 +86,12 @@ fn startup_loop(terminal: &mut Tui, balance: BalanceConfig) -> io::Result<(GameS
                     KeyCode::Down => cursor_down(&mut selected, menu_len),
                     KeyCode::Enter => {
                         if selected == 0 {
-                            // New Game
+                            // New Game. The guide is on by default for
+                            // someone with no saves yet — the player it
+                            // is for is the one who would not know to
+                            // turn it on.
                             company_name.clear();
-                            state = StartupState::NameInput;
+                            state = StartupState::NameInput { guided: saves.is_empty() };
                         } else {
                             // Load saved game
                             let idx = selected - 1;
@@ -98,7 +103,10 @@ fn startup_loop(terminal: &mut Tui, balance: BalanceConfig) -> io::Result<(GameS
                     }
                     _ => {}
                 },
-                StartupState::NameInput => match key.code {
+                StartupState::NameInput { guided } => match key.code {
+                    KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                        state = StartupState::NameInput { guided: !*guided };
+                    }
                     KeyCode::Char(_) if company_name.len() >= MAX_COMPANY_NAME_LEN => {}
                     code => match edit_text_field(code, &mut company_name, FieldKind::Text) {
                         FieldEdit::Continue => {}
@@ -109,7 +117,11 @@ fn startup_loop(terminal: &mut Tui, balance: BalanceConfig) -> io::Result<(GameS
                                 company_name.trim().to_string()
                             };
                             let seed: u64 = rand::random();
-                            return Ok((GameState::with_balance(name, seed, balance), true));
+                            let mut game = GameState::with_balance(name, seed, balance);
+                            if *guided {
+                                game.guide = Some(GuideState::start());
+                            }
+                            return Ok((game, true));
                         }
                         FieldEdit::Cancel => {
                             state = StartupState::Menu;
@@ -190,10 +202,10 @@ fn draw_menu(frame: &mut Frame, saves: &[(String, std::path::PathBuf)], selected
     }
 }
 
-fn draw_name_input(frame: &mut Frame, name: &str) {
+fn draw_name_input(frame: &mut Frame, name: &str, guided: bool) {
     let area = frame.area();
 
-    let content_width = 40u16;
+    let content_width = 44u16;
     let content_height = 5u16;
     let x = area.width.saturating_sub(content_width) / 2;
     let y = area.height.saturating_sub(content_height) / 3;
@@ -203,6 +215,7 @@ fn draw_name_input(frame: &mut Frame, name: &str) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // label + input
+            Constraint::Length(1), // guided toggle
             Constraint::Length(1), // blank
             Constraint::Length(1), // hint
         ])
@@ -212,7 +225,12 @@ fn draw_name_input(frame: &mut Frame, name: &str) {
     let input = Paragraph::new(input_text).style(Style::default().fg(Color::White));
     frame.render_widget(input, chunks[0]);
 
+    let (yes, no) = if guided { ("[Yes]", " No ") } else { (" Yes ", "[No]") };
+    let toggle = Paragraph::new(format!("Guided start: {yes} {no}   (←/→ toggles)"))
+        .style(Style::default().fg(Color::White));
+    frame.render_widget(toggle, chunks[1]);
+
     let hint = Paragraph::new("[Enter] Start  [Esc] Back")
         .style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(hint, chunks[2]);
+    frame.render_widget(hint, chunks[3]);
 }
