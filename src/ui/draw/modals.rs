@@ -131,24 +131,36 @@ pub(super) fn draw_guide_modal(
     screen: Rect,
 ) {
     use crate::ui::next_steps::step;
+    // The box is 68 wide with a border each side; two spaces of indent
+    // and a tick or nothing leave this much for wrapped text.
+    const TEXT_WIDTH: usize = 62;
     let mut lines: Vec<Line<'static>> = Vec::new();
     match achieved {
         None => lines.extend(orientation_lines(app)),
         Some(done) => {
+            // What was done is the quiet part: grey text, one green tick.
             lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("  ✓ ", Style::default().fg(Color::Green)),
-                Span::styled((step(done).text)(&app.game), Style::default().fg(Color::Green)),
-            ]));
+            let done_text = (step(done).text)(&app.game);
+            for (i, l) in wrap_words(&done_text, TEXT_WIDTH - 2).into_iter().enumerate() {
+                lines.push(Line::from(vec![
+                    Span::styled(if i == 0 { "  ✓ " } else { "    " }, Style::default().fg(Color::Green)),
+                    Span::styled(l, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
             lines.push(Line::from(""));
         }
     }
+    // The new task is the loud part: a small heading, then its name in
+    // the modal accent, wrapped so a long one never runs off the box.
     let s = step(next);
-    let heading = if next == crate::guide::StepId::Graduate { "  Finally: " } else { "  Next: " };
-    lines.push(Line::from(vec![
-        Span::styled(heading, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::styled((s.text)(&app.game), Style::default().add_modifier(Modifier::BOLD)),
-    ]));
+    let heading = if next == crate::guide::StepId::Graduate { "  FINALLY" } else { "  NEXT" };
+    lines.push(Line::from(Span::styled(heading, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+    for l in wrap_words(&(s.text)(&app.game), TEXT_WIDTH) {
+        lines.push(Line::from(Span::styled(
+            format!("  {l}"),
+            Style::default().fg(MODAL_ACCENT).add_modifier(Modifier::BOLD),
+        )));
+    }
     lines.push(Line::from(""));
     for l in s.explain {
         lines.push(Line::from(format!("  {l}")));

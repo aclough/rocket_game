@@ -112,3 +112,41 @@ pub(super) fn render_gauges(
         frame.render_widget(gauge, gauge_area);
     }
 }
+
+/// Break `text` into lines no wider than `width` characters at word
+/// boundaries (a single word longer than `width` stands alone). For
+/// modal text that is composed at runtime and cannot be pre-wrapped.
+pub(super) fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let need = if line.is_empty() { word.chars().count() } else { line.chars().count() + 1 + word.chars().count() };
+        if !line.is_empty() && need > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::wrap_words;
+
+    #[test]
+    fn wraps_at_words_and_never_past_the_width() {
+        let text = "Design a second engine for the upper stage (a different propellant flies higher)";
+        let lines = wrap_words(text, 30);
+        assert!(lines.iter().all(|l| l.chars().count() <= 30), "{lines:?}");
+        assert_eq!(lines.join(" "), text, "nothing lost, nothing added");
+        assert_eq!(wrap_words("", 10), vec![String::new()]);
+        assert_eq!(wrap_words("supercalifragilistic", 5), vec!["supercalifragilistic".to_string()]);
+    }
+}

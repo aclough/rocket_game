@@ -287,3 +287,22 @@ fn designer_sub_modals_draw_over_the_designer() {
     app.input_mode = InputMode::EngineEditor { project_id: epid, cursor: 0, state: None };
     assert!(!render(&app, 120, 40).contains(title));
 }
+
+/// Every guide popup shows the whole of the step's name — the long ones
+/// wrap instead of running off the box — at 80 columns as well as 120.
+#[test]
+fn guide_titles_wrap_instead_of_overflowing() {
+    use crate::guide::StepId;
+    use crate::ui::next_steps::guided_steps;
+    let mut app = rich_app();
+    for s in guided_steps() {
+        app.input_mode = InputMode::Guide { achieved: Some(StepId::FirstEngine), next: s.id };
+        let title = (s.text)(&app.game);
+        let last_word = title.split_whitespace().last().unwrap();
+        for (w, h) in [(80u16, 30u16), (120, 40)] {
+            let screen = render(&app, w, h);
+            assert!(screen.contains(last_word),
+                "{:?} at {w} cols: the end of {title:?} is cut off", s.id);
+        }
+    }
+}
