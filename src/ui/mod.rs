@@ -665,6 +665,11 @@ impl App {
     /// swallowing it — a player who thinks they're protected and isn't
     /// is worse off than one who knows.
     fn autosave(&mut self) {
+        // Tests drive `tick()` through whole game-years; their monthly
+        // autosaves must not land in the player's real save folder.
+        if cfg!(test) {
+            return;
+        }
         if let Err(e) = save::autosave(&self.game) {
             self.status_message = Some(format!("Autosave failed: {e}"));
         }
