@@ -214,7 +214,7 @@ pub(super) fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_sty
         for s in &steps {
             lines.push(Line::from(vec![
                 Span::styled("    → ", Style::default().fg(Color::Cyan)),
-                Span::raw(s.text.clone()),
+                Span::raw((s.text)(game)),
                 Span::styled(
                     format!("  ({} tab, [{}])", s.tab, s.key),
                     Style::default().fg(Color::DarkGray),

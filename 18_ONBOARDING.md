@@ -193,6 +193,24 @@ every step's explanation text; the Overview panel unchanged in
 behaviour (its tests pass as they are, plus one that every step's
 explanation fits a 68-column modal). No guide yet.
 
+**Step 3 record.** `next_steps.rs` is now `STEPS: &[Step]` with
+`StepId`, a `text` fn for the Overview line, `tab`/`key`, `explain`
+(every line ≤ 60 chars, tested), an `applies` rule, a `guided` flag
+and a `done: Done::{State, Event, Ui}` trigger for the guide. The eight
+old rules are rows (the two nags, idle teams and unrevised flaws, are
+`guided: false`); the bidding arc adds PickSolicitation, PlaceBid,
+AwaitAward, LostBid, Launch, ReadOutcome and Graduate. The Overview
+gains two dynamic lines it never had: a pending bid ("Your bid on X
+resolves DATE — let the clock run") and a lost one ("You were outbid —
+read Award History and bid again"), and a post-first-flight nudge to
+set standing bid rules that stops after the second flight so it never
+becomes a standing nag. `next_steps()` returns the applying rows;
+`guided_steps()` the path. The explanations' claims were checked
+against the code (the default engine, payment on arrival, hydrolox
+needing no technology, the designer's and tabs' keys). 649 tests
+(three new: explanations fit, the path's order, the bidding lines
+appear), clippy clean.
+
 ### Step 4 — The guide
 
 `GuideState`, the tick check, `InputMode::Guide`, the branch, the Esc
