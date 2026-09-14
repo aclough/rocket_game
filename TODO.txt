@@ -2,4 +2,5 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
 [] Better money onboarding
 [] Better solid UI
+[] History appears at the bottom of the contracts screen in unused space
 
