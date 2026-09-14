@@ -725,7 +725,10 @@ mod market_discovery_render_tests {
             player_bid: Some(150_000_000.0),
         }));
         game.award_history.push(mk("HighSat", AwardOutcome::PlayerRejected {
-            bid: 400_000_000.0,
+            bid: 400_000_000.0, ceiling: 300_000_000.0,
+        }));
+        game.award_history.push(mk("GhostSat", AwardOutcome::Lapsed {
+            ceiling: 45_000_000.0,
         }));
 
         let mut app = App::new(game);

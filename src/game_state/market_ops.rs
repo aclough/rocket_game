@@ -353,21 +353,34 @@ impl GameState {
                 None => {
                     let campaign = self.active_campaigns.remove(i);
                     if auction.player_over_ceiling {
-                        // Over budget: no award, and the customer
-                        // doesn't say what the budget was.
+                        // Over budget: no award, and with nobody paid
+                        // the customer's per-mission budget is public.
                         let record = record_outcome(
                             contract::AwardOutcome::PlayerRejected {
                                 bid: player_bid.unwrap_or(0.0),
+                                ceiling,
                             },
                             &campaign,
                         );
                         self.push_award_record(record);
                         let evt = GameEvent::CampaignBidRejected {
                             program: campaign.name.clone(),
+                            ceiling,
+                        };
+                        self.emit(events, evt);
+                    } else {
+                        // No bid at all: the program lapses with its
+                        // budget on the record.
+                        let record = record_outcome(
+                            contract::AwardOutcome::Lapsed { ceiling }, &campaign,
+                        );
+                        self.push_award_record(record);
+                        let evt = GameEvent::CampaignLapsed {
+                            program: campaign.name.clone(),
+                            ceiling,
                         };
                         self.emit(events, evt);
                     }
-                    // No bid at all: lapses without ceremony.
                 }
             }
         }
@@ -603,21 +616,36 @@ impl GameState {
                     self.emit(events, evt);
                 }
                 None if auction.player_over_ceiling => {
-                    // Over budget: no award, and the customer doesn't
-                    // say what the budget was.
+                    // Over budget: no award, and with nobody paid the
+                    // customer's budget becomes public.
                     let record = record_outcome(
                         contract::AwardOutcome::PlayerRejected {
                             bid: c.player_bid.unwrap_or(0.0),
+                            ceiling: c.budget_ceiling,
                         },
                         &c,
                     );
                     self.push_award_record(record);
                     let evt = GameEvent::BidRejected {
                         contract_name: c.name.clone(),
+                        ceiling: c.budget_ceiling,
                     };
                     self.emit(events, evt);
                 }
-                None => {} // No valid bids: lapses without ceremony.
+                None => {
+                    // No valid bids: the mission lapses, and its budget
+                    // goes on the record so the player learns what work
+                    // they could not (yet) fly would have paid.
+                    let record = record_outcome(
+                        contract::AwardOutcome::Lapsed { ceiling: c.budget_ceiling }, &c,
+                    );
+                    self.push_award_record(record);
+                    let evt = GameEvent::SolicitationLapsed {
+                        contract_name: c.name.clone(),
+                        ceiling: c.budget_ceiling,
+                    };
+                    self.emit(events, evt);
+                }
             }
         }
     }

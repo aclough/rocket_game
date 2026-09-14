@@ -146,7 +146,10 @@ fn bid_over_ceiling_is_rejected() {
         let ran_on = gs.date;
         for e in gs.advance_day() {
             match e {
-                GameEvent::BidRejected { contract_name } if contract_name == name => rejected = true,
+                GameEvent::BidRejected { contract_name, ceiling: told } if contract_name == name => {
+                    rejected = true;
+                    assert_eq!(told, ceiling, "the rejection discloses the customer's budget");
+                }
                 GameEvent::ContractAwarded { contract_name, .. } if contract_name == name => awarded = true,
                 _ => {}
             }
@@ -422,4 +425,40 @@ fn legacy_market_min_reputation_alias_loads() {
     );
     assert_eq!(reloaded.id, market.id);
     assert_eq!(reloaded.name, market.name);
+}
+
+/// A solicitation nobody bids on lapses into the award history with
+/// the customer's budget, so the player learns what a mission they
+/// could not fly would have paid.
+#[test]
+fn an_unbid_solicitation_lapses_with_its_budget_on_the_record() {
+    use rocket_tycoon::contract::AwardOutcome;
+    let mut gs = GameState::with_balance("Test".into(), 5, solo_balance());
+    let idx = advance_to_first_solicitation(&mut gs, 40);
+    let id = gs.available_contracts[idx].id;
+    let name = gs.available_contracts[idx].name.clone();
+    let ceiling = gs.available_contracts[idx].budget_ceiling;
+    let deadline = gs.available_contracts[idx].bid_deadline.expect("a solicitation");
+
+    let mut lapsed = false;
+    loop {
+        let ran_on = gs.date;
+        for e in gs.advance_day() {
+            if let GameEvent::SolicitationLapsed { contract_name, ceiling: told } = e {
+                if contract_name == name {
+                    lapsed = true;
+                    assert_eq!(told, ceiling);
+                }
+            }
+        }
+        if ran_on > deadline {
+            break;
+        }
+    }
+    assert!(lapsed, "the lapse should be announced");
+    assert!(!gs.available_contracts.iter().any(|c| c.id == id), "the contract is gone");
+    let record = gs.award_history.iter()
+        .find(|r| r.contract_name == name && matches!(r.outcome, AwardOutcome::Lapsed { .. }))
+        .expect("the lapse is on the record");
+    assert!(matches!(record.outcome, AwardOutcome::Lapsed { ceiling: c } if c == ceiling));
 }

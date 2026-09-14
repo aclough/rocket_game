@@ -266,9 +266,17 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                             ),
                         }
                     }
-                    crate::contract::AwardOutcome::PlayerRejected { bid } => (
-                        format!("over budget (bid {})", format_money(*bid)),
+                    crate::contract::AwardOutcome::PlayerRejected { bid, ceiling } => (
+                        if *ceiling > 0.0 {
+                            format!("over budget {} (you {})", format_money(*ceiling), format_money(*bid))
+                        } else {
+                            format!("over budget (you {})", format_money(*bid))
+                        },
                         Color::Yellow,
+                    ),
+                    crate::contract::AwardOutcome::Lapsed { ceiling } => (
+                        format!("no bids, budget {}", format_money(*ceiling)),
+                        Color::DarkGray,
                     ),
                 };
                 // Campaign block awards: amounts are per mission, so

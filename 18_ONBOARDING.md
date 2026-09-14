@@ -170,6 +170,22 @@ Save corpus loads (old `PlayerRejected` records default the ceiling).
 Gate: save_compat, full tests, clippy; 200-seed bands run once to
 confirm no drift (expected identical: the bot ignores the record).
 
+**Step 2 record.** `AwardOutcome::PlayerRejected { bid, ceiling }`
+(ceiling `#[serde(default)]`, drawn as "over budget (you $X)" when an
+old record has none) and `AwardOutcome::Lapsed { ceiling }`; the
+`BidRejected` and `CampaignBidRejected` events carry the ceiling and
+say "…the customer's budget of $Z", and new `SolicitationLapsed` /
+`CampaignLapsed` events (Routine importance: every market closes unbid
+solicitations monthly) announce a lapse with its budget. Both the
+solicitation and the program auctions record every lapse (Q2). Award
+History shows "over budget $Z (you $X)" and "no bids, budget $Z".
+Tests: the over-ceiling bid's event and record carry the contract's
+ceiling; an unbid solicitation lapses into the history with its
+budget; the history render fixture gained a lapsed row. Save corpus
+loads (old `PlayerRejected` records and `BidRejected` log entries
+default the ceiling). Oracle byte-identical; 200-seed bands unchanged.
+646 tests, clippy clean.
+
 ### Step 3 — The step table
 
 `next_steps.rs` restructured as in 1.1 with the new bidding steps and

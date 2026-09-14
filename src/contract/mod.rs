@@ -113,9 +113,18 @@ pub enum AwardOutcome {
     /// A competitor won; the price is public news. `player_bid` is
     /// set when the player bid and lost.
     CompetitorWon { company: String, amount: f64, player_bid: Option<f64> },
-    /// The player's bid exceeded the (undisclosed) budget and nobody
-    /// else won. Only the player's own bid is knowable.
-    PlayerRejected { bid: f64 },
+    /// The player's bid exceeded the budget and nobody else won. With
+    /// no award the customer's budget is public; `ceiling` is 0.0 on
+    /// records from before it was recorded.
+    PlayerRejected {
+        bid: f64,
+        #[serde(default)]
+        ceiling: f64,
+    },
+    /// Nobody bid. The customer's budget is public once the window
+    /// closes, so a mission the player could not fly still says what
+    /// it would have paid.
+    Lapsed { ceiling: f64 },
 }
 
 /// Get the display name for a location ID.

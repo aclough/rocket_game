@@ -138,7 +138,7 @@ fn assert_year1_reference_bid_wins(seed: u64) {
                 GameEvent::ContractAwardedToCompetitor { contract_name, company, .. }
                     if contract_name == name =>
                     panic!("seed {seed}: {company} took the floor contract {contract_name}"),
-                GameEvent::BidRejected { contract_name }
+                GameEvent::BidRejected { contract_name, .. }
                     if contract_name == name =>
                     panic!("seed {seed}: reference bid on {contract_name} was rejected"),
                 _ => {}

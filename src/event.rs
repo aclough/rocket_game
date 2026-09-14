@@ -35,7 +35,15 @@ pub enum GameEvent {
     ContractExpired { contract_name: String },
     BidPlaced { contract_name: String, amount: f64 },
     ContractAwarded { contract_name: String, amount: f64 },
-    BidRejected { contract_name: String },
+    BidRejected {
+        contract_name: String,
+        /// The customer's budget, disclosed once nobody won; 0.0 in
+        /// logs from before it was recorded.
+        #[serde(default)]
+        ceiling: f64,
+    },
+    /// A solicitation closed with no bids from anyone.
+    SolicitationLapsed { contract_name: String, ceiling: f64 },
     /// A competitor won the award. The winning price is public
     /// market news — losing teaches the player the going rate.
     ContractAwardedToCompetitor {
@@ -90,7 +98,13 @@ pub enum GameEvent {
     CampaignAwarded { program: String, amount: f64, missions: u32 },
     /// The player's block bid exceeded the customer's (undisclosed)
     /// budget and the program found no launcher — it lapses.
-    CampaignBidRejected { program: String },
+    CampaignBidRejected {
+        program: String,
+        #[serde(default)]
+        ceiling: f64,
+    },
+    /// A program closed with no block bids from anyone.
+    CampaignLapsed { program: String, ceiling: f64 },
     /// A competitor won the whole program. The per-mission price is
     /// public market news; `player_bid` is set when the player bid
     /// and lost.
@@ -216,8 +230,16 @@ impl fmt::Display for GameEvent {
                 write!(f, "Bid placed: {} at {}", contract_name, crate::resources::format_money(*amount)),
             GameEvent::ContractAwarded { contract_name, amount } =>
                 write!(f, "Contract awarded: {} at {}", contract_name, crate::resources::format_money(*amount)),
-            GameEvent::BidRejected { contract_name } =>
-                write!(f, "No award on {}: the bid exceeded the customer's budget", contract_name),
+            GameEvent::BidRejected { contract_name, ceiling } => {
+                write!(f, "No award on {}: the bid exceeded the customer's budget", contract_name)?;
+                if *ceiling > 0.0 {
+                    write!(f, " of {}", crate::resources::format_money(*ceiling))?;
+                }
+                Ok(())
+            }
+            GameEvent::SolicitationLapsed { contract_name, ceiling } =>
+                write!(f, "No bids on {}: the customer's budget was {}",
+                    contract_name, crate::resources::format_money(*ceiling)),
             GameEvent::ContractAwardedToCompetitor { contract_name, company, amount, player_bid } => {
                 match player_bid {
                     Some(b) => write!(f, "Outbid: {} goes to {} at {} (you bid {})",
@@ -280,8 +302,16 @@ impl fmt::Display for GameEvent {
             GameEvent::CampaignAwarded { program, amount, missions } =>
                 write!(f, "Program won: {} at {}/mission x {}",
                     program, crate::resources::format_money(*amount), missions),
-            GameEvent::CampaignBidRejected { program } =>
-                write!(f, "No award on {}: the block bid exceeded the customer's budget", program),
+            GameEvent::CampaignBidRejected { program, ceiling } => {
+                write!(f, "No award on program {}: the block bid exceeded the customer's budget", program)?;
+                if *ceiling > 0.0 {
+                    write!(f, " of {} per mission", crate::resources::format_money(*ceiling))?;
+                }
+                Ok(())
+            }
+            GameEvent::CampaignLapsed { program, ceiling } =>
+                write!(f, "No bids on program {}: the customer's budget was {} per mission",
+                    program, crate::resources::format_money(*ceiling)),
             GameEvent::CampaignAwardedToCompetitor { program, company, amount, missions, player_bid } => {
                 match player_bid {
                     Some(b) => write!(f, "Outbid: {} program goes to {} at {}/mission x {} (you bid {})",
@@ -320,7 +350,11 @@ impl GameEvent {
     pub fn importance(&self) -> EventImportance {
         match self {
             GameEvent::MonthStart | GameEvent::SalariesPaid { .. }
-            | GameEvent::CompetitorRocketBuilt { .. } =>
+            | GameEvent::CompetitorRocketBuilt { .. }
+            // Every market's unbid solicitations close somewhere every
+            // month; the price is for the record, not the feed.
+            | GameEvent::SolicitationLapsed { .. }
+            | GameEvent::CampaignLapsed { .. } =>
                 EventImportance::Routine,
             GameEvent::ContractAwardedToCompetitor { player_bid, .. } => {
                 if player_bid.is_some() { EventImportance::Notable } else { EventImportance::Routine }
