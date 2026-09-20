@@ -109,7 +109,7 @@ impl App {
         };
         if changed {
             if let Some(s) = state.as_mut() {
-                sync_stages_to_projects(s, &self.game.player_company);
+                sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
             }
         }
     }
@@ -355,7 +355,7 @@ impl App {
                     ep.apply_edit(name, next, new_preset, scale, &self.game.balance);
                 }
                 if let Some(s) = state.as_mut() {
-                    sync_stages_to_projects(s, &self.game.player_company);
+                    sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
@@ -370,7 +370,7 @@ impl App {
                     ep.apply_edit(name, cycle, next, scale, &self.game.balance);
                 }
                 if let Some(s) = state.as_mut() {
-                    sync_stages_to_projects(s, &self.game.player_company);
+                    sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
@@ -381,7 +381,7 @@ impl App {
                 );
                 self.apply_engine_scale(project_id, new_scale);
                 if let Some(s) = state.as_mut() {
-                    sync_stages_to_projects(s, &self.game.player_company);
+                    sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }

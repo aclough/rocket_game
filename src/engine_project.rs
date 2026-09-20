@@ -4,6 +4,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::balance;
 use crate::engine::{EngineDesign, EngineCycle, EngineId, PropellantFraction, G0};
+use crate::balance_config::NozzleConfig;
 use crate::balance_config::{BalanceConfig, FlawsConfig};
 use crate::flaw::FlawDomain;
 use crate::project::{DesignProject, DesignStatus, Designable, Direction, Improvement, ImprovementId, ProjectKind, ProjectRef};
@@ -111,24 +112,26 @@ impl PropellantPreset {
 
 /// Baseline engine parameters for a (cycle, propellant) combination at scale 1.0.
 ///
-/// These represent realistic-ish performance inspired by real engines.
-/// Thrust and mass scale linearly with the scale factor.
-/// Isp is fixed (doesn't change with scale).
+/// Realistic-ish figures inspired by real engines. Thrust and mass scale
+/// linearly with the scale factor; Isp does not. The nozzle is not on
+/// the baseline: `design` derives the sea-level bell from the chamber
+/// pressure (19_NOZZLES.md §2) and `EngineDesign::with_vacuum_bell`
+/// the long one from the throat that thrust and chamber pressure imply.
 #[derive(Debug, Clone, Copy)]
 pub struct EngineBaseline {
-    /// Baseline thrust in Newtons at scale 1.0.
+    /// Vacuum thrust of the sea-level bell at scale 1.0 (N).
     pub thrust_n: f64,
-    /// Baseline mass in kg at scale 1.0.
+    /// Mass at scale 1.0 with the sea-level bell (kg).
     pub mass_kg: f64,
-    /// Specific impulse in seconds (vacuum).
-    pub isp_vac_s: f64,
-    /// Specific impulse in seconds (sea level, if applicable).
-    pub isp_sl_s: f64,
-    /// Exit pressure in Pa when optimized for vacuum.
-    pub exit_pressure_vac_pa: f64,
-    /// Exit pressure in Pa when optimized for sea level.
-    pub exit_pressure_sl_pa: f64,
-    /// If true, this engine can only be built in vacuum configuration.
+    /// Vacuum Isp of the *sea-level* bell (s): the recognisable figure
+    /// (kerolox ~311, hydrolox ~420). The pad figure and the vacuum
+    /// bell's are derived from it. 0 for a sail.
+    pub isp_ref_s: f64,
+    /// Chamber pressure (Pa); 0 for engines without a nozzle.
+    pub chamber_pressure_pa: f64,
+    /// Exhaust heat-capacity ratio; 0 for engines without a nozzle.
+    pub gamma: f64,
+    /// If true, this engine only exists in vacuum configuration.
     pub vacuum_only: bool,
     /// Electrical power draw at full thrust (watts). 0 for everything
     /// except `ElectricPropulsion`.
@@ -136,28 +139,99 @@ pub struct EngineBaseline {
 }
 
 impl EngineBaseline {
-    /// The engine this baseline yields at `scale`, with the sea-level or
-    /// vacuum nozzle. Baselines that only exist in vacuum ignore
-    /// `vacuum` and always give the vacuum form.
+    /// The engine this baseline yields at `scale`, with the sea-level
+    /// bell (expanded to `cfg.sea_level_exit_pressure_pa`) or, when
+    /// `vacuum` or the baseline is vacuum-only, the long bell.
+    #[allow(clippy::too_many_arguments)]
     pub fn design(
         &self, id: EngineId, name: String, cycle: EngineCycle, preset: PropellantPreset,
-        scale: f64, vacuum: bool,
+        scale: f64, vacuum: bool, cfg: &NozzleConfig,
     ) -> EngineDesign {
-        let use_vacuum = self.vacuum_only || vacuum;
-        EngineDesign {
+        let mut design = EngineDesign {
             id,
             name,
             cycle,
             thrust_n: self.thrust_n * scale,
             mass_kg: self.mass_kg * scale,
-            isp_s: if use_vacuum { self.isp_vac_s } else { self.isp_sl_s },
-            exit_pressure_pa: if use_vacuum { self.exit_pressure_vac_pa } else { self.exit_pressure_sl_pa },
-            needs_atmosphere: !use_vacuum,
+            isp_s: self.isp_ref_s,
+            exit_pressure_pa: 0.0,
+            needs_atmosphere: self.chamber_pressure_pa > 0.0,
             propellant_mix: preset.propellant_mix(),
             // Power draw: scales with thrust for ion drives (~30 kW/N
             // ≈ NEXT thruster ratio); 0 for everything else.
             power_draw_w: self.power_draw_w * scale,
+            chamber_pressure_pa: 0.0,
+            expansion_ratio: 0.0,
+            gamma: 0.0,
+        };
+        if self.chamber_pressure_pa > 0.0 {
+            design.set_nozzle_for_exit_pressure(
+                self.chamber_pressure_pa, cfg.sea_level_exit_pressure_pa, self.gamma,
+            );
         }
+        if self.vacuum_only || vacuum {
+            design = design.with_vacuum_bell(cfg);
+        }
+        design
+    }
+}
+
+/// Chamber pressure (Pa) of a (cycle, propellant) family, from the real
+/// engines of each kind (19_NOZZLES.md §5): Kestrel/AJ10 pressure-fed
+/// at 9–10 bar, Merlin/F-1 gas generators at 70–97, RL10/Vinci
+/// expanders at 44–60, RD-180/RS-25/BE-4 staged combustion at 134–257,
+/// Raptor full-flow at 300. Kerosene and hypergolics are poor expander
+/// coolants; those rows stay legal at low pressure. `None` for the
+/// nozzle-less kinds and for combinations that don't exist.
+pub fn chamber_pressure_pa(cycle: EngineCycle, preset: PropellantPreset) -> Option<f64> {
+    use EngineCycle as C;
+    use PropellantPreset as P;
+    let bar = match (cycle, preset) {
+        (C::PressureFed, P::Kerolox | P::Hydrolox | P::Methalox) => 15.0,
+        (C::PressureFed, P::Hypergolic) => 10.0,
+        (C::PressureFed, P::Solid) => 60.0,
+        (C::GasGenerator, P::Kerolox | P::Methalox) => 90.0,
+        (C::GasGenerator, P::Hydrolox) => 100.0,
+        (C::GasGenerator, P::Hypergolic) => 60.0,
+        (C::Expander, P::Kerolox | P::Hypergolic) => 40.0,
+        (C::Expander, P::Hydrolox | P::Methalox) => 45.0,
+        (C::StagedCombustion, P::Kerolox) => 250.0,
+        (C::StagedCombustion, P::Hydrolox) => 200.0,
+        (C::StagedCombustion, P::Methalox) => 135.0,
+        (C::StagedCombustion, P::Hypergolic) => 150.0,
+        (C::FullFlow, P::Kerolox | P::Hydrolox) => 250.0,
+        (C::FullFlow, P::Methalox) => 300.0,
+        (C::FullFlow, P::Hypergolic) => 200.0,
+        // NERVA-class: ~30 bar.
+        (C::NuclearThermal, P::Hydrogen) => 30.0,
+        _ => return None,
+    };
+    Some(bar * 100_000.0)
+}
+
+/// Heat-capacity ratio of a propellant's exhaust. Hot hydrogen (NTR)
+/// is closest to a diatomic gas; the chemical exhausts sit at 1.18–1.23.
+pub fn exhaust_gamma(preset: PropellantPreset) -> f64 {
+    match preset {
+        PropellantPreset::Kerolox => 1.22,
+        PropellantPreset::Hydrolox => 1.20,
+        PropellantPreset::Methalox => 1.21,
+        PropellantPreset::Hypergolic => 1.23,
+        PropellantPreset::Solid => 1.18,
+        PropellantPreset::Hydrogen => 1.40,
+        PropellantPreset::Xenon | PropellantPreset::Photon => 0.0,
+    }
+}
+
+/// The chamber pressure to assume for a design that predates nozzles
+/// (`save::sanitize`): its family's if the propellant mix names one,
+/// else the cycle's kerolox figure, else nothing (no nozzle).
+pub fn chamber_pressure_for_legacy(design: &EngineDesign) -> Option<(f64, f64)> {
+    let preset = preset_for_mix(&design.propellant_mix);
+    match preset {
+        Some(p) => chamber_pressure_pa(design.cycle, p).map(|pc| (pc, exhaust_gamma(p))),
+        None => chamber_pressure_pa(design.cycle, PropellantPreset::Kerolox)
+            .map(|pc| (pc, crate::engine::DEFAULT_GAMMA)),
     }
 }
 
@@ -184,6 +258,9 @@ pub fn design_has_nozzle_choice(design: &EngineDesign) -> bool {
 
 /// Get the baseline engine parameters for a (cycle, propellant) combination.
 ///
+/// Returns `None` for invalid combinations (e.g., Solid + GasGenerator,
+/// or Xenon with anything other than ElectricPropulsion).
+///
 /// These are the "middle of the range" values at scale 1.0.
 /// Inspired by real engines but simplified for gameplay.
 pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<EngineBaseline> {
@@ -198,10 +275,9 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
             // implicitly carries its own power supply (panels are
             // provisioned separately on the stage).
             mass_kg: 35.0,
-            isp_vac_s: 3000.0,           // very high Isp
-            isp_sl_s: 0.0,              // vacuum only
-            exit_pressure_vac_pa: 0.0,
-            exit_pressure_sl_pa: 0.0,    // not applicable
+            isp_ref_s: 3000.0,           // very high Isp
+            chamber_pressure_pa: 0.0,    // no nozzle the air can act on
+            gamma: 0.0,
             vacuum_only: true,
             // ~30 kW per Newton of thrust — NEXT-thruster scale.
             power_draw_w: 30_000.0,
@@ -216,10 +292,9 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         return Some(EngineBaseline {
             thrust_n: 0.01,              // 10 millinewtons at 1 AU, scale 1.0
             mass_kg: 100.0,              // sail + structure
-            isp_vac_s: 0.0,             // not meaningful for sails
-            isp_sl_s: 0.0,
-            exit_pressure_vac_pa: 0.0,
-            exit_pressure_sl_pa: 0.0,
+            isp_ref_s: 0.0,              // not meaningful for sails
+            chamber_pressure_pa: 0.0,
+            gamma: 0.0,
             vacuum_only: true,
             // Solar sails get thrust from photons, not electricity. A
             // future "magnetic sail" variant might draw power.
@@ -235,10 +310,11 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         return Some(EngineBaseline {
             thrust_n: 330_000.0,          // ~NERVA class (~73 klbf)
             mass_kg: 10_000.0,            // very heavy (reactor + shielding)
-            isp_vac_s: 850.0,             // excellent vacuum Isp
-            isp_sl_s: 0.0,               // never used at sea level
-            exit_pressure_vac_pa: 7_000.0,
-            exit_pressure_sl_pa: 7_000.0, // vacuum only
+            // Sea-level-bell reference; the vacuum bell it always flies
+            // lands near NERVA's ~850 s.
+            isp_ref_s: 785.0,
+            chamber_pressure_pa: chamber_pressure_pa(cycle, preset)?,
+            gamma: exhaust_gamma(preset),
             vacuum_only: true,
             power_draw_w: 0.0,
         });
@@ -261,23 +337,29 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         return None;
     }
 
-    // Base Isp values by propellant (vacuum), then cycle adjusts
-    let (base_isp_vac, base_isp_sl) = match preset {
-        PropellantPreset::Kerolox => (310.0, 270.0),
-        PropellantPreset::Hydrolox => (440.0, 360.0),
-        PropellantPreset::Methalox => (350.0, 305.0),
-        PropellantPreset::Hypergolic => (290.0, 255.0),
-        PropellantPreset::Solid => (265.0, 240.0),
+    // Vacuum Isp of the sea-level bell by propellant (gas-generator
+    // reference), then the cycle adjusts. Merlin 1D 311, J-2 / Vulcain
+    // class ~420, Raptor 350, AJ10-class hypergolic ~285, Castor-class
+    // solid ~285.
+    let base_isp_ref = match preset {
+        PropellantPreset::Kerolox => 311.0,
+        PropellantPreset::Hydrolox => 420.0,
+        PropellantPreset::Methalox => 350.0,
+        PropellantPreset::Hypergolic => 285.0,
+        PropellantPreset::Solid => 285.0,
         PropellantPreset::Hydrogen => unreachable!(),
         PropellantPreset::Xenon => unreachable!(),
         PropellantPreset::Photon => unreachable!(),
     };
 
-    // Cycle multipliers for Isp (relative to GasGenerator baseline)
+    // Cycle multipliers for the sea-level-bell reference Isp (relative
+    // to GasGenerator). The expander's low chamber pressure gives it a
+    // poor short bell; its long bell (the only one it flies) then gains
+    // the most, landing hydrolox at RL10's ~465 s.
     let isp_mult = match cycle {
         EngineCycle::PressureFed => 0.92,
         EngineCycle::GasGenerator => 1.00,
-        EngineCycle::Expander => 1.04,
+        EngineCycle::Expander => 0.97,
         EngineCycle::StagedCombustion => 1.06,
         EngineCycle::FullFlow => 1.08,
         EngineCycle::NuclearThermal => unreachable!(),
@@ -325,20 +407,12 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
     let thrust = base_thrust * thrust_mult;
     let mass = thrust / (twr * G0);
 
-    // Exit pressure depends on optimization:
-    // Sea-level: ~80 kPa (near-optimal at 101 kPa ambient)
-    // Vacuum: ~7 kPa (large nozzle, optimized for space)
-    // Expander cycles always vacuum (low chamber pressure)
-    let exit_pressure_sl = 80_000.0;
-    let exit_pressure_vac = 7_000.0;
-
     Some(EngineBaseline {
         thrust_n: thrust,
         mass_kg: mass,
-        isp_vac_s: base_isp_vac * isp_mult,
-        isp_sl_s: base_isp_sl * isp_mult,
-        exit_pressure_vac_pa: exit_pressure_vac,
-        exit_pressure_sl_pa: exit_pressure_sl,
+        isp_ref_s: base_isp_ref * isp_mult,
+        chamber_pressure_pa: chamber_pressure_pa(cycle, preset)?,
+        gamma: exhaust_gamma(preset),
         vacuum_only: cycle == EngineCycle::Expander,
         // Chemical engines don't draw electrical power.
         power_draw_w: 0.0,
@@ -441,7 +515,7 @@ impl EngineProject {
         // The project's own `design` holds the canonical (sea-level)
         // form of the family; `design_variant` derives the nozzle a
         // given stage actually flies.
-        let design = baseline.design(engine_id, name, cycle, preset, scale, false);
+        let design = baseline.design(engine_id, name, cycle, preset, scale, false, &balance_cfg.nozzle);
         Some(DesignProject::new_in_design(
             project_id, design, EngineSpec { preset, scale }, complexity, work_required, None,
         ))
@@ -491,7 +565,7 @@ impl EngineProject {
         let work_required = balance_cfg.work.design_work_required(effective, scale);
 
         // Preserve engine id and re-derive everything else.
-        self.design = baseline.design(self.design.id, name, cycle, preset, scale, false);
+        self.design = baseline.design(self.design.id, name, cycle, preset, scale, false, &balance_cfg.nozzle);
         self.spec = EngineSpec { preset, scale };
         self.complexity = complexity;
         self.clamp_work_after_edit(work_required);
@@ -509,22 +583,15 @@ impl EngineProject {
     ///
     /// Baselines that only exist in vacuum (electric, solar sail, NTR)
     /// ignore `vacuum` and always return the vacuum form.
-    pub fn design_variant(&self, vacuum: bool) -> EngineDesign {
-        let Some(baseline) = engine_baseline(self.design.cycle, self.spec.preset) else {
-            // No baseline (shouldn't happen for a live project) — the
-            // stored design is the best answer available.
-            return self.design.clone();
-        };
-        let use_vacuum = baseline.vacuum_only || vacuum;
-        EngineDesign {
-            isp_s: if use_vacuum { baseline.isp_vac_s } else { baseline.isp_sl_s },
-            exit_pressure_pa: if use_vacuum {
-                baseline.exit_pressure_vac_pa
-            } else {
-                baseline.exit_pressure_sl_pa
-            },
-            needs_atmosphere: !use_vacuum,
-            ..self.design.clone()
+    pub fn design_variant(&self, vacuum: bool, cfg: &NozzleConfig) -> EngineDesign {
+        // The project's design is the sea-level bell (or, for a
+        // vacuum-only family, already the long bell); improvements and
+        // deficiencies have been applied to it, so both variants carry
+        // them.
+        if vacuum && !self.design.is_vacuum_variant() {
+            self.design.with_vacuum_bell(cfg)
+        } else {
+            self.design.clone()
         }
     }
 
@@ -694,19 +761,17 @@ mod tests {
                 assert!(b.is_some(), "Missing baseline for {:?}/{:?}", cycle, preset);
                 let b = b.unwrap();
                 // Solar sails have ~0 thrust and 0 Isp; skip those assertions
-                if b.isp_vac_s > 0.0 {
+                if b.isp_ref_s > 0.0 {
                     assert!(b.thrust_n > 0.0);
                 }
                 assert!(b.mass_kg > 0.0);
                 if *cycle != EngineCycle::SolarSail {
-                    assert!(b.isp_vac_s > 0.0);
+                    assert!(b.isp_ref_s > 0.0);
                 }
-                // Nuclear thermal, electric propulsion, and solar sail have no sea-level Isp (vacuum only)
-                if *cycle != EngineCycle::NuclearThermal && *cycle != EngineCycle::ElectricPropulsion
-                    && *cycle != EngineCycle::SolarSail
-                {
-                    assert!(b.isp_sl_s > 0.0);
-                }
+                // Everything that exhausts through a bell has a chamber pressure and gamma.
+                let has_nozzle = !matches!(cycle, EngineCycle::ElectricPropulsion | EngineCycle::SolarSail);
+                assert_eq!(b.chamber_pressure_pa > 0.0, has_nozzle, "{cycle:?}/{preset:?}");
+                assert_eq!(b.gamma > 1.0, has_nozzle, "{cycle:?}/{preset:?}");
             }
         }
     }
@@ -754,16 +819,29 @@ mod tests {
         ).unwrap();
         assert!(p.has_nozzle_choice(), "a kerolox gas generator has a choice");
 
-        let vac = p.design_variant(true);
-        let sl = p.design_variant(false);
+        let cfg = crate::balance_config::NozzleConfig::default();
+        let vac = p.design_variant(true, &cfg);
+        let sl = p.design_variant(false, &cfg);
         assert!(vac.isp_s > sl.isp_s, "vacuum bell should have higher Isp");
         assert!(vac.exit_pressure_pa < sl.exit_pressure_pa,
             "vacuum bell expands further");
+        assert!(vac.expansion_ratio > sl.expansion_ratio);
         assert!(vac.is_vacuum_variant() && !sl.is_vacuum_variant());
-        // Shared hardware: same chamber, same turbopump, same mass.
-        assert_eq!(vac.thrust_n, sl.thrust_n);
-        assert_eq!(vac.mass_kg, sl.mass_kg);
+        // Same chamber: chamber pressure and mass flow are shared, so
+        // thrust rises with Isp; the long bell weighs more.
+        assert_eq!(vac.chamber_pressure_pa, sl.chamber_pressure_pa);
+        let gain = vac.isp_s / sl.isp_s;
+        assert!(gain > 1.05 && gain < 1.10, "kerolox gas generator: 3 m bell gains ~7 %, got {gain}");
+        assert!((vac.thrust_n / sl.thrust_n - gain).abs() < 1e-9, "thrust gain equals Isp gain");
+        assert!((vac.mass_flow_rate() - sl.mass_flow_rate()).abs() < 1e-6, "same mass flow");
+        assert!(vac.mass_kg > sl.mass_kg && vac.mass_kg < sl.mass_kg * 1.4,
+            "bell extension adds mass: {} vs {}", vac.mass_kg, sl.mass_kg);
         assert_eq!(vac.id, sl.id);
+        // The sea-level bell is the reference figure; it is charged the
+        // pad by the ascent, not here.
+        assert!((sl.isp_s - 311.0).abs() < 1e-9);
+        let pad = sl.isp_fraction_at(101_325.0);
+        assert!(pad > 0.85 && pad < 0.90, "90 bar sea-level bell keeps ~87 % at the pad, got {pad}");
         // The project's canonical design is the sea-level form.
         assert!(!p.design.is_vacuum_variant());
     }
@@ -776,8 +854,10 @@ mod tests {
         ).unwrap();
         assert!(!p.has_nozzle_choice());
         // Asking for the sea-level form still yields the vacuum one.
-        assert_eq!(p.design_variant(false).isp_s, p.design_variant(true).isp_s);
-        assert!(p.design_variant(false).is_vacuum_variant());
+        let cfg = crate::balance_config::NozzleConfig::default();
+        assert_eq!(p.design_variant(false, &cfg).isp_s, p.design_variant(true, &cfg).isp_s);
+        assert!(p.design_variant(false, &cfg).is_vacuum_variant());
+        assert!(!p.design.has_nozzle(), "an ion thruster has no bell the air acts on");
     }
 
     #[test]
@@ -921,7 +1001,7 @@ mod tests {
     fn test_hydrolox_higher_isp_than_kerolox() {
         let kero = engine_baseline(EngineCycle::GasGenerator, PropellantPreset::Kerolox).unwrap();
         let hydro = engine_baseline(EngineCycle::GasGenerator, PropellantPreset::Hydrolox).unwrap();
-        assert!(hydro.isp_vac_s > kero.isp_vac_s);
+        assert!(hydro.isp_ref_s > kero.isp_ref_s);
     }
 
     #[test]

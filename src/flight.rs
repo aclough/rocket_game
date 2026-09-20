@@ -427,6 +427,9 @@ mod tests {
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
             ],
             power_draw_w: 0.0,
+            chamber_pressure_pa: 9_000_000.0,
+            expansion_ratio: 14.38,
+            gamma: 1.2,
         };
         let stage = Stage {
             id: StageId(id), name: format!("S{}", id),
@@ -633,6 +636,9 @@ mod tests {
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
             power_draw_w: 0.0,
+            chamber_pressure_pa: 9_000_000.0,
+            expansion_ratio: 14.38,
+            gamma: 1.2,
         };
         let upper_engine = EngineDesign {
             id: EngineId(2), name: "Upper".into(),
@@ -644,6 +650,9 @@ mod tests {
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
             power_draw_w: 0.0,
+            chamber_pressure_pa: 9_000_000.0,
+            expansion_ratio: 65.85,
+            gamma: 1.2,
         };
         let s1 = Stage {
             id: StageId(1), name: "S1".into(),
@@ -778,6 +787,7 @@ mod tests {
             cycle: EngineCycle::ElectricPropulsion,
             thrust_n: 5.0, mass_kg: 35.0, isp_s: 3000.0,
             exit_pressure_pa: 0.0, needs_atmosphere: false,
+            chamber_pressure_pa: 0.0, expansion_ratio: 0.0, gamma: 0.0,
             propellant_mix: vec![PropellantFraction {
                 propellant: Propellant::Xenon, mass_fraction: 1.0,
             }],

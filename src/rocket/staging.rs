@@ -49,8 +49,8 @@ impl BurnPhase {
             mass_flow_kg_s: self.mass_flow_kg_s,
             propellant_kg: self.propellant_kg,
             dry_mass_dropped_kg: self.dry_mass_dropped_kg,
-            nozzles: self.active.iter().map(|&k| location::AscentNozzle {
-                exit_pressure_pa: stages[k].engine.exit_pressure_pa,
+            nozzles: self.active.iter().map(|&k| location::AscentThruster {
+                response: stages[k].engine.atmosphere_response(),
                 thrust_n: stages[k].total_thrust_n(),
             }).collect(),
         }
@@ -769,6 +769,9 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 1.0 },
             ],
             power_draw_w: 0.0,
+            chamber_pressure_pa: 0.0,
+            expansion_ratio: 0.0,
+            gamma: 0.0,
         };
         let lander_engine = kerolox_engine(11, 50_000.0, 100.0, 320.0);
 

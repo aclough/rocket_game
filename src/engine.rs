@@ -4,6 +4,8 @@ use crate::project::Direction;
 use crate::technology::TechDeficiencyKind;
 
 use crate::propellant::Propellant;
+use crate::balance_config::NozzleConfig;
+use crate::nozzle::{self, AtmosphereResponse};
 
 /// Standard gravity (m/s²), used for Isp <-> exhaust velocity conversion.
 pub const G0: f64 = 9.80665;
@@ -75,20 +77,24 @@ pub struct EngineDesign {
     /// (supply minus housekeeping) caps the engine's effective thrust.
     #[serde(default)]
     pub power_draw_w: f64,
+    /// Chamber pressure (Pa). With `expansion_ratio` and `gamma` this is
+    /// the nozzle: it sets how much of the vacuum thrust the air takes
+    /// back (`atmosphere_response`), the bell a chamber pressure allows
+    /// at sea level, and the exit pressure the separation risk reads.
+    /// 0 means "no nozzle" — electric, sail, or a design from before
+    /// nozzles were modelled (`save::sanitize` back-fills those).
+    #[serde(default)]
+    pub chamber_pressure_pa: f64,
+    /// Expansion ratio of this variant's bell (exit area / throat area).
+    #[serde(default)]
+    pub expansion_ratio: f64,
+    /// Heat-capacity ratio of the exhaust; 0 reads as `DEFAULT_GAMMA`.
+    #[serde(default)]
+    pub gamma: f64,
 }
 
-/// Isp fraction a nozzle with `exit_pressure_pa` retains at
-/// `ambient_pressure_pa`: 1.0 in vacuum or when the nozzle is not
-/// overexpanded. K = 0.20: a vacuum engine (7 kPa exit) at sea level
-/// loses ~19% Isp. The one formula behind `EngineDesign::isp_fraction_at`
-/// and the ascent integrator's altitude-by-altitude charge.
-pub fn isp_fraction(exit_pressure_pa: f64, ambient_pressure_pa: f64) -> f64 {
-    if ambient_pressure_pa <= 0.0 || exit_pressure_pa >= ambient_pressure_pa {
-        return 1.0;
-    }
-    let k = 0.20;
-    (1.0 - k * (1.0 - exit_pressure_pa / ambient_pressure_pa)).max(0.0)
-}
+/// Heat-capacity ratio assumed for a design that carries none.
+pub const DEFAULT_GAMMA: f64 = 1.2;
 
 impl EngineDesign {
     /// Apply or revert the stat effect of one technology deficiency.
@@ -163,21 +169,108 @@ impl EngineDesign {
         errors
     }
 
-    /// Isp fraction retained when operating at the given ambient pressure
-    /// (see [`isp_fraction`]).
-    pub fn isp_fraction_at(&self, ambient_pressure_pa: f64) -> f64 {
-        isp_fraction(self.exit_pressure_pa, ambient_pressure_pa)
+    /// The exhaust's heat-capacity ratio, `DEFAULT_GAMMA` when unset.
+    pub fn gamma_or_default(&self) -> f64 {
+        if self.gamma > 0.0 { self.gamma } else { DEFAULT_GAMMA }
     }
 
-    /// Per-engine probability of destruction from flow separation due to
-    /// severe overexpansion. Returns 0.0 when safely matched or in vacuum.
-    /// Formula: ((ambient / exit) - 4) * 0.2, clamped to [0, 1].
-    pub fn overexpansion_destruction_risk(&self, ambient_pressure_pa: f64) -> f64 {
+    /// Whether this design carries a De Laval nozzle the air can act on.
+    pub fn has_nozzle(&self) -> bool {
+        self.chamber_pressure_pa > 0.0 && self.expansion_ratio > 0.0
+    }
+
+    /// Fit a bell: chamber pressure, expansion ratio and gamma, with the
+    /// exit pressure they imply.
+    pub fn set_nozzle(&mut self, chamber_pressure_pa: f64, expansion_ratio: f64, gamma: f64) {
+        self.chamber_pressure_pa = chamber_pressure_pa;
+        self.expansion_ratio = expansion_ratio;
+        self.gamma = gamma;
+        self.exit_pressure_pa = if self.has_nozzle() {
+            chamber_pressure_pa * nozzle::exit_pressure_ratio(expansion_ratio, self.gamma_or_default())
+        } else {
+            0.0
+        };
+    }
+
+    /// Fit the bell that exhausts at `exit_pressure_pa` from a chamber
+    /// at `chamber_pressure_pa`. How `save::sanitize` gives a design
+    /// from before nozzles were modelled the bell its stored exit
+    /// pressure describes, and how tests ask for "a nozzle built for
+    /// X kPa".
+    pub fn set_nozzle_for_exit_pressure(&mut self, chamber_pressure_pa: f64, exit_pressure_pa: f64, gamma: f64) {
+        if chamber_pressure_pa <= 0.0 || exit_pressure_pa <= 0.0 {
+            self.set_nozzle(0.0, 0.0, gamma);
+            return;
+        }
+        let eps = nozzle::expansion_ratio_for_exit_pressure(chamber_pressure_pa, exit_pressure_pa, gamma);
+        self.set_nozzle(chamber_pressure_pa, eps, gamma);
+    }
+
+    /// Throat area of this design's nozzle (m²); 0 without one.
+    pub fn throat_area_m2(&self) -> f64 {
+        if !self.has_nozzle() {
+            return 0.0;
+        }
+        nozzle::throat_area_m2(self.thrust_n, self.chamber_pressure_pa, self.expansion_ratio, self.gamma_or_default())
+    }
+
+    /// This design with the long bell: the largest expansion ratio that
+    /// fits `cfg.max_vacuum_bell_exit_m`, capped at
+    /// `cfg.max_expansion_ratio`. Isp and thrust rise by the thrust-
+    /// coefficient ratio (same chamber, same mass flow); mass grows by
+    /// the added bell area at `cfg.bell_areal_density_kg_m2`. A design
+    /// without a nozzle only loses `needs_atmosphere`.
+    pub fn with_vacuum_bell(&self, cfg: &NozzleConfig) -> EngineDesign {
+        let mut vac = self.clone();
+        vac.needs_atmosphere = false;
+        if !self.has_nozzle() {
+            return vac;
+        }
+        let gamma = self.gamma_or_default();
+        let throat = self.throat_area_m2();
+        let eps_vac = nozzle::expansion_ratio_for_exit_diameter(
+            throat, cfg.max_vacuum_bell_exit_m, cfg.max_expansion_ratio, self.expansion_ratio,
+        );
+        let gain = nozzle::thrust_coefficient_vacuum(eps_vac, gamma)
+            / nozzle::thrust_coefficient_vacuum(self.expansion_ratio, gamma);
+        vac.isp_s = self.isp_s * gain;
+        vac.thrust_n = self.thrust_n * gain;
+        vac.mass_kg = self.mass_kg
+            + nozzle::bell_extension_mass_kg(throat, self.expansion_ratio, eps_vac, cfg.bell_areal_density_kg_m2);
+        vac.set_nozzle(self.chamber_pressure_pa, eps_vac, gamma);
+        vac
+    }
+
+    /// How the air acts on this design's thrust: the per-step question
+    /// the ascent asks. One constant for a bell, nothing for the rest.
+    pub fn atmosphere_response(&self) -> AtmosphereResponse {
+        if !self.has_nozzle() {
+            return AtmosphereResponse::None;
+        }
+        AtmosphereResponse::Nozzle {
+            zero_thrust_pressure_pa: nozzle::zero_thrust_pressure_pa(
+                self.chamber_pressure_pa, self.expansion_ratio, self.gamma_or_default(),
+            ),
+        }
+    }
+
+    /// Fraction of vacuum Isp (and thrust) retained at the given ambient
+    /// pressure; 1.0 in vacuum or without a nozzle.
+    pub fn isp_fraction_at(&self, ambient_pressure_pa: f64) -> f64 {
+        self.atmosphere_response().thrust_fraction(ambient_pressure_pa)
+    }
+
+    /// Per-engine probability of destruction from flow separation when
+    /// the air outside is far denser than the bell's exit: a ramp of
+    /// `cfg.separation_risk_slope` per unit of ambient / exit pressure
+    /// beyond `cfg.separation_risk_start_ratio`, clamped to [0, 1]. 0 in
+    /// vacuum, without a nozzle, or when the bell is matched.
+    pub fn overexpansion_destruction_risk(&self, ambient_pressure_pa: f64, cfg: &NozzleConfig) -> f64 {
         if ambient_pressure_pa <= 0.0 || self.exit_pressure_pa <= 0.0 {
             return 0.0;
         }
         let ratio = ambient_pressure_pa / self.exit_pressure_pa;
-        ((ratio - 4.0) * 0.2).clamp(0.0, 1.0)
+        ((ratio - cfg.separation_risk_start_ratio) * cfg.separation_risk_slope).clamp(0.0, 1.0)
     }
 
     /// Whether this engine is a low-thrust type (ion, Hall, solar sail).
@@ -210,40 +303,56 @@ impl EngineDesign {
 mod tests {
     use super::*;
 
+    /// Merlin 1D-like: 97 bar, ε 16 sea-level bell.
     fn test_kerolox_engine() -> EngineDesign {
-        EngineDesign {
+        let mut e = EngineDesign {
             id: EngineId(1),
             name: "Merlin-like".into(),
             cycle: EngineCycle::GasGenerator,
-            thrust_n: 845_000.0,
+            thrust_n: 914_000.0,
             mass_kg: 470.0,
             isp_s: 311.0,
-            exit_pressure_pa: 70_000.0,
-            needs_atmosphere: false,
+            exit_pressure_pa: 0.0,
+            needs_atmosphere: true,
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
             power_draw_w: 0.0,
-        }
+            chamber_pressure_pa: 0.0,
+            expansion_ratio: 0.0,
+            gamma: 0.0,
+        };
+        e.set_nozzle(9_700_000.0, 16.0, 1.2);
+        e
     }
 
+    /// RL10-like: 44 bar, a bell exhausting at 5 kPa.
     fn test_hydrolox_engine() -> EngineDesign {
-        EngineDesign {
+        let mut e = EngineDesign {
             id: EngineId(2),
             name: "RL-10-like".into(),
             cycle: EngineCycle::Expander,
             thrust_n: 110_000.0,
             mass_kg: 170.0,
             isp_s: 465.0,
-            exit_pressure_pa: 5_000.0,
+            exit_pressure_pa: 0.0,
             needs_atmosphere: false,
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.833 },
                 PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.167 },
             ],
             power_draw_w: 0.0,
-        }
+            chamber_pressure_pa: 0.0,
+            expansion_ratio: 0.0,
+            gamma: 0.0,
+        };
+        e.set_nozzle_for_exit_pressure(4_400_000.0, 5_000.0, 1.2);
+        e
+    }
+
+    fn cfg() -> NozzleConfig {
+        NozzleConfig::default()
     }
 
     #[test]
@@ -258,8 +367,8 @@ mod tests {
     fn test_mass_flow_rate() {
         let engine = test_kerolox_engine();
         let mdot = engine.mass_flow_rate();
-        // 845000 / 3049.87 ≈ 277.1
-        assert!((mdot - 277.1).abs() < 1.0, "got {}", mdot);
+        // 914000 / 3049.87 ≈ 299.7
+        assert!((mdot - 299.7).abs() < 1.0, "got {}", mdot);
     }
 
     #[test]
@@ -303,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_isp_fraction_vacuum() {
-        let engine = test_kerolox_engine(); // exit_pressure = 70 kPa
+        let engine = test_kerolox_engine();
         // In vacuum (0 Pa ambient), no penalty
         assert_eq!(engine.isp_fraction_at(0.0), 1.0);
         // In vacuum (negative, shouldn't happen but guard)
@@ -312,53 +421,87 @@ mod tests {
 
     #[test]
     fn test_isp_fraction_sea_level_engine() {
-        let engine = test_kerolox_engine(); // exit_pressure = 70 kPa
+        let engine = test_kerolox_engine();
         let frac = engine.isp_fraction_at(101_325.0);
-        // 1.0 - 0.20 * (1.0 - 70000/101325) = 1.0 - 0.20 * 0.309 = 0.938
-        assert!(frac > 0.93 && frac < 0.95,
-            "Sea-level engine should lose ~6% Isp, got fraction {}", frac);
+        // Merlin 1D: 282 / 311 = 0.907 at the pad.
+        assert!(frac > 0.89 && frac < 0.92,
+            "Sea-level bell should lose ~9% Isp at the pad, got fraction {}", frac);
+        assert!((engine.exit_pressure_pa - 65_700.0).abs() < 1_000.0,
+            "ε 16 at 97 bar exhausts near 66 kPa, got {}", engine.exit_pressure_pa);
     }
 
     #[test]
     fn test_isp_fraction_vacuum_engine() {
         let engine = test_hydrolox_engine(); // exit_pressure = 5 kPa
         let frac = engine.isp_fraction_at(101_325.0);
-        // 1.0 - 0.20 * (1.0 - 5000/101325) = 1.0 - 0.20 * 0.951 = 0.810
-        assert!(frac > 0.80 && frac < 0.82,
-            "Vacuum engine should lose ~19% Isp at sea level, got fraction {}", frac);
+        // A 5 kPa bell at 44 bar is deep into back-pressure at the pad.
+        assert!(frac > 0.1 && frac < 0.5,
+            "Vacuum bell should lose most of its thrust at sea level, got fraction {}", frac);
+    }
+
+    #[test]
+    fn test_no_nozzle_is_untouched_by_air() {
+        let mut ion = test_kerolox_engine();
+        ion.set_nozzle(0.0, 0.0, 0.0);
+        assert!(!ion.has_nozzle());
+        assert_eq!(ion.atmosphere_response(), crate::nozzle::AtmosphereResponse::None);
+        assert_eq!(ion.isp_fraction_at(101_325.0), 1.0);
+        assert_eq!(ion.overexpansion_destruction_risk(101_325.0, &cfg()), 0.0);
+        assert_eq!(ion.exit_pressure_pa, 0.0);
+    }
+
+    #[test]
+    fn test_vacuum_bell_variant() {
+        let sl = test_kerolox_engine();
+        let vac = sl.with_vacuum_bell(&cfg());
+        // A Merlin throat fits ~ε 130 inside a 3 m exit.
+        assert!(vac.expansion_ratio > 120.0 && vac.expansion_ratio < 140.0, "ε {}", vac.expansion_ratio);
+        let gain = vac.isp_s / sl.isp_s;
+        assert!(gain > 1.08 && gain < 1.11, "Isp gain {gain}");
+        assert!((vac.thrust_n / sl.thrust_n - gain).abs() < 1e-9);
+        // ~6 m² of added bell at 20 kg/m².
+        assert!(vac.mass_kg - sl.mass_kg > 100.0 && vac.mass_kg - sl.mass_kg < 160.0,
+            "bell mass {}", vac.mass_kg - sl.mass_kg);
+        assert!(!vac.needs_atmosphere && vac.is_vacuum_variant());
+        assert!(vac.exit_pressure_pa < 10_000.0);
+        assert_eq!(vac.chamber_pressure_pa, sl.chamber_pressure_pa);
+        // The long bell at the pad: heavily penalised and at risk.
+        assert!(vac.isp_fraction_at(101_325.0) < 0.5);
+        assert_eq!(vac.overexpansion_destruction_risk(101_325.0, &cfg()), 1.0);
     }
 
     #[test]
     fn test_overexpansion_no_risk_sea_level_engine() {
-        let engine = test_kerolox_engine(); // exit_pressure = 70 kPa
-        let risk = engine.overexpansion_destruction_risk(101_325.0);
-        // ratio = 101325/70000 = 1.45, (1.45 - 4) * 0.2 < 0 → 0
+        let engine = test_kerolox_engine(); // exit ~58 kPa
+        let risk = engine.overexpansion_destruction_risk(101_325.0, &cfg());
+        // ratio = 101325/57800 = 1.75 < 3 → 0
         assert_eq!(risk, 0.0);
     }
 
     #[test]
     fn test_overexpansion_risk_vacuum_engine() {
         let engine = test_hydrolox_engine(); // exit_pressure = 5 kPa
-        let risk = engine.overexpansion_destruction_risk(101_325.0);
-        // ratio = 101325/5000 = 20.265, (20.265 - 4) * 0.2 = 3.253 → capped at 1.0
+        let risk = engine.overexpansion_destruction_risk(101_325.0, &cfg());
+        // ratio = 101325/5000 = 20.3, (20.3 - 3) * 0.2 → capped at 1.0
         assert_eq!(risk, 1.0, "Deep vacuum engine should have 100% destruction risk");
     }
 
     #[test]
     fn test_overexpansion_risk_moderate() {
-        // Engine with exit_pressure = 20 kPa
+        // A bell exhausting at 20 kPa.
         let mut engine = test_kerolox_engine();
-        engine.exit_pressure_pa = 20_000.0;
-        let risk = engine.overexpansion_destruction_risk(101_325.0);
-        // ratio = 101325/20000 = 5.066, (5.066 - 4) * 0.2 = 0.213
-        assert!(risk > 0.20 && risk < 0.22,
-            "20 kPa engine should have ~21% risk, got {}", risk);
+        engine.set_nozzle_for_exit_pressure(9_700_000.0, 20_000.0, 1.2);
+        assert!((engine.exit_pressure_pa - 20_000.0).abs() < 1.0);
+        let risk = engine.overexpansion_destruction_risk(101_325.0, &cfg());
+        // ratio = 101325/20000 = 5.07, (5.07 - 3) * 0.2 = 0.413
+        assert!(risk > 0.40 && risk < 0.42,
+            "20 kPa engine should have ~41% risk, got {}", risk);
     }
 
     #[test]
     fn test_overexpansion_risk_in_vacuum() {
         let engine = test_hydrolox_engine();
-        let risk = engine.overexpansion_destruction_risk(0.0);
+        let risk = engine.overexpansion_destruction_risk(0.0, &cfg());
         assert_eq!(risk, 0.0, "No risk in vacuum");
     }
 }

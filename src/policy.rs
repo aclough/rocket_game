@@ -304,7 +304,7 @@ impl BasicPolicy {
             name: "BLV S1".into(),
             // First stage lights at sea level; upper stage flies the
             // vacuum bell of its own engine family.
-            engine: booster.design_variant(false),
+            engine: booster.design_variant(false, &game.balance.nozzle),
             engine_count: 2,
             propellant_mass_kg: 90_000.0,
             structural_mass_kg: 6_450.0,
@@ -314,7 +314,7 @@ impl BasicPolicy {
         let mut s2 = Stage {
             id: StageId(2),
             name: "BLV S2".into(),
-            engine: upper.design_variant(true),
+            engine: upper.design_variant(true, &game.balance.nozzle),
             engine_count: 1,
             propellant_mass_kg: 15_000.0,
             structural_mass_kg: 1_500.0,

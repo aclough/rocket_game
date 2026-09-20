@@ -187,8 +187,8 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
         // what an upper stage would gain before committing a design.
         let isp_str = if project.has_nozzle_choice() {
             format!("{:.0}s SL / {:.0}s vac",
-                project.design_variant(false).isp_s,
-                project.design_variant(true).isp_s)
+                project.design_variant(false, &app.game.balance.nozzle).isp_s,
+                project.design_variant(true, &app.game.balance.nozzle).isp_s)
         } else {
             format!("{:.0}s vac", project.design.isp_s)
         };

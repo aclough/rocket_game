@@ -296,7 +296,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                 if gi == 0 && state.launch_from == "earth_surface" {
                     let ambient = 101_325.0_f64;
                     let isp_frac = stage.engine.isp_fraction_at(ambient);
-                    let risk = stage.engine.overexpansion_destruction_risk(ambient);
+                    let risk = stage.engine.overexpansion_destruction_risk(ambient, &app.game.balance.nozzle);
                     if risk > 0.0 {
                         lines.push(Line::from(Span::styled(
                             format!(

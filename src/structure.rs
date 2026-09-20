@@ -130,6 +130,9 @@ mod tests {
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
             power_draw_w: 0.0,
+            chamber_pressure_pa: 9_000_000.0,
+            expansion_ratio: 14.38,
+            gamma: 1.2,
         }
     }
 

@@ -710,7 +710,7 @@ pub(super) mod help_tests {
 
         // A rocket project built from the engine above, plus one
         // finished rocket sitting in inventory for the Launches tab.
-        let engine = company.engine_projects[0].design_variant(false);
+        let engine = company.engine_projects[0].design_variant(false, &bal.nozzle);
         let design = crate::rocket::RocketDesign {
             id: crate::rocket::RocketDesignId(1),
             name: "Fixture-1".into(),

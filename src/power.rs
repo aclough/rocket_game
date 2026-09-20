@@ -572,6 +572,7 @@ mod tests {
             cycle: EngineCycle::GasGenerator,
             thrust_n: 1.0, mass_kg: 100.0, isp_s: 300.0,
             exit_pressure_pa: 1.0, needs_atmosphere: false,
+            chamber_pressure_pa: 0.0, expansion_ratio: 0.0, gamma: 0.0,
             propellant_mix: vec![PropellantFraction {
                 propellant: Propellant::LOX, mass_fraction: 1.0,
             }],

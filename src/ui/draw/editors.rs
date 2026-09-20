@@ -72,25 +72,20 @@ pub(super) fn draw_engine_editor_modal(
     // Live + baseline derived stats.
     lines.push(Line::from(""));
     if let Some(b) = baseline {
-        lines.push(hint_line(format!(" Baseline ({:?} / {}):  thrust {}  mass {}  Isp {}",
+        lines.push(hint_line(format!(" Baseline ({:?} / {}):  thrust {}  mass {}  Isp {:.0} s",
                 ep.design.cycle, ep.spec.preset.name(),
-                format_thrust_n(b.thrust_n), format_kg(b.mass_kg),
-                if b.vacuum_only {
-                    format!("{:.0} s", b.isp_vac_s)
-                } else {
-                    format!("{:.0} s SL / {:.0} s vac", b.isp_sl_s, b.isp_vac_s)
-                })));
+                format_thrust_n(b.thrust_n), format_kg(b.mass_kg), b.isp_ref_s)));
     }
     lines.push(Line::from(format!(
         " Scaled:    thrust {}  mass {}  Isp {}  power {}",
         format_thrust_n(ep.design.thrust_n),
         format_kg(ep.design.mass_kg),
         if vacuum_only {
-            format!("{:.0} s", ep.design_variant(true).isp_s)
+            format!("{:.0} s", ep.design_variant(true, &app.game.balance.nozzle).isp_s)
         } else {
             format!("{:.0} s SL / {:.0} s vac",
-                ep.design_variant(false).isp_s,
-                ep.design_variant(true).isp_s)
+                ep.design_variant(false, &app.game.balance.nozzle).isp_s,
+                ep.design_variant(true, &app.game.balance.nozzle).isp_s)
         },
         format_power_w(ep.design.power_draw_w),
     )));

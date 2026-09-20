@@ -30,6 +30,7 @@ pub struct BalanceConfig {
     pub competitor: CompetitorConfig,
     pub engine_materials: EngineMaterialsConfig,
     pub flight: FlightConfig,
+    pub nozzle: NozzleConfig,
     pub geopolitics: GeopoliticsConfig,
     pub economy: EconomyConfig,
     pub technology: TechnologyConfig,
@@ -1046,6 +1047,47 @@ impl Default for FlightConfig {
             short_burn_strand_cut: 0.95,
             remaining_route_strand_cut: 0.5,
             partial_payment_fraction: 0.5,
+        }
+    }
+}
+
+/// Nozzle geometry limits and the flow-separation hazard
+/// (19_NOZZLES.md). The physics itself — thrust coefficient by
+/// expansion ratio and ambient pressure — is in `nozzle.rs` and is not
+/// a knob; these are the design conventions and limits it is applied
+/// under.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NozzleConfig {
+    /// Exit pressure a sea-level bell is designed to: the Summerfield
+    /// separation limit (~0.4 atm) sets how far it may expand.
+    pub sea_level_exit_pressure_pa: f64,
+    /// Largest exit diameter a vacuum bell may have — the stage and
+    /// interstage it has to fit inside.
+    pub max_vacuum_bell_exit_m: f64,
+    /// Cap on a vacuum bell's expansion ratio; past ~300 the Isp gain
+    /// has flattened to under 1 % per 50.
+    pub max_expansion_ratio: f64,
+    /// Mass of bell extension per square metre of added exit area
+    /// (MVac ≈ 16, RL10B-2's carbon extendible ≈ 40).
+    pub bell_areal_density_kg_m2: f64,
+    /// Ambient-to-exit pressure ratio at which flow separation starts
+    /// to destroy engines; the sea-level bell sits at 2.5 on the pad.
+    pub separation_risk_start_ratio: f64,
+    /// Per-engine destruction probability added per unit of pressure
+    /// ratio beyond the start.
+    pub separation_risk_slope: f64,
+}
+
+impl Default for NozzleConfig {
+    fn default() -> Self {
+        NozzleConfig {
+            sea_level_exit_pressure_pa: 0.4 * 101_325.0,
+            max_vacuum_bell_exit_m: 3.0,
+            max_expansion_ratio: 300.0,
+            bell_areal_density_kg_m2: 20.0,
+            separation_risk_start_ratio: 3.0,
+            separation_risk_slope: 0.2,
         }
     }
 }

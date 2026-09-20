@@ -188,6 +188,9 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.14 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 10_000_000.0,
+        expansion_ratio: 17.56,
+        gamma: 1.2,
     };
     let upper_engine = EngineDesign {
         id: EngineId(20_002),
@@ -203,6 +206,9 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.17 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 4_500_000.0,
+        expansion_ratio: 65.85,
+        gamma: 1.2,
     };
 
     for (design, complexity) in [(booster_engine.clone(), 12u32), (upper_engine.clone(), 8u32)] {

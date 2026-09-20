@@ -423,6 +423,9 @@ mod tests {
                 PropellantFraction { propellant: Propellant::Xenon, mass_fraction: 1.0 },
             ],
             power_draw_w: 0.0,
+            chamber_pressure_pa: 0.0,
+            expansion_ratio: 0.0,
+            gamma: 0.0,
         }
     }
 

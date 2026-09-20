@@ -252,6 +252,9 @@ fn test_reactor_flaw_activates_mid_flight() {
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 14.38,
+        gamma: 1.2,
     };
     let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu, &crate::balance_config::CostsConfig::default());
     let steady_full = reactor_design.steady_w;
@@ -344,6 +347,9 @@ fn test_reactor_perflight_flaw_fires_at_flight_start() {
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 14.38,
+        gamma: 1.2,
     };
     let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu, &crate::balance_config::CostsConfig::default());
     let stage = Stage {

@@ -10,8 +10,9 @@
 //! (Merlin, F-1, RD-180, RS-25, Vulcain 2, Raptor: sea-level Isp
 //! within 2 % from chamber pressure and expansion ratio alone).
 //!
-//! Nothing in the game calls this module yet; step 2 wires it into
-//! `engine_project::design_variant` and the ascent integrator.
+//! Callers: `EngineDesign` (`set_nozzle`, `with_vacuum_bell`,
+//! `atmosphere_response`), `EngineBaseline::design`, and the ascent
+//! integrator through [`AtmosphereResponse`].
 //!
 //! Notation: `ε` expansion ratio (exit area / throat area), `γ`
 //! heat-capacity ratio, `p_c` chamber pressure, `p_e` exit pressure,
@@ -130,6 +131,49 @@ pub fn bell_extension_mass_kg(
     (throat_area_m2 * (eps_to - eps_from)).max(0.0) * areal_density_kg_m2
 }
 
+/// Expansion ratio of a bell whose exit pressure is `exit_pressure_pa`
+/// at chamber pressure `chamber_pressure_pa`.
+pub fn expansion_ratio_for_exit_pressure(chamber_pressure_pa: f64, exit_pressure_pa: f64, gamma: f64) -> f64 {
+    expansion_ratio_for_pressure_ratio(exit_pressure_pa / chamber_pressure_pa, gamma)
+}
+
+/// How an engine's thrust answers to the air around it: the one thing
+/// the ascent integrator asks of a thruster per step. Built once per
+/// design (`EngineDesign::atmosphere_response`); the per-step call is
+/// arithmetic only. A later `AirBreathing` or `PulseUnit` variant lands
+/// here (19_NOZZLES.md §3, the seam toward Option C).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AtmosphereResponse {
+    /// Ambient pressure does nothing: electric thrusters, sails, or a
+    /// design with no nozzle data.
+    None,
+    /// A De Laval bell: thrust falls linearly with ambient pressure,
+    /// reaching zero at `zero_thrust_pressure_pa`.
+    Nozzle { zero_thrust_pressure_pa: f64 },
+}
+
+impl AtmosphereResponse {
+    /// Fraction of vacuum thrust (and Isp) delivered at `pressure_pa`.
+    pub fn thrust_fraction(&self, pressure_pa: f64) -> f64 {
+        match *self {
+            AtmosphereResponse::None => 1.0,
+            AtmosphereResponse::Nozzle { zero_thrust_pressure_pa } => {
+                thrust_fraction(zero_thrust_pressure_pa, pressure_pa)
+            }
+        }
+    }
+
+    /// The ambient pressure below which this thruster's loss is under a
+    /// tenth of a percent — where an integrator may stop looking the
+    /// pressure up. Infinite for a thruster the air never touches.
+    pub fn negligible_pressure_pa(&self) -> f64 {
+        match *self {
+            AtmosphereResponse::None => f64::INFINITY,
+            AtmosphereResponse::Nozzle { zero_thrust_pressure_pa } => 1e-3 * zero_thrust_pressure_pa,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +284,19 @@ mod tests {
         let m = bell_extension_mass_kg(at, 16.0, 165.0, 16.0);
         assert!(m > 110.0 && m < 150.0, "mass {m}");
         assert_eq!(bell_extension_mass_kg(at, 165.0, 16.0, 16.0), 0.0);
+    }
+
+    #[test]
+    fn atmosphere_response() {
+        let none = AtmosphereResponse::None;
+        assert_eq!(none.thrust_fraction(PA), 1.0);
+        assert_eq!(none.negligible_pressure_pa(), f64::INFINITY);
+        let bell = AtmosphereResponse::Nozzle { zero_thrust_pressure_pa: 1_000_000.0 };
+        assert!(close(bell.thrust_fraction(PA), 1.0 - PA / 1e6, 1e-12));
+        assert_eq!(bell.negligible_pressure_pa(), 1_000.0);
+        // Round trip: the exit pressure a bell was built to comes back.
+        let eps = expansion_ratio_for_exit_pressure(97.0 * BAR, 40_000.0, G);
+        assert!(close(exit_pressure_ratio(eps, G) * 97.0 * BAR, 40_000.0, 1e-6));
     }
 
     #[test]

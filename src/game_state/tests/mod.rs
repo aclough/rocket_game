@@ -57,6 +57,9 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 10.96,
+        gamma: 1.2,
     };
 
     let engine2 = EngineDesign {
@@ -73,6 +76,9 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 10.96,
+        gamma: 1.2,
     };
 
     let stage1 = Stage {

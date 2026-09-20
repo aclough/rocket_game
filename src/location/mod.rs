@@ -7,7 +7,7 @@ mod ascent;
 mod graph_data;
 
 pub use ascent::{
-    simulate_ascent, simulate_ascent_with, simulate_gravity_losses, AscentGroupResult, AscentNozzle,
+    simulate_ascent, simulate_ascent_with, simulate_gravity_losses, AscentGroupResult, AscentThruster,
     AscentPhase, AscentProfile, ASCENT_TIMESTEP_S, DEFAULT_ASCENT_PROFILE, KICK_OVER_VELOCITY,
     LEGACY_GRAVITY_TURN, PITCH_KICK_RAD, PITCH_SCHEDULE_PRESSURE_PA,
 };

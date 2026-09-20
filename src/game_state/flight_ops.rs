@@ -133,6 +133,7 @@ impl GameState {
             &self.player_company.contracted_engines,
             &mut self.seed.contingent_rng,
             &self.balance.flight,
+            &self.balance.nozzle,
         );
 
         let mut events = Vec::new();
@@ -298,7 +299,7 @@ impl GameState {
             }
             let end = tick_flight(
                 flight, &tables, &mut self.seed.contingent_rng, &mut events, &mut discoveries,
-                &self.balance.flight,
+                &self.balance.flight, &self.balance.nozzle,
             );
             if let Some(end) = end {
                 ended.push((i, end));
@@ -908,6 +909,7 @@ fn tick_flight(
     events: &mut Vec<GameEvent>,
     discoveries: &mut FlawDiscoveries,
     flight_cfg: &crate::balance_config::FlightConfig,
+    nozzle_cfg: &crate::balance_config::NozzleConfig,
 ) -> Option<FlightEnd> {
     if flight.leg_days_remaining > 0 {
         flight.leg_days_remaining -= 1;
@@ -962,7 +964,7 @@ fn tick_flight(
                     if !flight.flaw_rolled_groups.contains(&gi) {
                         if let Some(group) = flight.design.stage_groups.get_mut(gi) {
                             for stage in group.iter_mut() {
-                                if let Some(loss) = launch::roll_overexpansion(rng, stage, ambient) {
+                                if let Some(loss) = launch::roll_overexpansion(rng, stage, ambient, nozzle_cfg) {
                                     events.push(GameEvent::MidFlightFlawActivated {
                                         rocket_name: flight.rocket_name.clone(),
                                         flaw_description: format!(

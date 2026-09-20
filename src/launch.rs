@@ -210,8 +210,10 @@ pub struct OverexpansionLoss {
 /// Roll each of the stage's engines independently at its overexpansion
 /// destruction risk and take the losses off the stage — all of them
 /// gone disables it. `None` when the nozzle is safely matched.
-pub fn roll_overexpansion(rng: &mut StdRng, stage: &mut Stage, ambient_pa: f64) -> Option<OverexpansionLoss> {
-    let risk = stage.engine.overexpansion_destruction_risk(ambient_pa);
+pub fn roll_overexpansion(
+    rng: &mut StdRng, stage: &mut Stage, ambient_pa: f64, nozzle_cfg: &crate::balance_config::NozzleConfig,
+) -> Option<OverexpansionLoss> {
+    let risk = stage.engine.overexpansion_destruction_risk(ambient_pa, nozzle_cfg);
     if risk <= 0.0 {
         return None;
     }
@@ -289,6 +291,7 @@ pub fn simulate_launch(
     contracted_engines: &[ContractedEngine],
     rng: &mut StdRng,
     flight_cfg: &crate::balance_config::FlightConfig,
+    nozzle_cfg: &crate::balance_config::NozzleConfig,
 ) -> LaunchSimResult {
     let mut rocket_flaw_discoveries: Vec<usize> = Vec::new();
 
@@ -360,7 +363,7 @@ pub fn simulate_launch(
     if groups_needed > 0 && !vehicle_lost {
         for stage in degraded.stage_groups[0].iter_mut() {
             let engine_name = stage.engine.name.clone();
-            let Some(loss) = roll_overexpansion(rng, stage, ambient) else { continue };
+            let Some(loss) = roll_overexpansion(rng, stage, ambient, nozzle_cfg) else { continue };
             let total = loss.engines_lost >= loss.engines_before;
             activations.push(FlawActivation {
                 flaw_description: if total {
@@ -564,6 +567,9 @@ mod tests {
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
             ],
             power_draw_w: 0.0,
+            chamber_pressure_pa: 9_000_000.0,
+            expansion_ratio: 10.96,
+            gamma: 1.2,
         }
     }
 
@@ -633,6 +639,9 @@ mod tests {
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
             power_draw_w: 0.0,
+            chamber_pressure_pa: 9_000_000.0,
+            expansion_ratio: crate::nozzle::expansion_ratio_for_exit_pressure(9_000_000.0, exit_pa, 1.2),
+            gamma: 1.2,
         };
         let stage = |id: u64, e: EngineDesign, prop: f64, dry: f64| Stage {
             id: StageId(id), name: format!("S{id}"), engine: e, engine_count: 1,
@@ -652,7 +661,7 @@ mod tests {
             ],
         };
         let mut rng = StdRng::seed_from_u64(1);
-        let sim = simulate_launch(&design, "leo", 0.0, &[], &[], &[], &mut rng, &crate::balance_config::FlightConfig::default());
+        let sim = simulate_launch(&design, "leo", 0.0, &[], &[], &[], &mut rng, &crate::balance_config::FlightConfig::default(), &crate::balance_config::NozzleConfig::default());
 
         // The vehicle handed to the flight is the design as built.
         assert_eq!(sim.degraded_design.stage_groups[0][0].engine.isp_s, e1.isp_s,
@@ -688,6 +697,7 @@ mod tests {
             &design, "leo", 0.0,
             &[ep1, ep2], &rp.flaws, &[], &mut rng,
             &crate::balance_config::FlightConfig::default(),
+            &crate::balance_config::NozzleConfig::default(),
         );
 
         assert!(matches!(result.outcome, LaunchOutcome::Success));
@@ -714,6 +724,7 @@ mod tests {
             &design, "leo", 0.0,
             &[ep1, ep2], &rp.flaws, &[], &mut rng,
             &crate::balance_config::FlightConfig::default(),
+            &crate::balance_config::NozzleConfig::default(),
         );
 
         assert_eq!(result.flaws_activated.len(), 1);
@@ -786,6 +797,7 @@ mod tests {
             &[make_engine_project(1, vec![flaw]), make_engine_project(2, vec![])],
             &rp.flaws, &[], &mut rng,
             &crate::balance_config::FlightConfig::default(),
+            &crate::balance_config::NozzleConfig::default(),
         );
 
         let reason = match &result.outcome {
@@ -816,6 +828,7 @@ mod tests {
             &design, "gto", 5000.0,
             &[ep1, ep2], &rp.flaws, &[], &mut rng,
             &crate::balance_config::FlightConfig::default(),
+            &crate::balance_config::NozzleConfig::default(),
         );
 
         // Should be failure or partial failure (not success)
@@ -842,6 +855,7 @@ mod tests {
             &design, "leo", 0.0,
             &[ep1, ep2], &rp.flaws, &[], &mut rng,
             &crate::balance_config::FlightConfig::default(),
+            &crate::balance_config::NozzleConfig::default(),
         );
 
         assert_eq!(result.flaws_activated.len(), 1);
@@ -920,6 +934,7 @@ mod tests {
             &design, "leo", 0.0,
             &[ep1, ep2], &rp.flaws, &[], &mut rng,
             &crate::balance_config::FlightConfig::default(),
+            &crate::balance_config::NozzleConfig::default(),
         );
 
         assert!(result.flaws_activated.is_empty());

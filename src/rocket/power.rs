@@ -446,6 +446,7 @@ mod tests {
             cycle: EngineCycle::ElectricPropulsion,
             thrust_n, mass_kg: 35.0, isp_s: 3000.0,
             exit_pressure_pa: 0.0, needs_atmosphere: false,
+            chamber_pressure_pa: 0.0, expansion_ratio: 0.0, gamma: 0.0,
             propellant_mix: vec![PropellantFraction {
                 propellant: Propellant::Xenon, mass_fraction: 1.0,
             }],
@@ -526,6 +527,9 @@ mod tests {
                 PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.167 },
             ],
             power_draw_w: 0.0,
+            chamber_pressure_pa: 9_000_000.0,
+            expansion_ratio: 114.40,
+            gamma: 1.2,
         }
     }
 

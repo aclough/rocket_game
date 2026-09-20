@@ -123,6 +123,48 @@ fn sanitize(state: &mut GameState) {
     // past every spacecraft the save holds (idempotent on a current save).
     let highest = state.spacecraft.iter().map(|s| s.id.0).max().unwrap_or(0);
     state.next_spacecraft_id.ensure_past(highest);
+
+    backfill_nozzles(state);
+}
+
+/// Give every engine design from before nozzles were modelled
+/// (19_NOZZLES.md) the bell its stored exit pressure describes, at its
+/// family's chamber pressure. Idempotent: a design that already has a
+/// nozzle is left alone, and a design with no exit pressure (electric,
+/// sail) gets none.
+fn backfill_nozzles(state: &mut GameState) {
+    fn fit(design: &mut crate::engine::EngineDesign) {
+        if design.has_nozzle() || design.exit_pressure_pa <= 0.0 {
+            return;
+        }
+        if let Some((pc, gamma)) = crate::engine_project::chamber_pressure_for_legacy(design) {
+            design.set_nozzle_for_exit_pressure(pc, design.exit_pressure_pa, gamma);
+        }
+    }
+    fn fit_rocket(design: &mut crate::rocket::RocketDesign) {
+        for stage in design.stage_groups.iter_mut().flatten() {
+            fit(&mut stage.engine);
+        }
+    }
+    let company = &mut state.player_company;
+    for ep in &mut company.engine_projects {
+        fit(&mut ep.design);
+    }
+    for tp in &mut company.third_party_catalog {
+        fit(&mut tp.design);
+    }
+    for ce in &mut company.contracted_engines {
+        fit(&mut ce.design);
+    }
+    for rp in &mut company.rocket_projects {
+        fit_rocket(&mut rp.design);
+    }
+    for flight in &mut state.active_flights {
+        fit_rocket(&mut flight.design);
+    }
+    for craft in &mut state.spacecraft {
+        fit_rocket(&mut craft.design);
+    }
 }
 
 /// Version-gated shape migrations on the untyped JSON, applied in
@@ -738,6 +780,9 @@ mod tests {
                     propellant: Propellant::LOX, mass_fraction: 1.0,
                 }],
                 power_draw_w: 0.0,
+                chamber_pressure_pa: 9_000_000.0,
+                expansion_ratio: 1998.37,
+                gamma: 1.2,
             };
             let stage = Stage {
                 id: StageId(id), name: "S".into(),

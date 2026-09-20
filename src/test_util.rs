@@ -38,6 +38,9 @@ pub fn kerolox_engine(id: u64, thrust: f64, mass: f64, isp: f64) -> EngineDesign
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 14.38,
+        gamma: 1.2,
     }
 }
 
@@ -57,5 +60,8 @@ pub fn solid_engine(id: u64, thrust: f64, mass: f64, isp: f64) -> EngineDesign {
             PropellantFraction { propellant: Propellant::SolidMix, mass_fraction: 1.0 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 10.96,
+        gamma: 1.2,
     }
 }

@@ -436,6 +436,78 @@ limit and cap; MVac's bell mass at 16 kg/m²; `thrust_fraction` edges.
 No callers, so the oracle is untouched by construction. 666 tests
 pass, clippy clean.
 
+### Step 2 record (2026‑09‑20)
+
+**Model.** `EngineBaseline` now carries `isp_ref_s` (vacuum Isp of the
+sea‑level bell), `chamber_pressure_pa` (per cycle × propellant,
+`engine_project::chamber_pressure_pa`), `gamma` (per propellant,
+`exhaust_gamma`), `vacuum_only`, thrust, mass, power. `EngineDesign`
+gained `chamber_pressure_pa`, `expansion_ratio`, `gamma` (all
+`#[serde(default)]`); `exit_pressure_pa` is now a derived cache kept for
+the UI and the separation roll. Methods: `set_nozzle`,
+`set_nozzle_for_exit_pressure`, `throat_area_m2`, `with_vacuum_bell(cfg)`
+(ε from the 3 m exit limit and the 300 cap; Isp and thrust × the
+thrust‑coefficient ratio; mass + bell area × 20 kg/m²),
+`atmosphere_response()`, `isp_fraction_at` (via the response),
+`overexpansion_destruction_risk(ambient, cfg)` (ramp from ratio 3.0,
+slope 0.2). The K = 0.2 free function `engine::isp_fraction` is gone.
+
+**Variants.** `EngineBaseline::design(.., cfg)` builds the sea‑level bell
+at `cfg.sea_level_exit_pressure_pa` (0.4 atm) and, for `vacuum` or a
+vacuum‑only family, applies `with_vacuum_bell`. `design_variant(vacuum,
+cfg)` is now a transform of the project's *current* design, so Isp
+improvements and Isp tech penalties reach the flown engine (the §0 bug).
+Fifteen callers take `&balance.nozzle`.
+
+**Ascent.** `AscentNozzle { exit_pressure_pa, thrust_n }` →
+`AscentThruster { response: AtmosphereResponse, thrust_n }`
+(`nozzle::AtmosphereResponse::{None, Nozzle { zero_thrust_pressure_pa }}`,
+the seam toward Option C). Per step: `response.thrust_fraction(p)`, one
+divide; the lookup ceiling is where the loss falls under 0.1 %.
+
+**Balance.** New `[nozzle]` section (`NozzleConfig`): sea‑level exit
+pressure, max bell exit 3.0 m, ε cap 300, bell 20 kg/m², separation
+ramp start 3.0 / slope 0.2. Reference Isp per propellant: kerolox 311,
+hydrolox 420, methalox 350, hypergolic 285, solid 285; NTR 785. Cycle
+Isp multipliers unchanged except Expander 1.04 → 0.97: its low chamber
+pressure makes a poor short bell and its long bell gains the most, so
+the hydrolox expander lands at 463 s (RL10). Resulting figures at
+scale 1 (pad / SL‑bell vacuum / long bell):
+
+| family | pad | SL bell vac | long bell | thrust gain | mass |
+|---|---|---|---|---|---|
+| Kerolox GG (starting engine) | 271 | 311 | 334 | +7 % | 1147 → 1266 kg |
+| Kerolox staged | 297 | 330 | 349 | +6 % | |
+| Hydrolox GG | 365 | 420 | 461 | +10 % | |
+| Hydrolox expander (vac only) | — | — | 463 | | |
+| Methalox GG | 304 | 350 | 379 | +8 % | |
+| Hypergolic pressure‑fed | 195 | 262 | 322 (+100 kg, ε 300) | +23 % | AJ10‑190: 316 s, 118 kg |
+| Solid | 221 | 262 | 294 | | Castor 30XL 294 |
+| NTR (vac only) | — | — | 852 | | NERVA ~850 |
+
+**Saves.** `save::sanitize` → `backfill_nozzles`: every stored
+`EngineDesign` without a nozzle gets one fitted to its stored exit
+pressure at its family's chamber pressure (`chamber_pressure_for_legacy`;
+kerolox figure of the cycle when the mix names no preset). Legacy
+designs keep their stored Isp, so old engines are no better or worse
+than they were. Found and fixed on the way: `serde_json`'s default float
+parser is not exactly round‑trip, so a freshly computed ε changed by one
+ulp on reload and the corpus idempotence test caught it —
+`float_roundtrip` is now enabled in `Cargo.toml`.
+
+**Fixtures.** Every `EngineDesign` literal (≈40 across src) gained the
+three fields, fitted to its exit pressure at 90 bar (third‑party and
+DinoSoar engines at their realistic pressures). `test_util::kerolox_engine`
+and friends likewise. Engine tests re‑pinned: Merlin‑like 97 bar ε 16
+keeps 0.907 at the pad and exhausts at 66 kPa; the long bell at the pad
+is under 0.5 and rolls 100 % separation.
+
+**Gates.** 669 tests, clippy clean, save corpus round‑trips, 200‑seed
+bands pass. The bot's upper stage flies a vacuum bell, so the 40‑seed
+oracle changed as intended; new baseline `oracle_19_base.{txt,csv}` in
+the scratchpad (avg final $196.5M, 2/40 bankrupt, 37/40 ever‑profitable
+— the previous baseline file was no longer on disk to diff against).
+
 ## 7. Questions
 
 1. Option B with the `AtmosphereResponse` seam, or straight to A for

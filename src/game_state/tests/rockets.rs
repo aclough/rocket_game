@@ -37,6 +37,7 @@ fn test_flaw_scoping_by_stage_usage() {
         &design, "leo", 0.0,
         &engine_projects, &rp.flaws, &[], &mut rng,
         &crate::balance_config::FlightConfig::default(),
+            &crate::balance_config::NozzleConfig::default(),
     );
 
     assert!(matches!(sim.outcome, crate::launch::LaunchOutcome::Success),
@@ -142,6 +143,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
         &design, "leo", 0.0,
         &gs.player_company.engine_projects, &rp.flaws, &[], &mut rng,
         &crate::balance_config::FlightConfig::default(),
+            &crate::balance_config::NozzleConfig::default(),
     );
 
     // Build route and instantiate rocket
@@ -223,6 +225,9 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.27 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 12.99,
+        gamma: 1.2,
     };
     let stage1 = Stage {
         id: StageId(1), name: "S1".into(),
@@ -253,6 +258,9 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
             PropellantFraction { propellant: Propellant::Xenon, mass_fraction: 1.0 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 0.0,
+        expansion_ratio: 0.0,
+        gamma: 0.0,
     };
     let ion_stage = Stage {
         id: StageId(3), name: "Ion".into(),
@@ -277,6 +285,9 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
             PropellantFraction { propellant: Propellant::UDMH, mass_fraction: 0.43 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 87.45,
+        gamma: 1.2,
     };
     let lander_stage = Stage {
         id: StageId(4), name: "Lander".into(),

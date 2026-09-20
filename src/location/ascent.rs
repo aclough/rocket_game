@@ -2,6 +2,7 @@
 //! costs each stage group in gravity loss and in sea-level Isp, given
 //! the phases it burns in. Read through `DesignPerformance`.
 
+use crate::nozzle::AtmosphereResponse;
 use super::SurfaceProperties;
 
 /// Velocity at which the rocket leaves the vertical, whatever steers it
@@ -91,16 +92,16 @@ pub struct AscentPhase {
     pub propellant_kg: f64,
     /// Structure that falls away when the phase ends (empty stages).
     pub dry_mass_dropped_kg: f64,
-    /// The nozzles firing, for the altitude-by-altitude Isp penalty.
+    /// The thrusters firing, for the altitude-by-altitude Isp penalty.
     /// Empty means "charge nothing" (a vacuum-only fixture).
-    pub nozzles: Vec<AscentNozzle>,
+    pub nozzles: Vec<AscentThruster>,
 }
 
 /// One engine cluster's contribution to an [`AscentPhase`]'s thrust,
-/// with the exit pressure that decides how much of it sea level eats.
+/// with how the air acts on it (`EngineDesign::atmosphere_response`).
 #[derive(Debug, Clone, Copy)]
-pub struct AscentNozzle {
-    pub exit_pressure_pa: f64,
+pub struct AscentThruster {
+    pub response: AtmosphereResponse,
     /// Vacuum thrust of the cluster.
     pub thrust_n: f64,
 }
@@ -120,8 +121,8 @@ pub struct AscentGroupResult {
     pub burnout_altitude_m: f64,
 }
 
-/// Thrust-weighted Isp fraction of the nozzles firing at `pressure_pa`.
-fn nozzle_fraction(nozzles: &[AscentNozzle], pressure_pa: f64) -> f64 {
+/// Thrust-weighted Isp fraction of the thrusters firing at `pressure_pa`.
+fn nozzle_fraction(nozzles: &[AscentThruster], pressure_pa: f64) -> f64 {
     if nozzles.is_empty() || pressure_pa <= 0.0 {
         return 1.0;
     }
@@ -130,7 +131,7 @@ fn nozzle_fraction(nozzles: &[AscentNozzle], pressure_pa: f64) -> f64 {
         return 1.0;
     }
     nozzles.iter()
-        .map(|n| n.thrust_n * crate::engine::isp_fraction(n.exit_pressure_pa, pressure_pa))
+        .map(|n| n.thrust_n * n.response.thrust_fraction(pressure_pa))
         .sum::<f64>() / total
 }
 
@@ -153,8 +154,8 @@ fn nozzle_fraction(nozzles: &[AscentNozzle], pressure_pa: f64) -> f64 {
 /// velocity and pitch the previous one reached; the first starts at
 /// rest, vertical, and is steered by [`DEFAULT_ASCENT_PROFILE`].
 ///
-/// Thrust at each step is the vacuum figure scaled by the nozzles' Isp
-/// fraction at the current altitude's pressure (`surface.pressure_at`),
+/// Thrust at each step is the vacuum figure scaled by the thrusters'
+/// response to the current altitude's pressure (`surface.pressure_at`),
 /// and that fraction, weighted by the propellant burned at it, is the
 /// group's `isp_fraction`. Propellant burned after orbital velocity, or
 /// in a phase that never entered the integration, counts as vacuum.
@@ -225,12 +226,12 @@ pub fn simulate_ascent_with(
             let (thrust, mass_flow, propellant, dry_mass) =
                 (*thrust_n, *mass_flow_kg_s, *propellant_kg, *dry_mass_dropped_kg);
             let mut remaining_prop = propellant;
-            // Above this altitude every nozzle firing is under-expanded or
-            // matched and the fraction is 1: no pressure lookup needed,
-            // which spares the integration an `exp` per step for most of
-            // the climb.
+            // Above this altitude the air takes under a tenth of a percent
+            // from every thruster firing and the fraction is 1: no
+            // pressure lookup needed, which spares the integration an
+            // `exp` per step for most of the climb.
             let penalty_ceiling_m = nozzles.iter()
-                .map(|n| surface.altitude_where_pressure_falls_to(n.exit_pressure_pa))
+                .map(|n| surface.altitude_where_pressure_falls_to(n.response.negligible_pressure_pa()))
                 .fold(0.0_f64, f64::max);
 
             // Skip phases with no propellant/mass flow (solar sails), and any

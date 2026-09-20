@@ -22,6 +22,9 @@ fn tiny_payload_spacecraft(
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 14.38,
+        gamma: 1.2,
     };
     let stage = Stage {
         id: StageId(id), name: format!("S{}", id),
@@ -247,6 +250,9 @@ fn push_test_spacecraft(gs: &mut GameState, id: u64, name: &str, location: &str)
             propellant: Propellant::LOX, mass_fraction: 1.0,
         }],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 1998.37,
+        gamma: 1.2,
     };
     let stage = Stage {
         id: StageId(id), name: "S".into(),
@@ -434,6 +440,9 @@ fn test_mid_flight_stage_loss_destroys_vehicle() {
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
         ],
         power_draw_w: 0.0,
+        chamber_pressure_pa: 9_000_000.0,
+        expansion_ratio: 14.38,
+        gamma: 1.2,
     };
     let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu, &crate::balance_config::CostsConfig::default());
     let stage = Stage {
@@ -517,6 +526,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
         &design, "leo", 0.0,
         &gs.player_company.engine_projects, &rp.flaws, &[], &mut rng,
         &crate::balance_config::FlightConfig::default(),
+            &crate::balance_config::NozzleConfig::default(),
     );
 
     let rocket_mass = sim.degraded_design.total_mass_kg();
