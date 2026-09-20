@@ -203,16 +203,6 @@ impl BellFigures {
         self.pair(|e| format_kg(e.mass_kg))
     }
 
-    /// Chamber pressure and both bells' expansion ratios, for the
-    /// engine editor: `chamber 90 bar · bell ε 21 / 128`.
-    pub fn geometry(&self) -> Option<String> {
-        if !self.vacuum.has_nozzle() {
-            return None;
-        }
-        let eps = self.pair(|e| format!("{:.0}", e.expansion_ratio));
-        Some(format!("chamber {:.0} bar · bell ε {}", self.vacuum.chamber_pressure_pa / 100_000.0, eps))
-    }
-
     /// Whether `isp` and friends are pairs (so a legend applies).
     pub fn is_pair(&self) -> bool {
         self.sea_level.is_some()
@@ -239,7 +229,6 @@ mod bell_tests {
         assert_eq!(bells.isp(), "271 / 334 s");
         assert_eq!(bells.thrust(), "900 kN / 966 kN");
         assert_eq!(bells.mass(), "1,147 kg / 1,266 kg");
-        assert_eq!(bells.geometry().as_deref(), Some("chamber 90 bar · bell ε 21 / 128"));
     }
 
     #[test]
@@ -248,11 +237,9 @@ mod bell_tests {
         let bells = BellFigures::of_project(&ep, &bal().nozzle);
         assert!(!bells.is_pair());
         assert_eq!(bells.isp(), "463 s");
-        assert_eq!(bells.geometry().as_deref(), Some("chamber 45 bar · bell ε 300"));
         let ion = project(EngineCycle::ElectricPropulsion, PropellantPreset::Xenon);
         let bells = BellFigures::of_project(&ion, &bal().nozzle);
         assert_eq!(bells.isp(), "3000 s");
-        assert_eq!(bells.geometry(), None);
     }
 
     #[test]

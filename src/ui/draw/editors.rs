@@ -21,8 +21,6 @@ pub(super) fn draw_engine_editor_modal(
         Some(ep) => ep,
         None => return,
     };
-    let baseline = crate::engine_project::engine_baseline(ep.design.cycle, ep.spec.preset);
-    let vacuum_only = baseline.is_some_and(|b| b.vacuum_only);
     let row_count = 4; // Name, Cycle, Preset, Scale
     let cursor = cursor.min(row_count - 1);
 
@@ -60,49 +58,33 @@ pub(super) fn draw_engine_editor_modal(
         format!(" {} Scale:  {:.3}×", row_label(3, true), ep.spec.scale),
         row_style(3),
     )));
-    lines.push(Line::from(Span::styled(
-        if vacuum_only {
-            "   Nozzle: vacuum only".to_string()
-        } else {
-            "   Nozzle: chosen per stage in the rocket designer".to_string()
-        },
-        Style::default().fg(Color::DarkGray),
-    )));
 
-    // Live + baseline derived stats.
+    // One line per bell. The sea-level bell shows what it does on the
+    // pad (and in vacuum, which the ascent charges by altitude); the
+    // vacuum bell shows its vacuum figures. A vacuum-only family has
+    // just the second line.
     lines.push(Line::from(""));
-    // Figures read pad / vac: the sea-level bell at the pad and the
-    // vacuum bell in vacuum (a vacuum-only family shows one figure).
     let cfg = &app.game.balance.nozzle;
-    if let Some(b) = baseline {
-        let at = |vacuum: bool| b.design(
-            ep.design.id, String::new(), ep.design.cycle, ep.spec.preset, 1.0, vacuum, cfg,
-        );
-        let bells = BellFigures {
-            sea_level: (!b.vacuum_only && b.chamber_pressure_pa > 0.0).then(|| at(false)),
-            vacuum: at(true),
-        };
-        lines.push(hint_line(format!(" Baseline ({:?} / {}):  Isp {}  thrust {}  mass {}",
-                ep.design.cycle, ep.spec.preset.name(),
-                bells.isp(), bells.thrust(), bells.mass())));
-    }
     let bells = BellFigures::of_project(ep, cfg);
-    lines.push(Line::from(format!(
-        " Scaled:  Isp {}  thrust {}  mass {}",
-        bells.isp(), bells.thrust(), bells.mass(),
-    )));
+    let bell_line = |label: &str, e: &crate::engine::EngineDesign, isp: String| {
+        let eps = if e.has_nozzle() { format!("ε {:.0}", e.expansion_ratio) } else { String::new() };
+        format!(" {label:<12}{isp:<22}{:>9}{:>12}   {eps}",
+            format_thrust_n(e.thrust_n), format_kg(e.mass_kg))
+    };
+    if let Some(sl) = &bells.sea_level {
+        lines.push(Line::from(bell_line("Sea level:", sl,
+            format!("{:.0} s pad · {:.0} s vac", sl.isp_s * sl.isp_fraction_at(PAD_PRESSURE_PA), sl.isp_s))));
+    }
+    lines.push(Line::from(bell_line("Vacuum:", &bells.vacuum, format!("{:.0} s vac", bells.vacuum.isp_s))));
     let mut detail: Vec<String> = Vec::new();
-    if let Some(geometry) = bells.geometry() {
-        detail.push(geometry);
+    if bells.vacuum.has_nozzle() {
+        detail.push(format!("chamber {:.0} bar", bells.vacuum.chamber_pressure_pa / 100_000.0));
     }
     if ep.design.power_draw_w > 0.0 {
         detail.push(format!("power {}", format_power_w(ep.design.power_draw_w)));
     }
-    if bells.is_pair() {
-        detail.push("Isp / thrust / mass read pad / vac".to_string());
-    }
     if !detail.is_empty() {
-        lines.push(hint_line(format!("          {}", detail.join(" · "))));
+        lines.push(hint_line(format!("             {}", detail.join(" · "))));
     }
     let (work_completed, work_required) = match &ep.status {
         crate::engine_project::EngineDesignStatus::Proposed { work_required } => (0.0, *work_required),

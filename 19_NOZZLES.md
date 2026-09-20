@@ -558,6 +558,24 @@ the gap to Falcon 9 is the structural model (A → B: 3.6 t LEO, 2.7 t
 GTO) and the ascent's missing Earth‑rotation credit (A vs real), both
 for the follow‑up plan named in §6.
 
+### Editor revision (2026‑09‑20, after playtest)
+
+USER: the engine editor has room for separate Sea Level and Vacuum
+lines where "Scaled" was; no baseline line, no "scaled" label, no note
+that the nozzle is chosen per stage.
+
+CLAUDE: Done. The editor's stats block is now one line per bell,
+aligned in columns — `Sea level:  276 s pad · 317 s vac    900 kN
+1,147 kg   ε 21` over `Vacuum:     340 s vac    966 kN    1,266 kg
+ε 128` — then a hint with the chamber pressure (and power draw when
+there is one). A vacuum‑only family has just the Vacuum line. The
+baseline line and both Nozzle notes are gone. The editor also gets its
+own 72‑column box (`engine_editor_area`): the default modal is 60 % of
+the screen, 48 columns at 80, which was clipping these lines and had
+been clipping the old nozzle note too. `BellFigures::geometry` went
+unused and was removed. 672 tests, clippy clean, smoke test at both
+widths.
+
 ## 7. Questions
 
 1. Option B with the `AtmosphereResponse` seam, or straight to A for

@@ -224,6 +224,19 @@ pub(super) fn draw_intro_modal(frame: &mut Frame, app: &App, screen: Rect) {
     render_modal(frame, area, " Welcome ", lines);
 }
 
+/// The engine editor's box: the default modal is 60 % of the screen,
+/// 48 columns at 80, which clips its two bell lines. Give it 72 columns
+/// (or the screen less a margin) at the default modal's height.
+fn engine_editor_area(screen: Rect, default: Rect) -> Rect {
+    let w = 72u16.min(screen.width.saturating_sub(4));
+    Rect {
+        x: screen.x + screen.width.saturating_sub(w) / 2,
+        y: default.y,
+        width: w,
+        height: default.height,
+    }
+}
+
 pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
     let modal_area = centered_rect(60, 50, area);
     frame.render_widget(Clear, modal_area);
@@ -240,10 +253,14 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             draw_confirm_retire_modal(frame, effects, area);
         }
         InputMode::EngineEditor { project_id, cursor, state } => {
-            draw_engine_editor_modal(frame, app, *project_id, *cursor, None, state.is_none(), modal_area);
+            let area = engine_editor_area(area, modal_area);
+            frame.render_widget(Clear, area);
+            draw_engine_editor_modal(frame, app, *project_id, *cursor, None, state.is_none(), area);
         }
         InputMode::EngineEditorField { project_id, cursor, field, buffer, state } => {
-            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some((field.label(), buffer.clone())), state.is_none(), modal_area);
+            let area = engine_editor_area(area, modal_area);
+            frame.render_widget(Clear, area);
+            draw_engine_editor_modal(frame, app, *project_id, *cursor, Some((field.label(), buffer.clone())), state.is_none(), area);
         }
         InputMode::ReactorEditor { project_id, cursor } => {
             draw_reactor_editor_modal(frame, app, *project_id, *cursor, None, modal_area);
