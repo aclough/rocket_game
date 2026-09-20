@@ -67,8 +67,7 @@ pub(super) fn draw_engine_editor_modal(
     let cfg = &app.game.balance.nozzle;
     let bells = BellFigures::of_project(ep, cfg);
     let bell_line = |label: &str, e: &crate::engine::EngineDesign, isp: String| {
-        let eps = if e.has_nozzle() { format!("ε {:.0}", e.expansion_ratio) } else { String::new() };
-        format!(" {label:<12}{isp:<22}{:>9}{:>12}   {eps}",
+        format!(" {label:<12}{isp:<22}{:>9}{:>12}",
             format_thrust_n(e.thrust_n), format_kg(e.mass_kg))
     };
     if let Some(sl) = &bells.sea_level {

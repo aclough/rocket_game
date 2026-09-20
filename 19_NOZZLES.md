@@ -576,6 +576,11 @@ been clipping the old nozzle note too. `BellFigures::geometry` went
 unused and was removed. 672 tests, clippy clean, smoke test at both
 widths.
 
+USER: people won't know what ε is — drop it.
+CLAUDE: Dropped from both bell lines; the editor shows Isp, thrust and
+mass per bell plus the chamber pressure. The expansion ratio stays in
+the model and the probes only.
+
 ## 7. Questions
 
 1. Option B with the `AtmosphereResponse` seam, or straight to A for
