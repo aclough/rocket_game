@@ -2,10 +2,13 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
 [] Audit where we use complexity and what modifiers it has right now.
     [] Maybe tune to realistic costs?
+    [] Rethink scaling, beyond .25x to 4x.  Maybe leave fixed diameter?
     [] Look at variations in how we conceive of rocket engines.  What flaws and
-    benefits can do compared to differences in real engines
+        benefits can do compared to differences in real engines
     [] A technology problem should be able to make an engine as hard to make as
-    an RL-10
+        an RL-10
     [] Refinement should be able to make something as lightweight as a Merlin
-    1D
+        1D
+[] Investigate dry masses when we go to do re-entry and start adding other
+options to our rocket bodies.
 
