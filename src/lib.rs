@@ -1,5 +1,6 @@
 pub mod propellant;
 pub mod engine;
+pub mod nozzle;
 pub mod stage;
 pub mod power;
 pub mod reactor;
