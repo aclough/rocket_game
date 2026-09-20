@@ -753,4 +753,51 @@ mod tests {
         let back: EngineDesign = serde_json::from_str(&json).unwrap();
         assert_eq!(back.propulsion, flat.propulsion);
     }
+
+    /// The contract a propulsion kind signs (see the enum's doc): every
+    /// question it must answer, asked of one design of each kind. The
+    /// `match` is exhaustive on purpose — adding a variant fails to
+    /// compile here until its row is written, and the rest of the
+    /// contract (a cycle, a baseline, a flaw pool, an editor entry) is
+    /// listed alongside so it is not forgotten.
+    #[test]
+    fn propulsion_contract() {
+        let bell = Propulsion::nozzle(9_000_000.0, 20.0, 1.2, true);
+        let ion = Propulsion::Electric { power_draw_w: 30_000.0 };
+        let sail = Propulsion::Sail;
+        let pad = ThrustEnvironment::at_pressure(101_325.0);
+        let far = ThrustEnvironment::at_sun(3.0);
+        for p in [&bell, &ion, &sail] {
+            // Rated thrust is the vacuum, 1 AU figure: nothing beats it.
+            assert!(p.thrust_fraction(&ThrustEnvironment::VACUUM_1AU) == 1.0);
+            assert!(p.thrust_fraction(&pad) <= 1.0 && p.thrust_fraction(&far) <= 1.0);
+            match p {
+                Propulsion::Nozzle { .. } => {
+                    assert!(p.has_nozzle() && p.is_sea_level_bell() && p.exit_pressure_pa() > 0.0);
+                    assert!(matches!(p.atmosphere_response(), AtmosphereResponse::Nozzle { .. }));
+                    assert!(p.thrust_fraction(&pad) < 1.0, "the air takes something back");
+                    assert_eq!(p.power_draw_w(), 0.0);
+                    assert!(!p.is_low_thrust() && p.consumes_propellant());
+                    // Cycle: any chemical cycle or NuclearThermal. Baseline:
+                    // `engine_baseline`. Flaws: the per-cycle pools. Editor:
+                    // the Cycle row.
+                }
+                Propulsion::Electric { .. } => {
+                    assert!(!p.has_nozzle() && !p.is_sea_level_bell() && p.exit_pressure_pa() == 0.0);
+                    assert_eq!(p.atmosphere_response(), AtmosphereResponse::None);
+                    assert_eq!(p.thrust_fraction(&pad), 1.0);
+                    assert!(p.power_draw_w() > 0.0, "the flight derates it by power");
+                    assert!(p.is_low_thrust() && p.consumes_propellant());
+                    // Cycle: ElectricPropulsion. Flaws: ELECTRIC_FLAWS.
+                }
+                Propulsion::Sail => {
+                    assert!(!p.has_nozzle() && !p.is_sea_level_bell() && p.exit_pressure_pa() == 0.0);
+                    assert_eq!(p.atmosphere_response(), AtmosphereResponse::None);
+                    assert_eq!(p.power_draw_w(), 0.0);
+                    assert!(p.is_low_thrust() && !p.consumes_propellant());
+                    // Cycle: SolarSail. Flaws: SOLAR_SAIL_FLAWS.
+                }
+            }
+        }
+    }
 }

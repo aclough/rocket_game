@@ -242,6 +242,15 @@ today, so nothing moved: oracle byte‑identical, 674 tests, clippy
 clean. A test pins that the kind questions follow the propulsion even
 when the cycle disagrees, and that `validate` flags the disagreement.
 
+### Step 4 record (2026‑09‑20)
+
+The contract lives in two places: the `Propulsion` doc comment lists
+every question a kind answers and the four things outside the enum it
+needs (cycle, baseline, flaw pool, editor entry); `engine::tests::
+propulsion_contract` asks each question of one design per kind inside
+an exhaustive `match`, so a new variant fails to compile there until its
+row is written. No placeholder variants (Q3).
+
 ## 4. Questions
 
 1. Serde fold via `EngineDesignRepr` (§2, recommended) or a versioned
