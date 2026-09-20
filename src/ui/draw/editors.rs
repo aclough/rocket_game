@@ -71,24 +71,39 @@ pub(super) fn draw_engine_editor_modal(
 
     // Live + baseline derived stats.
     lines.push(Line::from(""));
+    // Figures read pad / vac: the sea-level bell at the pad and the
+    // vacuum bell in vacuum (a vacuum-only family shows one figure).
+    let cfg = &app.game.balance.nozzle;
     if let Some(b) = baseline {
-        lines.push(hint_line(format!(" Baseline ({:?} / {}):  thrust {}  mass {}  Isp {:.0} s",
+        let at = |vacuum: bool| b.design(
+            ep.design.id, String::new(), ep.design.cycle, ep.spec.preset, 1.0, vacuum, cfg,
+        );
+        let bells = BellFigures {
+            sea_level: (!b.vacuum_only && b.chamber_pressure_pa > 0.0).then(|| at(false)),
+            vacuum: at(true),
+        };
+        lines.push(hint_line(format!(" Baseline ({:?} / {}):  Isp {}  thrust {}  mass {}",
                 ep.design.cycle, ep.spec.preset.name(),
-                format_thrust_n(b.thrust_n), format_kg(b.mass_kg), b.isp_ref_s)));
+                bells.isp(), bells.thrust(), bells.mass())));
     }
+    let bells = BellFigures::of_project(ep, cfg);
     lines.push(Line::from(format!(
-        " Scaled:    thrust {}  mass {}  Isp {}  power {}",
-        format_thrust_n(ep.design.thrust_n),
-        format_kg(ep.design.mass_kg),
-        if vacuum_only {
-            format!("{:.0} s", ep.design_variant(true, &app.game.balance.nozzle).isp_s)
-        } else {
-            format!("{:.0} s SL / {:.0} s vac",
-                ep.design_variant(false, &app.game.balance.nozzle).isp_s,
-                ep.design_variant(true, &app.game.balance.nozzle).isp_s)
-        },
-        format_power_w(ep.design.power_draw_w),
+        " Scaled:  Isp {}  thrust {}  mass {}",
+        bells.isp(), bells.thrust(), bells.mass(),
     )));
+    let mut detail: Vec<String> = Vec::new();
+    if let Some(geometry) = bells.geometry() {
+        detail.push(geometry);
+    }
+    if ep.design.power_draw_w > 0.0 {
+        detail.push(format!("power {}", format_power_w(ep.design.power_draw_w)));
+    }
+    if bells.is_pair() {
+        detail.push("Isp / thrust / mass read pad / vac".to_string());
+    }
+    if !detail.is_empty() {
+        lines.push(hint_line(format!("          {}", detail.join(" · "))));
+    }
     let (work_completed, work_required) = match &ep.status {
         crate::engine_project::EngineDesignStatus::Proposed { work_required } => (0.0, *work_required),
         crate::engine_project::EngineDesignStatus::InDesign { work_completed, work_required } => (*work_completed, *work_required),

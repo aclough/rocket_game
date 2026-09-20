@@ -260,13 +260,14 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             for (i, entry) in catalog.iter().enumerate() {
                 let marker = if i == *selected { "▶" } else { " " };
                 let style = selected_style(i == *selected);
+                let bells = BellFigures::of_engine(&entry.design);
                 lines.push(Line::from(Span::styled(
                     format!(
-                        "  {} {}  {:.0}kN  {:.0}s  {}/unit",
+                        "  {} {}  {}  {}  {}/unit",
                         marker,
                         entry.design.name,
-                        entry.design.thrust_n / 1000.0,
-                        entry.design.isp_s,
+                        bells.thrust(),
+                        bells.isp(),
                         format_money(entry.purchase_cost_per_unit),
                     ),
                     style,

@@ -468,14 +468,23 @@ pub(super) fn draw_rocket_pick_engine_modal(
         let marker = if i == selected { "▶" } else { " " };
         let tag = status_tag(source);
         let style = selected_style(i == selected);
+        // A family reads pad / vac across its two bells; a contracted
+        // engine reads the one bell it comes with.
+        let bells = match source {
+            EngineSource::PlayerDesign(pid) => app.game.player_company
+                .find_engine_project(*pid)
+                .map(|ep| BellFigures::of_project(ep, &app.game.balance.nozzle))
+                .unwrap_or_else(|| BellFigures::of_engine(design)),
+            _ => BellFigures::of_engine(design),
+        };
         lines.push(Line::from(Span::styled(
-            format!("  {} {}{}  {}  {:.0}s  {}",
+            format!("  {} {}{}  {}  {}  {}",
                 marker, design.name, tag,
-                format_thrust_n(design.thrust_n), design.isp_s,
-                format_kg(design.mass_kg)),
+                bells.thrust(), bells.isp(), bells.mass()),
             style,
         )));
     }
+    lines.push(hint_line("    Isp / thrust / mass: sea-level bell at the pad / vacuum bell in vacuum"));
 
     // "Design new engine" sentinel row — picking it opens the standard
     // engine-design wizard and returns to the rocket designer after.

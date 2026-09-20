@@ -183,21 +183,17 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
         let prop_str: Vec<String> = project.design.propellant_mix.iter()
             .map(|f| format!("{} {:.0}%", f.propellant.display_name(), f.mass_fraction * 100.0))
             .collect();
-        // One project, two bells: show both so the player can see
-        // what an upper stage would gain before committing a design.
-        let isp_str = if project.has_nozzle_choice() {
-            format!("{:.0}s SL / {:.0}s vac",
-                project.design_variant(false, &app.game.balance.nozzle).isp_s,
-                project.design_variant(true, &app.game.balance.nozzle).isp_s)
-        } else {
-            format!("{:.0}s vac", project.design.isp_s)
-        };
+        // One project, two bells: sea-level bell at the pad / vacuum
+        // bell in vacuum, so the player sees what an upper stage gains
+        // before committing a design (19_NOZZLES.md §5).
+        let bells = BellFigures::of_project(project, &app.game.balance.nozzle);
+        let legend = if bells.is_pair() { "  (pad / vac)" } else { "" };
         lines.push(Line::from(format!(
-            "      {}  {}  {}  {}",
+            "      {}  {}  Isp {}{}",
             project.design.cycle.display_name(),
             prop_str.join(" / "),
-            format_thrust_n(project.design.thrust_n),
-            isp_str,
+            bells.isp(),
+            legend,
         )));
         let power_str = if project.design.power_draw_w > 0.0 {
             format!("    Power: {}", format_power_w(project.design.power_draw_w))
@@ -205,11 +201,15 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
             String::new()
         };
         lines.push(Line::from(format!(
-            "      Mass: {}    Scale: {:.2}x    Auto-revise: {}{}",
-            format_kg(project.design.mass_kg),
+            "      Thrust: {}    Mass: {}{}",
+            bells.thrust(),
+            bells.mass(),
+            power_str,
+        )));
+        lines.push(Line::from(format!(
+            "      Scale: {:.2}x    Auto-revise: {}",
             project.spec.scale,
             if project.auto_revise { "on" } else { "off" },
-            power_str,
         )));
 
         // Show inventory count for engines in Testing or later
@@ -230,11 +230,12 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
         lines.push(Line::from("  Contracted Engines"));
         lines.push(Line::from("  ─────────────────────────────────────────────"));
         for ce in &company.contracted_engines {
+            let bells = BellFigures::of_engine(&ce.design);
             lines.push(Line::from(format!(
-                "    {} [3P]  {:.0}kN  {:.0}s  {}/unit",
+                "    {} [3P]  {}  {}  {}/unit",
                 ce.design.name,
-                ce.design.thrust_n / 1000.0,
-                ce.design.isp_s,
+                bells.thrust(),
+                bells.isp(),
                 format_money(ce.purchase_cost_per_unit),
             )));
             for flaw in ce.flaws.iter().filter(|f| f.discovered) {

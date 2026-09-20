@@ -508,6 +508,27 @@ oracle changed as intended; new baseline `oracle_19_base.{txt,csv}` in
 the scratchpad (avg final $196.5M, 2/40 bankrupt, 37/40 ever‑profitable
 — the previous baseline file was no longer on disk to diff against).
 
+### Step 3 record (2026‑09‑20)
+
+`ui::draw::format::BellFigures { sea_level: Option<EngineDesign>, vacuum }`
+is the one place the pair is built: `of_project(ep, cfg)` (both bells
+of a family, one for a vacuum‑only cycle) and `of_engine(e)` (a built
+engine: a sea‑level bell reads pad / vacuum of itself, a vacuum bell its
+vacuum figure). `isp()` → `271 / 334 s`, `thrust()` → `900 kN / 966 kN`,
+`mass()` → `1,147 kg / 1,266 kg`, `geometry()` → `chamber 90 bar · bell
+ε 21 / 128`. Used by: the Engines tab's expanded rows (Isp line with a
+`(pad / vac)` legend, then a Thrust / Mass line, then Scale /
+Auto‑revise), the contracted‑engines rows, the engine editor (baseline
+and scaled lines as pairs, plus a hint line with chamber pressure, both
+ε and the legend), the rocket designer's Pick Engine list (family pairs
+for player designs, single bell for contracted; legend line under the
+list) and the third‑party catalogue modal. The stage rows keep their
+` SL` / ` vac` / ` vac‑only` bell tag. Three tests pin the exact strings
+for kerolox gas generator, hydrolox expander (`463 s`), ion (`3000 s`)
+and the two built bells (`271 / 311 s`, `334 s`). Render smoke test
+passes at both widths; 672 tests; clippy clean; oracle byte‑identical to
+the step‑2 baseline (UI only).
+
 ## 7. Questions
 
 1. Option B with the `AtmosphereResponse` seam, or straight to A for

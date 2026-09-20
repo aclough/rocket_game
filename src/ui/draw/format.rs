@@ -1,6 +1,9 @@
 //! Number formatters shared by every pane.
 
 use super::*;
+use crate::balance_config::NozzleConfig;
+use crate::engine::EngineDesign;
+use crate::engine_project::EngineProject;
 
 pub(super) fn format_dv(dv: f64) -> String {
     if dv.is_infinite() { "∞".to_string() }
@@ -145,5 +148,120 @@ mod format_helpers_tests {
         assert_eq!(format_kg(4_200.0), "4,200 kg");
         assert_eq!(format_kg(33_348.0), "33,348 kg");
         assert_eq!(format_kg(1_234_567.0), "1,234,567 kg");
+    }
+}
+
+/// Sea-level ambient for every "at the pad" figure the UI shows.
+pub(super) const PAD_PRESSURE_PA: f64 = 101_325.0;
+
+/// The two figures a nozzle family is read by (19_NOZZLES.md §5): the
+/// sea-level bell's Isp *at the pad* and the vacuum bell's *in vacuum*
+/// — what you get lifting off, and the best you get in space.
+pub(super) struct BellFigures {
+    pub sea_level: Option<EngineDesign>,
+    pub vacuum: EngineDesign,
+}
+
+impl BellFigures {
+    /// A project's two bells; one for a vacuum-only family.
+    pub fn of_project(ep: &EngineProject, cfg: &NozzleConfig) -> Self {
+        let vacuum = ep.design_variant(true, cfg);
+        let sea_level = ep.has_nozzle_choice().then(|| ep.design_variant(false, cfg));
+        BellFigures { sea_level, vacuum }
+    }
+
+    /// One engine as built: a sea-level bell reads pad / vacuum of
+    /// itself; a bell that never sees the pad reads its vacuum figure.
+    pub fn of_engine(e: &EngineDesign) -> Self {
+        let sea_level = (e.needs_atmosphere && e.has_nozzle()).then(|| e.clone());
+        BellFigures { sea_level, vacuum: e.clone() }
+    }
+
+    fn pair(&self, f: impl Fn(&EngineDesign) -> String) -> String {
+        match &self.sea_level {
+            Some(sl) => format!("{} / {}", f(sl), f(&self.vacuum)),
+            None => f(&self.vacuum),
+        }
+    }
+
+    /// `271 / 334 s`, or `463 s` for a single bell.
+    pub fn isp(&self) -> String {
+        match &self.sea_level {
+            Some(sl) => format!("{:.0} / {:.0} s",
+                sl.isp_s * sl.isp_fraction_at(PAD_PRESSURE_PA), self.vacuum.isp_s),
+            None => format!("{:.0} s", self.vacuum.isp_s),
+        }
+    }
+
+    /// Vacuum thrust of each bell, `900 kN / 966 kN`.
+    pub fn thrust(&self) -> String {
+        self.pair(|e| format_thrust_n(e.thrust_n))
+    }
+
+    /// Mass of each bell, `1,147 kg / 1,266 kg`.
+    pub fn mass(&self) -> String {
+        self.pair(|e| format_kg(e.mass_kg))
+    }
+
+    /// Chamber pressure and both bells' expansion ratios, for the
+    /// engine editor: `chamber 90 bar · bell ε 21 / 128`.
+    pub fn geometry(&self) -> Option<String> {
+        if !self.vacuum.has_nozzle() {
+            return None;
+        }
+        let eps = self.pair(|e| format!("{:.0}", e.expansion_ratio));
+        Some(format!("chamber {:.0} bar · bell ε {}", self.vacuum.chamber_pressure_pa / 100_000.0, eps))
+    }
+
+    /// Whether `isp` and friends are pairs (so a legend applies).
+    pub fn is_pair(&self) -> bool {
+        self.sea_level.is_some()
+    }
+}
+
+#[cfg(test)]
+mod bell_tests {
+    use super::*;
+    use crate::engine::EngineCycle;
+    use crate::engine_project::{EngineProject, EngineProjectId, PropellantPreset};
+    use crate::engine::EngineId;
+    use crate::test_util::bal;
+
+    fn project(cycle: EngineCycle, preset: PropellantPreset) -> EngineProject {
+        EngineProject::new(EngineProjectId(1), EngineId(1), "F".into(), cycle, preset, 1.0, &bal()).unwrap()
+    }
+
+    #[test]
+    fn a_family_reads_pad_over_vacuum() {
+        let ep = project(EngineCycle::GasGenerator, PropellantPreset::Kerolox);
+        let bells = BellFigures::of_project(&ep, &bal().nozzle);
+        assert!(bells.is_pair());
+        assert_eq!(bells.isp(), "271 / 334 s");
+        assert_eq!(bells.thrust(), "900 kN / 966 kN");
+        assert_eq!(bells.mass(), "1,147 kg / 1,266 kg");
+        assert_eq!(bells.geometry().as_deref(), Some("chamber 90 bar · bell ε 21 / 128"));
+    }
+
+    #[test]
+    fn a_vacuum_only_family_reads_one_figure() {
+        let ep = project(EngineCycle::Expander, PropellantPreset::Hydrolox);
+        let bells = BellFigures::of_project(&ep, &bal().nozzle);
+        assert!(!bells.is_pair());
+        assert_eq!(bells.isp(), "463 s");
+        assert_eq!(bells.geometry().as_deref(), Some("chamber 45 bar · bell ε 300"));
+        let ion = project(EngineCycle::ElectricPropulsion, PropellantPreset::Xenon);
+        let bells = BellFigures::of_project(&ion, &bal().nozzle);
+        assert_eq!(bells.isp(), "3000 s");
+        assert_eq!(bells.geometry(), None);
+    }
+
+    #[test]
+    fn a_built_engine_reads_its_own_bell() {
+        let ep = project(EngineCycle::GasGenerator, PropellantPreset::Kerolox);
+        let cfg = &bal().nozzle;
+        let sl = BellFigures::of_engine(&ep.design_variant(false, cfg));
+        assert_eq!(sl.isp(), "271 / 311 s", "a sea-level bell: at the pad / in vacuum");
+        let vac = BellFigures::of_engine(&ep.design_variant(true, cfg));
+        assert_eq!(vac.isp(), "334 s", "a vacuum bell never sees the pad");
     }
 }
