@@ -37,7 +37,7 @@ fn reactor_ref(gs: &GameState, i: usize) -> ProjectRef {
 /// Stages 1 & 2 use engine_id=1, stage 3 uses engine_id=2.
 /// With 0 payload, stages 1+2 provide enough dv for LEO; stage 3 provides dv for LEO→GTO.
 fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::EngineProject>) {
-    use crate::engine::{EngineDesign, EngineId, EngineCycle, PropellantFraction};
+    use crate::engine::{EngineDesign, Propulsion, EngineId, EngineCycle, PropellantFraction};
     use crate::propellant::Propellant;
     use crate::stage::{Stage, StageId};
     use crate::flaw::{Flaw, FlawId, FlawConsequence};
@@ -49,17 +49,12 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         cycle: EngineCycle::GasGenerator,
         thrust_n: 2_000_000.0,
         isp_s: 300.0,
-        exit_pressure_pa: 100_000.0,
-        needs_atmosphere: false,
         mass_kg: 1500.0,
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.6 },
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 10.96,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 10.96, 1.2, false),
     };
 
     let engine2 = EngineDesign {
@@ -68,17 +63,12 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         cycle: EngineCycle::GasGenerator,
         thrust_n: 100_000.0,
         isp_s: 350.0,
-        exit_pressure_pa: 100_000.0,
-        needs_atmosphere: false,
         mass_kg: 200.0,
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.6 },
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 10.96,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 10.96, 1.2, false),
     };
 
     let stage1 = Stage {

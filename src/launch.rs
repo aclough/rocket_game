@@ -222,7 +222,7 @@ pub fn roll_overexpansion(
     if engines_lost == 0 {
         return None;
     }
-    let exit_pressure_pa = stage.engine.exit_pressure_pa;
+    let exit_pressure_pa = stage.engine.exit_pressure_pa();
     if engines_lost >= engines_before {
         stage.disable();
     } else {
@@ -540,7 +540,7 @@ pub fn apply_reactor_consequence_to_stage(
 mod tests {
     use super::*;
     use rand::SeedableRng;
-    use crate::engine::{EngineDesign, EngineCycle, PropellantFraction};
+    use crate::engine::{EngineDesign, Propulsion, EngineCycle, PropellantFraction};
     use crate::propellant::Propellant;
     use crate::rocket::{RocketDesign, RocketDesignId};
     use crate::stage::{Stage, StageId};
@@ -559,17 +559,12 @@ mod tests {
             // handover (17_3_PHYSICS.md D7).
             thrust_n: 2_500_000.0,
             isp_s: 300.0,
-            exit_pressure_pa: 100_000.0,
-            needs_atmosphere: false,
             mass_kg: 1000.0,
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.6 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.4 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 9_000_000.0,
-            expansion_ratio: 10.96,
-            gamma: 1.2,
+            propulsion: Propulsion::nozzle(9_000_000.0, 10.96, 1.2, false),
         }
     }
 
@@ -624,7 +619,7 @@ mod tests {
     /// squared.
     #[test]
     fn overexpansion_is_charged_once_across_launch_and_first_leg() {
-        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction, G0};
+        use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction, G0};
         use crate::propellant::Propellant;
         use crate::rocket::{RocketDesignId, RocketId};
         use crate::stage::{Stage, StageId};
@@ -632,16 +627,12 @@ mod tests {
         let ambient = 101_325.0;
         let engine = |id: u64, thrust: f64, isp: f64, exit_pa: f64| EngineDesign {
             id: EngineId(id), name: format!("E{id}"), cycle: EngineCycle::GasGenerator,
-            thrust_n: thrust, mass_kg: 500.0, isp_s: isp, exit_pressure_pa: exit_pa,
-            needs_atmosphere: false,
+            thrust_n: thrust, mass_kg: 500.0, isp_s: isp,
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 9_000_000.0,
-            expansion_ratio: crate::nozzle::expansion_ratio_for_exit_pressure(9_000_000.0, exit_pa, 1.2),
-            gamma: 1.2,
+            propulsion: Propulsion::nozzle(9_000_000.0, crate::nozzle::expansion_ratio_for_exit_pressure(9_000_000.0, exit_pa, 1.2), 1.2, false),
         };
         let stage = |id: u64, e: EngineDesign, prop: f64, dry: f64| Stage {
             id: StageId(id), name: format!("S{id}"), engine: e, engine_count: 1,

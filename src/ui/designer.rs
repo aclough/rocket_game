@@ -1118,7 +1118,7 @@ mod sync_tests {
         // Before sync: stage still has kerolox numbers.
         assert!(state.stage_groups[0][0].engine.thrust_n > 100_000.0,
             "stage engine should still be kerolox-sized before sync");
-        assert_eq!(state.stage_groups[0][0].engine.power_draw_w, 0.0,
+        assert_eq!(state.stage_groups[0][0].engine.power_draw_w(), 0.0,
             "stage engine should have zero power draw before sync");
         let kerolox_prop = state.stage_groups[0][0].propellant_mass_kg;
 
@@ -1128,9 +1128,9 @@ mod sync_tests {
         assert!(state.stage_groups[0][0].engine.thrust_n < 100.0,
             "stage engine thrust should be ~1 N (ion) after sync, got {}",
             state.stage_groups[0][0].engine.thrust_n);
-        assert!(state.stage_groups[0][0].engine.power_draw_w > 1000.0,
+        assert!(state.stage_groups[0][0].engine.power_draw_w() > 1000.0,
             "stage engine power_draw_w should reflect ion engine after sync, got {}",
-            state.stage_groups[0][0].engine.power_draw_w);
+            state.stage_groups[0][0].engine.power_draw_w());
         // The tank is re-solved rather than left at its kerolox size. This
         // stage sits in the first-stage slot, and a 1 N ion engine cannot
         // lift anything at all, so the solver bottoms out — which is the
@@ -1147,18 +1147,22 @@ mod sync_tests {
 mod autosize_tests {
     use super::*;
     use crate::stage::{LOW_THRUST_DV_TARGET, TARGET_LIFTOFF_TWR, TARGET_STAGE_TWR};
-    use crate::engine::{EngineId, PropellantFraction};
+    use crate::engine::{EngineId, PropellantFraction, Propulsion};
     use crate::rocket::RocketDesign;
     use crate::propellant::Propellant;
 
     fn engine(id: u64, thrust: f64, isp: f64, mass: f64, cycle: EngineCycle,
               prop: Propellant) -> EngineDesign {
+        let propulsion = match cycle {
+            EngineCycle::ElectricPropulsion => Propulsion::Electric { power_draw_w: 0.0 },
+            EngineCycle::SolarSail => Propulsion::Sail,
+            _ => Propulsion::nozzle(9_000_000.0, 12.7, 1.2, false),
+        };
         EngineDesign {
             id: EngineId(id), name: format!("E{id}"), cycle,
             thrust_n: thrust, mass_kg: mass, isp_s: isp,
-            exit_pressure_pa: 70_000.0, needs_atmosphere: false, power_draw_w: 0.0,
-            chamber_pressure_pa: 9_000_000.0, expansion_ratio: 12.7, gamma: 1.2,
             propellant_mix: vec![PropellantFraction { propellant: prop, mass_fraction: 1.0 }],
+            propulsion,
         }
     }
 
@@ -1348,7 +1352,7 @@ mod autosize_tests {
 mod nozzle_variant_tests {
     use super::*;
     use crate::engine_project::EngineProject;
-    use crate::engine::EngineId;
+    use crate::engine::{EngineId, Propulsion};
     use crate::engine_project::EngineProjectId;
 
     fn app_with_engine() -> (App, EngineProjectId) {
@@ -1529,12 +1533,9 @@ mod nozzle_variant_tests {
             id: EngineId(99), name: "NK-33".into(),
             cycle: EngineCycle::StagedCombustion,
             thrust_n: 1_500_000.0, mass_kg: 1_200.0, isp_s: 297.0,
-            exit_pressure_pa: 70_000.0, needs_atmosphere: true,
+
             propellant_mix: PropellantPreset::Kerolox.propellant_mix(),
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 9_000_000.0,
-            expansion_ratio: 14.38,
-            gamma: 1.2,
+            propulsion: Propulsion::nozzle(9_000_000.0, 14.38, 1.2, true),
         };
         let mut state = Box::new(RocketDesignerState::new("Bought".into()));
         state.push_new_group(

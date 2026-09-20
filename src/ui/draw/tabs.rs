@@ -195,8 +195,8 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
             bells.isp(),
             legend,
         )));
-        let power_str = if project.design.power_draw_w > 0.0 {
-            format!("    Power: {}", format_power_w(project.design.power_draw_w))
+        let power_str = if project.design.power_draw_w() > 0.0 {
+            format!("    Power: {}", format_power_w(project.design.power_draw_w()))
         } else {
             String::new()
         };

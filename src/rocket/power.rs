@@ -122,7 +122,7 @@ impl RocketDesign {
         let mut remaining = available_power_w;
         for stage in group {
             let nominal = stage.total_thrust_n();
-            let required = stage.engine.power_draw_w * stage.engine_count as f64;
+            let required = stage.engine.power_draw_w() * stage.engine_count as f64;
             if required <= 0.0 {
                 total += nominal;
             } else if remaining <= 0.0 {
@@ -445,12 +445,12 @@ mod tests {
             id: EngineId(1), name: "Ion".into(),
             cycle: EngineCycle::ElectricPropulsion,
             thrust_n, mass_kg: 35.0, isp_s: 3000.0,
-            exit_pressure_pa: 0.0, needs_atmosphere: false,
-            chamber_pressure_pa: 0.0, expansion_ratio: 0.0, gamma: 0.0,
+
+
             propellant_mix: vec![PropellantFraction {
                 propellant: Propellant::Xenon, mass_fraction: 1.0,
             }],
-            power_draw_w,
+            propulsion: Propulsion::Electric { power_draw_w },
         }
     }
 
@@ -521,15 +521,12 @@ mod tests {
             id: EngineId(1), name: "RL-10-like".into(),
             cycle: EngineCycle::Expander,
             thrust_n: 100_000.0, mass_kg: 170.0, isp_s: 450.0,
-            exit_pressure_pa: 5_000.0, needs_atmosphere: false,
+
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.833 },
                 PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.167 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 9_000_000.0,
-            expansion_ratio: 114.40,
-            gamma: 1.2,
+            propulsion: Propulsion::nozzle(9_000_000.0, 114.40, 1.2, false),
         }
     }
 

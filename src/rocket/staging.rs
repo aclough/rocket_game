@@ -763,15 +763,10 @@ mod tests {
             thrust_n: 1.0,
             mass_kg: 50.0,
             isp_s: 3000.0,
-            exit_pressure_pa: 0.0,
-            needs_atmosphere: false,
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 1.0 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 0.0,
-            expansion_ratio: 0.0,
-            gamma: 0.0,
+            propulsion: Propulsion::nozzle(0.0, 0.0, 0.0, false),
         };
         let lander_engine = kerolox_engine(11, 50_000.0, 100.0, 320.0);
 

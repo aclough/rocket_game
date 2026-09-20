@@ -413,7 +413,7 @@ mod tests {
     /// assemble Payload::Spacecraft test instances without dragging in the
     /// full engine/stage helpers.
     fn tiny_spacecraft(id: u64, prop: f64, dry: f64) -> (RocketDesign, Rocket) {
-        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
         use crate::propellant::Propellant;
         use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
         use crate::stage::{Stage, StageId};
@@ -421,15 +421,12 @@ mod tests {
             id: EngineId(id), name: "TestEng".into(),
             cycle: EngineCycle::GasGenerator,
             thrust_n: 100_000.0, mass_kg: 100.0, isp_s: 300.0,
-            exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 9_000_000.0,
-            expansion_ratio: 14.38,
-            gamma: 1.2,
+            propulsion: Propulsion::nozzle(9_000_000.0, 14.38, 1.2, false),
         };
         let stage = Stage {
             id: StageId(id), name: format!("S{}", id),
@@ -621,7 +618,7 @@ mod tests {
     /// Build a 2-leg flight (Earth Surface -> LEO -> GTO) using a real
     /// 2-stage rocket design so the dv-plan dry-run has something to bite into.
     fn make_two_leg_flight() -> Flight {
-        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
         use crate::propellant::Propellant;
         use crate::rocket::{RocketDesign, RocketDesignId, RocketId};
         use crate::stage::{Stage, StageId};
@@ -630,29 +627,23 @@ mod tests {
             id: EngineId(1), name: "Booster".into(),
             cycle: EngineCycle::GasGenerator,
             thrust_n: 7_000_000.0, mass_kg: 1_500.0, isp_s: 280.0,
-            exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 9_000_000.0,
-            expansion_ratio: 14.38,
-            gamma: 1.2,
+            propulsion: Propulsion::nozzle(9_000_000.0, 14.38, 1.2, false),
         };
         let upper_engine = EngineDesign {
             id: EngineId(2), name: "Upper".into(),
             cycle: EngineCycle::GasGenerator,
             thrust_n: 1_000_000.0, mass_kg: 800.0, isp_s: 340.0,
-            exit_pressure_pa: 10_000.0, needs_atmosphere: false,
+
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 9_000_000.0,
-            expansion_ratio: 65.85,
-            gamma: 1.2,
+            propulsion: Propulsion::nozzle(9_000_000.0, 65.85, 1.2, false),
         };
         let s1 = Stage {
             id: StageId(1), name: "S1".into(),
@@ -777,7 +768,7 @@ mod tests {
     /// Build an ion-only spacecraft with `panel_w` watts of solar at
     /// 1 AU. Big propellant so a long burn is possible.
     fn ion_spacecraft_design(panel_w: f64) -> RocketDesign {
-        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
         use crate::power::PowerSource;
         use crate::propellant::Propellant;
         use crate::rocket::{RocketDesign, RocketDesignId};
@@ -786,12 +777,12 @@ mod tests {
             id: EngineId(1), name: "Ion".into(),
             cycle: EngineCycle::ElectricPropulsion,
             thrust_n: 5.0, mass_kg: 35.0, isp_s: 3000.0,
-            exit_pressure_pa: 0.0, needs_atmosphere: false,
-            chamber_pressure_pa: 0.0, expansion_ratio: 0.0, gamma: 0.0,
+
+
             propellant_mix: vec![PropellantFraction {
                 propellant: Propellant::Xenon, mass_fraction: 1.0,
             }],
-            power_draw_w: 150_000.0, // 5 N × 30 kW/N
+            propulsion: Propulsion::Electric { power_draw_w: 150_000.0 },
         };
         let stage = Stage {
             id: StageId(1), name: "S1".into(),
@@ -865,7 +856,7 @@ mod tests {
         let (upper, _) = tiny_spacecraft(2, 8_000.0, 800.0);
         let mut s1 = lower.stage_groups[0][0].clone();
         s1.engine.thrust_n = 1_200_000.0;
-        s1.engine.exit_pressure_pa = 60_000.0; // penalised at the pad
+        s1.engine.set_nozzle_for_exit_pressure(9_000_000.0, 60_000.0, 1.2); // penalised at the pad
         let mut s2 = upper.stage_groups[0][0].clone();
         s2.engine.thrust_n = 150_000.0;
         s2.engine.isp_s = 340.0;

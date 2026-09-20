@@ -466,7 +466,7 @@ mod falcon9 {
     //! read 7.3 t LEO / 0 GTO for the all‑game rocket.
 
     use rocket_tycoon::balance_config::BalanceConfig;
-    use rocket_tycoon::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+    use rocket_tycoon::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
     use rocket_tycoon::engine_project::{EngineProject, EngineProjectId, PropellantPreset};
     use rocket_tycoon::propellant::Propellant;
     use rocket_tycoon::rocket::{DesignPerformance, RocketDesign, RocketDesignId};
@@ -480,13 +480,12 @@ mod falcon9 {
     fn merlin(id: u64, name: &str, thrust: f64, mass: f64, isp: f64, eps: f64, sea_level: bool) -> EngineDesign {
         let mut e = EngineDesign {
             id: EngineId(id), name: name.into(), cycle: EngineCycle::GasGenerator,
-            thrust_n: thrust, mass_kg: mass, isp_s: isp, exit_pressure_pa: 0.0,
-            needs_atmosphere: sea_level,
+            thrust_n: thrust, mass_kg: mass, isp_s: isp,
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
-            power_draw_w: 0.0, chamber_pressure_pa: 0.0, expansion_ratio: 0.0, gamma: 0.0,
+            propulsion: Propulsion::nozzle(0.0, 0.0, 0.0, sea_level),
         };
         e.set_nozzle(9_700_000.0, eps, 1.22);
         e
@@ -519,7 +518,7 @@ mod falcon9 {
             let s = &g[0];
             println!(
                 "   S{}: {} ×{}  Isp {:.0} s  ε {:.0}  engines {:.0} kg  structure {:.0} kg  dry {:.0} kg  wet {:.0} kg",
-                gi + 1, s.engine.name, s.engine_count, s.engine.isp_s, s.engine.expansion_ratio,
+                gi + 1, s.engine.name, s.engine_count, s.engine.isp_s, s.engine.propulsion.bell().map_or(0.0, |b| b.1),
                 s.engine.mass_kg * s.engine_count as f64, s.structural_mass_kg, s.dry_mass_kg(), s.wet_mass_kg(),
             );
         }

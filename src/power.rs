@@ -379,7 +379,7 @@ pub fn preset_available(
 }
 
 /// Synthesize a SolarPanel sized to cover this stage's full electrical
-/// demand at 1 AU (housekeeping + engine.power_draw_w × engine_count).
+/// demand at 1 AU (housekeeping + engine.power_draw_w() × engine_count).
 /// Used at design time when a new stage is created and as the
 /// "Solar Panel (auto-sized)" preset in the editor.
 ///
@@ -389,7 +389,7 @@ pub fn preset_available(
 /// editor's +/- controls.
 pub fn solar_panel_for_stage_demand(stage: &crate::stage::Stage) -> PowerSource {
     let demand = stage.housekeeping_w()
-        + stage.engine.power_draw_w * stage.engine_count as f64;
+        + stage.engine.power_draw_w() * stage.engine_count as f64;
     PowerSource::new_solar_panel(demand.max(1.0))
 }
 
@@ -564,19 +564,18 @@ mod tests {
     }
 
     fn make_stage(power_draw_w: f64, engine_count: u32) -> crate::stage::Stage {
-        use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+        use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
         use crate::propellant::Propellant;
         use crate::stage::{Stage, StageId};
+        // An electric thruster with the given draw (0 for "no engine draw").
         let engine = EngineDesign {
             id: EngineId(1), name: "E".into(),
-            cycle: EngineCycle::GasGenerator,
+            cycle: EngineCycle::ElectricPropulsion,
             thrust_n: 1.0, mass_kg: 100.0, isp_s: 300.0,
-            exit_pressure_pa: 1.0, needs_atmosphere: false,
-            chamber_pressure_pa: 0.0, expansion_ratio: 0.0, gamma: 0.0,
             propellant_mix: vec![PropellantFraction {
                 propellant: Propellant::LOX, mass_fraction: 1.0,
             }],
-            power_draw_w,
+            propulsion: Propulsion::Electric { power_draw_w },
         };
         Stage {
             id: StageId(1), name: "S".into(),

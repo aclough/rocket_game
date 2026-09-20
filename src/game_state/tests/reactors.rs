@@ -212,7 +212,7 @@ fn test_reactor_tech_deficiencies_apply_and_revise() {
 /// `advance_day` flight loop.
 #[test]
 fn test_reactor_flaw_activates_mid_flight() {
-    use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+    use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
     use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawTrigger};
     use crate::power::PowerSource;
     use crate::propellant::Propellant;
@@ -246,15 +246,12 @@ fn test_reactor_flaw_activates_mid_flight() {
         id: EngineId(1), name: "E".into(),
         cycle: EngineCycle::GasGenerator,
         thrust_n: 100_000.0, mass_kg: 200.0, isp_s: 350.0,
-        exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 14.38,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 14.38, 1.2, false),
     };
     let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu, &crate::balance_config::CostsConfig::default());
     let steady_full = reactor_design.steady_w;
@@ -310,7 +307,7 @@ fn test_reactor_flaw_activates_mid_flight() {
 /// start), not when the reactor's stage engine happens to fire.
 #[test]
 fn test_reactor_perflight_flaw_fires_at_flight_start() {
-    use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+    use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
     use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawTrigger};
     use crate::power::PowerSource;
     use crate::propellant::Propellant;
@@ -341,15 +338,12 @@ fn test_reactor_perflight_flaw_fires_at_flight_start() {
         id: EngineId(1), name: "E".into(),
         cycle: EngineCycle::GasGenerator,
         thrust_n: 100_000.0, mass_kg: 200.0, isp_s: 350.0,
-        exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 14.38,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 14.38, 1.2, false),
     };
     let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu, &crate::balance_config::CostsConfig::default());
     let stage = Stage {

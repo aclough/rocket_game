@@ -3,7 +3,7 @@ use rand::rngs::StdRng;
 use serde::{Serialize, Deserialize};
 
 use crate::balance;
-use crate::engine::{EngineDesign, EngineCycle, EngineId, PropellantFraction, G0};
+use crate::engine::{Propulsion, EngineDesign, EngineCycle, EngineId, PropellantFraction, G0};
 use crate::balance_config::NozzleConfig;
 use crate::balance_config::{BalanceConfig, FlawsConfig};
 use crate::flaw::FlawDomain;
@@ -147,32 +147,32 @@ impl EngineBaseline {
         &self, id: EngineId, name: String, cycle: EngineCycle, preset: PropellantPreset,
         scale: f64, vacuum: bool, cfg: &NozzleConfig,
     ) -> EngineDesign {
-        let mut design = EngineDesign {
+        let propulsion = match cycle {
+            EngineCycle::ElectricPropulsion => Propulsion::Electric {
+                // Power draw: scales with thrust for ion drives (~30 kW/N
+                // ≈ NEXT thruster ratio).
+                power_draw_w: self.power_draw_w * scale,
+            },
+            EngineCycle::SolarSail => Propulsion::Sail,
+            _ => Propulsion::nozzle_for_exit_pressure(
+                self.chamber_pressure_pa, cfg.sea_level_exit_pressure_pa, self.gamma, true,
+            ),
+        };
+        let design = EngineDesign {
             id,
             name,
             cycle,
             thrust_n: self.thrust_n * scale,
             mass_kg: self.mass_kg * scale,
             isp_s: self.isp_ref_s,
-            exit_pressure_pa: 0.0,
-            needs_atmosphere: self.chamber_pressure_pa > 0.0,
             propellant_mix: preset.propellant_mix(),
-            // Power draw: scales with thrust for ion drives (~30 kW/N
-            // ≈ NEXT thruster ratio); 0 for everything else.
-            power_draw_w: self.power_draw_w * scale,
-            chamber_pressure_pa: 0.0,
-            expansion_ratio: 0.0,
-            gamma: 0.0,
+            propulsion,
         };
-        if self.chamber_pressure_pa > 0.0 {
-            design.set_nozzle_for_exit_pressure(
-                self.chamber_pressure_pa, cfg.sea_level_exit_pressure_pa, self.gamma,
-            );
-        }
         if self.vacuum_only || vacuum {
-            design = design.with_vacuum_bell(cfg);
+            design.with_vacuum_bell(cfg)
+        } else {
+            design
         }
-        design
     }
 }
 
@@ -224,13 +224,12 @@ pub fn exhaust_gamma(preset: PropellantPreset) -> f64 {
 }
 
 /// The chamber pressure to assume for a design that predates nozzles
-/// (`save::sanitize`): its family's if the propellant mix names one,
+/// (`EngineDesignRepr`): its family's if the propellant mix names one,
 /// else the cycle's kerolox figure, else nothing (no nozzle).
-pub fn chamber_pressure_for_legacy(design: &EngineDesign) -> Option<(f64, f64)> {
-    let preset = preset_for_mix(&design.propellant_mix);
-    match preset {
-        Some(p) => chamber_pressure_pa(design.cycle, p).map(|pc| (pc, exhaust_gamma(p))),
-        None => chamber_pressure_pa(design.cycle, PropellantPreset::Kerolox)
+pub fn chamber_pressure_for_legacy(cycle: EngineCycle, mix: &[crate::engine::PropellantFraction]) -> Option<(f64, f64)> {
+    match preset_for_mix(mix) {
+        Some(p) => chamber_pressure_pa(cycle, p).map(|pc| (pc, exhaust_gamma(p))),
+        None => chamber_pressure_pa(cycle, PropellantPreset::Kerolox)
             .map(|pc| (pc, crate::engine::DEFAULT_GAMMA)),
     }
 }
@@ -823,13 +822,15 @@ mod tests {
         let vac = p.design_variant(true, &cfg);
         let sl = p.design_variant(false, &cfg);
         assert!(vac.isp_s > sl.isp_s, "vacuum bell should have higher Isp");
-        assert!(vac.exit_pressure_pa < sl.exit_pressure_pa,
+        assert!(vac.exit_pressure_pa() < sl.exit_pressure_pa(),
             "vacuum bell expands further");
-        assert!(vac.expansion_ratio > sl.expansion_ratio);
+        let (vac_pc, vac_eps, _) = vac.propulsion.bell().unwrap();
+        let (sl_pc, sl_eps, _) = sl.propulsion.bell().unwrap();
+        assert!(vac_eps > sl_eps);
         assert!(vac.is_vacuum_variant() && !sl.is_vacuum_variant());
         // Same chamber: chamber pressure and mass flow are shared, so
         // thrust rises with Isp; the long bell weighs more.
-        assert_eq!(vac.chamber_pressure_pa, sl.chamber_pressure_pa);
+        assert_eq!(vac_pc, sl_pc);
         let gain = vac.isp_s / sl.isp_s;
         assert!(gain > 1.05 && gain < 1.10, "kerolox gas generator: 3 m bell gains ~7 %, got {gain}");
         assert!((vac.thrust_n / sl.thrust_n - gain).abs() < 1e-9, "thrust gain equals Isp gain");

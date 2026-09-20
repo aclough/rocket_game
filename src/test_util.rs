@@ -8,7 +8,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use crate::balance_config::BalanceConfig;
-use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
 use crate::propellant::Propellant;
 
 /// The default balance.
@@ -31,16 +31,11 @@ pub fn kerolox_engine(id: u64, thrust: f64, mass: f64, isp: f64) -> EngineDesign
         thrust_n: thrust,
         mass_kg: mass,
         isp_s: isp,
-        exit_pressure_pa: 70_000.0,
-        needs_atmosphere: false,
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 14.38,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 14.38, 1.2, false),
     }
 }
 
@@ -54,14 +49,9 @@ pub fn solid_engine(id: u64, thrust: f64, mass: f64, isp: f64) -> EngineDesign {
         thrust_n: thrust,
         mass_kg: mass,
         isp_s: isp,
-        exit_pressure_pa: 100_000.0,
-        needs_atmosphere: false,
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::SolidMix, mass_fraction: 1.0 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 10.96,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 10.96, 1.2, false),
     }
 }

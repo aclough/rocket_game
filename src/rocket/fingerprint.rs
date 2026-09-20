@@ -32,9 +32,22 @@ impl RocketDesign {
                 e.thrust_n.to_bits().hash(&mut h);
                 e.mass_kg.to_bits().hash(&mut h);
                 e.isp_s.to_bits().hash(&mut h);
-                e.exit_pressure_pa.to_bits().hash(&mut h);
-                e.needs_atmosphere.hash(&mut h);
-                e.power_draw_w.to_bits().hash(&mut h);
+                // The propulsion kind and its data: which bell, or the
+                // electrical draw the flight derates by.
+                match e.propulsion {
+                    crate::engine::Propulsion::Nozzle { chamber_pressure_pa, expansion_ratio, gamma, sea_level } => {
+                        0u8.hash(&mut h);
+                        chamber_pressure_pa.to_bits().hash(&mut h);
+                        expansion_ratio.to_bits().hash(&mut h);
+                        gamma.to_bits().hash(&mut h);
+                        sea_level.hash(&mut h);
+                    }
+                    crate::engine::Propulsion::Electric { power_draw_w } => {
+                        1u8.hash(&mut h);
+                        power_draw_w.to_bits().hash(&mut h);
+                    }
+                    crate::engine::Propulsion::Sail => 2u8.hash(&mut h),
+                }
                 stage.engine_count.hash(&mut h);
                 stage.propellant_mass_kg.to_bits().hash(&mut h);
                 stage.structural_mass_kg.to_bits().hash(&mut h);

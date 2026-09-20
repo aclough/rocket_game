@@ -173,7 +173,7 @@ impl BellFigures {
     /// One engine as built: a sea-level bell reads pad / vacuum of
     /// itself; a bell that never sees the pad reads its vacuum figure.
     pub fn of_engine(e: &EngineDesign) -> Self {
-        let sea_level = (e.needs_atmosphere && e.has_nozzle()).then(|| e.clone());
+        let sea_level = (e.propulsion.is_sea_level_bell() && e.has_nozzle()).then(|| e.clone());
         BellFigures { sea_level, vacuum: e.clone() }
     }
 

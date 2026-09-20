@@ -8,7 +8,7 @@ use super::*;
 fn tiny_payload_spacecraft(
     id: u64, name: &str, deploy_at: &str, nested: Vec<Payload>,
 ) -> Payload {
-    use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+    use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
     use crate::propellant::Propellant;
     use crate::rocket::{RocketDesign, RocketId};
     use crate::stage::{Stage, StageId};
@@ -16,15 +16,12 @@ fn tiny_payload_spacecraft(
         id: EngineId(id), name: "TinyEng".into(),
         cycle: EngineCycle::GasGenerator,
         thrust_n: 100_000.0, mass_kg: 100.0, isp_s: 300.0,
-        exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 14.38,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 14.38, 1.2, false),
     };
     let stage = Stage {
         id: StageId(id), name: format!("S{}", id),
@@ -237,7 +234,7 @@ fn test_multiple_payloads_at_same_destination() {
 /// Push a freshly-built minimal Spacecraft into `gs.spacecraft` at
 /// `location` with the given name. Returns its index.
 fn push_test_spacecraft(gs: &mut GameState, id: u64, name: &str, location: &str) -> usize {
-    use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+    use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
     use crate::propellant::Propellant;
     use crate::rocket::{RocketDesign, RocketId};
     use crate::stage::{Stage, StageId};
@@ -245,14 +242,11 @@ fn push_test_spacecraft(gs: &mut GameState, id: u64, name: &str, location: &str)
         id: EngineId(id), name: "E".into(),
         cycle: EngineCycle::GasGenerator,
         thrust_n: 1.0, mass_kg: 1.0, isp_s: 100.0,
-        exit_pressure_pa: 1.0, needs_atmosphere: false,
+
         propellant_mix: vec![PropellantFraction {
             propellant: Propellant::LOX, mass_fraction: 1.0,
         }],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 1998.37,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 1998.37, 1.2, false),
     };
     let stage = Stage {
         id: StageId(id), name: "S".into(),
@@ -403,7 +397,7 @@ fn test_save_and_load_with_docked_spacecraft() {
 /// it's reported as lost (not stranded) and dents reputation.
 #[test]
 fn test_mid_flight_stage_loss_destroys_vehicle() {
-    use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+    use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
     use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawTrigger};
     use crate::power::PowerSource;
     use crate::propellant::Propellant;
@@ -434,15 +428,12 @@ fn test_mid_flight_stage_loss_destroys_vehicle() {
         id: EngineId(1), name: "E".into(),
         cycle: EngineCycle::GasGenerator,
         thrust_n: 100_000.0, mass_kg: 200.0, isp_s: 350.0,
-        exit_pressure_pa: 70_000.0, needs_atmosphere: false,
+
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.7 },
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.3 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 14.38,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 14.38, 1.2, false),
     };
     let reactor_design = ReactorDesign::new(reactor_id, "R".into(), 1.0, EnrichmentLevel::Leu, &crate::balance_config::CostsConfig::default());
     let stage = Stage {

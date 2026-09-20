@@ -303,7 +303,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                                 "        ▲ Flow separation risk: {:.0}%/engine, Isp penalty: {:.0}%  (exit {:.0} kPa)",
                                 risk * 100.0,
                                 (1.0 - isp_frac) * 100.0,
-                                stage.engine.exit_pressure_pa / 1000.0,
+                                stage.engine.exit_pressure_pa() / 1000.0,
                             ),
                             Style::default().fg(Color::Red),
                         )));
@@ -312,7 +312,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                             format!(
                                 "        Isp penalty: {:.0}%  (exit {:.0} kPa at sea level)",
                                 (1.0 - isp_frac) * 100.0,
-                                stage.engine.exit_pressure_pa / 1000.0,
+                                stage.engine.exit_pressure_pa() / 1000.0,
                             ),
                             Style::default().fg(Color::Yellow),
                         )));

@@ -204,7 +204,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
 /// ion stage, and the planner switches to chemical pathfinding after staging.
 #[test]
 fn test_hybrid_ion_chemical_to_asteroid_surface() {
-    use crate::engine::{EngineDesign, EngineId, EngineCycle, PropellantFraction};
+    use crate::engine::{EngineDesign, Propulsion, EngineId, EngineCycle, PropellantFraction};
     use crate::propellant::Propellant;
     use crate::stage::{Stage, StageId};
     use crate::rocket::{RocketDesign, RocketId};
@@ -217,17 +217,12 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         cycle: EngineCycle::GasGenerator,
         thrust_n: 2_000_000.0,
         isp_s: 300.0,
-        exit_pressure_pa: 80_000.0,
-        needs_atmosphere: false,
         mass_kg: 1500.0,
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.73 },
             PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.27 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 12.99,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 12.99, 1.2, false),
     };
     let stage1 = Stage {
         id: StageId(1), name: "S1".into(),
@@ -251,16 +246,11 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         cycle: EngineCycle::ElectricPropulsion,
         thrust_n: 1.0,
         isp_s: 3000.0,
-        exit_pressure_pa: 0.0,
-        needs_atmosphere: false,
         mass_kg: 50.0,
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::Xenon, mass_fraction: 1.0 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 0.0,
-        expansion_ratio: 0.0,
-        gamma: 0.0,
+        propulsion: Propulsion::Electric { power_draw_w: 0.0 },
     };
     let ion_stage = Stage {
         id: StageId(3), name: "Ion".into(),
@@ -277,17 +267,12 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         cycle: EngineCycle::PressureFed,
         thrust_n: 5_000.0,
         isp_s: 280.0,
-        exit_pressure_pa: 7_000.0,
-        needs_atmosphere: false,
         mass_kg: 20.0,
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::NTO, mass_fraction: 0.57 },
             PropellantFraction { propellant: Propellant::UDMH, mass_fraction: 0.43 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 9_000_000.0,
-        expansion_ratio: 87.45,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(9_000_000.0, 87.45, 1.2, false),
     };
     let lander_stage = Stage {
         id: StageId(4), name: "Lander".into(),

@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 
 use crate::calendar::GameDate;
-use crate::engine::{EngineDesign, EngineCycle, EngineId, PropellantFraction};
+use crate::engine::{EngineDesign, Propulsion, EngineCycle, EngineId, PropellantFraction};
 use crate::engine_project::PropellantPreset;
 use crate::flaw::{self, Flaw};
 use crate::propellant::Propellant;
@@ -52,15 +52,10 @@ pub fn generate_starter_engines(_seed: &GameSeed) -> Vec<ThirdPartyEngine> {
                 thrust_n: 75_000.0,
                 mass_kg: 35.0,
                 isp_s: 245.0,
-                exit_pressure_pa: 70_000.0, // sea-level optimized SRM
-                needs_atmosphere: true,
                 propellant_mix: vec![
                     PropellantFraction { propellant: Propellant::SolidMix, mass_fraction: 1.0 },
                 ],
-                power_draw_w: 0.0,
-                chamber_pressure_pa: 6_000_000.0,
-                expansion_ratio: 10.56,
-                gamma: 1.2,
+                propulsion: Propulsion::nozzle(6_000_000.0, 10.56, 1.2, true),
             },
             preset: PropellantPreset::Solid,
             complexity: 5,
@@ -75,16 +70,11 @@ pub fn generate_starter_engines(_seed: &GameSeed) -> Vec<ThirdPartyEngine> {
                 thrust_n: 1_680_000.0,
                 mass_kg: 1_220.0,
                 isp_s: 297.0,
-                exit_pressure_pa: 80_000.0, // sea-level optimized kerolox
-                needs_atmosphere: true,
                 propellant_mix: vec![
                     PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.73 },
                     PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.27 },
                 ],
-                power_draw_w: 0.0,
-                chamber_pressure_pa: 25_000_000.0,
-                expansion_ratio: 28.61,
-                gamma: 1.2,
+                propulsion: Propulsion::nozzle(25_000_000.0, 28.61, 1.2, true),
             },
             preset: PropellantPreset::Kerolox,
             complexity: 8,
@@ -99,16 +89,11 @@ pub fn generate_starter_engines(_seed: &GameSeed) -> Vec<ThirdPartyEngine> {
                 thrust_n: 40_000.0,
                 mass_kg: 90.0,
                 isp_s: 267.0,
-                exit_pressure_pa: 7_000.0, // vacuum-optimized hypergolic
-                needs_atmosphere: false,
                 propellant_mix: vec![
                     PropellantFraction { propellant: Propellant::NTO, mass_fraction: 0.57 },
                     PropellantFraction { propellant: Propellant::UDMH, mass_fraction: 0.43 },
                 ],
-                power_draw_w: 0.0,
-                chamber_pressure_pa: 1_000_000.0,
-                expansion_ratio: 15.59,
-                gamma: 1.2,
+                propulsion: Propulsion::nozzle(1_000_000.0, 15.59, 1.2, false),
             },
             preset: PropellantPreset::Hypergolic,
             complexity: 5,

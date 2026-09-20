@@ -385,16 +385,11 @@ mod tests {
             thrust_n: 1_000_000.0,
             mass_kg: 500.0,
             isp_s: 300.0,
-            exit_pressure_pa: 100_000.0,
-            needs_atmosphere: false,
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 9_000_000.0,
-            expansion_ratio: 10.96,
-            gamma: 1.2,
+            propulsion: Propulsion::nozzle(9_000_000.0, 10.96, 1.2, false),
         }
     }
 

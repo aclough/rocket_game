@@ -52,49 +52,223 @@ pub struct PropellantFraction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EngineId(pub u64);
 
+/// How an engine makes thrust, and what its surroundings do to it
+/// (20_PROPULSION.md). One value per design; `EngineCycle` stays the
+/// R&D key (complexity, flaw pool, the editor's Cycle row) and
+/// `engine_baseline` decides which `Propulsion` a family gets.
+///
+/// **Contract for a new kind** (the questions every variant answers,
+/// checked exhaustively by `propulsion_contract` in the tests): how the
+/// air acts on its thrust (`atmosphere_response`), its thrust at a
+/// place (`thrust_fraction`), its electrical draw (`power_draw_w`),
+/// whether it routes from orbit only (`is_low_thrust`), whether it
+/// burns propellant (`consumes_propellant`), which bell if any
+/// (`is_sea_level_bell`, `exit_pressure_pa`); plus, outside this
+/// enum, a cycle, a baseline, a flaw pool and an editor entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Propulsion {
+    /// Exhaust through a De Laval bell: chemical and nuclear thermal.
+    /// Zero chamber pressure or expansion ratio means "no bell data"
+    /// (a fixture); `has_nozzle` is then false and the air does nothing.
+    Nozzle {
+        chamber_pressure_pa: f64,
+        expansion_ratio: f64,
+        /// Heat-capacity ratio of the exhaust; 0 reads as `DEFAULT_GAMMA`.
+        gamma: f64,
+        /// The short bell, built to fire at sea level; the long bell
+        /// is `false`.
+        sea_level: bool,
+    },
+    /// Electric thruster: thrust is capped by the electrical power the
+    /// stage can spare, `power_draw_w` being the draw at full thrust.
+    Electric { power_draw_w: f64 },
+    /// Solar sail: no propellant; thrust from sunlight.
+    Sail,
+}
+
+/// Where an engine is firing, for [`Propulsion::thrust_fraction`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThrustEnvironment {
+    pub ambient_pressure_pa: f64,
+    pub sun_distance_au: f64,
+}
+
+impl ThrustEnvironment {
+    /// Vacuum at 1 AU: what every non-atmospheric burn sees today.
+    pub const VACUUM_1AU: ThrustEnvironment = ThrustEnvironment { ambient_pressure_pa: 0.0, sun_distance_au: 1.0 };
+
+    /// An atmosphere at 1 AU.
+    pub fn at_pressure(ambient_pressure_pa: f64) -> Self {
+        ThrustEnvironment { ambient_pressure_pa, sun_distance_au: 1.0 }
+    }
+}
+
+/// Heat-capacity ratio assumed for a bell that carries none.
+pub const DEFAULT_GAMMA: f64 = 1.2;
+
+impl Propulsion {
+    /// A bell with `chamber_pressure_pa`, `expansion_ratio` and `gamma`,
+    /// short (`sea_level`) or long.
+    pub fn nozzle(chamber_pressure_pa: f64, expansion_ratio: f64, gamma: f64, sea_level: bool) -> Self {
+        Propulsion::Nozzle { chamber_pressure_pa, expansion_ratio, gamma, sea_level }
+    }
+
+    /// A bell that exhausts at `exit_pressure_pa` from `chamber_pressure_pa`.
+    pub fn nozzle_for_exit_pressure(chamber_pressure_pa: f64, exit_pressure_pa: f64, gamma: f64, sea_level: bool) -> Self {
+        let eps = if chamber_pressure_pa > 0.0 && exit_pressure_pa > 0.0 {
+            nozzle::expansion_ratio_for_exit_pressure(chamber_pressure_pa, exit_pressure_pa, gamma)
+        } else {
+            0.0
+        };
+        Propulsion::nozzle(chamber_pressure_pa, eps, gamma, sea_level)
+    }
+
+    /// Carries a bell the air acts on.
+    pub fn has_nozzle(&self) -> bool {
+        matches!(self, Propulsion::Nozzle { chamber_pressure_pa, expansion_ratio, .. }
+            if *chamber_pressure_pa > 0.0 && *expansion_ratio > 0.0)
+    }
+
+    /// The bell's `(chamber pressure, expansion ratio, gamma)`; None
+    /// without a usable bell.
+    pub fn bell(&self) -> Option<(f64, f64, f64)> {
+        match *self {
+            Propulsion::Nozzle { chamber_pressure_pa, expansion_ratio, gamma, .. } if self.has_nozzle() => {
+                Some((chamber_pressure_pa, expansion_ratio, if gamma > 0.0 { gamma } else { DEFAULT_GAMMA }))
+            }
+            _ => None,
+        }
+    }
+
+    /// The short bell. False for the long bell and for anything without one.
+    pub fn is_sea_level_bell(&self) -> bool {
+        matches!(self, Propulsion::Nozzle { sea_level: true, .. })
+    }
+
+    /// Exit pressure of the bell (Pa); 0 without one. Derived, never stored.
+    pub fn exit_pressure_pa(&self) -> f64 {
+        match self.bell() {
+            Some((pc, eps, gamma)) => pc * nozzle::exit_pressure_ratio(eps, gamma),
+            None => 0.0,
+        }
+    }
+
+    /// What the air does to thrust: one constant for a bell, nothing
+    /// for the rest (19_NOZZLES.md §3).
+    pub fn atmosphere_response(&self) -> AtmosphereResponse {
+        match self.bell() {
+            Some((pc, eps, gamma)) => AtmosphereResponse::Nozzle {
+                zero_thrust_pressure_pa: nozzle::zero_thrust_pressure_pa(pc, eps, gamma),
+            },
+            None => AtmosphereResponse::None,
+        }
+    }
+
+    /// Fraction of rated (vacuum, 1 AU) thrust delivered at `env`.
+    pub fn thrust_fraction(&self, env: &ThrustEnvironment) -> f64 {
+        match self {
+            Propulsion::Nozzle { .. } => self.atmosphere_response().thrust_fraction(env.ambient_pressure_pa),
+            Propulsion::Electric { .. } => 1.0,
+            // Constant for now; 20_PROPULSION.md step 5 reads the Sun.
+            Propulsion::Sail => 1.0,
+        }
+    }
+
+    /// Electrical power at full thrust (W); 0 unless electric.
+    pub fn power_draw_w(&self) -> f64 {
+        match *self {
+            Propulsion::Electric { power_draw_w } => power_draw_w,
+            Propulsion::Nozzle { .. } | Propulsion::Sail => 0.0,
+        }
+    }
+
+    /// Whether this kind never lifts off: it routes from orbit on the
+    /// delta-v graph's spiral edges.
+    pub fn is_low_thrust(&self) -> bool {
+        matches!(self, Propulsion::Electric { .. } | Propulsion::Sail)
+    }
+
+    /// Whether a burn consumes propellant (a sail's burn is ∞).
+    pub fn consumes_propellant(&self) -> bool {
+        !matches!(self, Propulsion::Sail)
+    }
+}
+
 /// An engine design blueprint.
+///
+/// Reads through [`EngineDesignRepr`], so a save from before
+/// `propulsion` existed — nozzle data as flat fields, or none at all —
+/// loads as the same design.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "EngineDesignRepr")]
 pub struct EngineDesign {
     pub id: EngineId,
     pub name: String,
     pub cycle: EngineCycle,
+    /// Rated thrust: in vacuum, at 1 AU (N).
     pub thrust_n: f64,
     pub mass_kg: f64,
+    /// Vacuum Isp (s).
     pub isp_s: f64,
-    pub exit_pressure_pa: f64,
-    /// True when this unit carries the sea-level nozzle. The stored
-    /// inverse of "vacuum variant" — see `is_vacuum_variant`. Nothing
-    /// in the simulation reads this directly; the physics goes through
-    /// `exit_pressure_pa` (see `isp_fraction_at_pressure` and
-    /// `overexpansion_risk`). It exists so the UI can tell which bell
-    /// a stage is flying without re-deriving it from pressures.
-    pub needs_atmosphere: bool,
     pub propellant_mix: Vec<PropellantFraction>,
-    /// Electrical power required (watts) to operate at full rated thrust.
-    /// Default 0 — chemical, nuclear-thermal, and solar-sail engines
-    /// don't consume electrical power. Set for ElectricPropulsion at
-    /// engine-design time. When positive, the rocket's available power
-    /// (supply minus housekeeping) caps the engine's effective thrust.
-    #[serde(default)]
-    pub power_draw_w: f64,
-    /// Chamber pressure (Pa). With `expansion_ratio` and `gamma` this is
-    /// the nozzle: it sets how much of the vacuum thrust the air takes
-    /// back (`atmosphere_response`), the bell a chamber pressure allows
-    /// at sea level, and the exit pressure the separation risk reads.
-    /// 0 means "no nozzle" — electric, sail, or a design from before
-    /// nozzles were modelled (`save::sanitize` back-fills those).
-    #[serde(default)]
-    pub chamber_pressure_pa: f64,
-    /// Expansion ratio of this variant's bell (exit area / throat area).
-    #[serde(default)]
-    pub expansion_ratio: f64,
-    /// Heat-capacity ratio of the exhaust; 0 reads as `DEFAULT_GAMMA`.
-    #[serde(default)]
-    pub gamma: f64,
+    /// How it makes thrust and what its surroundings do to it.
+    pub propulsion: Propulsion,
 }
 
-/// Heat-capacity ratio assumed for a design that carries none.
-pub const DEFAULT_GAMMA: f64 = 1.2;
+/// The wire form of an `EngineDesign`: the current shape plus every
+/// field a past version stored flat. `From` folds the old fields into
+/// `propulsion` and gives a pre-nozzle design the bell its exit
+/// pressure described (`engine_project::chamber_pressure_for_legacy`).
+#[derive(Deserialize)]
+pub struct EngineDesignRepr {
+    id: EngineId,
+    name: String,
+    cycle: EngineCycle,
+    thrust_n: f64,
+    mass_kg: f64,
+    isp_s: f64,
+    propellant_mix: Vec<PropellantFraction>,
+    #[serde(default)]
+    propulsion: Option<Propulsion>,
+    // Legacy flat fields.
+    #[serde(default)]
+    exit_pressure_pa: f64,
+    #[serde(default)]
+    needs_atmosphere: bool,
+    #[serde(default)]
+    power_draw_w: f64,
+    #[serde(default)]
+    chamber_pressure_pa: f64,
+    #[serde(default)]
+    expansion_ratio: f64,
+    #[serde(default)]
+    gamma: f64,
+}
+
+impl From<EngineDesignRepr> for EngineDesign {
+    fn from(r: EngineDesignRepr) -> Self {
+        let propulsion = r.propulsion.unwrap_or_else(|| match r.cycle {
+            EngineCycle::ElectricPropulsion => Propulsion::Electric { power_draw_w: r.power_draw_w },
+            EngineCycle::SolarSail => Propulsion::Sail,
+            _ => {
+                if r.chamber_pressure_pa <= 0.0 && r.exit_pressure_pa > 0.0 {
+                    // Before nozzles were modelled: fit the bell the stored
+                    // exit pressure describes, at the family's chamber pressure.
+                    match crate::engine_project::chamber_pressure_for_legacy(r.cycle, &r.propellant_mix) {
+                        Some((pc, gamma)) => Propulsion::nozzle_for_exit_pressure(pc, r.exit_pressure_pa, gamma, r.needs_atmosphere),
+                        None => Propulsion::nozzle(0.0, 0.0, 0.0, r.needs_atmosphere),
+                    }
+                } else {
+                    Propulsion::nozzle(r.chamber_pressure_pa, r.expansion_ratio, r.gamma, r.needs_atmosphere)
+                }
+            }
+        });
+        EngineDesign {
+            id: r.id, name: r.name, cycle: r.cycle, thrust_n: r.thrust_n, mass_kg: r.mass_kg,
+            isp_s: r.isp_s, propellant_mix: r.propellant_mix, propulsion,
+        }
+    }
+}
 
 impl EngineDesign {
     /// Apply or revert the stat effect of one technology deficiency.
@@ -114,11 +288,10 @@ impl EngineDesign {
         }
     }
 
-    /// Whether this unit carries the vacuum nozzle. The choice is made
-    /// per stage in the rocket designer; both variants come from one
-    /// engine project.
+    /// Whether this unit flies the long bell — or has no bell for the
+    /// air to act on. The stored inverse used to be `needs_atmosphere`.
     pub fn is_vacuum_variant(&self) -> bool {
-        !self.needs_atmosphere
+        !self.propulsion.is_sea_level_bell()
     }
 
     /// Effective exhaust velocity in m/s (Isp * g0).
@@ -169,49 +342,52 @@ impl EngineDesign {
         errors
     }
 
-    /// The exhaust's heat-capacity ratio, `DEFAULT_GAMMA` when unset.
-    pub fn gamma_or_default(&self) -> f64 {
-        if self.gamma > 0.0 { self.gamma } else { DEFAULT_GAMMA }
-    }
-
     /// Whether this design carries a De Laval nozzle the air can act on.
     pub fn has_nozzle(&self) -> bool {
-        self.chamber_pressure_pa > 0.0 && self.expansion_ratio > 0.0
+        self.propulsion.has_nozzle()
     }
 
-    /// Fit a bell: chamber pressure, expansion ratio and gamma, with the
-    /// exit pressure they imply.
+    /// Exit pressure of the bell (Pa); 0 without one.
+    pub fn exit_pressure_pa(&self) -> f64 {
+        self.propulsion.exit_pressure_pa()
+    }
+
+    /// Electrical power at full thrust (W); 0 unless electric.
+    pub fn power_draw_w(&self) -> f64 {
+        self.propulsion.power_draw_w()
+    }
+
+    /// Which bell the design was: the short one unless it is already
+    /// the long one.
+    fn keeps_sea_level_bell(&self) -> bool {
+        match self.propulsion {
+            Propulsion::Nozzle { sea_level, .. } => sea_level,
+            _ => true,
+        }
+    }
+
+    /// Fit a bell: chamber pressure, expansion ratio and gamma. Keeps
+    /// which bell (short or long) the design was; a design that had no
+    /// bell becomes a short one.
     pub fn set_nozzle(&mut self, chamber_pressure_pa: f64, expansion_ratio: f64, gamma: f64) {
-        self.chamber_pressure_pa = chamber_pressure_pa;
-        self.expansion_ratio = expansion_ratio;
-        self.gamma = gamma;
-        self.exit_pressure_pa = if self.has_nozzle() {
-            chamber_pressure_pa * nozzle::exit_pressure_ratio(expansion_ratio, self.gamma_or_default())
-        } else {
-            0.0
-        };
+        let sea_level = self.keeps_sea_level_bell();
+        self.propulsion = Propulsion::nozzle(chamber_pressure_pa, expansion_ratio, gamma, sea_level);
     }
 
     /// Fit the bell that exhausts at `exit_pressure_pa` from a chamber
-    /// at `chamber_pressure_pa`. How `save::sanitize` gives a design
-    /// from before nozzles were modelled the bell its stored exit
-    /// pressure describes, and how tests ask for "a nozzle built for
+    /// at `chamber_pressure_pa`: how tests ask for "a nozzle built for
     /// X kPa".
     pub fn set_nozzle_for_exit_pressure(&mut self, chamber_pressure_pa: f64, exit_pressure_pa: f64, gamma: f64) {
-        if chamber_pressure_pa <= 0.0 || exit_pressure_pa <= 0.0 {
-            self.set_nozzle(0.0, 0.0, gamma);
-            return;
-        }
-        let eps = nozzle::expansion_ratio_for_exit_pressure(chamber_pressure_pa, exit_pressure_pa, gamma);
-        self.set_nozzle(chamber_pressure_pa, eps, gamma);
+        let sea_level = self.keeps_sea_level_bell();
+        self.propulsion = Propulsion::nozzle_for_exit_pressure(chamber_pressure_pa, exit_pressure_pa, gamma, sea_level);
     }
 
     /// Throat area of this design's nozzle (m²); 0 without one.
     pub fn throat_area_m2(&self) -> f64 {
-        if !self.has_nozzle() {
-            return 0.0;
+        match self.propulsion.bell() {
+            Some((pc, eps, gamma)) => nozzle::throat_area_m2(self.thrust_n, pc, eps, gamma),
+            None => 0.0,
         }
-        nozzle::throat_area_m2(self.thrust_n, self.chamber_pressure_pa, self.expansion_ratio, self.gamma_or_default())
     }
 
     /// This design with the long bell: the largest expansion ratio that
@@ -219,45 +395,40 @@ impl EngineDesign {
     /// `cfg.max_expansion_ratio`. Isp and thrust rise by the thrust-
     /// coefficient ratio (same chamber, same mass flow); mass grows by
     /// the added bell area at `cfg.bell_areal_density_kg_m2`. A design
-    /// without a nozzle only loses `needs_atmosphere`.
+    /// without a bell is returned as it is (a bell-less `Nozzle` fixture
+    /// only loses its sea-level flag).
     pub fn with_vacuum_bell(&self, cfg: &NozzleConfig) -> EngineDesign {
         let mut vac = self.clone();
-        vac.needs_atmosphere = false;
-        if !self.has_nozzle() {
+        let Some((pc, eps_sl, gamma)) = self.propulsion.bell() else {
+            if let Propulsion::Nozzle { sea_level, .. } = &mut vac.propulsion {
+                *sea_level = false;
+            }
             return vac;
-        }
-        let gamma = self.gamma_or_default();
+        };
         let throat = self.throat_area_m2();
         let eps_vac = nozzle::expansion_ratio_for_exit_diameter(
-            throat, cfg.max_vacuum_bell_exit_m, cfg.max_expansion_ratio, self.expansion_ratio,
+            throat, cfg.max_vacuum_bell_exit_m, cfg.max_expansion_ratio, eps_sl,
         );
         let gain = nozzle::thrust_coefficient_vacuum(eps_vac, gamma)
-            / nozzle::thrust_coefficient_vacuum(self.expansion_ratio, gamma);
+            / nozzle::thrust_coefficient_vacuum(eps_sl, gamma);
         vac.isp_s = self.isp_s * gain;
         vac.thrust_n = self.thrust_n * gain;
         vac.mass_kg = self.mass_kg
-            + nozzle::bell_extension_mass_kg(throat, self.expansion_ratio, eps_vac, cfg.bell_areal_density_kg_m2);
-        vac.set_nozzle(self.chamber_pressure_pa, eps_vac, gamma);
+            + nozzle::bell_extension_mass_kg(throat, eps_sl, eps_vac, cfg.bell_areal_density_kg_m2);
+        vac.propulsion = Propulsion::nozzle(pc, eps_vac, gamma, false);
         vac
     }
 
     /// How the air acts on this design's thrust: the per-step question
     /// the ascent asks. One constant for a bell, nothing for the rest.
     pub fn atmosphere_response(&self) -> AtmosphereResponse {
-        if !self.has_nozzle() {
-            return AtmosphereResponse::None;
-        }
-        AtmosphereResponse::Nozzle {
-            zero_thrust_pressure_pa: nozzle::zero_thrust_pressure_pa(
-                self.chamber_pressure_pa, self.expansion_ratio, self.gamma_or_default(),
-            ),
-        }
+        self.propulsion.atmosphere_response()
     }
 
     /// Fraction of vacuum Isp (and thrust) retained at the given ambient
     /// pressure; 1.0 in vacuum or without a nozzle.
     pub fn isp_fraction_at(&self, ambient_pressure_pa: f64) -> f64 {
-        self.atmosphere_response().thrust_fraction(ambient_pressure_pa)
+        self.propulsion.thrust_fraction(&ThrustEnvironment::at_pressure(ambient_pressure_pa))
     }
 
     /// Per-engine probability of destruction from flow separation when
@@ -266,15 +437,14 @@ impl EngineDesign {
     /// beyond `cfg.separation_risk_start_ratio`, clamped to [0, 1]. 0 in
     /// vacuum, without a nozzle, or when the bell is matched.
     pub fn overexpansion_destruction_risk(&self, ambient_pressure_pa: f64, cfg: &NozzleConfig) -> f64 {
-        if ambient_pressure_pa <= 0.0 || self.exit_pressure_pa <= 0.0 {
+        let exit = self.exit_pressure_pa();
+        if ambient_pressure_pa <= 0.0 || exit <= 0.0 {
             return 0.0;
         }
-        let ratio = ambient_pressure_pa / self.exit_pressure_pa;
+        let ratio = ambient_pressure_pa / exit;
         ((ratio - cfg.separation_risk_start_ratio) * cfg.separation_risk_slope).clamp(0.0, 1.0)
     }
 
-    /// Whether this engine is a low-thrust type (ion, Hall, solar sail).
-    /// Low-thrust engines can only use transfer edges marked low_thrust_ok.
     /// A solid motor: one propellant, the solid mix. Its tank is its
     /// casing, so the designer can't resize it by the step.
     pub fn is_solid(&self) -> bool {
@@ -282,6 +452,8 @@ impl EngineDesign {
             && self.propellant_mix[0].propellant == crate::propellant::Propellant::SolidMix
     }
 
+    /// Whether this engine is a low-thrust type (ion, Hall, solar sail).
+    /// Low-thrust engines can only use transfer edges marked low_thrust_ok.
     pub fn is_low_thrust(&self) -> bool {
         matches!(self.cycle, EngineCycle::ElectricPropulsion | EngineCycle::SolarSail)
     }
@@ -312,16 +484,11 @@ mod tests {
             thrust_n: 914_000.0,
             mass_kg: 470.0,
             isp_s: 311.0,
-            exit_pressure_pa: 0.0,
-            needs_atmosphere: true,
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
                 PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 0.0,
-            expansion_ratio: 0.0,
-            gamma: 0.0,
+            propulsion: Propulsion::nozzle(0.0, 0.0, 0.0, true),
         };
         e.set_nozzle(9_700_000.0, 16.0, 1.2);
         e
@@ -336,16 +503,11 @@ mod tests {
             thrust_n: 110_000.0,
             mass_kg: 170.0,
             isp_s: 465.0,
-            exit_pressure_pa: 0.0,
-            needs_atmosphere: false,
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.833 },
                 PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.167 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 0.0,
-            expansion_ratio: 0.0,
-            gamma: 0.0,
+            propulsion: Propulsion::nozzle(0.0, 0.0, 0.0, false),
         };
         e.set_nozzle_for_exit_pressure(4_400_000.0, 5_000.0, 1.2);
         e
@@ -426,8 +588,8 @@ mod tests {
         // Merlin 1D: 282 / 311 = 0.907 at the pad.
         assert!(frac > 0.89 && frac < 0.92,
             "Sea-level bell should lose ~9% Isp at the pad, got fraction {}", frac);
-        assert!((engine.exit_pressure_pa - 65_700.0).abs() < 1_000.0,
-            "ε 16 at 97 bar exhausts near 66 kPa, got {}", engine.exit_pressure_pa);
+        assert!((engine.exit_pressure_pa() - 65_700.0).abs() < 1_000.0,
+            "ε 16 at 97 bar exhausts near 66 kPa, got {}", engine.exit_pressure_pa());
     }
 
     #[test]
@@ -442,12 +604,14 @@ mod tests {
     #[test]
     fn test_no_nozzle_is_untouched_by_air() {
         let mut ion = test_kerolox_engine();
-        ion.set_nozzle(0.0, 0.0, 0.0);
+        ion.propulsion = Propulsion::Electric { power_draw_w: 30_000.0 };
         assert!(!ion.has_nozzle());
+        assert_eq!(ion.power_draw_w(), 30_000.0);
+        assert!(ion.is_vacuum_variant(), "no bell: nothing to fly at sea level");
         assert_eq!(ion.atmosphere_response(), crate::nozzle::AtmosphereResponse::None);
         assert_eq!(ion.isp_fraction_at(101_325.0), 1.0);
         assert_eq!(ion.overexpansion_destruction_risk(101_325.0, &cfg()), 0.0);
-        assert_eq!(ion.exit_pressure_pa, 0.0);
+        assert_eq!(ion.exit_pressure_pa(), 0.0);
     }
 
     #[test]
@@ -455,16 +619,18 @@ mod tests {
         let sl = test_kerolox_engine();
         let vac = sl.with_vacuum_bell(&cfg());
         // A Merlin throat fits ~ε 130 inside a 3 m exit.
-        assert!(vac.expansion_ratio > 120.0 && vac.expansion_ratio < 140.0, "ε {}", vac.expansion_ratio);
+        let (vac_pc, vac_eps, _) = vac.propulsion.bell().unwrap();
+        let (sl_pc, _, _) = sl.propulsion.bell().unwrap();
+        assert!(vac_eps > 120.0 && vac_eps < 140.0, "ε {}", vac_eps);
         let gain = vac.isp_s / sl.isp_s;
         assert!(gain > 1.08 && gain < 1.11, "Isp gain {gain}");
         assert!((vac.thrust_n / sl.thrust_n - gain).abs() < 1e-9);
         // ~6 m² of added bell at 20 kg/m².
         assert!(vac.mass_kg - sl.mass_kg > 100.0 && vac.mass_kg - sl.mass_kg < 160.0,
             "bell mass {}", vac.mass_kg - sl.mass_kg);
-        assert!(!vac.needs_atmosphere && vac.is_vacuum_variant());
-        assert!(vac.exit_pressure_pa < 10_000.0);
-        assert_eq!(vac.chamber_pressure_pa, sl.chamber_pressure_pa);
+        assert!(!vac.propulsion.is_sea_level_bell() && vac.is_vacuum_variant());
+        assert!(vac.exit_pressure_pa() < 10_000.0);
+        assert_eq!(vac_pc, sl_pc);
         // The long bell at the pad: heavily penalised and at risk.
         assert!(vac.isp_fraction_at(101_325.0) < 0.5);
         assert_eq!(vac.overexpansion_destruction_risk(101_325.0, &cfg()), 1.0);
@@ -491,7 +657,7 @@ mod tests {
         // A bell exhausting at 20 kPa.
         let mut engine = test_kerolox_engine();
         engine.set_nozzle_for_exit_pressure(9_700_000.0, 20_000.0, 1.2);
-        assert!((engine.exit_pressure_pa - 20_000.0).abs() < 1.0);
+        assert!((engine.exit_pressure_pa() - 20_000.0).abs() < 1.0);
         let risk = engine.overexpansion_destruction_risk(101_325.0, &cfg());
         // ratio = 101325/20000 = 5.07, (5.07 - 3) * 0.2 = 0.413
         assert!(risk > 0.40 && risk < 0.42,
@@ -503,5 +669,47 @@ mod tests {
         let engine = test_hydrolox_engine();
         let risk = engine.overexpansion_destruction_risk(0.0, &cfg());
         assert_eq!(risk, 0.0, "No risk in vacuum");
+    }
+
+    /// Saves from before `propulsion` load through the wire form:
+    /// flat nozzle fields fold into `Nozzle`, a pre-nozzle design gets
+    /// the bell its exit pressure described, and an old ion thruster
+    /// keeps its power draw.
+    #[test]
+    fn legacy_designs_fold_into_propulsion() {
+        // The kerolox preset's own mix, so the fold finds the family.
+        let mix = r#"[{"propellant":"LOX","mass_fraction":0.73},{"propellant":"RP1","mass_fraction":0.27}]"#;
+        // Pre-nozzle (before 19_NOZZLES.md): exit pressure and the bell flag only.
+        let old: EngineDesign = serde_json::from_str(&format!(r#"{{"id":1,"name":"Old","cycle":"GasGenerator",
+            "thrust_n":900000.0,"mass_kg":1100.0,"isp_s":300.0,"exit_pressure_pa":70000.0,
+            "needs_atmosphere":true,"propellant_mix":{mix}}}"#)).unwrap();
+        let (pc, eps, gamma) = old.propulsion.bell().expect("a bell was fitted");
+        assert_eq!(pc, 9_000_000.0, "the kerolox gas generator's chamber pressure");
+        assert!((gamma - 1.22).abs() < 1e-9, "kerolox exhaust gamma, got {gamma}");
+        // A mix no preset owns still gets the cycle's kerolox figure and the default gamma.
+        let odd: EngineDesign = serde_json::from_str(r#"{"id":4,"name":"Odd","cycle":"StagedCombustion",
+            "thrust_n":1680000.0,"mass_kg":1220.0,"isp_s":297.0,"exit_pressure_pa":80000.0,"needs_atmosphere":true,
+            "propellant_mix":[{"propellant":"LOX","mass_fraction":0.6},{"propellant":"RP1","mass_fraction":0.4}]}"#).unwrap();
+        let (odd_pc, _, odd_gamma) = odd.propulsion.bell().unwrap();
+        assert_eq!((odd_pc, odd_gamma), (25_000_000.0, DEFAULT_GAMMA));
+        assert!(eps > 1.0 && (old.exit_pressure_pa() - 70_000.0).abs() < 1e-3,
+            "the bell exhausts at the stored pressure, got {}", old.exit_pressure_pa());
+        assert!(!old.is_vacuum_variant());
+        // Flat nozzle fields (19_NOZZLES.md step 2) fold as they are.
+        let flat: EngineDesign = serde_json::from_str(&format!(r#"{{"id":2,"name":"Flat","cycle":"GasGenerator",
+            "thrust_n":900000.0,"mass_kg":1100.0,"isp_s":311.0,"exit_pressure_pa":1.0,"needs_atmosphere":false,
+            "power_draw_w":0.0,"chamber_pressure_pa":9700000.0,"expansion_ratio":16.0,"gamma":1.2,
+            "propellant_mix":{mix}}}"#)).unwrap();
+        assert_eq!(flat.propulsion, Propulsion::nozzle(9_700_000.0, 16.0, 1.2, false));
+        // An old ion thruster keeps its draw and has no bell.
+        let ion: EngineDesign = serde_json::from_str(r#"{"id":3,"name":"Ion","cycle":"ElectricPropulsion",
+            "thrust_n":1.0,"mass_kg":35.0,"isp_s":3000.0,"exit_pressure_pa":0.0,"needs_atmosphere":false,
+            "power_draw_w":30000.0,"propellant_mix":[{"propellant":"Xenon","mass_fraction":1.0}]}"#).unwrap();
+        assert_eq!(ion.propulsion, Propulsion::Electric { power_draw_w: 30_000.0 });
+        // The current shape round-trips exactly.
+        let json = serde_json::to_string(&flat).unwrap();
+        assert!(json.contains("\"propulsion\"") && !json.contains("\"exit_pressure_pa\""));
+        let back: EngineDesign = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.propulsion, flat.propulsion);
     }
 }

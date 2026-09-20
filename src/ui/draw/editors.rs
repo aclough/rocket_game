@@ -76,11 +76,11 @@ pub(super) fn draw_engine_editor_modal(
     }
     lines.push(Line::from(bell_line("Vacuum:", &bells.vacuum, format!("{:.0} s vac", bells.vacuum.isp_s))));
     let mut detail: Vec<String> = Vec::new();
-    if bells.vacuum.has_nozzle() {
-        detail.push(format!("chamber {:.0} bar", bells.vacuum.chamber_pressure_pa / 100_000.0));
+    if let Some((chamber_pressure_pa, _, _)) = bells.vacuum.propulsion.bell() {
+        detail.push(format!("chamber {:.0} bar", chamber_pressure_pa / 100_000.0));
     }
-    if ep.design.power_draw_w > 0.0 {
-        detail.push(format!("power {}", format_power_w(ep.design.power_draw_w)));
+    if ep.design.power_draw_w() > 0.0 {
+        detail.push(format!("power {}", format_power_w(ep.design.power_draw_w())));
     }
     if !detail.is_empty() {
         lines.push(hint_line(format!("             {}", detail.join(" · "))));
@@ -273,7 +273,7 @@ pub(super) fn draw_power_editor_modal(
     // something the player can select or remove.
     let supply_w = stage.supply_w(1.0);
     let idle_demand_w = stage.housekeeping_w();
-    let engine_draw_w = stage.engine.power_draw_w * stage.engine_count as f64;
+    let engine_draw_w = stage.engine.power_draw_w() * stage.engine_count as f64;
     let thrust_demand_w = idle_demand_w + engine_draw_w;
     let battery_kwd: f64 = stage.effective_power_sources().iter()
         .filter_map(|p| match p.kind {

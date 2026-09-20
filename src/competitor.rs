@@ -17,7 +17,7 @@ use serde::{Serialize, Deserialize};
 use crate::balance_config::BalanceConfig;
 use crate::calendar::GameDate;
 use crate::contract::{Contract, ContractId};
-use crate::engine::{EngineDesign, EngineCycle, EngineId, PropellantFraction};
+use crate::engine::{EngineDesign, Propulsion, EngineCycle, EngineId, PropellantFraction};
 use crate::engine_project::{EngineProject, EngineDesignStatus, PropellantPreset};
 use crate::flaw::{Flaw, FlawConsequence, FlawTrigger};
 use crate::game_state::Company;
@@ -181,16 +181,11 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
         thrust_n: 3_140_000.0,
         mass_kg: 6_600.0,
         isp_s: 386.0,
-        exit_pressure_pa: 60_000.0,
-        needs_atmosphere: false,
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.86 },
             PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.14 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 10_000_000.0,
-        expansion_ratio: 17.56,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(10_000_000.0, 17.56, 1.2, false),
     };
     let upper_engine = EngineDesign {
         id: EngineId(20_002),
@@ -199,16 +194,11 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
         thrust_n: 110_000.0,
         mass_kg: 300.0,
         isp_s: 462.0,
-        exit_pressure_pa: 5_000.0,
-        needs_atmosphere: false,
         propellant_mix: vec![
             PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.83 },
             PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.17 },
         ],
-        power_draw_w: 0.0,
-        chamber_pressure_pa: 4_500_000.0,
-        expansion_ratio: 65.85,
-        gamma: 1.2,
+        propulsion: Propulsion::nozzle(4_500_000.0, 65.85, 1.2, false),
     };
 
     for (design, complexity) in [(booster_engine.clone(), 12u32), (upper_engine.clone(), 8u32)] {

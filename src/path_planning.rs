@@ -406,7 +406,7 @@ impl DeltaVMap {
 mod tests {
     use super::*;
     use crate::test_util::{kerolox_engine};
-    use crate::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+    use crate::engine::{EngineCycle, EngineDesign, Propulsion, EngineId, PropellantFraction};
     use crate::location::DELTA_V_MAP;
     use crate::propellant::Propellant;
     use crate::rocket::{RocketDesign, RocketDesignId};
@@ -418,14 +418,11 @@ mod tests {
             id: EngineId(id), name: format!("IE-{}", id),
             cycle: EngineCycle::ElectricPropulsion,
             thrust_n: thrust, mass_kg: mass, isp_s: isp,
-            exit_pressure_pa: 0.0, needs_atmosphere: false,
+
             propellant_mix: vec![
                 PropellantFraction { propellant: Propellant::Xenon, mass_fraction: 1.0 },
             ],
-            power_draw_w: 0.0,
-            chamber_pressure_pa: 0.0,
-            expansion_ratio: 0.0,
-            gamma: 0.0,
+            propulsion: Propulsion::Electric { power_draw_w: 0.0 },
         }
     }
 
