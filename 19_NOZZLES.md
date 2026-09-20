@@ -1,8 +1,11 @@
 # 19_NOZZLES — Nozzle variants from chamber pressure
 
-Status: **agreed 2026‑09‑20** (Option B, per cycle × propellant chamber
-pressures, fixed vacuum bell from an exit‑diameter limit, "SL / vac"
-presentation). Step records are appended to §6 as each commit lands.
+Status: **done 2026‑09‑20** — all four steps committed (records in §6).
+Option B, per cycle × propellant chamber pressures, fixed vacuum bell
+from an exit‑diameter limit, "pad / vac" presentation. Follow‑ups named
+in §6: the structural model and Earth‑rotation credit (own plan), and
+Option C (`Propulsion` enum) when the first air‑breathing or pulse
+engine is scheduled.
 Questions are numbered at the end; answers inline as `USER:` /
 `CLAUDE:`.
 
@@ -528,6 +531,32 @@ for kerolox gas generator, hydrolox expander (`463 s`), ion (`3000 s`)
 and the two built bells (`271 / 311 s`, `334 s`). Render smoke test
 passes at both widths; 672 tests; clippy clean; oracle byte‑identical to
 the step‑2 baseline (UI only).
+
+### Step 4 record (2026‑09‑20)
+
+`tests/probes.rs::falcon9::falcon9_yardstick` (ignored; `cargo test
+--release --test probes falcon9 -- --ignored --nocapture`): Falcon 9's
+tanks, expendable, flown five ways. Merlin 1D / MVac are built through
+`set_nozzle` (97 bar; ε 16 / 165), the game families through
+`EngineProject::new` + `design_variant`, so the probe exercises the
+real code path. Output today (LEO / GTO, real Falcon 9: 22.8 / 8.3 t):
+
+| rocket | LEO | GTO | 19th (K model, old bells) |
+|---|---|---|---|
+| A: Merlin, real dry masses | 17.7 t | 5.6 t | 18.8 / 6.1 |
+| B: Merlin, game structure | 14.1 t | 2.9 t | 15.2 / 3.5 |
+| C: game kerolox GG family, game structure | 10.7 t | 0.8 t | 7.3 / 0 |
+| C: game kerolox staged, game structure | 13.7 t | 1.9 t | — |
+| C: game kerolox full‑flow, game structure | 13.8 t | 1.6 t | — |
+| D: game kerolox GG family, real dry masses | 15.3 t | 4.2 t | 11.1 / 1.8 |
+
+Reading it: the starting kerolox rocket went from 7.3 t and no GTO to
+10.7 t and a GTO capability, all from the nozzle model (right Isp for
+the sea‑level bell in vacuum, a real vacuum bell). Row A lost a tonne
+because Merlin's pad penalty is now the real 9 %, not 4 %. The rest of
+the gap to Falcon 9 is the structural model (A → B: 3.6 t LEO, 2.7 t
+GTO) and the ascent's missing Earth‑rotation credit (A vs real), both
+for the follow‑up plan named in §6.
 
 ## 7. Questions
 

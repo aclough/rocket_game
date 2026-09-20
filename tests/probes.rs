@@ -11,6 +11,7 @@
 //! | `dinosoar` | DinoSoar's awards, launches and stock over seeds, or on a real save |
 //! | `capability` | payload capability, compute timing and ascent models |
 //! | `campaigns` | campaign announcement/award/cancel rates over 100 seeds |
+//! | `falcon9` | Falcon 9 replicas through the game's models: where the payload goes |
 //!
 //! `seed_fairness::measure_year1_distribution` stays with the floors it
 //! re-derives: it is defined by that suite's own `achievable` filter,
@@ -451,5 +452,115 @@ mod campaigns {
             100.0 * liftable_at_announce as f64 / announced.max(1) as f64,
         );
         assert!(announced > 0, "campaigns should announce somewhere in {seeds} seeds");
+    }
+}
+
+mod falcon9 {
+    //! Falcon 9 as a yardstick (19_NOZZLES.md step 4): the same tanks
+    //! (411 t / 107.5 t, expendable) flown with Merlin 1D / MVac on the
+    //! real dry masses, with the game's structural model, with the
+    //! game's starting kerolox family, and with each of the game's
+    //! kerolox cycles. Real Falcon 9 does ~22.8 t to LEO and ~8.3 t to
+    //! GTO expendable. The gap between rows says which model is
+    //! costing what; the 2026‑09‑19 probe that started the nozzle work
+    //! read 7.3 t LEO / 0 GTO for the all‑game rocket.
+
+    use rocket_tycoon::balance_config::BalanceConfig;
+    use rocket_tycoon::engine::{EngineCycle, EngineDesign, EngineId, PropellantFraction};
+    use rocket_tycoon::engine_project::{EngineProject, EngineProjectId, PropellantPreset};
+    use rocket_tycoon::propellant::Propellant;
+    use rocket_tycoon::rocket::{DesignPerformance, RocketDesign, RocketDesignId};
+    use rocket_tycoon::rocket_perf::max_payload_to;
+    use rocket_tycoon::stage::{recompute_structural_masses, Fairing, Stage, StageId};
+
+    const P1: f64 = 411_000.0;
+    const P2: f64 = 107_500.0;
+
+    /// Merlin 1D / MVac as built: 97 bar; ε 16 and ε 165.
+    fn merlin(id: u64, name: &str, thrust: f64, mass: f64, isp: f64, eps: f64, sea_level: bool) -> EngineDesign {
+        let mut e = EngineDesign {
+            id: EngineId(id), name: name.into(), cycle: EngineCycle::GasGenerator,
+            thrust_n: thrust, mass_kg: mass, isp_s: isp, exit_pressure_pa: 0.0,
+            needs_atmosphere: sea_level,
+            propellant_mix: vec![
+                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.725 },
+                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.275 },
+            ],
+            power_draw_w: 0.0, chamber_pressure_pa: 0.0, expansion_ratio: 0.0, gamma: 0.0,
+        };
+        e.set_nozzle(9_700_000.0, eps, 1.22);
+        e
+    }
+
+    fn stage(id: u64, e: EngineDesign, n: u32, prop: f64, structural: f64, fairing: Option<f64>) -> Stage {
+        Stage {
+            id: StageId(id), name: format!("S{id}"), engine: e, engine_count: n,
+            propellant_mass_kg: prop, structural_mass_kg: structural,
+            fairing: fairing.map(|m| Fairing { mass_kg: m, diameter_m: 5.2 }),
+            power_sources: Vec::new(),
+        }
+    }
+
+    fn design(s1: Stage, s2: Stage) -> RocketDesign {
+        RocketDesign { id: RocketDesignId(1), name: "F9".into(), stage_groups: vec![vec![s1], vec![s2]] }
+    }
+
+    /// The game's two bells of a kerolox family at scale 1.
+    fn family(cycle: EngineCycle, bal: &BalanceConfig) -> (EngineDesign, EngineDesign) {
+        let ep = EngineProject::new(
+            EngineProjectId(1), EngineId(1), format!("{cycle:?}"), cycle, PropellantPreset::Kerolox, 1.0, bal,
+        ).unwrap();
+        (ep.design_variant(false, &bal.nozzle), ep.design_variant(true, &bal.nozzle))
+    }
+
+    fn report(label: &str, d: &RocketDesign) {
+        println!("\n== {label}");
+        for (gi, g) in d.stage_groups.iter().enumerate() {
+            let s = &g[0];
+            println!(
+                "   S{}: {} ×{}  Isp {:.0} s  ε {:.0}  engines {:.0} kg  structure {:.0} kg  dry {:.0} kg  wet {:.0} kg",
+                gi + 1, s.engine.name, s.engine_count, s.engine.isp_s, s.engine.expansion_ratio,
+                s.engine.mass_kg * s.engine_count as f64, s.structural_mass_kg, s.dry_mass_kg(), s.wet_mass_kg(),
+            );
+        }
+        let p = DesignPerformance::compute(d, 8_300.0, "earth_surface");
+        let losses: Vec<String> = p.groups.iter().enumerate()
+            .map(|(gi, g)| format!("g{gi} vac {:.0} grav −{:.0} nozzle −{:.0}", g.delta_v_vacuum, g.gravity_loss, g.overexpansion_loss))
+            .collect();
+        println!("   at 8.3 t: {}  drag −{:.0}  → planner {:.0}", losses.join("; "), p.ascent.drag, p.total_planner_dv());
+        println!(
+            "   max payload: LEO {:>6.0} kg   GTO {:>5.0} kg      (Falcon 9 expendable: 22 800 / 8 300)",
+            max_payload_to(d, "earth_surface", "leo"), max_payload_to(d, "earth_surface", "gto"),
+        );
+    }
+
+    #[test]
+    #[ignore = "prints the Falcon 9 yardstick; run with --ignored --nocapture"]
+    fn falcon9_yardstick() {
+        let bal = BalanceConfig::default();
+        let m1d = merlin(1, "Merlin 1D", 914_000.0, 470.0, 311.0, 16.0, true);
+        let mvac = merlin(2, "MVac", 981_000.0, 600.0, 348.0, 165.0, false);
+
+        report("A: Merlin 1D / MVac, real Falcon 9 dry masses, 1.7 t fairing", &design(
+            stage(1, m1d.clone(), 9, P1, 22_200.0 - 9.0 * 470.0, None),
+            stage(2, mvac.clone(), 1, P2, 4_000.0 - 600.0, Some(1_700.0)),
+        ));
+
+        let mut b = design(stage(1, m1d.clone(), 9, P1, 0.0, None), stage(2, mvac.clone(), 1, P2, 0.0, None));
+        recompute_structural_masses(&mut b.stage_groups);
+        report("B: Merlin 1D / MVac, game structural model", &b);
+
+        for cycle in [EngineCycle::GasGenerator, EngineCycle::StagedCombustion, EngineCycle::FullFlow] {
+            let (sl, vac) = family(cycle, &bal);
+            let mut c = design(stage(1, sl, 9, P1, 0.0, None), stage(2, vac, 1, P2, 0.0, None));
+            recompute_structural_masses(&mut c.stage_groups);
+            report(&format!("C: game kerolox {cycle:?} family (scale 1), game structural model"), &c);
+        }
+
+        let (sl, vac) = family(EngineCycle::GasGenerator, &bal);
+        report("D: game kerolox GasGenerator family, real Falcon 9 dry masses", &design(
+            stage(1, sl.clone(), 9, P1, 22_200.0 - 9.0 * sl.mass_kg, None),
+            stage(2, vac.clone(), 1, P2, 4_000.0 - vac.mass_kg, Some(1_700.0)),
+        ));
     }
 }
