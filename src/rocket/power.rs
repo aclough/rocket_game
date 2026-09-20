@@ -107,13 +107,17 @@ impl RocketDesign {
         (self.total_power_supply_w(sun_distance_au) - self.total_housekeeping_w()).max(0.0)
     }
 
-    /// Effective combined thrust of a group, derated by available
-    /// electrical power. Self-powered engines (power_draw_w == 0) always
-    /// produce nominal thrust; electric engines scale down by
+    /// Effective combined thrust of a group at `env`, derated by
+    /// available electrical power. Each stage's rated thrust is first
+    /// scaled by its propulsion's `thrust_fraction(env)` (a bell in air,
+    /// a sail by its sunlight); engines that draw no power then produce
+    /// that figure, and electric engines scale down by
     /// `min(1, available / required)` and consume their share of the
     /// available pool. Power is allocated to stages in their order
     /// within the group.
-    pub fn group_effective_thrust_n(&self, group_index: usize, available_power_w: f64) -> f64 {
+    pub fn group_effective_thrust_n(
+        &self, group_index: usize, available_power_w: f64, env: &crate::engine::ThrustEnvironment,
+    ) -> f64 {
         let group = match self.stage_groups.get(group_index) {
             Some(g) => g,
             None => return 0.0,
@@ -121,7 +125,7 @@ impl RocketDesign {
         let mut total = 0.0;
         let mut remaining = available_power_w;
         for stage in group {
-            let nominal = stage.total_thrust_n();
+            let nominal = stage.total_thrust_n() * stage.engine.propulsion.thrust_fraction(env);
             let required = stage.engine.power_draw_w() * stage.engine_count as f64;
             if required <= 0.0 {
                 total += nominal;
@@ -477,7 +481,7 @@ mod tests {
         let design = powered_design(0.0, 0.0); // no panels at all
         // Chemical engine: power_draw_w = 0, so derate is a no-op.
         let nominal = design.group_thrust_n(0);
-        let effective = design.group_effective_thrust_n(0, 0.0);
+        let effective = design.group_effective_thrust_n(0, 0.0, &crate::engine::ThrustEnvironment::VACUUM_1AU);
         assert!((nominal - effective).abs() < 1e-6,
             "chemical thrust should not depend on power");
     }
@@ -487,7 +491,7 @@ mod tests {
         // 10 N ion engine drawing 300 kW; provide a 500 kW panel at 1 AU.
         let design = ion_stage_design(10.0, 300_000.0, 500_000.0);
         let avail = design.power_for_engines_w(1.0);
-        let effective = design.group_effective_thrust_n(0, avail);
+        let effective = design.group_effective_thrust_n(0, avail, &crate::engine::ThrustEnvironment::VACUUM_1AU);
         let nominal = design.group_thrust_n(0);
         assert!((effective - nominal).abs() < 1e-6, "expected full thrust");
     }
@@ -500,7 +504,7 @@ mod tests {
         // panel covers half the engine's draw → ~half thrust.
         let design = ion_stage_design(10.0, 300_000.0, 150_000.0);
         let avail = design.power_for_engines_w(1.0);
-        let effective = design.group_effective_thrust_n(0, avail);
+        let effective = design.group_effective_thrust_n(0, avail, &crate::engine::ThrustEnvironment::VACUUM_1AU);
         let nominal = design.group_thrust_n(0);
         assert!(effective < nominal * 0.6 && effective > nominal * 0.4,
             "expected ~half thrust, got {} of nominal {}", effective, nominal);
@@ -512,7 +516,7 @@ mod tests {
         let design = ion_stage_design(10.0, 300_000.0, 0.0);
         let avail = design.power_for_engines_w(1.0);
         assert_eq!(avail, 0.0);
-        let effective = design.group_effective_thrust_n(0, avail);
+        let effective = design.group_effective_thrust_n(0, avail, &crate::engine::ThrustEnvironment::VACUUM_1AU);
         assert_eq!(effective, 0.0);
     }
 
@@ -608,8 +612,8 @@ mod tests {
         let design = ion_stage_design(10.0, 300_000.0, 500_000.0);
         let avail_1au = design.power_for_engines_w(1.0);
         let avail_3au = design.power_for_engines_w(3.0);
-        let t_1au = design.group_effective_thrust_n(0, avail_1au);
-        let t_3au = design.group_effective_thrust_n(0, avail_3au);
+        let t_1au = design.group_effective_thrust_n(0, avail_1au, &crate::engine::ThrustEnvironment::at_sun(1.0));
+        let t_3au = design.group_effective_thrust_n(0, avail_3au, &crate::engine::ThrustEnvironment::at_sun(3.0));
         let nominal = design.group_thrust_n(0);
         assert!((t_1au - nominal).abs() < 1e-6,
             "1 AU should be full thrust, got {} of nominal {}", t_1au, nominal);

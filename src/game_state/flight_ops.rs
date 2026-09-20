@@ -209,9 +209,10 @@ impl GameState {
         // Refuse to launch if the active group's engines have no
         // electrical power available at takeoff (e.g. ion stage with no
         // panels). Chemical engines always have nominal thrust regardless.
+        // In vacuum terms: the ascent charges the pad's air separately.
         let avail_power_at_takeoff = sim.degraded_design.power_for_engines_w(1.0);
         let first_group_thrust = sim.degraded_design
-            .group_effective_thrust_n(0, avail_power_at_takeoff);
+            .group_effective_thrust_n(0, avail_power_at_takeoff, &crate::engine::ThrustEnvironment::VACUUM_1AU);
 
         let path = crate::location::DELTA_V_MAP
             .shortest_path_for_rocket(
@@ -599,7 +600,7 @@ impl GameState {
             .map_or(1.0, |l| l.sun_distance_au());
         let avail_power = sc.design.power_for_engines_w(sun_au_at_takeoff);
         let first_group_thrust = sc.design
-            .group_effective_thrust_n(0, avail_power);
+            .group_effective_thrust_n(0, avail_power, &crate::engine::ThrustEnvironment::at_sun(sun_au_at_takeoff));
         if first_group_thrust <= 0.0 {
             self.spacecraft.insert(spacecraft_index, sc);
             return;

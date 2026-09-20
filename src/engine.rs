@@ -101,6 +101,11 @@ impl ThrustEnvironment {
     pub fn at_pressure(ambient_pressure_pa: f64) -> Self {
         ThrustEnvironment { ambient_pressure_pa, sun_distance_au: 1.0 }
     }
+
+    /// Vacuum at `sun_distance_au`: every burn away from a surface.
+    pub fn at_sun(sun_distance_au: f64) -> Self {
+        ThrustEnvironment { ambient_pressure_pa: 0.0, sun_distance_au }
+    }
 }
 
 /// Heat-capacity ratio assumed for a bell that carries none.
@@ -339,6 +344,12 @@ impl EngineDesign {
             }
         }
 
+        if !self.propulsion_matches_cycle() {
+            errors.push(format!(
+                "{:?} cycle with {:?} propulsion", self.cycle, self.propulsion
+            ));
+        }
+
         errors
     }
 
@@ -455,12 +466,25 @@ impl EngineDesign {
     /// Whether this engine is a low-thrust type (ion, Hall, solar sail).
     /// Low-thrust engines can only use transfer edges marked low_thrust_ok.
     pub fn is_low_thrust(&self) -> bool {
-        matches!(self.cycle, EngineCycle::ElectricPropulsion | EngineCycle::SolarSail)
+        self.propulsion.is_low_thrust()
     }
 
     /// Whether this engine is a solar sail (no propellant, infinite dv).
     pub fn is_solar_sail(&self) -> bool {
-        matches!(self.cycle, EngineCycle::SolarSail)
+        !self.propulsion.consumes_propellant()
+    }
+
+    /// The propulsion kind the cycle implies: the cycle is the R&D key
+    /// and `engine_baseline` hands each family its kind, so the two must
+    /// agree on a design.
+    pub fn propulsion_matches_cycle(&self) -> bool {
+        match (&self.propulsion, self.cycle) {
+            (Propulsion::Electric { .. }, EngineCycle::ElectricPropulsion) => true,
+            (Propulsion::Sail, EngineCycle::SolarSail) => true,
+            (Propulsion::Nozzle { .. }, EngineCycle::ElectricPropulsion | EngineCycle::SolarSail) => false,
+            (Propulsion::Nozzle { .. }, _) => true,
+            _ => false,
+        }
     }
 
     /// Propellant cost per kg of total propellant consumed.
@@ -669,6 +693,23 @@ mod tests {
         let engine = test_hydrolox_engine();
         let risk = engine.overexpansion_destruction_risk(0.0, &cfg());
         assert_eq!(risk, 0.0, "No risk in vacuum");
+    }
+
+    #[test]
+    fn kind_questions_read_the_enum_not_the_cycle() {
+        let mut e = test_kerolox_engine();
+        assert!(!e.is_low_thrust() && !e.is_solar_sail() && e.validate().is_empty());
+        // A nozzle design whose cycle says "electric" is inconsistent,
+        // and the kind questions follow the propulsion, not the cycle.
+        e.cycle = EngineCycle::ElectricPropulsion;
+        assert!(!e.is_low_thrust(), "a bell is not low-thrust whatever the cycle says");
+        assert!(e.validate().iter().any(|m| m.contains("propulsion")));
+        e.propulsion = Propulsion::Electric { power_draw_w: 1.0 };
+        assert!(e.is_low_thrust() && !e.is_solar_sail() && e.validate().is_empty());
+        e.cycle = EngineCycle::SolarSail;
+        e.propulsion = Propulsion::Sail;
+        assert!(e.is_low_thrust() && e.is_solar_sail());
+        assert!(e.validate().iter().all(|m| !m.contains("propulsion")));
     }
 
     /// Saves from before `propulsion` load through the wire form:

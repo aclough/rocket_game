@@ -226,6 +226,22 @@ thruster from JSON and checks the fold and the round trip.
 Gates: 673 tests, clippy clean, save corpus round‑trips, 40‑seed oracle
 byte‑identical to `oracle_19_base`.
 
+### Steps 2 + 3 record (2026‑09‑20, one commit)
+
+`EngineDesign::is_low_thrust` / `is_solar_sail` read `propulsion`
+(`is_low_thrust()`, `!consumes_propellant()`) instead of matching the
+cycle; `propulsion_matches_cycle` is the cycle ↔ kind rule and
+`validate` reports a mismatch. The fourteen callers kept their names.
+`RocketDesign::group_effective_thrust_n(gi, power, env)` takes a
+`ThrustEnvironment` and scales each stage's rated thrust by
+`propulsion.thrust_fraction(env)` before the power derating; the five
+callers pass `at_sun(sun_au)` (flight legs, accelerations, a
+spacecraft's departure) or `VACUUM_1AU` (launch from Earth — the
+ascent charges the pad separately). Every kind returns 1.0 in vacuum
+today, so nothing moved: oracle byte‑identical, 674 tests, clippy
+clean. A test pins that the kind questions follow the propulsion even
+when the cycle disagrees, and that `validate` flags the disagreement.
+
 ## 4. Questions
 
 1. Serde fold via `EngineDesignRepr` (§2, recommended) or a versioned

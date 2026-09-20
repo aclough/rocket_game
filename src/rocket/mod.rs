@@ -168,7 +168,7 @@ impl Rocket {
         let Some(gi) = self.lowest_attached_group() else { return 0.0 };
         let total_mass = self.current_mass_kg(design, payload_kg);
         let avail_power = design.power_for_engines_w(sun_au);
-        let thrust = design.group_effective_thrust_n(gi, avail_power);
+        let thrust = design.group_effective_thrust_n(gi, avail_power, &crate::engine::ThrustEnvironment::at_sun(sun_au));
         if total_mass > 0.0 { thrust / total_mass } else { 0.0 }
     }
 }
@@ -180,7 +180,7 @@ impl RocketDesign {
     pub fn initial_accel_m_s2(&self, payload_kg: f64, sun_au: f64) -> f64 {
         let total_mass = self.total_mass_kg() + payload_kg;
         let avail_power = self.power_for_engines_w(sun_au);
-        let thrust = self.group_effective_thrust_n(0, avail_power);
+        let thrust = self.group_effective_thrust_n(0, avail_power, &crate::engine::ThrustEnvironment::at_sun(sun_au));
         if total_mass > 0.0 { thrust / total_mass } else { 0.0 }
     }
 

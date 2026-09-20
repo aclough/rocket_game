@@ -378,7 +378,7 @@ pub fn build_route_for_rocket(
         let housekeeping_w = sim.total_housekeeping_w(design);
         let avail_for_engines = (supply_w - housekeeping_w).max(0.0);
         let thrust = sim.active_group()
-            .map(|gi| design.group_effective_thrust_n(gi, avail_for_engines))
+            .map(|gi| design.group_effective_thrust_n(gi, avail_for_engines, &crate::engine::ThrustEnvironment::at_sun(sun_au)))
             .unwrap_or(0.0);
 
         // Whole days only — see the note in `build_route`.
