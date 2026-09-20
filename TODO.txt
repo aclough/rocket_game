@@ -1,5 +1,12 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
-[] Better solid UI
-[] History appears at the bottom of the contracts screen in unused space
+[] Audit where we use complexity and what modifiers it has right now.
+    [] Maybe tune to realistic costs?
+    [] Do we actually scale thrust with sea level verus vaccum
+    [] Look at variations in how we conceive of rocket engines.  What flaws and
+    benefits can do compared to differences in real engines
+    [] A technology problem should be able to make an engine as hard to make as
+    an RL-10
+    [] Refinement should be able to make something as lightweight as a Merlin
+    1D
 
