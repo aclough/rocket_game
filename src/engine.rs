@@ -169,13 +169,17 @@ impl Propulsion {
         }
     }
 
-    /// Fraction of rated (vacuum, 1 AU) thrust delivered at `env`.
+    /// Fraction of rated (vacuum, 1 AU) thrust delivered at `env`. A
+    /// bell loses to the air; a sail's push follows the sunlight, the
+    /// inverse square of its distance from the Sun — a quarter at 2 AU,
+    /// and more than rated inside 1 AU.
     pub fn thrust_fraction(&self, env: &ThrustEnvironment) -> f64 {
         match self {
             Propulsion::Nozzle { .. } => self.atmosphere_response().thrust_fraction(env.ambient_pressure_pa),
             Propulsion::Electric { .. } => 1.0,
-            // Constant for now; 20_PROPULSION.md step 5 reads the Sun.
-            Propulsion::Sail => 1.0,
+            Propulsion::Sail => {
+                if env.sun_distance_au > 0.0 { 1.0 / (env.sun_distance_au * env.sun_distance_au) } else { 1.0 }
+            }
         }
     }
 
@@ -768,7 +772,8 @@ mod tests {
         let pad = ThrustEnvironment::at_pressure(101_325.0);
         let far = ThrustEnvironment::at_sun(3.0);
         for p in [&bell, &ion, &sail] {
-            // Rated thrust is the vacuum, 1 AU figure: nothing beats it.
+            // Rated thrust is the vacuum, 1 AU figure; air and distance
+            // only take from it (a sail inside 1 AU is the one exception).
             assert!(p.thrust_fraction(&ThrustEnvironment::VACUUM_1AU) == 1.0);
             assert!(p.thrust_fraction(&pad) <= 1.0 && p.thrust_fraction(&far) <= 1.0);
             match p {
@@ -795,6 +800,9 @@ mod tests {
                     assert_eq!(p.atmosphere_response(), AtmosphereResponse::None);
                     assert_eq!(p.power_draw_w(), 0.0);
                     assert!(p.is_low_thrust() && !p.consumes_propellant());
+                    assert!((p.thrust_fraction(&ThrustEnvironment::at_sun(2.0)) - 0.25).abs() < 1e-12);
+                    assert!((p.thrust_fraction(&ThrustEnvironment::at_sun(0.5)) - 4.0).abs() < 1e-12);
+                    assert_eq!(p.thrust_fraction(&pad), 1.0, "air does nothing to a sail");
                     // Cycle: SolarSail. Flaws: SOLAR_SAIL_FLAWS.
                 }
             }

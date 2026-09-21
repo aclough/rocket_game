@@ -1,6 +1,6 @@
 # 20_PROPULSION — One enum for what an engine is
 
-Status: **agreed 2026‑09‑20** (fold via `EngineDesignRepr`; cycle stays; contract only for future kinds; sails read the Sun in step 5; blanket approval for steps 1–4). Records appended to §3 as commits land. Option C of `19_NOZZLES.md`
+Status: **done 2026‑09‑20** — all five steps committed (records in §3). Fold via `EngineDesignRepr`; cycle stays the R&D key; contract only for future kinds; sails read the Sun. Option C of `19_NOZZLES.md`
 §3: lift "what kind of thing is this engine" out of scattered fields and
 cycle matches into one `Propulsion` value on `EngineDesign`, with the
 environment‑dependent questions answered in one place. A pure refactor
@@ -250,6 +250,20 @@ needs (cycle, baseline, flaw pool, editor entry); `engine::tests::
 propulsion_contract` asks each question of one design per kind inside
 an exhaustive `match`, so a new variant fails to compile there until its
 row is written. No placeholder variants (Q3).
+
+### Step 5 record (2026‑09‑20)
+
+`Propulsion::Sail`'s `thrust_fraction` is `1 / au²` (1.0 when the
+environment carries no distance). Everything that asks a sail for
+thrust already goes through `group_effective_thrust_n(.., env)`, so
+flight legs, the acceleration figures in the flight and spacecraft
+panes, and a spacecraft's departure check all see it; the ascent never
+does (a sail never lifts off) and the planner's Δv for a sail is ∞
+regardless. The contract test pins a quarter at 2 AU and four times
+rated at 0.5 AU, and that air does nothing to a sail. Gates: 675
+tests, clippy clean, 200‑seed bands pass, and the 40‑seed oracle is
+byte‑identical because the bot flies no sails — so this changes only
+player‑built sail flights.
 
 ## 4. Questions
 
