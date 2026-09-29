@@ -1062,9 +1062,12 @@ pub struct NozzleConfig {
     /// Exit pressure a sea-level bell is designed to: the Summerfield
     /// separation limit (~0.4 atm) sets how far it may expand.
     pub sea_level_exit_pressure_pa: f64,
-    /// Largest exit diameter a vacuum bell may have — the stage and
-    /// interstage it has to fit inside.
-    pub max_vacuum_bell_exit_m: f64,
+    /// How much wider a vacuum bell's exit may be than the same
+    /// engine's sea-level bell (diameter ratio): MVac is ~3.6× Merlin,
+    /// RVac ~1.8× Raptor. Until stages have a diameter (the EDL and
+    /// structure work) this, not a fixed size, bounds the long bell, so
+    /// its expansion ratio is this squared times the short bell's.
+    pub vacuum_bell_exit_ratio: f64,
     /// Cap on a vacuum bell's expansion ratio; past ~300 the Isp gain
     /// has flattened to under 1 % per 50.
     pub max_expansion_ratio: f64,
@@ -1083,7 +1086,7 @@ impl Default for NozzleConfig {
     fn default() -> Self {
         NozzleConfig {
             sea_level_exit_pressure_pa: 0.4 * 101_325.0,
-            max_vacuum_bell_exit_m: 3.0,
+            vacuum_bell_exit_ratio: 3.0,
             max_expansion_ratio: 300.0,
             bell_areal_density_kg_m2: 20.0,
             separation_risk_start_ratio: 3.0,

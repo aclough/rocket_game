@@ -123,6 +123,11 @@ pub struct EngineBaseline {
     pub thrust_n: f64,
     /// Mass at scale 1.0 with the sea-level bell (kg).
     pub mass_kg: f64,
+    /// How mass grows with size: `mass_kg × scale^mass_size_exponent`.
+    /// Below 1 for pump-fed liquid engines, so thrust-to-weight rises
+    /// gently with size (`TWR_SIZE_EXPONENT`); 1 for kinds whose mass is
+    /// simply proportional (solids, reactors, ion engines, sails).
+    pub mass_size_exponent: f64,
     /// Vacuum Isp of the *sea-level* bell (s): the recognisable figure
     /// (kerolox ~311, hydrolox ~420). The pad figure and the vacuum
     /// bell's are derived from it. 0 for a sail.
@@ -163,7 +168,7 @@ impl EngineBaseline {
             name,
             cycle,
             thrust_n: self.thrust_n * scale,
-            mass_kg: self.mass_kg * scale,
+            mass_kg: self.mass_kg * scale.powf(self.mass_size_exponent),
             isp_s: self.isp_ref_s,
             propellant_mix: preset.propellant_mix(),
             propulsion,
@@ -234,6 +239,61 @@ pub fn chamber_pressure_for_legacy(cycle: EngineCycle, mix: &[crate::engine::Pro
     }
 }
 
+/// Thrust at which `first_production_twr_1mn` is quoted.
+pub const TWR_REFERENCE_THRUST_N: f64 = 1_000_000.0;
+
+/// How thrust-to-weight grows with thrust: TWR ∝ thrust^0.10, so a
+/// 25 kN engine of a family is ~0.69× its 1 MN TWR and a 7 MN one
+/// ~1.21×. Small pump-fed engines are heavier per kN (RL10, HM7B,
+/// LE-5 at 33–59; F-1 82 at 6.8 MN), 21_ENGINES.md §3.3.3.
+pub const TWR_SIZE_EXPONENT: f64 = 0.10;
+
+/// Thrust-to-weight of a family's *first production* engine at 1 MN of
+/// rated (vacuum, short-bell) thrust (21_ENGINES.md §3.3.2 and question
+/// 9): where a new programme starts, with tier-2 uprates carrying it
+/// toward the refined engines (Merlin 1D, NK-33, RD-275M, Raptor).
+///
+/// Fitted to the survey (21_1_ENGINE_SURVEY.md) on pad TWR, which is
+/// ~0.87–0.90 of the rated figure here. Mass rises with chamber
+/// pressure across families (§3.3.1, question 8): high-pressure staged
+/// combustion is not lighter than a gas generator. Anchors:
+/// - kerolox GG: Merlin 1C 68, RD-107A 79, RS-27A 79, F-1 82;
+/// - kerolox SC: RD-180 71, RD-191 86, YF-100 64, SCE-200 69;
+/// - hydrolox GG: Vulcain 2 53, RS-68 46, J-2 59 vac;
+/// - hydrolox SC: RS-25 54, LE-7 50, RD-0120 45;
+/// - hydrolox expander: RL10A-3 51, RL10A-4 59, LE-5A 50 (vac, small);
+/// - methalox GG: Longyun-70 80; methalox FF: Raptor 1 89;
+/// - hypergolic GG: Viking 5C 84, YF-20B 105; SC: RD-253 139, RD-0210 105;
+/// - pressure-fed: Kestrel 60, AJ10-118K 47, Aestus 27 (all small).
+///
+/// Combinations nobody has flown (full-flow kerolox, hydrolox or
+/// hypergolic; kerolox or hypergolic expanders) sit beside their nearest
+/// real relatives.
+pub fn first_production_twr_1mn(cycle: EngineCycle, preset: PropellantPreset) -> f64 {
+    use EngineCycle as C;
+    use PropellantPreset as P;
+    match (cycle, preset) {
+        (C::PressureFed, P::Kerolox | P::Methalox) => 75.0,
+        (C::PressureFed, P::Hydrolox) => 45.0,
+        (C::PressureFed, _) => 42.0,
+        (C::GasGenerator, P::Kerolox | P::Methalox) => 86.0,
+        (C::GasGenerator, P::Hydrolox) => 63.0,
+        (C::GasGenerator, _) => 105.0,
+        (C::Expander, P::Hydrolox) => 65.0,
+        (C::Expander, _) => 60.0,
+        (C::StagedCombustion, P::Kerolox) => 74.0,
+        (C::StagedCombustion, P::Methalox) => 78.0,
+        (C::StagedCombustion, P::Hydrolox) => 55.0,
+        (C::StagedCombustion, _) => 140.0,
+        (C::FullFlow, P::Kerolox) => 82.0,
+        (C::FullFlow, P::Methalox) => 92.0,
+        (C::FullFlow, P::Hydrolox) => 60.0,
+        (C::FullFlow, _) => 140.0,
+        // Not liquid pump-fed engines: their baselines carry a mass.
+        (C::NuclearThermal | C::ElectricPropulsion | C::SolarSail, _) => 0.0,
+    }
+}
+
 /// The preset whose propellant mix this design carries, if any — the
 /// way back from a built engine to the family it came from.
 pub fn preset_for_mix(mix: &[crate::engine::PropellantFraction]) -> Option<PropellantPreset> {
@@ -274,6 +334,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
             // implicitly carries its own power supply (panels are
             // provisioned separately on the stage).
             mass_kg: 35.0,
+            mass_size_exponent: 1.0,
             isp_ref_s: 3000.0,           // very high Isp
             chamber_pressure_pa: 0.0,    // no nozzle the air can act on
             gamma: 0.0,
@@ -291,6 +352,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         return Some(EngineBaseline {
             thrust_n: 0.01,              // 10 millinewtons at 1 AU, scale 1.0
             mass_kg: 100.0,              // sail + structure
+            mass_size_exponent: 1.0,
             isp_ref_s: 0.0,              // not meaningful for sails
             chamber_pressure_pa: 0.0,
             gamma: 0.0,
@@ -309,6 +371,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         return Some(EngineBaseline {
             thrust_n: 330_000.0,          // ~NERVA class (~73 klbf)
             mass_kg: 10_000.0,            // very heavy (reactor + shielding)
+            mass_size_exponent: 1.0,
             // Sea-level-bell reference; the vacuum bell it always flies
             // lands near NERVA's ~850 s.
             isp_ref_s: 785.0,
@@ -390,25 +453,20 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         EngineCycle::SolarSail => unreachable!(),
     };
 
-    // Thrust-to-weight ratio by cycle (higher = lighter for given thrust)
-    // This gives us mass from thrust
-    let twr = match cycle {
-        EngineCycle::PressureFed => 40.0,    // simple, light
-        EngineCycle::GasGenerator => 80.0,   // good TWR
-        EngineCycle::Expander => 50.0,       // moderate
-        EngineCycle::StagedCombustion => 70.0, // heavy but powerful
-        EngineCycle::FullFlow => 60.0,       // heaviest complex cycle
-        EngineCycle::NuclearThermal => unreachable!(),
-        EngineCycle::ElectricPropulsion => unreachable!(),
-        EngineCycle::SolarSail => unreachable!(),
-    };
-
     let thrust = base_thrust * thrust_mult;
-    let mass = thrust / (twr * G0);
+    // A solid motor's case is its tank; its mass stays in proportion.
+    let (mass, mass_size_exponent) = if preset == PropellantPreset::Solid {
+        (thrust / (40.0 * G0), 1.0)
+    } else {
+        let twr = first_production_twr_1mn(cycle, preset)
+            * (thrust / TWR_REFERENCE_THRUST_N).powf(TWR_SIZE_EXPONENT);
+        (thrust / (twr * G0), 1.0 - TWR_SIZE_EXPONENT)
+    };
 
     Some(EngineBaseline {
         thrust_n: thrust,
         mass_kg: mass,
+        mass_size_exponent,
         isp_ref_s: base_isp_ref * isp_mult,
         chamber_pressure_pa: chamber_pressure_pa(cycle, preset)?,
         gamma: exhaust_gamma(preset),
@@ -906,9 +964,11 @@ mod tests {
             EngineProjectId(2), EngineId(2), "Big".into(),
             EngineCycle::GasGenerator, PropellantPreset::Kerolox, 2.0, &bal(),
         ).unwrap();
-        // Thrust and mass scale linearly
+        // Thrust scales linearly; mass a little slower, so the bigger
+        // engine has the better thrust-to-weight (TWR_SIZE_EXPONENT).
         assert!((p2.design.thrust_n / p1.design.thrust_n - 4.0).abs() < 0.01);
-        assert!((p2.design.mass_kg / p1.design.mass_kg - 4.0).abs() < 0.01);
+        let mass_ratio = 4.0_f64.powf(1.0 - TWR_SIZE_EXPONENT);
+        assert!((p2.design.mass_kg / p1.design.mass_kg - mass_ratio).abs() < 1e-9);
         // Isp doesn't change
         assert_eq!(p1.design.isp_s, p2.design.isp_s);
     }

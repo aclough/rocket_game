@@ -720,12 +720,14 @@ mod engines {
             );
         }
         for group in ["core", "outlier"] {
-            let rs: Vec<f64> = ratios.iter().filter(|(g, _)| *g == group).map(|(_, r)| r.ln()).collect();
-            if !rs.is_empty() {
-                let mean = (rs.iter().sum::<f64>() / rs.len() as f64).exp();
-                let spread = rs.iter().map(|x| (x - mean.ln()).abs()).fold(0.0_f64, f64::max).exp();
-                println!("TWR game/real, {group}: geometric mean ×{mean:.2}, worst ×{spread:.2} either way ({} engines)", rs.len());
+            let mut rs: Vec<f64> = ratios.iter().filter(|(g, _)| *g == group).map(|(_, r)| *r).collect();
+            if rs.is_empty() {
+                continue;
             }
+            rs.sort_by(|a, b| a.total_cmp(b));
+            let median = rs[rs.len() / 2];
+            let within = rs.iter().filter(|r| (0.8..=1.25).contains(*r)).count();
+            println!("TWR game/real, {group}: median ×{median:.2}; {within} of {} within 0.8–1.25×", rs.len());
         }
     }
 }

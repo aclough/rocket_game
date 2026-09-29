@@ -405,9 +405,9 @@ impl EngineDesign {
         }
     }
 
-    /// This design with the long bell: the largest expansion ratio that
-    /// fits `cfg.max_vacuum_bell_exit_m`, capped at
-    /// `cfg.max_expansion_ratio`. Isp and thrust rise by the thrust-
+    /// This design with the long bell: an exit `cfg.vacuum_bell_exit_ratio`
+    /// times the short bell's diameter (so ε × the ratio squared), capped
+    /// at `cfg.max_expansion_ratio`. Isp and thrust rise by the thrust-
     /// coefficient ratio (same chamber, same mass flow); mass grows by
     /// the added bell area at `cfg.bell_areal_density_kg_m2`. A design
     /// without a bell is returned as it is (a bell-less `Nozzle` fixture
@@ -421,9 +421,9 @@ impl EngineDesign {
             return vac;
         };
         let throat = self.throat_area_m2();
-        let eps_vac = nozzle::expansion_ratio_for_exit_diameter(
-            throat, cfg.max_vacuum_bell_exit_m, cfg.max_expansion_ratio, eps_sl,
-        );
+        let eps_vac = (eps_sl * cfg.vacuum_bell_exit_ratio.powi(2))
+            .min(cfg.max_expansion_ratio)
+            .max(eps_sl);
         let gain = nozzle::thrust_coefficient_vacuum(eps_vac, gamma)
             / nozzle::thrust_coefficient_vacuum(eps_sl, gamma);
         vac.isp_s = self.isp_s * gain;
@@ -646,10 +646,11 @@ mod tests {
     fn test_vacuum_bell_variant() {
         let sl = test_kerolox_engine();
         let vac = sl.with_vacuum_bell(&cfg());
-        // A Merlin throat fits ~ε 130 inside a 3 m exit.
+        // An exit 3× the sea-level bell's diameter: ε 16 × 3² = 144
+        // (MVac is 165 on Merlin's 16).
         let (vac_pc, vac_eps, _) = vac.propulsion.bell().unwrap();
         let (sl_pc, _, _) = sl.propulsion.bell().unwrap();
-        assert!(vac_eps > 120.0 && vac_eps < 140.0, "ε {}", vac_eps);
+        assert!((vac_eps - 144.0).abs() < 1e-9, "ε {}", vac_eps);
         let gain = vac.isp_s / sl.isp_s;
         assert!(gain > 1.08 && gain < 1.11, "Isp gain {gain}");
         assert!((vac.thrust_n / sl.thrust_n - gain).abs() < 1e-9);

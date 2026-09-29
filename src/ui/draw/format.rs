@@ -229,9 +229,9 @@ mod bell_tests {
         let ep = project(EngineCycle::GasGenerator, PropellantPreset::Kerolox);
         let bells = BellFigures::of_project(&ep, &bal().nozzle);
         assert!(bells.is_pair());
-        assert_eq!(bells.isp(), "271 / 334 s");
-        assert_eq!(bells.thrust(), "900 kN / 966 kN");
-        assert_eq!(bells.mass(), "1,147 kg / 1,266 kg");
+        assert_eq!(bells.isp(), "271 / 337 s");
+        assert_eq!(bells.thrust(), "900 kN / 976 kN");
+        assert_eq!(bells.mass(), "1,078 kg / 1,263 kg");
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod bell_tests {
         let ep = project(EngineCycle::Expander, PropellantPreset::Hydrolox);
         let bells = BellFigures::of_project(&ep, &bal().nozzle);
         assert!(!bells.is_pair());
-        assert_eq!(bells.isp(), "463 s");
+        assert_eq!(bells.isp(), "451 s");
         let ion = project(EngineCycle::ElectricPropulsion, PropellantPreset::Xenon);
         let bells = BellFigures::of_project(&ion, &bal().nozzle);
         assert_eq!(bells.isp(), "3000 s");
@@ -252,6 +252,6 @@ mod bell_tests {
         let sl = BellFigures::of_engine(&ep.design_variant(false, cfg));
         assert_eq!(sl.isp(), "271 / 311 s", "a sea-level bell: at the pad / in vacuum");
         let vac = BellFigures::of_engine(&ep.design_variant(true, cfg));
-        assert_eq!(vac.isp(), "334 s", "a vacuum bell never sees the pad");
+        assert_eq!(vac.isp(), "337 s", "a vacuum bell never sees the pad");
     }
 }

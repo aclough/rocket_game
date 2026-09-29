@@ -445,6 +445,59 @@ scale 2 loads with size = 2 × default and its thrust untouched.
 Gates: 679 tests, clippy clean, corpus loads and round‑trips, render
 smoke test (the engine field is now `Size`), oracle byte‑identical.
 
+### Step 4 record (2026‑09‑28)
+
+**Mass law.** `EngineBaseline` gains `mass_size_exponent`; a design at
+`scale` weighs `mass_kg × scale^exponent`. Liquid pump‑fed families
+use `1 − TWR_SIZE_EXPONENT` = 0.90, so TWR ∝ thrust^0.10: a 25 kN
+engine of a family is ~0.69× its 1 MN figure and a 7 MN one ~1.21×.
+Solids, reactors, ion engines and sails stay proportional (1.0). The
+first try at 0.12 made F‑1 and RS‑68 too light; 0.10 fits better.
+
+**First‑production TWR table.** `first_production_twr_1mn(cycle,
+preset)` replaces the per‑cycle TWR (PF 40, GG 80, expander 50, SC 70,
+FF 60) with one figure per family at 1 MN of rated thrust, anchored in
+its doc comment to the survey. It carries question 8 implicitly: the
+high‑pressure families are not lighter (kerolox SC 74 against GG 86).
+Values: kerolox/methalox GG 86, hydrolox GG 63, hypergolic GG 105;
+kerolox SC 74, methalox SC 78, hydrolox SC 55, hypergolic SC 140;
+methalox FF 92, kerolox FF 82, hydrolox FF 60; hydrolox expander 65,
+other expanders 60; pressure‑fed kerolox/methalox 75, hydrolox 45,
+hypergolic 42. Hypergolic staged combustion at 140 is the RD‑253,
+which was a first engine, not a refined one.
+
+**Vacuum bell.** `NozzleConfig::max_vacuum_bell_exit_m` (3 m) is
+replaced by `vacuum_bell_exit_ratio` = 3.0: the long bell's exit is 3×
+the short bell's diameter, so ε_vac = 9 × ε_SL, still capped at 300.
+Kerolox GG: ε 21 → 189 (was 128 at scale 1); hydrolox GG 24 → 216
+(was 300). Until stages have a diameter this lets a very large engine
+carry a very large bell; the EDL and structure work bounds it.
+
+**Yardstick** (step 1 baseline → now):
+
+| | before | after |
+|---|---|---|
+| core TWR, median game/real | ×0.98 (mean) | ×1.04 |
+| core engines within 0.8–1.25× | — | 17 of 21 |
+| outliers, median | ×0.51 (mean) | ×0.65 |
+
+Core misses left, each with a design reason rather than a size one:
+S5.98M ×3.2 and AJ10‑190 ×1.3 (long‑life restartable spacecraft
+engines), Vinci ×1.6 (deployable nozzle), RS‑68 ×1.3 (built heavy and
+cheap on purpose). Outliers now start closer: Merlin 1D ×0.41, NK‑33
+×0.57, Raptor 2 ×0.65, RD‑275M ×0.86 — the room tier‑2 uprates cover.
+
+**Starting engines** (scale 1): kerolox GG 1,147 → 1,078 kg (pad TWR 75;
+Merlin 1C‑sized at 420 kN reads 70), hydrolox GG upper 140 kg → 195 kg.
+Falcon 9 yardstick, starting kerolox family: LEO 10.7 → 11.1 t, GTO
+0.8 → 1.0 t.
+
+**Gates.** 679 tests (five pinned figures updated: the vacuum bell's ε,
+the scale test's mass ratio, and the pad/vac strings); clippy clean;
+200‑seed bands pass. Oracle moved as intended — new baseline
+`oracle_21_base4`: avg final $196.5M → $197.5M, bankrupt 2/40 → 0/40,
+ever‑profitable 37 → 40, first launch month 18.9 → 19.0.
+
 ## 5. Questions
 
 1. Size ladder (§2.1): the class label reads each family's thrust, so
