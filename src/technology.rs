@@ -25,6 +25,10 @@ pub enum TechDeficiencyKind {
     PowerPenalty(f64),
     /// Adds to effective complexity (more flaws, harder testing).
     ComplexityPenalty(u32),
+    /// Multiplies the work to build each unit (e.g. 1.8 = 80 % longer):
+    /// hand-finished parts, a low-yield process. Build time is labour, so
+    /// it is also unit cost (21_ENGINES.md step 6). Engine-only.
+    BuildTimePenalty(f64),
 }
 
 impl std::fmt::Display for TechDeficiencyKind {
@@ -35,6 +39,7 @@ impl std::fmt::Display for TechDeficiencyKind {
             TechDeficiencyKind::ThrustPenalty(frac) => write!(f, "-{:.0}% thrust", frac * 100.0),
             TechDeficiencyKind::PowerPenalty(frac) => write!(f, "-{:.0}% power", frac * 100.0),
             TechDeficiencyKind::ComplexityPenalty(n) => write!(f, "+{} complexity", n),
+            TechDeficiencyKind::BuildTimePenalty(m) => write!(f, "×{:.1} build time", m),
         }
     }
 }
@@ -193,7 +198,7 @@ fn generate_deficiencies(
 
         let roll: f64 = rng.gen();
         let (kind, description) = match domain {
-            TechDomain::Engine => engine_deficiency_kind(roll, magnitude, difficulty, rng),
+            TechDomain::Engine => engine_deficiency_kind(roll, magnitude, difficulty, rng, cfg),
             TechDomain::Reactor => reactor_deficiency_kind(roll, magnitude, difficulty, rng),
         };
 
@@ -214,24 +219,31 @@ fn engine_deficiency_kind(
     magnitude: f64,
     difficulty: u32,
     rng: &mut rand::rngs::StdRng,
+    cfg: &TechnologyConfig,
 ) -> (TechDeficiencyKind, String) {
-    if roll < 0.30 {
+    if roll < 0.25 {
         (TechDeficiencyKind::IspPenalty(magnitude), pick_description(rng, &[
             "Incomplete combustion characteristics",
             "Non-optimal mixture ratio range",
             "Nozzle erosion from exhaust products",
         ]))
-    } else if roll < 0.55 {
+    } else if roll < 0.45 {
         (TechDeficiencyKind::MassPenalty(magnitude), pick_description(rng, &[
             "Heavier propellant handling systems required",
             "Additional thermal management mass",
             "Reinforced injector design needed",
         ]))
-    } else if roll < 0.80 {
+    } else if roll < 0.65 {
         (TechDeficiencyKind::ThrustPenalty(magnitude), pick_description(rng, &[
             "Chamber pressure limitations",
             "Propellant feed instabilities",
             "Reduced injector throughput",
+        ]))
+    } else if roll < 0.85 {
+        (TechDeficiencyKind::BuildTimePenalty(1.0 + cfg.build_time_penalty_scale * magnitude), pick_description(rng, &[
+            "Hand-finished combustion chamber",
+            "Low-yield manufacturing process",
+            "Lengthy per-unit acceptance testing",
         ]))
     } else {
         let complexity_add = rng.gen_range(1..=2 + difficulty);
@@ -353,13 +365,35 @@ mod tests {
                     TechDeficiencyKind::MassPenalty(_)
                     | TechDeficiencyKind::ComplexityPenalty(_) => {}
                     TechDeficiencyKind::IspPenalty(_)
-                    | TechDeficiencyKind::ThrustPenalty(_) => {
+                    | TechDeficiencyKind::ThrustPenalty(_)
+                    | TechDeficiencyKind::BuildTimePenalty(_) => {
                         panic!("reactor tech produced an engine-only deficiency kind: {:?}", def.kind);
                     }
                 }
             }
         }
         assert!(saw_power, "reactor tech should produce PowerPenalty deficiencies across seeds");
+    }
+
+    /// Engine technologies can roll a build-time penalty, and its
+    /// multiplier stays in the configured band (×1.2 to ×2.4 at the
+    /// default magnitudes and scale).
+    #[test]
+    fn engine_techs_roll_build_time_penalties_in_range() {
+        let mut seen = 0;
+        for s in 0..300 {
+            let seed = GameSeed::new(s);
+            let techs = generate_technologies(&seed, &TechnologyConfig::default());
+            for tech in techs.iter().filter(|t| t.id != TECH_FISSION_REACTOR) {
+                for def in &tech.deficiencies {
+                    if let TechDeficiencyKind::BuildTimePenalty(m) = def.kind {
+                        seen += 1;
+                        assert!((1.2..=2.4 + 1e-9).contains(&m), "multiplier {m}");
+                    }
+                }
+            }
+        }
+        assert!(seen > 20, "only {seen} build-time penalties in 300 worlds");
     }
 
     #[test]

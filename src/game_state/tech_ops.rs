@@ -33,6 +33,7 @@ pub(super) trait TechProject {
     fn technology_id(&self) -> Option<TechnologyId>;
     fn tech_deficiency_ids_mut(&mut self) -> &mut Vec<TechDeficiencyId>;
     fn complexity_mut(&mut self) -> &mut u32;
+    fn build_time_multiplier_mut(&mut self) -> &mut f64;
     fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction);
 }
 
@@ -45,6 +46,7 @@ impl TechProject for EngineProject {
     fn technology_id(&self) -> Option<TechnologyId> { self.technology_id }
     fn tech_deficiency_ids_mut(&mut self) -> &mut Vec<TechDeficiencyId> { &mut self.tech_deficiency_ids }
     fn complexity_mut(&mut self) -> &mut u32 { &mut self.complexity }
+    fn build_time_multiplier_mut(&mut self) -> &mut f64 { &mut self.build_time_multiplier }
     fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction) {
         self.design.apply_deficiency(kind, dir);
     }
@@ -59,6 +61,7 @@ impl TechProject for ReactorProject {
     fn technology_id(&self) -> Option<TechnologyId> { self.technology_id }
     fn tech_deficiency_ids_mut(&mut self) -> &mut Vec<TechDeficiencyId> { &mut self.tech_deficiency_ids }
     fn complexity_mut(&mut self) -> &mut u32 { &mut self.complexity }
+    fn build_time_multiplier_mut(&mut self) -> &mut f64 { &mut self.build_time_multiplier }
     fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction) {
         self.design.apply_deficiency(kind, dir);
     }
@@ -94,6 +97,7 @@ impl GameState {
                         let c = project.complexity_mut();
                         *c = c.saturating_sub(*n);
                     }
+                    TechDeficiencyKind::BuildTimePenalty(m) => *project.build_time_multiplier_mut() /= m,
                     kind => project.apply_deficiency(kind, Direction::Revert),
                 }
                 news.push(GameEvent::project(P::KIND, name, ProjectEvent::RevisionComplete));
@@ -128,6 +132,7 @@ impl GameState {
             for def in &tech.deficiencies {
                 match &def.kind {
                     TechDeficiencyKind::ComplexityPenalty(n) => *project.complexity_mut() += n,
+                    TechDeficiencyKind::BuildTimePenalty(m) => *project.build_time_multiplier_mut() *= m,
                     kind => project.apply_deficiency(kind, Direction::Apply),
                 }
             }

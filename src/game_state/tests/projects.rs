@@ -182,3 +182,53 @@ fn test_cycle_auto_build_target_requires_testing_and_wraps() {
     assert_eq!(gs.player_company.cycle_auto_build_target(0), Some(0));
     assert!(!gs.player_company.auto_build_targets.contains_key(&pid));
 }
+
+/// 21_ENGINES.md step 6: a `BuildTimePenalty` deficiency stretches the
+/// build work of every unit of the design it lands on, shows in the
+/// build estimate, and comes off when a revision solves it.
+#[test]
+fn build_time_penalty_applies_to_builds_and_reverts_when_solved() {
+    use crate::engine::EngineCycle;
+    use crate::engine_project::PropellantPreset;
+    use crate::technology::{TechDeficiency, TechDeficiencyId, TechDeficiencyKind, TECH_METHALOX};
+
+    let mut gs = GameState::with_money("Btp".into(), 1_000_000_000.0, 3);
+    let tech = gs.technologies.iter_mut().find(|t| t.id == TECH_METHALOX).unwrap();
+    tech.deficiencies = vec![TechDeficiency {
+        id: TechDeficiencyId(990),
+        description: "Hand-finished combustion chamber".into(),
+        kind: TechDeficiencyKind::BuildTimePenalty(2.0),
+        solvability: 1.0,
+        solved: false,
+        total_attempts: 0,
+    }];
+    let bal = gs.balance.clone();
+    gs.player_company.start_engine_project(
+        "Printed".into(), EngineCycle::GasGenerator, PropellantPreset::Methalox, 1.0,
+        Some(TECH_METHALOX), &bal,
+    );
+    let pid = gs.player_company.engine_projects[0].project_id;
+    let mut events = Vec::new();
+    gs.apply_new_design_deficiencies::<crate::engine_project::EngineProject>(vec![pid], &mut events);
+    let ep = &gs.player_company.engine_projects[0];
+    assert_eq!(ep.build_time_multiplier, 2.0);
+    assert_eq!(ep.tech_deficiency_ids, vec![TechDeficiencyId(990)]);
+
+    // A build order for it takes twice the plain build work.
+    let plain = bal.work.engine_build_work(
+        ep.complexity, ep.design.mass_kg, bal.propellant_handling.multiplier(PropellantPreset::Methalox),
+    );
+    let order = crate::manufacturing::ManufacturingOrder::new_engine(
+        crate::manufacturing::ManufacturingOrderId(1),
+        crate::engine_project::EngineSource::PlayerDesign(pid), ep.design.id, ep.design.name.clone(),
+        ep.design.mass_kg, ep.complexity, PropellantPreset::Methalox, ep.build_time_multiplier, 0,
+        0, Vec::new(), Vec::new(), &bal,
+    );
+    assert!((order.work_required - 2.0 * plain).abs() < 1e-9);
+
+    // Solving it (solvability 1.0) takes the multiplier back off.
+    gs.resolve_tech_attempts::<crate::engine_project::EngineProject>(vec![(pid, TechDeficiencyId(990))], &mut events);
+    let ep = &gs.player_company.engine_projects[0];
+    assert_eq!(ep.build_time_multiplier, 1.0);
+    assert!(ep.tech_deficiency_ids.is_empty());
+}

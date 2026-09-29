@@ -609,6 +609,28 @@ Complexity reaches further than build time: a hydrolox gas generator
 at 9 instead of 6 takes 2.8× the design work, carries ~3 more flaws on
 average, and builds 2.9× slower. First launches slip a year.
 
+### Step 6 record (2026‑09‑29)
+
+`TechDeficiencyKind::BuildTimePenalty(m)`: multiplies the build work of
+each unit (question 4: build time only). It lives on the project, like
+`ComplexityPenalty`: `DesignProject::build_time_multiplier` (serde
+default 1.0) is multiplied by `m` when a design completes on the
+technology and divided back when a revision solves it
+(`TechProject::build_time_multiplier_mut`). Build orders take it as an
+argument (`ManufacturingOrder::new_engine(.., build_time_multiplier, ..)`)
+and the build‑cost estimate applies it, so labour cost follows.
+
+Roll table for engine technologies: Isp 25 %, mass 20 %, thrust 20 %,
+build time 20 %, complexity 15 % (was 30/25/25/0/20). Its multiplier is
+`1 + TechnologyConfig::build_time_penalty_scale (4.0) × magnitude`,
+×1.2–2.4 at the default magnitudes. Displayed as "×1.8 build time".
+Reactor technologies never roll it.
+
+Tests: the kind rolls on engine technologies in range across 300
+worlds; applying it doubles a build order's work, and solving it
+restores the multiplier and clears the id. 681 tests, clippy clean,
+bands pass, oracle identical (the bot uses no experimental technology).
+
 ## 5. Questions
 
 1. Size ladder (§2.1): the class label reads each family's thrust, so

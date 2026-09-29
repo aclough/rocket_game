@@ -281,6 +281,12 @@ pub struct DesignProject<D: Designable> {
     /// Which technology this design uses (if experimental).
     #[serde(default)]
     pub technology_id: Option<TechnologyId>,
+    /// Multiplier on the work to build one unit of this design: 1 unless
+    /// an unsolved `TechDeficiencyKind::BuildTimePenalty` stretches it
+    /// (hand-finished parts, a low-yield process). Build orders and the
+    /// build-cost estimate both read it, so labour cost follows.
+    #[serde(default = "crate::project::unit_multiplier")]
+    pub build_time_multiplier: f64,
     /// Automatically start a revision as soon as testing discovers a
     /// flaw. Default on: for a project you aren't yet mass-producing,
     /// revising promptly is what you'd do anyway. Turn it off on a
@@ -322,6 +328,7 @@ impl<D: Designable> DesignProject<D> {
             cumulative_testing_work: 0.0,
             tech_deficiency_ids: Vec::new(),
             technology_id,
+            build_time_multiplier: 1.0,
             auto_revise: crate::flaw::auto_revise_default(),
             retired: false,
         }
@@ -589,4 +596,9 @@ impl<D: Designable> ProjectCore for DesignProject<D> {
     fn begin_revision(&mut self) -> Option<RevisionPlan> {
         if self.start_revision() { self.revision_plan() } else { None }
     }
+}
+
+/// Serde default for multipliers that are 1 unless something changed them.
+pub fn unit_multiplier() -> f64 {
+    1.0
 }

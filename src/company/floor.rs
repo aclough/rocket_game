@@ -327,7 +327,8 @@ impl Company {
                             balance.work.engine_build_work(
                                 ep.complexity, stage.engine.mass_kg,
                                 balance.propellant_handling.multiplier(ep.spec.preset),
-                            ) * balance.work.learning_curve_multiplier(prior)
+                            ) * ep.build_time_multiplier
+                                * balance.work.learning_curve_multiplier(prior)
                         }),
                     // Contracted engines are delivered when ordered.
                     Some(EngineSource::Contracted(_)) | None => 0.0,

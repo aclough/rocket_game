@@ -293,7 +293,8 @@ impl EngineDesign {
             (K::MassPenalty(f), Revert) => self.mass_kg /= 1.0 + f,
             (K::ThrustPenalty(f), Apply) => self.thrust_n *= 1.0 - f,
             (K::ThrustPenalty(f), Revert) => self.thrust_n /= 1.0 - f,
-            (K::ComplexityPenalty(_) | K::PowerPenalty(_), _) => {}
+            // Complexity and build time land on the project, not the design.
+            (K::ComplexityPenalty(_) | K::PowerPenalty(_) | K::BuildTimePenalty(_), _) => {}
         }
     }
 

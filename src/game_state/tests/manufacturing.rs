@@ -20,7 +20,7 @@ fn test_engine_build_accrues_labor_cost() {
         "Test".into(),
         500.0,
         6,
-        PropellantPreset::Kerolox,
+        PropellantPreset::Kerolox, 1.0,
         0,
         0,
         Vec::new(),

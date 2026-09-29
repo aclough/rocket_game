@@ -1235,6 +1235,16 @@ pub struct TechnologyConfig {
     pub solved_elsewhere_multiplier: f64,
     /// …but never more likely than this.
     pub solve_chance_cap: f64,
+    /// A `BuildTimePenalty` deficiency multiplies build work by
+    /// `1 + this × magnitude`: at the default magnitudes (0.05–0.35) that
+    /// is ×1.2–2.4 — room for an RL10-style process on the worst rolls
+    /// without every hydrogen engine becoming one.
+    #[serde(default = "default_build_time_penalty_scale")]
+    pub build_time_penalty_scale: f64,
+}
+
+fn default_build_time_penalty_scale() -> f64 {
+    4.0
 }
 
 impl TechnologyConfig {
@@ -1264,6 +1274,7 @@ impl Default for TechnologyConfig {
             deficiency_magnitude_span: 0.15,
             solved_elsewhere_multiplier: 3.0,
             solve_chance_cap: 0.95,
+            build_time_penalty_scale: default_build_time_penalty_scale(),
         }
     }
 }
