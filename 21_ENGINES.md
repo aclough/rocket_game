@@ -498,6 +498,117 @@ the scale test's mass ratio, and the pad/vac strings); clippy clean;
 `oracle_21_base4`: avg final $196.5M → $197.5M, bankrupt 2/40 → 0/40,
 ever‑profitable 37 → 40, first launch month 18.9 → 19.0.
 
+### Step 5 record (2026‑09‑29)
+
+Settled after the sweep below, choosing +1 hydrogen complexity, a 3.5×
+hydrogen build premium, and four bot lines (USER, 2026‑09‑29).
+
+**Cost model.** Materials are a floor: mass × bill of materials, no
+propellant or cycle premium (`EngineMaterialsConfig` removed;
+`engine_material_cost(preset, mass, prices)`). Everything else is build
+work, which recorded build cost already attributes as line labour:
+`82.7 days × 1.43^(complexity − 5) × (mass / 1,150 kg)^0.6 × handling`.
+82.7 keeps a complexity‑6 engine at the old curve's 118 line‑days —
+the bot economy turns on its kerolox booster's build time.
+
+**Hydrogen.** Its problems factor now counts in `combined_complexity`,
+so build work sees it as design work and flaws always did (+1 point,
+×1.43); `effective_complexity` equals combined. The rest is
+`PropellantHandlingConfig::hydrolox` = 2.5 (everything else 1), so a
+hydrolox engine builds ~3.6× a kerolox one of the same complexity and
+mass — the "3.5" of the sweep. Nuclear thermal (liquid hydrogen too)
+gains the same point.
+
+**DinoSoar (option D).** Its hand‑set engine complexities (12, 8) are
+now its families' own through `combined_complexity` (hydrolox GG 7,
+expander 8). Its measured marginal cost fell $39.3M → ~$32.7M, so its
+margins go 2.6–7.2 → 3.18–8.81 and `catalog_cost` $39M → $32M, keeping
+its bid range at ~$103–285M. Its lines go 12 → 18: 15 kept its build
+count but flew a won campaign's third mission ~day 165, past the
+cadence test's window; 18 fly it by ~day 122. Four‑year behaviour
+against the last commit: awards 17–22 (was 17–21), builds 18–20 (was
+17–19), cash $6.7–7.5B (was $6.4–7.4B).
+
+**Bot.** Four manufacturing lines instead of three (`policy.rs`); the
+bot keeps its hydrolox upper stage for comparison.
+
+**Yardstick** (20th unit): kerolox GG ~$1.9k/kN; kerolox SC $2.0–2.4k
+(RD‑191 $4.6M against $4.7M; RD‑180 $7.6M against $10–23M); hydrolox
+boosters $3.6–5.2k (Vulcain 2 $4.9M against ~$11M; RS‑68 $10.5M against
+~$20M); RL10 $1.5M and RS‑25 $14M stay the legacy outliers for step 8.
+
+**Deferred to step 8:** third‑party purchase prices from the cost model
+(the plan had them here). Pricing the catalogue from the model moves
+the RD‑33K from $12M to ~$4M unless a vendor markup is added, and
+step 8 reworks the catalogue anyway.
+
+**Note for the bid guidance.** The Place Bid modal's material estimate
+(`Company::estimated_build_cost`) is materials only. With cost now
+mostly labour, it understates a complex or hydrogen engine's cost
+until the rocket has build history (which includes attributed labour).
+Worth a small follow‑up.
+
+**Gates.** 679 tests (pinned complexity, build‑work and cadence
+figures updated); clippy clean; 200‑seed bands pass. Bot economy:
+
+| | 200 seeds final | bankrupt | ever profitable | first launch |
+|---|---|---|---|---|
+| step 4 | $158M | 19 | 180 | 19.0 |
+| step 5 | $142M | 25 | 172 | 18.4 |
+
+40‑seed oracle re‑baselined (`oracle_21_base5`): $174.3M, 3/40
+bankrupt, 37/40 ever profitable, first launch 18.4.
+
+### Step 5 sweep (2026‑09‑29)
+
+**Correction.** DinoSoar is not why step 5 hurt the bot. Rescaling its
+margins so its bids stay at their old prices (option D) leaves the
+40‑seed run identical to the dollar: its $60M bid floor keeps it out of
+the contracts the bot bids on. D still matters for the player, who does
+meet DinoSoar, so it stays in the plan; it just does not move the bands.
+
+**The real cause** is the bot's own kerolox booster engines. The new
+curve (100 days × 1.43 per point) made a complexity‑6 engine ~21 %
+slower to build than the old one (90 × (6/5)^1.5 = 118 days). With the
+old build time for complexity 6 and no hydrogen premium the 40‑seed run
+is back to $198M, 0/40 bankrupt. The economy is threshold‑sensitive
+(first launches crossing contract windows swing it ±$30M), so the
+sweep below uses 200 seeds and anchors the curve at the old
+complexity‑6 figure: base 82.7 days × 1.43 per point.
+
+**Hydrogen multiplier × bot manufacturing lines** (200 seeds; committed
+step 4 baseline: final $158M, 19 bankrupt, 180 ever profitable, first
+launch month 19.0):
+
+| hydrogen | lines | final | bankrupt | profitable | first launch |
+|---|---|---|---|---|---|
+| 1.0 | 3 | $159M | 18 | 182 | 19.0 |
+| 1.0 | 4 | $163M | 21 | 180 | 17.3 |
+| 2.0 | 3 | $146M | 19 | 178 | 19.1 |
+| 2.0 | 4 | $147M | 27 | 175 | 17.3 |
+| 3.5 | 3 | $133M | 23 | 178 | 19.8 |
+| 3.5 | 4 | $146M | 23 | 178 | 18.4 |
+| 3.5 | 5 | $148M | 24 | 177 | 17.4 |
+| 5.0 | 4 | $126M | 27 | 171 | 19.6 |
+| 6.5 | 4 | $119M | 32 | 167 | 20.9 |
+
+Each extra line brings first launch 1–2 months earlier, but its salary
+($300k/month) raises bankruptcies; six lines is worse than five at
+every multiplier. Four lines recovers about half the loss at 3.5; at 5
+and above no line count gets back within $30M.
+
+**+3 hydrogen complexity** (all hydrolox engines, DinoSoar's included):
+
+| hydrogen | lines | final | bankrupt | profitable | first launch |
+|---|---|---|---|---|---|
+| 1.0 | 3 | $94M | 36 | 146 | 32.2 |
+| 1.0 | 4 | $111M | 31 | 169 | 31.0 |
+| 2.0 | 4 | $88M | 46 | 150 | 33.5 |
+
+Complexity reaches further than build time: a hydrolox gas generator
+at 9 instead of 6 takes 2.8× the design work, carries ~3 more flaws on
+average, and builds 2.9× slower. First launches slip a year.
+
 ## 5. Questions
 
 1. Size ladder (§2.1): the class label reads each family's thrust, so
@@ -585,3 +696,10 @@ ever‑profitable 37 → 40, first launch month 18.9 → 19.0.
     ×2.05 thrust, +2.6 % vacuum Isp and +5 % pad Isp, which would make
     high‑pressure boosters and low‑pressure upper stages emerge on their
     own — worth revisiting when stage diameter exists.
+12. (Step 5) How should hydrogen's cost be carried? See the step 5
+    sweep: D for DinoSoar's prices, plus a hydrogen build multiplier
+    and possibly a fourth bot line, or a hydrogen complexity bonus.
+    USER (2026‑09‑29, in discussion): +1 hydrogen complexity, 3.5
+    scaling, 4 lines; keep the bot's hydrolox upper stage for comparison.
+    CLAUDE: Done (step 5 record). The +1 also multiplies build work by
+    1.43, so the handling multiplier is 2.5 to keep the total at 3.5.

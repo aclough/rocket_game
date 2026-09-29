@@ -201,7 +201,15 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
         propulsion: Propulsion::nozzle(4_500_000.0, 65.85, 1.2, false),
     };
 
-    for (design, complexity) in [(booster_engine.clone(), 12u32), (upper_engine.clone(), 8u32)] {
+    // Complexities are the families' own, as a player's engine of the
+    // same cycle and propellant would get (hydrolox gas generator 7,
+    // hydrolox expander 8); hydrogen's build premium comes from
+    // `PropellantHandlingConfig`, as it does for the player.
+    let family = |cycle| crate::balance::combined_complexity(cycle, &PropellantPreset::Hydrolox.propellants());
+    for (design, complexity) in [
+        (booster_engine.clone(), family(EngineCycle::GasGenerator)),
+        (upper_engine.clone(), family(EngineCycle::Expander)),
+    ] {
         let project_id = company.next_project_id.mint();
         let size = crate::engine_project::natural_size(&design);
         company.engine_projects.push(EngineProject {

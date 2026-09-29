@@ -324,8 +324,10 @@ impl Company {
                         .map_or(0.0, |ep| {
                             let prior = *self.engine_build_counts
                                 .get(&ep_id).unwrap_or(&0);
-                            balance.work.engine_build_work(ep.complexity, stage.engine.mass_kg)
-                                * balance.work.learning_curve_multiplier(prior)
+                            balance.work.engine_build_work(
+                                ep.complexity, stage.engine.mass_kg,
+                                balance.propellant_handling.multiplier(ep.spec.preset),
+                            ) * balance.work.learning_curve_multiplier(prior)
                         }),
                     // Contracted engines are delivered when ordered.
                     Some(EngineSource::Contracted(_)) | None => 0.0,
@@ -376,8 +378,7 @@ impl Company {
                                 let learning = balance.work.learning_curve_multiplier(*prior);
                                 *prior += 1;
                                 crate::resources::engine_material_cost(
-                                    ep.spec.preset, ep.design.cycle, stage.engine.mass_kg,
-                                    prices, &balance.engine_materials,
+                                    ep.spec.preset, stage.engine.mass_kg, prices,
                                 ) * learning
                             }),
                         Some(EngineSource::Contracted(ce_id)) => self.contracted_engines.iter()

@@ -195,7 +195,10 @@ impl BasicPolicy {
                 game.log(evt);
             }
         }
-        if game.player_company.manufacturing_teams.len() < 3 {
+        // Four lines: with hydrogen engines' build premium (21_ENGINES.md
+        // step 5) three lines left the upper-stage engine the bottleneck;
+        // a fifth costs more in salary than it saves in latency.
+        if game.player_company.manufacturing_teams.len() < 4 {
             let name = format!("Mfg Team {}", game.player_company.manufacturing_teams.len() + 1);
             if let Some(evt) = game.player_company.hire_manufacturing_team(name, &game.balance) {
                 game.log(evt);

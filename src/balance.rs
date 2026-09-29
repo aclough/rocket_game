@@ -45,21 +45,24 @@ pub fn problems_factor(propellants: &[Propellant]) -> u32 {
     }
 }
 
-/// Combined complexity from cycle and fuel.
-/// Takes the max of cycle and fuel complexity, +1 if they are equal.
+/// Combined complexity from cycle and fuel: the max of cycle and fuel
+/// complexity, +1 if they are equal, plus the propellant's problems
+/// factor (hydrogen's embrittlement). The problems factor used to count
+/// only toward flaws and design work (`effective_complexity`); since
+/// 21_ENGINES.md step 5 it counts toward build work too, so a hydrolox
+/// engine is one complexity point harder to build as well as to design.
 pub fn combined_complexity(cycle: EngineCycle, propellants: &[Propellant]) -> u32 {
     let cc = cycle_complexity(cycle);
     let fc = fuel_complexity(propellants);
-    if cc == fc {
-        cc + 1
-    } else {
-        cc.max(fc)
-    }
+    let base = if cc == fc { cc + 1 } else { cc.max(fc) };
+    base + problems_factor(propellants)
 }
 
-/// Effective complexity for flaw generation (includes problems factor).
+/// Effective complexity for flaw generation and design work. The
+/// problems factor is already inside `combined_complexity`; this stays
+/// as the name flaw and design code ask for.
 pub fn effective_complexity(cycle: EngineCycle, propellants: &[Propellant]) -> u32 {
-    combined_complexity(cycle, propellants) + problems_factor(propellants)
+    combined_complexity(cycle, propellants)
 }
 
 /// Rocket integration complexity based on design characteristics.
@@ -136,16 +139,20 @@ mod tests {
 
     #[test]
     fn test_combined_complexity_hydrolox_pressure_fed() {
-        // PressureFed=5, Hydrolox fuel=5 → equal, so 5+1=6
+        // PressureFed=5, Hydrolox fuel=5 → equal, so 5+1=6, plus
+        // hydrogen's problems factor → 7
         let c = combined_complexity(EngineCycle::PressureFed, &[Propellant::LOX, Propellant::LH2]);
-        assert_eq!(c, 6);
+        assert_eq!(c, 7);
     }
 
     #[test]
     fn test_combined_complexity_hydrolox_expander() {
-        // Expander=7, Hydrolox fuel=5 → max(7,5)=7
+        // Expander=7, Hydrolox fuel=5 → max(7,5)=7, plus hydrogen's
+        // problems factor → 8
         let c = combined_complexity(EngineCycle::Expander, &[Propellant::LOX, Propellant::LH2]);
-        assert_eq!(c, 7);
+        assert_eq!(c, 8);
+        // Design work and flaws see the same figure as build work.
+        assert_eq!(effective_complexity(EngineCycle::Expander, &[Propellant::LOX, Propellant::LH2]), 8);
     }
 
     #[test]

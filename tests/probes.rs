@@ -699,9 +699,10 @@ mod engines {
                 Basis::Vacuum => (e.thrust_n, format!("–/{:.0}", e.isp_s)),
             };
             let twr = thrust / (e.mass_kg * G0);
-            let material = engine_material_cost(ep.spec.preset, e.cycle, e.mass_kg,
-                &bal.costs.resource_prices, &bal.engine_materials);
-            let days = bal.work.engine_build_work(ep.complexity, e.mass_kg);
+            let material = engine_material_cost(ep.spec.preset, e.mass_kg, &bal.costs.resource_prices);
+            let days = bal.work.engine_build_work(
+                ep.complexity, e.mass_kg, bal.propellant_handling.multiplier(ep.spec.preset),
+            );
             let unit1 = material + days * day;
             let unit20 = unit1 * l20;
             let ratio = if real.twr > 0.0 { twr / real.twr } else { f64::NAN };
