@@ -396,6 +396,18 @@ $196.5M, 2/40 bankrupt — the same as after 19).
 - **Cost per kN spans 1.5–12 $k/kN in the game** against 0.4–146 in
   the survey: the game has the middle and neither end.
 
+### Step 2 record (2026‑09‑28)
+
+`resources::engine_bom(Hydrogen)`: HEU 15 % → 0.6 % of engine mass
+(~61 kg on the 10.1 t baseline, per the SNRE figure), superalloys
+35 % → 54.4 %. The table summed to 0.95 before — the existing sum test
+never covered the hydrogen preset — so the missing 5 % went to
+structure as well. First‑unit cost of the baseline NTR: $633M → $50M
+($24M uranium at the unchanged $400k/kg, $17M other materials, $9M
+labour). New tests: every engine BOM sums to one; a 10 t NTR carries
+40–80 kg of HEU and costs $10–60M in materials. 677 tests, clippy
+clean, bands pass, oracle identical (the bot builds no NTR).
+
 ## 5. Questions
 
 1. Size ladder (§2.1): the class label reads each family's thrust, so

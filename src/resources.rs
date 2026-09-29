@@ -142,11 +142,17 @@ pub fn engine_bom(preset: PropellantPreset) -> BillOfMaterials {
                 (Resource::Steel, 0.10),
             ],
         },
-        // Nuclear thermal: reactor core (HEU), shielding, hydrogen plumbing
+        // Nuclear thermal: reactor core (HEU), shielding, hydrogen plumbing.
+        // The uranium is a small part of the engine: the 1972 SNRE design
+        // carried ~60 kg of U in a 1,160 kg core, reflector and drums
+        // (21_1_ENGINE_SURVEY.md), so ~0.6 % of a 10 t engine. The rest of
+        // the core — graphite/carbide matrix, reflector, drums — is
+        // superalloy-priced structure. (The table summed to 0.95 before;
+        // the missing 5 % is structure too.)
         PropellantPreset::Hydrogen => BillOfMaterials {
             fractions: vec![
-                (Resource::HEU, 0.15),
-                (Resource::Superalloys, 0.35),
+                (Resource::HEU, 0.006),
+                (Resource::Superalloys, 0.544),
                 (Resource::Steel, 0.20),
                 (Resource::Aluminium, 0.05),
                 (Resource::Plumbing, 0.10),
@@ -397,6 +403,30 @@ mod tests {
         let masses = bom.resource_masses(1000.0);
         let total: f64 = masses.iter().map(|(_, m)| m).sum();
         assert!((total - 1000.0).abs() < 1.0, "Total mass {} should be ~1000", total);
+    }
+
+    /// Every engine bill of materials accounts for the whole engine.
+    #[test]
+    fn engine_boms_sum_to_one() {
+        for preset in PropellantPreset::ALL {
+            let sum: f64 = engine_bom(*preset).fractions.iter().map(|(_, f)| f).sum();
+            assert!((sum - 1.0).abs() < 1e-9, "{preset:?} BOM sums to {sum}");
+        }
+    }
+
+    /// A NERVA-class engine carries tens of kilograms of uranium, not
+    /// tonnes: its unit cost is tens of millions, not hundreds.
+    #[test]
+    fn nuclear_thermal_uranium_is_a_small_share() {
+        let heu_kg: f64 = engine_bom(PropellantPreset::Hydrogen).resource_masses(10_000.0)
+            .iter().filter(|(r, _)| *r == Resource::HEU).map(|(_, m)| m).sum();
+        assert!((40.0..=80.0).contains(&heu_kg), "HEU in a 10 t engine: {heu_kg} kg");
+        let bal = crate::balance_config::BalanceConfig::default();
+        let cost = engine_material_cost(
+            PropellantPreset::Hydrogen, crate::engine::EngineCycle::NuclearThermal, 10_000.0,
+            &bal.costs.resource_prices, &bal.engine_materials,
+        );
+        assert!(cost > 10e6 && cost < 60e6, "NTR material cost ${:.1}M", cost / 1e6);
     }
 
     #[test]
