@@ -360,6 +360,42 @@ Steps 1–3 change no numbers. Steps 4, 5 and 7 are the balance changes
 and each gets the 200‑seed bands and a yardstick comparison in its
 record.
 
+### Step 1 record (2026‑09‑28)
+
+`tests/probes.rs::engines::engine_yardstick` (ignored; `cargo test
+--release --test probes engines -- --ignored --nocapture`). 29 real
+engines — 21 core points, 8 outliers — each beside its game analogue:
+same cycle and propellant, sized so its thrust matches on the basis the
+real figure is quoted at (sea‑level bell at the pad for boosters,
+vacuum bell in vacuum for upper engines; the vacuum sizing iterates
+because the bell's gain depends on the throat). Unit cost is materials
+plus build work at the line's daily salary, times the learning curve,
+through the same functions a build order calls. No game change; oracle
+identical (new baseline `oracle_21_base` in the scratchpad: avg final
+$196.5M, 2/40 bankrupt — the same as after 19).
+
+**Baseline reading** (the table later steps are measured against):
+
+- **TWR, core points: geometric mean ×0.98 of real.** The per‑cycle
+  figures are right on average. The misses are the ones step 4 targets:
+  - hydrolox boosters too light (Vulcain 2, RS‑68, LE‑7A: game 62–70
+    against real 46–53, ×1.3–1.5);
+  - small engines inconsistent: small hydrolox and storable GG engines
+    far too light (HM7B ×1.9, S5.98M ×3.0) while small pressure‑fed
+    ones are too heavy (Kestrel ×0.41);
+  - moderate misses on staged combustion (RD‑191 ×0.73).
+- **TWR, outliers: ×0.51** — Merlin 1D, NK‑33, RD‑275M and Raptor at
+  ×0.29–0.51. That gap is what tier‑2 uprates (step 7) must be able to
+  close from a first production engine.
+- **Cost, middle band close already:** RD‑180 game $10.7M at the 20th
+  unit against $10–23M; RD‑191 $5.9M against $4.7M; RS‑68 $12.6M against
+  ~$20M; Vulcain 2 $4.3M against ~$11M.
+- **Cost, the ends:** RL10 $1.2M against ≤ $14.5M (×12 short); RS‑25
+  $14.4M against $104.5M (×7 short); Merlin 1D $1.7M and Raptor 2
+  $9.4M against ~$1M (too dear — production improvements and rate).
+- **Cost per kN spans 1.5–12 $k/kN in the game** against 0.4–146 in
+  the survey: the game has the middle and neither end.
+
 ## 5. Questions
 
 1. Size ladder (§2.1): the class label reads each family's thrust, so

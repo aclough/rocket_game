@@ -12,6 +12,7 @@
 //! | `capability` | payload capability, compute timing and ascent models |
 //! | `campaigns` | campaign announcement/award/cancel rates over 100 seeds |
 //! | `falcon9` | Falcon 9 replicas through the game's models: where the payload goes |
+//! | `engines` | each surveyed real engine beside its game analogue: TWR, Isp, cost, build time |
 //!
 //! `seed_fairness::measure_year1_distribution` stays with the floors it
 //! re-derives: it is defined by that suite's own `achievable` filter,
@@ -561,5 +562,170 @@ mod falcon9 {
             stage(1, sl.clone(), 9, P1, 22_200.0 - 9.0 * sl.mass_kg, None),
             stage(2, vac.clone(), 1, P2, 4_000.0 - vac.mass_kg, Some(1_700.0)),
         ));
+    }
+}
+
+mod engines {
+    //! The engine yardstick (21_ENGINES.md step 1): each real engine the
+    //! plan calibrates against (§3.1 core points, §3.2 outliers; full
+    //! data and sources in 21_1_ENGINE_SURVEY.md) beside the game's
+    //! analogue — same cycle and propellant, sized to the same thrust,
+    //! with the bell the real engine flies. Prints TWR, Isp, unit cost
+    //! at the first and twentieth unit, cost per kN and build days.
+    //! Every later step of plan 21 records how this table moved.
+    //!
+    //! Unit cost here is what the game charges to build one: materials
+    //! plus build work at the manufacturing line's daily salary, times
+    //! the learning curve — the same functions a build order calls.
+
+    use rocket_tycoon::balance_config::BalanceConfig;
+    use rocket_tycoon::engine::{EngineCycle as C, EngineDesign, EngineId};
+    use rocket_tycoon::engine_project::{EngineProject, EngineProjectId, PropellantPreset as P};
+    use rocket_tycoon::resources::engine_material_cost;
+
+    const PAD_PA: f64 = 101_325.0;
+    const G0: f64 = 9.80665;
+
+    /// Which bell the real engine flies, and so which figure its thrust
+    /// and TWR are quoted at.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Basis {
+        /// A booster: thrust and TWR at sea level, sea-level bell.
+        SeaLevel,
+        /// An upper-stage engine: vacuum, vacuum bell.
+        Vacuum,
+    }
+
+    struct Real {
+        name: &'static str,
+        cycle: C,
+        preset: P,
+        basis: Basis,
+        /// Thrust on `basis` (kN).
+        thrust_kn: f64,
+        /// TWR on `basis`.
+        twr: f64,
+        /// Unit cost ($M) and how solid it is; None when unknown.
+        cost: Option<(f64, &'static str)>,
+        group: &'static str,
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn r(name: &'static str, cycle: C, preset: P, basis: Basis, thrust_kn: f64, twr: f64,
+         cost: Option<(f64, &'static str)>, group: &'static str) -> Real {
+        Real { name, cycle, preset, basis, thrust_kn, twr, cost, group }
+    }
+
+    fn survey() -> Vec<Real> {
+        use Basis::{SeaLevel as SL, Vacuum as V};
+        vec![
+            // §3.1 core points
+            r("Merlin 1C", C::GasGenerator, P::Kerolox, SL, 420.0, 68.0, None, "core"),
+            r("RD-107A", C::GasGenerator, P::Kerolox, SL, 839.0, 79.0, None, "core"),
+            r("RS-27A", C::GasGenerator, P::Kerolox, SL, 890.0, 79.0, None, "core"),
+            r("F-1", C::GasGenerator, P::Kerolox, SL, 6_770.0, 82.0, Some((40.0, "≤, 1966 contract in today's $")), "core"),
+            r("Viking 5C", C::GasGenerator, P::Hypergolic, SL, 678.0, 84.0, None, "core"),
+            r("YF-20B", C::GasGenerator, P::Hypergolic, SL, 731.5, 105.0, None, "core"),
+            r("RD-191", C::StagedCombustion, P::Kerolox, SL, 1_922.0, 86.0, Some((4.7, "domestic est. 2019")), "core"),
+            r("RD-180", C::StagedCombustion, P::Kerolox, SL, 3_830.0, 71.0, Some((10.0, "1996 deal; $23M by 2014")), "core"),
+            r("RD-181", C::StagedCombustion, P::Kerolox, SL, 1_922.0, 86.0, Some((11.2, "2014 export")), "core"),
+            r("Vulcain 2", C::GasGenerator, P::Hydrolox, SL, 940.0, 53.0, Some((11.0, "≈€10M, 2017")), "core"),
+            r("LE-7A", C::StagedCombustion, P::Hydrolox, SL, 870.0, 49.0, None, "core"),
+            r("RS-68", C::GasGenerator, P::Hydrolox, SL, 2_950.0, 46.0, Some((20.0, "weak")), "core"),
+            r("RL10A-4-2", C::Expander, P::Hydrolox, V, 99.0, 59.0, Some((14.5, "≤, 2016 contract")), "core"),
+            r("LE-5B", C::Expander, P::Hydrolox, V, 137.0, 47.0, None, "core"),
+            r("HM7B", C::GasGenerator, P::Hydrolox, V, 62.2, 38.0, None, "core"),
+            r("Vinci", C::Expander, P::Hydrolox, V, 180.0, 33.0, None, "core"),
+            r("J-2", C::GasGenerator, P::Hydrolox, V, 1_033.0, 59.0, None, "core"),
+            r("AJ10-190", C::PressureFed, P::Hypergolic, V, 26.7, 23.0, None, "core"),
+            r("Aestus", C::PressureFed, P::Hypergolic, V, 29.6, 27.0, None, "core"),
+            r("Kestrel", C::PressureFed, P::Kerolox, V, 31.0, 60.0, None, "core"),
+            r("S5.98M", C::GasGenerator, P::Hypergolic, V, 19.6, 21.0, None, "core"),
+            // §3.2 outliers
+            r("Merlin 1D B5", C::GasGenerator, P::Kerolox, SL, 845.0, 183.0, Some((1.0, "weak, $0.4-2M")), "outlier"),
+            r("NK-33", C::StagedCombustion, P::Kerolox, SL, 1_510.0, 124.0, Some((1.1, "surplus sale, not production")), "outlier"),
+            r("RD-275M", C::StagedCombustion, P::Hypergolic, SL, 1_671.0, 155.0, None, "outlier"),
+            r("Raptor 2", C::FullFlow, P::Methalox, SL, 2_256.0, 141.0, Some((1.0, "weak, stated goal")), "outlier"),
+            r("Raptor 3", C::FullFlow, P::Methalox, SL, 2_746.0, 184.0, None, "outlier"),
+            r("BE-4", C::StagedCombustion, P::Methalox, SL, 2_460.0, 0.0, Some((8.0, "rumour")), "outlier"),
+            r("RS-25D", C::StagedCombustion, P::Hydrolox, SL, 1_860.0, 54.0, Some((104.5, "OIG, 2015 $")), "outlier"),
+            r("LE-9", C::Expander, P::Hydrolox, V, 1_471.0, 60.0, None, "outlier"),
+        ]
+    }
+
+    /// The game's analogue: the family at scale 1 on the real engine's
+    /// basis, then rescaled so its thrust on that basis matches.
+    fn analogue(real: &Real, bal: &BalanceConfig) -> Option<(EngineProject, EngineDesign, f64)> {
+        let unit = EngineProject::new(EngineProjectId(1), EngineId(1), real.name.into(), real.cycle, real.preset, 1.0, bal)?;
+        let on_basis = |e: &EngineDesign| match real.basis {
+            Basis::SeaLevel => e.thrust_n * e.isp_fraction_at(PAD_PA),
+            Basis::Vacuum => e.thrust_n,
+        };
+        let vacuum = real.basis == Basis::Vacuum;
+        // A vacuum bell's gain depends on the throat (the exit-diameter
+        // limit), so thrust is not quite linear in scale: correct a few
+        // times until it lands.
+        let mut scale = real.thrust_kn * 1_000.0 / on_basis(&unit.design_variant(vacuum, &bal.nozzle));
+        let mut ep = unit;
+        for _ in 0..6 {
+            ep = EngineProject::new(EngineProjectId(1), EngineId(1), real.name.into(), real.cycle, real.preset, scale, bal)?;
+            scale *= real.thrust_kn * 1_000.0 / on_basis(&ep.design_variant(vacuum, &bal.nozzle));
+        }
+        let engine = ep.design_variant(vacuum, &bal.nozzle);
+        let scale = ep.spec.scale;
+        Some((ep, engine, scale))
+    }
+
+    #[test]
+    #[ignore = "prints the engine yardstick; run with --ignored --nocapture"]
+    #[allow(clippy::print_literal)] // the header row is spelled out beside the row format
+    fn engine_yardstick() {
+        let bal = BalanceConfig::default();
+        let day = bal.costs.daily_manufacturing_salary();
+        let l20 = bal.work.learning_curve_multiplier(20);
+        println!(
+            "{:<13} {:<8} {:<22} {:>3} {:>8} {:>6} | {:>6} {:>6} {:>5} | {:>9} {:>6} {:>6} {:>7} {:>6} | {}",
+            "engine", "group", "game family", "bs", "thrust", "scale", "TWR", "real", "×", "Isp p/v", "$M 1", "$M 20", "$k/kN", "days", "real cost",
+        );
+        let mut ratios: Vec<(&str, f64)> = Vec::new();
+        for real in survey() {
+            let Some((ep, e, scale)) = analogue(&real, &bal) else {
+                println!("{:<13} no game family for {:?}/{:?}", real.name, real.cycle, real.preset);
+                continue;
+            };
+            let pad = e.isp_fraction_at(PAD_PA);
+            let (thrust, isp) = match real.basis {
+                Basis::SeaLevel => (e.thrust_n * pad, format!("{:.0}/{:.0}", e.isp_s * pad, e.isp_s)),
+                Basis::Vacuum => (e.thrust_n, format!("–/{:.0}", e.isp_s)),
+            };
+            let twr = thrust / (e.mass_kg * G0);
+            let material = engine_material_cost(ep.spec.preset, e.cycle, e.mass_kg,
+                &bal.costs.resource_prices, &bal.engine_materials);
+            let days = bal.work.engine_build_work(ep.complexity, e.mass_kg);
+            let unit1 = material + days * day;
+            let unit20 = unit1 * l20;
+            let ratio = if real.twr > 0.0 { twr / real.twr } else { f64::NAN };
+            if real.twr > 0.0 {
+                ratios.push((real.group, ratio));
+            }
+            let real_cost = real.cost.map_or(String::new(), |(m, basis)|
+                format!("${m:.1}M = ${:.1}k/kN ({basis})", m * 1_000.0 / real.thrust_kn));
+            println!(
+                "{:<13} {:<8} {:<22} {:>3} {:>7.0}k {:>6.2} | {:>6.0} {:>6} {:>5.2} | {:>9} {:>6.2} {:>6.2} {:>7.1} {:>6.0} | {}",
+                real.name, real.group, format!("{:?}/{:?}", real.cycle, real.preset),
+                if real.basis == Basis::SeaLevel { "SL" } else { "vac" },
+                thrust / 1_000.0, scale, twr,
+                if real.twr > 0.0 { format!("{:.0}", real.twr) } else { "?".into() },
+                ratio, isp, unit1 / 1e6, unit20 / 1e6, unit20 / thrust, days, real_cost,
+            );
+        }
+        for group in ["core", "outlier"] {
+            let rs: Vec<f64> = ratios.iter().filter(|(g, _)| *g == group).map(|(_, r)| r.ln()).collect();
+            if !rs.is_empty() {
+                let mean = (rs.iter().sum::<f64>() / rs.len() as f64).exp();
+                let spread = rs.iter().map(|x| (x - mean.ln()).abs()).fold(0.0_f64, f64::max).exp();
+                println!("TWR game/real, {group}: geometric mean ×{mean:.2}, worst ×{spread:.2} either way ({} engines)", rs.len());
+            }
+        }
     }
 }
