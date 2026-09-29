@@ -21,6 +21,15 @@ fn available_engine_cycles(game: &GameState) -> Vec<EngineCycle> {
     cycles
 }
 
+/// How many SI units one typed unit of an engine's size headline is:
+/// the size field is typed in kN (thrust), kW (power) or m² (sail).
+fn headline_unit_si(unit: crate::engine_project::SizeUnit) -> f64 {
+    match unit {
+        crate::engine_project::SizeUnit::ThroatArea | crate::engine_project::SizeUnit::InputPower => 1_000.0,
+        crate::engine_project::SizeUnit::SailArea => 1.0,
+    }
+}
+
 /// One arrow-key step of an editor's scale: ×√2 up or ÷√2 down, held
 /// inside the project kind's `[min, max]`.
 fn stepped_scale(scale: f64, up: bool, min: f64, max: f64) -> f64 {
@@ -43,8 +52,50 @@ impl App {
             ep.design.name.clone(),
             ep.design.cycle,
             ep.spec.preset,
-            ep.spec.scale,
+            ep.scale(&self.game.balance.nozzle),
         ))
+    }
+
+    /// The engine's size headline (thrust, input power or sail area, in
+    /// SI units) and the unit it is measured in.
+    fn engine_headline(&self, project_id: crate::engine_project::EngineProjectId)
+        -> Option<(f64, crate::engine_project::SizeUnit)>
+    {
+        let ep = self.game.player_company.find_engine_project(project_id)?;
+        Some((crate::engine_project::headline(&ep.design),
+              crate::engine_project::SizeUnit::of_cycle(ep.design.cycle)))
+    }
+
+    /// Resize the engine so its headline figure is `target` (SI units),
+    /// held inside its kind's range.
+    pub(super) fn apply_engine_headline(&mut self, project_id: crate::engine_project::EngineProjectId, target: f64) {
+        let Some((_, cycle, preset, _)) = self.editor_snapshot(project_id) else { return };
+        let (lo, hi) = crate::engine_project::SizeUnit::of_cycle(cycle).headline_range();
+        if let Some(scale) = crate::engine_project::scale_for_headline(
+            cycle, preset, target.clamp(lo, hi), &self.game.balance.nozzle,
+        ) {
+            self.apply_engine_scale(project_id, scale);
+        }
+    }
+
+    /// Change an engine's family. Within one propulsion kind the engine
+    /// keeps its headline figure (a 900 kN kerolox engine becomes a
+    /// 900 kN methalox one); across kinds the numbers mean different
+    /// things, so it takes the new family's default size.
+    fn apply_engine_family(
+        &mut self, project_id: crate::engine_project::EngineProjectId,
+        name: String, cycle: EngineCycle, preset: PropellantPreset,
+    ) {
+        use crate::engine_project::{scale_for_headline, SizeUnit, DEFAULT_SCALE};
+        let Some((old_headline, old_unit)) = self.engine_headline(project_id) else { return };
+        let scale = if SizeUnit::of_cycle(cycle) == old_unit {
+            scale_for_headline(cycle, preset, old_headline, &self.game.balance.nozzle).unwrap_or(DEFAULT_SCALE)
+        } else {
+            DEFAULT_SCALE
+        };
+        if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
+            ep.apply_edit(name, cycle, preset, scale, &self.game.balance);
+        }
     }
 
     /// Apply an arbitrary scale to the engine project, rebuilding its
@@ -78,8 +129,8 @@ impl App {
     }
 
     /// Enter on an engine editor field: a non-empty name renames the
-    /// project; a parseable scale is clamped to the engine range and
-    /// applied. Either way the designer's stages (if the editor was
+    /// project; a parseable size (in kN, kW or m²) is clamped to the
+    /// kind's range and applied. Either way the designer's stages (if the editor was
     /// opened from it) follow the project.
     pub(super) fn commit_engine_field(
         &mut self,
@@ -97,14 +148,12 @@ impl App {
                 }
                 true
             }
-            EditorField::Scale => match buffer.parse::<f64>() {
-                Ok(parsed) => {
-                    let clamped = parsed.clamp(
-                        crate::engine_project::MIN_SCALE, crate::engine_project::MAX_SCALE);
-                    self.apply_engine_scale(project_id, clamped);
+            EditorField::Size | EditorField::Scale => match (buffer.parse::<f64>(), self.engine_headline(project_id)) {
+                (Ok(parsed), Some((_, unit))) => {
+                    self.apply_engine_headline(project_id, parsed * headline_unit_si(unit));
                     true
                 }
-                Err(_) => false,
+                _ => false,
             },
         };
         if changed {
@@ -130,7 +179,8 @@ impl App {
                     rp.design.name = new_name;
                 }
             }
-            EditorField::Scale => {
+            // A reactor is sized by scale; `Size` is the engine field.
+            EditorField::Size | EditorField::Scale => {
                 if let Ok(parsed) = buffer.parse::<f64>() {
                     let clamped = parsed.clamp(
                         crate::reactor::MIN_SCALE, crate::reactor::MAX_SCALE);
@@ -263,9 +313,9 @@ impl App {
     }
 
     /// Engine editor key handler. Cursor walks: 0=Name, 1=Cycle,
-    /// 2=Preset, 3=Scale. Left/Right cycles values on Cycle/Preset;
-    /// +/- adjusts Scale by ×√2 (and clamps to [MIN_SCALE, MAX_SCALE]);
-    /// Enter on Name/Scale opens a text/number sub-modal.
+    /// 2=Preset, 3=Size. Left/Right cycles values on Cycle/Preset and
+    /// steps Size by ×√2 within its kind's range; Enter on Name/Size
+    /// opens a text/number sub-modal (Size typed in kN, kW or m²).
     ///
     /// There is no nozzle row: a project designs an engine *family*
     /// and each stage picks its own bell in the rocket designer.
@@ -288,8 +338,8 @@ impl App {
                 return;
             }
         };
-        let (name, cycle, preset, scale) = snap;
-        let row_count = 4; // Name, Cycle, Preset, Scale
+        let (name, cycle, preset, _) = snap;
+        let row_count = 4; // Name, Cycle, Preset, Size
         if cursor >= row_count { cursor = row_count - 1; }
 
         match key {
@@ -332,9 +382,10 @@ impl App {
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Enter if cursor == 3 => {
+                let buffer = self.engine_headline(project_id)
+                    .map_or(String::new(), |(value, unit)| format!("{:.0}", value / headline_unit_si(unit)));
                 self.input_mode = InputMode::EngineEditorField {
-                    project_id, cursor, field: EditorField::Scale,
-                    buffer: format!("{:.2}", scale), state,
+                    project_id, cursor, field: EditorField::Size, buffer, state,
                 };
             }
             KeyCode::Left | KeyCode::Right if cursor == 1 => {
@@ -351,9 +402,7 @@ impl App {
                         .find(|p| p.compatible_cycles().contains(&next))
                         .unwrap_or(preset)
                 };
-                if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
-                    ep.apply_edit(name, next, new_preset, scale, &self.game.balance);
-                }
+                self.apply_engine_family(project_id, name, next, new_preset);
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
                 }
@@ -366,20 +415,18 @@ impl App {
                     .collect();
                 let next = wrap_cycle(&presets, preset, matches!(key, KeyCode::Right))
                     .unwrap_or(preset);
-                if let Some(ep) = self.game.player_company.find_engine_project_mut(project_id) {
-                    ep.apply_edit(name, cycle, next, scale, &self.game.balance);
-                }
+                self.apply_engine_family(project_id, name, cycle, next);
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
             KeyCode::Left | KeyCode::Right if cursor == 3 => {
-                let new_scale = stepped_scale(
-                    scale, matches!(key, KeyCode::Right),
-                    crate::engine_project::MIN_SCALE, crate::engine_project::MAX_SCALE,
-                );
-                self.apply_engine_scale(project_id, new_scale);
+                if let Some((value, unit)) = self.engine_headline(project_id) {
+                    let (lo, hi) = unit.headline_range();
+                    let target = stepped_scale(value, matches!(key, KeyCode::Right), lo, hi);
+                    self.apply_engine_headline(project_id, target);
+                }
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
                 }
@@ -511,7 +558,7 @@ impl App {
 mod field_tests {
     use super::*;
     use crate::engine::EngineId;
-    use crate::engine_project::{EngineProject, EngineProjectId, MAX_SCALE};
+    use crate::engine_project::{headline, EngineProject, EngineProjectId};
 
     fn app_with_engine() -> (App, EngineProjectId) {
         let mut game = crate::game_state::GameState::new("Field Test".into(), 5);
@@ -525,31 +572,64 @@ mod field_tests {
         (App::new(game), pid)
     }
 
-    fn scale_of(app: &App, pid: EngineProjectId) -> f64 {
-        app.game.player_company.find_engine_project(pid).unwrap().spec.scale
+    /// The engine's size headline: thrust for a bell (N).
+    fn thrust_of(app: &App, pid: EngineProjectId) -> f64 {
+        headline(&app.game.player_company.find_engine_project(pid).unwrap().design)
     }
 
-    /// Enter on the scale row opens the field with the current scale;
-    /// typing a value and Enter applies it clamped to the engine
-    /// range and returns to the same row.
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() <= 1e-6 * b.abs()
+    }
+
+    /// Enter on the size row opens the field with the thrust in kN;
+    /// typing a value and Enter applies it clamped to the kind's range
+    /// and returns to the same row.
     #[test]
-    fn typing_a_scale_applies_it_clamped_and_returns_to_the_row() {
+    fn typing_a_size_applies_it_clamped_and_returns_to_the_row() {
         let (mut app, pid) = app_with_engine();
         app.input_mode = InputMode::EngineEditor { project_id: pid, cursor: 3, state: None };
         app.handle_key(KeyCode::Enter);
         match &app.input_mode {
-            InputMode::EngineEditorField { field: EditorField::Scale, buffer, .. } => {
-                assert_eq!(buffer, "1.00");
+            InputMode::EngineEditorField { field: EditorField::Size, buffer, .. } => {
+                assert_eq!(buffer, "900", "the kerolox gas generator's default, in kN");
             }
-            other => panic!("expected the scale field, got {other:?}"),
+            other => panic!("expected the size field, got {other:?}"),
         }
-        for k in [KeyCode::Backspace, KeyCode::Backspace, KeyCode::Backspace, KeyCode::Backspace,
-                  KeyCode::Char('9'), KeyCode::Char('x'), KeyCode::Char('9')] {
+        for k in [KeyCode::Backspace, KeyCode::Backspace, KeyCode::Backspace,
+                  KeyCode::Char('2'), KeyCode::Char('x'), KeyCode::Char('5'), KeyCode::Char('0')] {
             app.handle_key(k);
         }
         app.handle_key(KeyCode::Enter);
         assert!(matches!(app.input_mode, InputMode::EngineEditor { cursor: 3, .. }));
-        assert_eq!(scale_of(&app, pid), MAX_SCALE, "99 (the x is filtered) clamps to the maximum");
+        assert!(close(thrust_of(&app, pid), 250_000.0), "250 kN (the x is filtered)");
+        // Past the top of the range it clamps to 10 MN.
+        app.handle_key(KeyCode::Enter);
+        for _ in 0..3 { app.handle_key(KeyCode::Backspace); }
+        for c in "99999".chars() { app.handle_key(KeyCode::Char(c)); }
+        app.handle_key(KeyCode::Enter);
+        assert!(close(thrust_of(&app, pid), 10_000_000.0), "clamps to the maximum");
+    }
+
+    /// Changing propellant keeps the thrust the player chose; changing
+    /// to another propulsion kind (electric) takes its default size,
+    /// since kN and kW are not the same number.
+    #[test]
+    fn a_family_change_keeps_the_thrust_within_a_kind() {
+        let (mut app, pid) = app_with_engine();
+        app.apply_engine_headline(pid, 400_000.0);
+        app.input_mode = InputMode::EngineEditor { project_id: pid, cursor: 2, state: None };
+        app.handle_key(KeyCode::Right); // Kerolox → the next preset for a gas generator
+        let ep = app.game.player_company.find_engine_project(pid).unwrap();
+        assert_ne!(ep.spec.preset, PropellantPreset::Kerolox);
+        assert!(close(headline(&ep.design), 400_000.0), "thrust kept across propellants");
+        // Size follows the throat, not the thrust: a different propellant
+        // or cycle needs a different throat for the same thrust.
+        assert!(ep.spec.size > 0.0);
+
+        app.apply_engine_family(pid, "Ion".into(), EngineCycle::ElectricPropulsion, PropellantPreset::Xenon);
+        let ep = app.game.player_company.find_engine_project(pid).unwrap();
+        assert!(close(ep.design.power_draw_w(), 30_000.0), "electric takes its 30 kW default");
+        assert!(close(ep.spec.size, 30_000.0), "an electric thruster is sized by its power");
     }
 
     /// Esc drops the typed value, and a renamed engine keeps its name
@@ -561,7 +641,7 @@ mod field_tests {
         app.handle_key(KeyCode::Enter);
         app.handle_key(KeyCode::Char('2'));
         app.handle_key(KeyCode::Esc);
-        assert_eq!(scale_of(&app, pid), 1.0);
+        assert!(close(thrust_of(&app, pid), 900_000.0), "Esc keeps the default 900 kN");
 
         app.input_mode = InputMode::EngineEditor { project_id: pid, cursor: 0, state: None };
         app.handle_key(KeyCode::Enter);

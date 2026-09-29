@@ -207,8 +207,7 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
             power_str,
         )));
         lines.push(Line::from(format!(
-            "      Scale: {:.2}x    Auto-revise: {}",
-            project.spec.scale,
+            "      Auto-revise: {}",
             if project.auto_revise { "on" } else { "off" },
         )));
 

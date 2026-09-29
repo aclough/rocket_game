@@ -138,8 +138,8 @@ fn modes(app: &App, bid_basis: crate::game_state::BidBasis) -> Vec<(&'static str
         ("engine name", InputMode::EngineEditorField {
             project_id: epid, cursor: 0, field: EditorField::Name, buffer: "Nam".into(), state: None,
         }),
-        ("engine scale", InputMode::EngineEditorField {
-            project_id: epid, cursor: 3, field: EditorField::Scale, buffer: "1.5".into(), state: None,
+        ("engine size", InputMode::EngineEditorField {
+            project_id: epid, cursor: 3, field: EditorField::Size, buffer: "1500".into(), state: None,
         }),
         ("reactor editor", InputMode::ReactorEditor { project_id: rpid, cursor: 0 }),
         ("reactor name", InputMode::ReactorEditorField {

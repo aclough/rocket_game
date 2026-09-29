@@ -139,11 +139,13 @@ fn input_timeout(
     }
 }
 
-/// The two typed fields the engine and reactor editors share: a free
-/// text name and a numeric scale.
+/// The typed fields of the engine and reactor editors: a free text
+/// name, an engine's size (typed in its headline unit: kN, kW or m²)
+/// and a reactor's scale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorField {
     Name,
+    Size,
     Scale,
 }
 
@@ -151,13 +153,14 @@ impl EditorField {
     pub fn kind(self) -> text_field::FieldKind {
         match self {
             EditorField::Name => text_field::FieldKind::Text,
-            EditorField::Scale => text_field::FieldKind::Number,
+            EditorField::Size | EditorField::Scale => text_field::FieldKind::Number,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             EditorField::Name => "Name",
+            EditorField::Size => "Size",
             EditorField::Scale => "Scale",
         }
     }

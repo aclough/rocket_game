@@ -672,7 +672,7 @@ mod engines {
             scale *= real.thrust_kn * 1_000.0 / on_basis(&ep.design_variant(vacuum, &bal.nozzle));
         }
         let engine = ep.design_variant(vacuum, &bal.nozzle);
-        let scale = ep.spec.scale;
+        let scale = ep.scale(&bal.nozzle);
         Some((ep, engine, scale))
     }
 

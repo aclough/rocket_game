@@ -21,7 +21,7 @@ pub(super) fn draw_engine_editor_modal(
         Some(ep) => ep,
         None => return,
     };
-    let row_count = 4; // Name, Cycle, Preset, Scale
+    let row_count = 4; // Name, Cycle, Preset, Size
     let cursor = cursor.min(row_count - 1);
 
     let row_label = |row: usize, sel: bool| -> &'static str {
@@ -54,8 +54,17 @@ pub(super) fn draw_engine_editor_modal(
         format!(" {} Preset: {}", row_label(2, true), ep.spec.preset.name()),
         row_style(2),
     )));
+    // Size reads as the figure the player knows it by; the stored size
+    // (throat, power, area) sits behind it.
+    let size_label = match crate::engine_project::SizeUnit::of_cycle(ep.design.cycle) {
+        crate::engine_project::SizeUnit::ThroatArea => format_thrust_n(ep.design.thrust_n),
+        crate::engine_project::SizeUnit::InputPower => format!(
+            "{} ({})", format_power_w(ep.design.power_draw_w()), format_thrust_n(ep.design.thrust_n)),
+        crate::engine_project::SizeUnit::SailArea => format!(
+            "{:.0} m² ({} at 1 AU)", ep.spec.size, format_thrust_n(ep.design.thrust_n)),
+    };
     lines.push(Line::from(Span::styled(
-        format!(" {} Scale:  {:.3}×", row_label(3, true), ep.spec.scale),
+        format!(" {} Size:   {}", row_label(3, true), size_label),
         row_style(3),
     )));
 

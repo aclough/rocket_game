@@ -51,7 +51,11 @@ pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
 /// v3: the nineteen per-kind project events (`FlawDiscovered`,
 /// `RocketFlawDiscovered`, `ReactorFlawDiscovered`, …) in the event log
 /// collapsed into one `Project { kind, name, event }`.
-pub const SAVE_VERSION: u32 = 3;
+///
+/// v4: an engine project's `spec.scale` (a multiple of its family's
+/// default) became `spec.size`, the engine's size in its kind's natural
+/// unit — throat area, input power or sail area (21_ENGINES.md step 3).
+pub const SAVE_VERSION: u32 = 4;
 
 /// Load game state from a JSON file, running any migrations the file
 /// needs, then stamping it with the current version.
@@ -152,6 +156,61 @@ fn migrate_json(root: &mut serde_json::Value, from: u32) {
     if from < 3 {
         migrate_event_log_to_v3(root);
     }
+    if from < 4 {
+        migrate_engine_scale_to_size_v4(root);
+    }
+}
+
+/// v3 -> v4: every engine project, the player's and each competitor's,
+/// trades `spec.scale` for `spec.size` = scale × its family's default
+/// size, priced with the save's own nozzle balance. A project whose
+/// family no longer has a baseline keeps its design's own size. The
+/// designs themselves are untouched, so no loaded engine changes.
+fn migrate_engine_scale_to_size_v4(root: &mut serde_json::Value) {
+    let nozzle: crate::balance_config::NozzleConfig = root.get("balance")
+        .and_then(|b| b.get("nozzle"))
+        .and_then(|n| serde_json::from_value(n.clone()).ok())
+        .unwrap_or_default();
+    let migrate_company = |company: &mut serde_json::Value| {
+        if let Some(projects) = company.get_mut("engine_projects").and_then(|l| l.as_array_mut()) {
+            for project in projects {
+                migrate_engine_project_to_v4(project, &nozzle);
+            }
+        }
+    };
+    if let Some(company) = root.get_mut("player_company") {
+        migrate_company(company);
+    }
+    if let Some(comps) = root.get_mut("competitors").and_then(|c| c.as_array_mut()) {
+        for comp in comps {
+            if let Some(company) = comp.get_mut("company") {
+                migrate_company(company);
+            }
+        }
+    }
+}
+
+fn migrate_engine_project_to_v4(project: &mut serde_json::Value, nozzle: &crate::balance_config::NozzleConfig) {
+    // The spec is flattened onto the project (`DesignProject::spec`),
+    // so `preset` and `scale` sit beside `design`.
+    let Some(obj) = project.as_object_mut() else { return };
+    if obj.contains_key("size") {
+        return;
+    }
+    let scale = obj.get("scale").and_then(|s| s.as_f64()).unwrap_or(crate::engine_project::DEFAULT_SCALE);
+    let preset = obj.get("preset").cloned()
+        .and_then(|p| serde_json::from_value::<crate::engine_project::PropellantPreset>(p).ok());
+    let design = obj.get("design").cloned()
+        .and_then(|d| serde_json::from_value::<crate::engine::EngineDesign>(d).ok());
+    let size = match (&design, preset) {
+        (Some(d), Some(p)) => crate::engine_project::default_size(d.cycle, p, nozzle)
+            .map(|base| scale * base)
+            .unwrap_or_else(|| crate::engine_project::natural_size(d)),
+        (Some(d), None) => crate::engine_project::natural_size(d),
+        _ => 0.0,
+    };
+    obj.remove("scale");
+    obj.insert("size".into(), serde_json::json!(size));
 }
 
 /// The v3 shape of one pre-v3 project event: which kind it was for,
@@ -571,6 +630,35 @@ mod tests {
     /// real m4 corpus save with one project's flaws and status
     /// rewritten (the bot had revised every flaw away, so two are put
     /// back), so the rest of the document is genuine v0 output.
+    /// v3 -> v4: an engine project's scale becomes its size — the
+    /// family default times the scale — and its design is untouched.
+    #[test]
+    fn v3_engine_scale_becomes_size() {
+        use crate::engine::EngineCycle;
+        use crate::engine_project::{default_size, PropellantPreset};
+        let mut state = GameState::with_money("V3".into(), 1_000_000_000.0, 1);
+        state.player_company.start_engine_project(
+            "Twice".into(), EngineCycle::GasGenerator, PropellantPreset::Kerolox, 2.0, None, &state.balance,
+        );
+        let thrust = state.player_company.engine_projects[0].design.thrust_n;
+        let mut raw = serde_json::to_value(&state).unwrap();
+        let ep = raw["player_company"]["engine_projects"][0].as_object_mut().unwrap();
+        ep.remove("size");
+        ep.insert("scale".into(), serde_json::json!(2.0));
+        raw["save_version"] = serde_json::json!(3);
+
+        let path = temp_path();
+        fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
+        let loaded = load_game(&path).expect("v3 save should load");
+        let _ = fs::remove_file(&path);
+
+        let ep = &loaded.player_company.engine_projects[0];
+        let base = default_size(EngineCycle::GasGenerator, PropellantPreset::Kerolox, &loaded.balance.nozzle).unwrap();
+        assert!((ep.spec.size - 2.0 * base).abs() < 1e-12, "size = scale × the family default");
+        assert!((ep.scale(&loaded.balance.nozzle) - 2.0).abs() < 1e-12);
+        assert_eq!(ep.design.thrust_n, thrust, "the design is not re-derived on load");
+    }
+
     #[test]
     fn v0_rocket_revision_queue_migrates_to_ids() {
         use crate::rocket_project::RocketDesignStatus;

@@ -36,8 +36,11 @@ pub(super) fn format_thrust_n(n: f64) -> String {
         format!("{:.1} kN", n / 1_000.0)
     } else if n.abs() >= 10.0 {
         format!("{:.0} N", n)
-    } else {
+    } else if n.abs() >= 0.1 || n == 0.0 {
         format!("{:.1} N", n)
+    } else {
+        // A sail pushes with millinewtons.
+        format!("{:.0} mN", n * 1_000.0)
     }
 }
 

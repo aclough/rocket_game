@@ -203,12 +203,15 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
 
     for (design, complexity) in [(booster_engine.clone(), 12u32), (upper_engine.clone(), 8u32)] {
         let project_id = company.next_project_id.mint();
+        let size = crate::engine_project::natural_size(&design);
         company.engine_projects.push(EngineProject {
             auto_revise: crate::flaw::auto_revise_default(),
             retired: false,
             project_id,
             design,
-            spec: crate::engine_project::EngineSpec { preset: PropellantPreset::Hydrolox, scale: 1.0 },
+            spec: crate::engine_project::EngineSpec {
+                preset: PropellantPreset::Hydrolox, size,
+            },
             status: EngineDesignStatus::Testing { work_completed: 0.0 },
             flaws: Vec::new(),
             revision: 0,

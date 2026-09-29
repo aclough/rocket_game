@@ -419,10 +419,10 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
 }
 
 /// Scale range for engine design. Player picks a value in [min_scale, max_scale].
-pub const MIN_SCALE: f64 = 0.25;
-pub const MAX_SCALE: f64 = 4.0;
+/// The family's default engine size, as a multiple of its baseline.
+/// Constructors take a scale in this sense; the project stores the
+/// resulting size (`EngineSpec::size`).
 pub const DEFAULT_SCALE: f64 = 1.0;
-pub const SCALE_STEP: f64 = 0.25;
 
 /// Status of an engine design project — the shared [`DesignStatus`].
 pub type EngineDesignStatus = DesignStatus;
@@ -443,7 +443,101 @@ pub enum EngineSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineSpec {
     pub preset: PropellantPreset,
-    pub scale: f64,
+    /// How big the engine is, in its kind's natural unit (`SizeUnit`):
+    /// throat area for a bell, input power for an electric thruster,
+    /// sail area for a sail. Fixed when the design is laid out;
+    /// improvements move the engine's figures, not its size. Saves
+    /// before v4 stored a `scale` multiplier instead (`save::migrate_json`).
+    pub size: f64,
+}
+
+/// Solar radiation pressure on a sail at 1 AU (N/m²): ~9.1 µN/m² for a
+/// perfect reflector, a little less for a real film.
+pub const SAIL_THRUST_N_PER_M2_1AU: f64 = 9.0e-6;
+
+/// What an engine's size is measured in, by propulsion kind
+/// (21_ENGINES.md, question 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeUnit {
+    /// A bell: throat area (m²). The editor shows it as rated thrust.
+    ThroatArea,
+    /// An electric thruster: input power (W).
+    InputPower,
+    /// A sail: area (m²).
+    SailArea,
+}
+
+impl SizeUnit {
+    /// The unit a family of `cycle` is sized in.
+    pub fn of_cycle(cycle: EngineCycle) -> SizeUnit {
+        match cycle {
+            EngineCycle::ElectricPropulsion => SizeUnit::InputPower,
+            EngineCycle::SolarSail => SizeUnit::SailArea,
+            _ => SizeUnit::ThroatArea,
+        }
+    }
+
+    /// The editor's range for the size's headline figure (`headline`):
+    /// 10 kN–10 MN of thrust, 1 kW–1 MW of input power, 10 m²–1 km² of
+    /// sail. Wide enough for Rutherford to RD-170 and a CubeSat sail to
+    /// a mission-class one.
+    pub fn headline_range(self) -> (f64, f64) {
+        match self {
+            SizeUnit::ThroatArea => (10_000.0, 10_000_000.0),
+            SizeUnit::InputPower => (1_000.0, 1_000_000.0),
+            SizeUnit::SailArea => (10.0, 1_000_000.0),
+        }
+    }
+}
+
+/// An engine design's size in its kind's natural unit (see `SizeUnit`).
+/// A bell fixture with no nozzle data has a throat of 0.
+pub fn natural_size(design: &EngineDesign) -> f64 {
+    match design.propulsion {
+        Propulsion::Nozzle { .. } => design.throat_area_m2(),
+        Propulsion::Electric { power_draw_w } => power_draw_w,
+        Propulsion::Sail => design.thrust_n / SAIL_THRUST_N_PER_M2_1AU,
+    }
+}
+
+/// The figure the editor shows for an engine's size, in SI units: rated
+/// thrust for a bell, input power for an electric thruster, area for a
+/// sail. It is what the player recognises; the size behind it is what
+/// is stored.
+pub fn headline(design: &EngineDesign) -> f64 {
+    match design.propulsion {
+        Propulsion::Nozzle { .. } => design.thrust_n,
+        Propulsion::Electric { power_draw_w } => power_draw_w,
+        Propulsion::Sail => natural_size(design),
+    }
+}
+
+/// The size of a (cycle, propellant) family's default engine — the one
+/// `DEFAULT_SCALE` gives — in its natural unit.
+pub fn default_size(cycle: EngineCycle, preset: PropellantPreset, cfg: &NozzleConfig) -> Option<f64> {
+    let design = engine_baseline(cycle, preset)?
+        .design(EngineId(0), String::new(), cycle, preset, DEFAULT_SCALE, false, cfg);
+    Some(natural_size(&design))
+}
+
+/// The scale (multiple of the family default) whose canonical design
+/// has `target` as its headline figure. Linear except where a
+/// vacuum-only family's bell gain depends on the throat, so it corrects
+/// a few times.
+pub fn scale_for_headline(
+    cycle: EngineCycle, preset: PropellantPreset, target: f64, cfg: &NozzleConfig,
+) -> Option<f64> {
+    let baseline = engine_baseline(cycle, preset)?;
+    let at = |scale: f64| headline(&baseline.design(EngineId(0), String::new(), cycle, preset, scale, false, cfg));
+    let mut scale = target / at(DEFAULT_SCALE);
+    for _ in 0..6 {
+        let got = at(scale);
+        if got <= 0.0 {
+            break;
+        }
+        scale *= target / got;
+    }
+    Some(scale)
 }
 
 /// An engine design project with workflow state.
@@ -515,8 +609,9 @@ impl EngineProject {
         // form of the family; `design_variant` derives the nozzle a
         // given stage actually flies.
         let design = baseline.design(engine_id, name, cycle, preset, scale, false, &balance_cfg.nozzle);
+        let size = scale * default_size(cycle, preset, &balance_cfg.nozzle)?;
         Some(DesignProject::new_in_design(
-            project_id, design, EngineSpec { preset, scale }, complexity, work_required, None,
+            project_id, design, EngineSpec { preset, size }, complexity, work_required, None,
         ))
     }
 
@@ -564,11 +659,22 @@ impl EngineProject {
         let work_required = balance_cfg.work.design_work_required(effective, scale);
 
         // Preserve engine id and re-derive everything else.
+        let Some(base) = default_size(cycle, preset, &balance_cfg.nozzle) else {
+            return false;
+        };
         self.design = baseline.design(self.design.id, name, cycle, preset, scale, false, &balance_cfg.nozzle);
-        self.spec = EngineSpec { preset, scale };
+        self.spec = EngineSpec { preset, size: scale * base };
         self.complexity = complexity;
         self.clamp_work_after_edit(work_required);
         true
+    }
+
+    /// The project's size as a multiple of its family's default
+    /// (`DEFAULT_SCALE`), for the formulas that still take a scale.
+    pub fn scale(&self, cfg: &NozzleConfig) -> f64 {
+        default_size(self.design.cycle, self.spec.preset, cfg)
+            .filter(|base| *base > 0.0)
+            .map_or(DEFAULT_SCALE, |base| self.spec.size / base)
     }
 
     /// The engine as flown with the given nozzle.

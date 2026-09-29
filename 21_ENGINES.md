@@ -408,6 +408,43 @@ labour). New tests: every engine BOM sums to one; a 10 t NTR carries
 40–80 kg of HEU and costs $10–60M in materials. 677 tests, clippy
 clean, bands pass, oracle identical (the bot builds no NTR).
 
+### Step 3 record (2026‑09‑28)
+
+`EngineSpec { preset, size }`: the engine's size in its kind's natural
+unit (`SizeUnit::of_cycle`) — throat area for a bell, input power for
+an electric thruster, sail area for a sail (`natural_size`; sails at
+`SAIL_THRUST_N_PER_M2_1AU` = 9 µN/m², so the 10 mN baseline is
+~1,111 m²). Constructors still take a multiple of the family default
+(`DEFAULT_SCALE`; the bot and ~40 tests pass 1.0 or a small multiple),
+and store `size = scale × default_size(cycle, preset)`;
+`EngineProject::scale(cfg)` gives the multiple back for the formulas
+that still take one (design work). Mass and thrust are unchanged —
+still linear — so step 4 is where size starts to matter physically.
+`MIN_SCALE`/`MAX_SCALE`/`SCALE_STEP` are gone.
+
+**Editor.** The Scale row is a Size row showing the kind's headline
+figure (`headline`): `900 kN`; `30 kW (1.0 N)`; `1111 m² (10 mN at
+1 AU)`. Enter opens a Size field typed in kN, kW or m²; ←/→ step ×√2;
+both clamp to the kind's range (`SizeUnit::headline_range`: 10 kN–
+10 MN, 1 kW–1 MW, 10 m²–1 km²) through `scale_for_headline`, which
+iterates for vacuum‑only families whose bell gain depends on the
+throat. Changing propellant or cycle keeps the headline within a
+propulsion kind (a 400 kN kerolox engine becomes a 400 kN methalox one)
+and takes the new family's default across kinds. The Engines tab drops
+its "Scale: 1.00x". `EditorField::Size` is the engine field; reactors
+keep `EditorField::Scale`. `format_thrust_n` shows millinewtons below
+0.1 N.
+
+**Saves: v4.** `migrate_json` turns each engine project's flattened
+`scale` into `size` = scale × the family default under the save's own
+nozzle balance, for the player's and each competitor's projects; a
+family without a baseline keeps its design's own size. Designs are not
+re‑derived on load, so no loaded engine changes. Test: a v3 project at
+scale 2 loads with size = 2 × default and its thrust untouched.
+
+Gates: 679 tests, clippy clean, corpus loads and round‑trips, render
+smoke test (the engine field is now `Size`), oracle byte‑identical.
+
 ## 5. Questions
 
 1. Size ladder (§2.1): the class label reads each family's thrust, so
