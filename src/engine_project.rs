@@ -760,6 +760,11 @@ impl EngineProject {
         };
         self.design = baseline.design(self.design.id, name, cycle, preset, scale, false, &balance_cfg.nozzle);
         self.spec = EngineSpec { preset, size: scale * base };
+        // The propellant decides the technology: an engine edited to
+        // methalox is a methalox engine and inherits that technology's
+        // deficiencies when its design completes. (Every engine starts as
+        // kerolox, so without this no edited engine ever did.)
+        self.technology_id = crate::technology::technology_for_preset(preset);
         self.complexity = complexity;
         self.clamp_work_after_edit(work_required);
         true
@@ -1365,5 +1370,19 @@ mod tests {
         assert_eq!(d.isp_s, before.isp_s);
         // Tier-1 improvements carry no risk.
         assert_eq!(EngineDesign::improvement_side_effects(&EngineImprovementKind::Isp(0.02)), (0, 0.0, 1.0));
+    }
+
+    /// The propellant decides the technology: editing an engine to an
+    /// experimental propellant attaches that technology (so its
+    /// deficiencies land when the design completes), and editing it back
+    /// takes it off.
+    #[test]
+    fn editing_the_propellant_sets_the_technology() {
+        let mut p = create_test_project();
+        assert_eq!(p.technology_id, None);
+        assert!(p.apply_edit("E".into(), EngineCycle::GasGenerator, PropellantPreset::Methalox, 1.0, &bal()));
+        assert_eq!(p.technology_id, Some(crate::technology::TECH_METHALOX));
+        assert!(p.apply_edit("E".into(), EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, &bal()));
+        assert_eq!(p.technology_id, None);
     }
 }
