@@ -3,3 +3,12 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 [] Investigate dry masses when we go to do re-entry and start adding other
 options to our rocket bodies.
 
+
+[] Tech deficiencies retire per company: a new design on a technology
+inherits only the deficiencies that company hasn't solved (existing
+engines still carrying one keep it until revised). Once all are solved
+the technology stops being Experimental for that company (drop the ⚗
+cue). Solved state moves from the world's Technology to the company, so
+a rival adopting the tech faces the full list; the solved-elsewhere
+multiplier then has nothing left to do. Tackle with the flaws and
+deficiencies pass.
