@@ -631,6 +631,36 @@ worlds; applying it doubles a build order's work, and solving it
 restores the multiplier and clears the id. 681 tests, clippy clean,
 bands pass, oracle identical (the bot uses no experimental technology).
 
+### Rocket designs follow their engines (2026‑09‑29, between steps 6 and 7)
+
+Found while measuring uprates: a rocket design keeps a copy of each
+engine as its stages were laid out, and only the rocket designer, while
+open, ever refreshed that copy. Capability, bidding and the launch
+simulation all read the rocket project, so no improvement, uprate or
+solved technology deficiency ever reached an existing rocket — the
+player's or the bot's. USER: apply it automatically, for free, since
+built engines' revisions aren't tracked yet.
+
+`GameState::refresh_rocket_engines`, run after each day's research and
+technology resolution: each rocket project's stage whose engine project
+design differs takes `design_variant` of it (keeping the stage's bell),
+its thrust structure moves by the change in thrust
+(`structure::thrust_structure_mass_kg` plus aero shell for the first
+group, leaving any hand‑set base alone), and a solar panel sized to
+exactly the stage's demand is re‑sized to the new demand. Capability
+caches clear when anything changed. `EngineDesign` now derives
+`PartialEq` for the comparison. Flights and spacecraft keep the vehicle
+they launched.
+
+The panel rule matters: without it, a +2 % thrust improvement on the
+bot's upper engine added 6 kg of structure, housekeeping went 174.5 →
+175.1 W against 174.5 W of panels, the rocket failed the trip‑survival
+check and the bot never bid again (200 seeds: $115M, 45 bankrupt).
+
+**Effect, 200 seeds:** $142M, 25 bankrupt, 172 ever profitable →
+$152M, 24, 175. Bands pass; 682 tests; oracle re‑baselined
+(`oracle_21_base6b`: 40 seeds $183.1M, 3/40 bankrupt).
+
 ## 5. Questions
 
 1. Size ladder (§2.1): the class label reads each family's thrust, so

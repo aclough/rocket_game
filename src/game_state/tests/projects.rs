@@ -232,3 +232,52 @@ fn build_time_penalty_applies_to_builds_and_reverts_when_solved() {
     assert_eq!(ep.build_time_multiplier, 1.0);
     assert!(ep.tech_deficiency_ids.is_empty());
 }
+
+/// Rocket designs follow their engine projects: an improvement applied
+/// to an engine reaches every rocket built around it, each stage keeping
+/// its bell, its thrust structure following the thrust, and a solar
+/// panel auto-sized to the stage's demand following the new demand.
+#[test]
+fn rocket_designs_follow_their_engines_improvements() {
+    use crate::engine_project::EngineImprovementKind;
+    use crate::project::Designable;
+
+    let mut gs = GameState::with_money("Follow".into(), 1_000_000_000.0, 5);
+    let mut policy = crate::policy::BasicPolicy::new();
+    for _ in 0..(365 * 3) {
+        if !gs.player_company.rocket_projects.is_empty() { break; }
+        crate::policy::CompanyPolicy::act(&mut policy, &mut gs);
+        gs.advance_day();
+    }
+    let before = gs.player_company.rocket_projects[0].design.clone();
+    let booster_id = before.stage_groups[0][0].engine.id;
+    let upper_id = before.stage_groups[1][0].engine.id;
+    assert!(!before.stage_groups[0][0].engine.is_vacuum_variant());
+    assert!(before.stage_groups[1][0].engine.is_vacuum_variant());
+
+    // Nothing changed yet: a refresh is a no-op.
+    gs.refresh_rocket_engines();
+    let unchanged = &gs.player_company.rocket_projects[0].design;
+    assert_eq!(unchanged.stage_groups[0][0].engine, before.stage_groups[0][0].engine);
+    assert_eq!(unchanged.stage_groups[0][0].structural_mass_kg, before.stage_groups[0][0].structural_mass_kg);
+
+    // +10 % thrust on both engine projects.
+    for ep in gs.player_company.engine_projects.iter_mut() {
+        ep.design.apply_improvement(&EngineImprovementKind::Thrust(0.10));
+    }
+    gs.refresh_rocket_engines();
+    let after = &gs.player_company.rocket_projects[0].design;
+    for (gi, id) in [(0usize, booster_id), (1, upper_id)] {
+        let old = &before.stage_groups[gi][0];
+        let new = &after.stage_groups[gi][0];
+        assert_eq!(new.engine.id, id);
+        assert_eq!(new.engine.is_vacuum_variant(), old.engine.is_vacuum_variant(), "stage {gi} keeps its bell");
+        assert!((new.engine.thrust_n / old.engine.thrust_n - 1.10).abs() < 1e-9, "stage {gi} gets the thrust");
+        assert!(new.structural_mass_kg > old.structural_mass_kg, "stage {gi}'s thrust structure grows");
+        assert_eq!(new.propellant_mass_kg, old.propellant_mass_kg);
+        // The bot's panels were auto-sized to demand; they follow it, so
+        // the heavier stage stays powered.
+        assert!(new.supply_w(1.0) >= new.housekeeping_w() - 1e-9, "stage {gi} stays powered");
+        assert!(new.supply_w(1.0) > old.supply_w(1.0));
+    }
+}

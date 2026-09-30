@@ -208,7 +208,7 @@ impl Propulsion {
 /// Reads through [`EngineDesignRepr`], so a save from before
 /// `propulsion` existed — nozzle data as flat fields, or none at all —
 /// loads as the same design.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(from = "EngineDesignRepr")]
 pub struct EngineDesign {
     pub id: EngineId,

@@ -90,6 +90,68 @@ impl GameState {
         self.apply_new_design_deficiencies::<crate::reactor_project::ReactorProject>(
             newly_designed_reactors, events,
         );
+        // Whatever today's work did to an engine design reaches the
+        // rockets built around it.
+        self.refresh_rocket_engines();
+    }
+
+    /// Rocket designs follow their engine projects (21_ENGINES.md, after
+    /// step 6). A rocket design keeps a copy of each engine as its stages
+    /// were laid out; when an engine project's design changes — an
+    /// improvement or uprate applied, a technology deficiency added or
+    /// solved, a rename — every rocket design using it takes the new
+    /// figures, each stage keeping its own bell, and the stage's thrust
+    /// structure grows or shrinks with the thrust (the rest of its
+    /// structure, however it was sized, is left alone). A solar panel
+    /// auto-sized to the stage's demand is re-sized to the new demand, so
+    /// a heavier stage doesn't silently brown out. Free and immediate: built engines'
+    /// revisions aren't tracked yet, so rockets already in inventory fly
+    /// the current design too. Flights and spacecraft already launched
+    /// keep the vehicle they flew. Contracted engines have no project and
+    /// never change.
+    pub(crate) fn refresh_rocket_engines(&mut self) {
+        let cfg = self.balance.nozzle.clone();
+        let company = &mut self.player_company;
+        let mut changed = false;
+        for rp in company.rocket_projects.iter_mut() {
+            for (gi, group) in rp.design.stage_groups.iter_mut().enumerate() {
+                for stage in group.iter_mut() {
+                    let Some(ep) = company.engine_projects.iter().find(|ep| ep.design.id == stage.engine.id) else {
+                        continue;
+                    };
+                    let current = ep.design_variant(stage.engine.is_vacuum_variant(), &cfg);
+                    if current == stage.engine {
+                        continue;
+                    }
+                    let thrust_structure = |e: &crate::engine::EngineDesign| {
+                        let base = crate::structure::thrust_structure_mass_kg(e, stage.engine_count);
+                        base + crate::structure::aero_shell_mass_kg(base, crate::structure::is_exposed_to_airflow(gi))
+                    };
+                    let delta = thrust_structure(&current) - thrust_structure(&stage.engine);
+                    // A panel sized to exactly this stage's demand (the
+                    // designer's and the bot's default) follows the new
+                    // demand; a panel sized by hand is left as it is.
+                    let auto_before = crate::power::solar_panel_for_stage_demand(stage);
+                    stage.structural_mass_kg = (stage.structural_mass_kg + delta).max(0.0);
+                    stage.engine = current;
+                    let auto_after = crate::power::solar_panel_for_stage_demand(stage);
+                    for src in stage.power_sources.iter_mut() {
+                        if let (
+                            crate::power::PowerSourceKind::SolarPanel { peak_w_at_1au: had },
+                            crate::power::PowerSourceKind::SolarPanel { peak_w_at_1au: auto },
+                        ) = (&src.kind, &auto_before.kind) {
+                            if (had - auto).abs() <= 1e-9 * auto.abs().max(1.0) {
+                                *src = auto_after.clone();
+                            }
+                        }
+                    }
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.clear_capability_caches();
+        }
     }
 
     /// Everything that happens on the 1st: salaries, the economy and
