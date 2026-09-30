@@ -796,6 +796,21 @@ rocket has build history (step 5 note); tracking built engines'
 revisions, so rockets already in inventory need not fly the latest
 engine design (the refresh's current simplification).
 
+### Playtest fix: methalox Isp (2026‑09‑30)
+
+USER, playing with methalox: same thrust per size across cycles, better
+Isp, same complexity — shouldn't the lower density cost TWR? Answer:
+the equal thrust is the editor keeping the chosen thrust across a
+propellant change (step 3); the survey shows no methalox TWR penalty
+(Longyun‑70 ~80 like kerolox gas generators; Raptor the lightest
+surveyed), and density already costs methalox stages a 16 % heavier
+tank fraction. But the Isp edge was too large: the reference was 350 s
+against kerolox's 311, ~40 s in every cycle, where the survey shows
+~10–20 s at a comparable bell. Methalox reference 350 → 325 s:
+gas generator 325 vac / ~283 pad, staged combustion ~345, full‑flow
+~351. 685 tests; bands pass; oracle identical (the bot flies no
+methalox).
+
 ## 5. Questions
 
 1. Size ladder (§2.1): the class label reads each family's thrust, so

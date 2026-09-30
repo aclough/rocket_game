@@ -401,12 +401,15 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
 
     // Vacuum Isp of the sea-level bell by propellant (gas-generator
     // reference), then the cycle adjusts. Merlin 1D 311, J-2 / Vulcain
-    // class ~420, Raptor 350, AJ10-class hypergolic ~285, Castor-class
-    // solid ~285.
+    // class ~420, AJ10-class hypergolic ~285, Castor-class solid ~285.
+    // Methalox sits ~14 s above kerolox at the same bell: TQ-12's 337 s
+    // on its larger bell is ~324 s on Merlin's, and Raptor 1 (350 s,
+    // full-flow, 250 bar) is ~12 s over the RD-180 (338 s). It was 350
+    // here until 2026-09-30, a ~40 s edge in every cycle.
     let base_isp_ref = match preset {
         PropellantPreset::Kerolox => 311.0,
         PropellantPreset::Hydrolox => 420.0,
-        PropellantPreset::Methalox => 350.0,
+        PropellantPreset::Methalox => 325.0,
         PropellantPreset::Hypergolic => 285.0,
         PropellantPreset::Solid => 285.0,
         PropellantPreset::Hydrogen => unreachable!(),
