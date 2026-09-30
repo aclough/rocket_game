@@ -455,6 +455,7 @@ impl Company {
             purchase_cost_per_unit: entry.purchase_cost_per_unit,
             flaws,
             complexity: entry.complexity,
+            legacy: entry.legacy.clone(),
         };
         self.contracted_engines.push(contracted);
         Some(GameEvent::EngineContracted { engine_name: name })

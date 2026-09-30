@@ -289,6 +289,10 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     ),
                     style,
                 )));
+                // Why a legacy engine costs what it does.
+                if let Some(legacy) = &entry.legacy {
+                    lines.push(hint_line(format!("      legacy: {}", legacy)));
+                }
             }
             render_modal(frame, modal_area, " Contract Third-Party Engine ", lines);
         }

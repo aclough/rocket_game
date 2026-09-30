@@ -244,6 +244,9 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
                 bells.isp(),
                 format_money(ce.purchase_cost_per_unit),
             )));
+            if let Some(legacy) = &ce.legacy {
+                lines.push(hint_line(format!("      legacy: {}", legacy)));
+            }
             for flaw in ce.flaws.iter().filter(|f| f.discovered) {
                 lines.push(flaw_line(flaw, ProjectKind::Engine));
             }

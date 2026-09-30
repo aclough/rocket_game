@@ -157,7 +157,7 @@ impl Default for BidRule {
 
 impl Company {
     pub fn new(name: String, starting_money: f64, seed: &GameSeed, balance_cfg: &BalanceConfig) -> Self {
-        let catalog = third_party::generate_starter_engines(seed);
+        let catalog = third_party::generate_starter_engines(seed, balance_cfg);
         let mut company = Company {
             name,
             money: starting_money,

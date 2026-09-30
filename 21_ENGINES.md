@@ -1,6 +1,6 @@
 # 21_ENGINES — What makes one engine different from another
 
-Status: **design settled 2026‑09‑28**; steps in §4. Nothing implemented. Started from
+Status: **done 2026‑09‑29** — all eight steps committed, plus the rocket refresh between steps 6 and 7 (records in §4). Started from
 `engine-variation-thoughts.txt` and the TODO audit items (complexity,
 scale, RL‑10 cost, Merlin‑class TWR). Answer inline as `USER:`; I reply
 as `CLAUDE:`. Steps get firmed up once §2 settles.
@@ -742,6 +742,59 @@ uprate's hidden flaws are flown before testing finds them. It passes the
 bands, so the bot keeps the plan's behaviour and exercises the mechanic.
 685 tests, clippy clean; oracle re‑baselined (`oracle_21_base7`: 40
 seeds $178.9M, 3/40 bankrupt, 37/40 ever profitable).
+
+### Step 8 record (2026‑09‑29)
+
+**Catalogue prices from the cost model.** `third_party::catalogue_price`:
+the vendor's unit cost under the same model as the player's engines —
+materials floor plus build work at the line salary, times any legacy
+`build_time_multiplier` — at the vendor's volume
+(`ThirdPartyConfig::vendor_prior_builds` = 20) times its `markup` (3.0).
+Complexities now come from `combined_complexity` rather than hand‑set
+numbers (they came out the same: 5, 8, 5). New games' catalogue:
+
+| engine | before | now |
+|---|---|---|
+| KM‑15 kick motor (solid, 35 kg) | $0.8M | $0.23M |
+| RD‑33K (NK‑33 analogue) | $12M | $7.6M |
+| HT‑40 (hypergolic, 90 kg) | $2.5M | $0.54M |
+| DL‑10 Dactyl (RL10 analogue, new) | — | ~$16M |
+
+The two small engines get much cheaper: the model makes small engines
+cheap (mass^0.6 labour), and the survey had no prices for small engines
+to check it against. Worth watching in playtests.
+
+**Legacy engine.** `ThirdPartyEngine` gains `build_time_multiplier`
+(fixed; a buyer's revision can't solve a vendor's process) and a
+`legacy` note, carried onto `ContractedEngine`. The DL‑10 Dactyl —
+110 kN, 462 s, 300 kg hydrolox expander — carries "1960s hand‑brazed
+tube‑wall chamber, ×3 build time" (×4 priced it at $21M, above the
+RL10's $10–20M). The catalogue modal and the contracted‑engine rows
+show the note.
+
+**DinoSoar buys it.** Its upper stage is now the catalogue's Dactyl,
+contracted at realization, as the real incumbent buys RL10s: the legacy
+cost lands in its rocket without ×3 line time. Its marginal cost rose
+$32.7M → ~$47M, so (option D again) its margins go 3.18–8.81 → 2.17–6.02
+and `catalog_cost` $32M → $48M, keeping its bid range. Freed of
+building the upper engine, it built and won more on 18 lines; 15 lines
+restore its step‑7 four‑year behaviour (awards 17–22, builds 19–20; was
+17–22 and 18–20). The campaign cadence tests pass at 15.
+
+**Gates.** 685 tests (catalogue count, DinoSoar's shape updated);
+clippy clean; bands pass. Bot economy unchanged from step 7 (it buys no
+third‑party engines): 200 seeds $148.9M, 28 bankrupt; the 40‑seed
+summary matches step 7's (`oracle_21_base8`).
+
+TODO.txt: the complexity‑audit block (realistic costs, scaling beyond
+0.25–4×, engine variation, an RL10‑hard technology problem,
+Merlin‑1D‑light refinement) is delivered by this plan and removed.
+
+**Follow‑ups not done here:** the Place Bid modal's material estimate
+excludes labour, so it understates complex and hydrogen engines until a
+rocket has build history (step 5 note); tracking built engines'
+revisions, so rockets already in inventory need not fly the latest
+engine design (the refresh's current simplification).
 
 ## 5. Questions
 

@@ -57,7 +57,7 @@ fn test_team_assignment() {
 #[test]
 fn test_third_party_catalog() {
     let gs = GameState::new("Test".into(), 42);
-    assert_eq!(gs.player_company.third_party_catalog.len(), 3);
+    assert_eq!(gs.player_company.third_party_catalog.len(), 4);
 }
 
 #[test]

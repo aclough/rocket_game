@@ -36,6 +36,7 @@ pub struct BalanceConfig {
     pub technology: TechnologyConfig,
     pub improvements: ImprovementsConfig,
     pub uprates: UpratesConfig,
+    pub third_party: ThirdPartyConfig,
 }
 
 impl BalanceConfig {
@@ -853,6 +854,8 @@ pub struct CompetitorConfig {
     /// engine ~26 % more line-days and its upper engine ~3×; 15 lines
     /// kept its four-year build count but a won campaign's third
     /// mission flew ~day 165, past the cadence test; 18 fly it by ~122.
+    /// 18 → 15 in step 8: it now buys its upper-stage engine, and 15
+    /// lines give the same four-year build and award counts as before.
     pub production_lines: u32,
     pub starting_money: f64,
     /// Integrated rockets on the shelf at game start.
@@ -870,7 +873,8 @@ pub struct CompetitorConfig {
     /// Task 4: the hydrolox material premium on its 6.6 t booster
     /// engine raised measured marginal cost to ~$39M (`probes::dinosoar`);
     /// $39M → $32M in 21_ENGINES.md step 5 (materials floor plus
-    /// complexity-driven labour).
+    /// complexity-driven labour); $32M → $48M in step 8 (its upper
+    /// engine bought from the catalogue at its legacy price).
     pub catalog_cost: f64,
     /// Bid = marginal cost × margin. Margin relaxes from margin_max
     /// (one free rocket) toward margin_min as free stock grows.
@@ -882,7 +886,9 @@ pub struct CompetitorConfig {
     /// to 2.6-7.2 in Task 4 when the hydrolox premium raised its cost
     /// basis $36M → $39M (bid range stays ~$103-285M), and to 3.18-8.81
     /// in 21_ENGINES.md step 5 when engine cost moved from materials to
-    /// complexity and lowered it $39.3M → $32.1M (same bid range).
+    /// complexity and lowered it $39.3M → $32.1M (same bid range), and
+    /// to 2.17-6.02 in step 8 when its upper engine became a bought
+    /// legacy RL10 analogue (~$16M) and its cost rose to ~$47.9M.
     pub margin_min: f64,
     pub margin_max: f64,
     /// Absolute lowest bid the script will ever place — the safety
@@ -922,14 +928,14 @@ impl Default for CompetitorConfig {
         CompetitorConfig {
             enabled: true,
             name: "DinoSoar".into(),
-            production_lines: 18,
+            production_lines: 15,
             starting_money: 3_000_000_000.0,
             initial_stock: 3,
             auto_build_target: 4,
             prior_builds: 40,
-            catalog_cost: 32_000_000.0,
-            margin_min: 3.18,
-            margin_max: 8.81,
+            catalog_cost: 48_000_000.0,
+            margin_min: 2.17,
+            margin_max: 6.02,
             bid_floor: 60_000_000.0,
             bid_jitter: 0.05,
             block_discount: 0.10,
@@ -1292,6 +1298,28 @@ pub struct ImprovementRoll {
     pub weight: f64,
     pub min: f64,
     pub max: f64,
+}
+
+/// How the third-party catalogue is priced (21_ENGINES.md step 8): what
+/// the engine costs its vendor to build — the same cost model as the
+/// player's engines, legacy build-time penalty included — at the
+/// vendor's production volume, times the vendor's markup (development
+/// recovered, support, margin).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThirdPartyConfig {
+    /// Units the vendor has built: where its learning curve sits.
+    pub vendor_prior_builds: u32,
+    /// Price over the vendor's unit cost. 3.0 puts the NK-33 analogue at
+    /// ~$7.6M, between the NK-33 surplus sale ($1.1M) and AJ26 (~$10M),
+    /// and the RL10 analogue near the RL10C-3 contract (≤ $14.5M).
+    pub markup: f64,
+}
+
+impl Default for ThirdPartyConfig {
+    fn default() -> Self {
+        ThirdPartyConfig { vendor_prior_builds: 20, markup: 3.0 }
+    }
 }
 
 /// Tier-2 improvements: uprates (21_ENGINES.md step 7). Larger than an

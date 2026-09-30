@@ -187,29 +187,26 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
         ],
         propulsion: Propulsion::nozzle(10_000_000.0, 17.56, 1.2, false),
     };
-    let upper_engine = EngineDesign {
-        id: EngineId(20_002),
-        name: "DL-10 Dactyl".into(),
-        cycle: EngineCycle::Expander,
-        thrust_n: 110_000.0,
-        mass_kg: 300.0,
-        isp_s: 462.0,
-        propellant_mix: vec![
-            PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.83 },
-            PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.17 },
-        ],
-        propulsion: Propulsion::nozzle(4_500_000.0, 65.85, 1.2, false),
-    };
+    // The upper-stage engine is bought, as the real incumbent buys its
+    // RL10s: the catalogue's legacy hydrolox engine, priced by the cost
+    // model with its 1960s process (21_ENGINES.md step 8). Buying it
+    // puts that cost in the rocket without the ×3 line time.
+    let dactyl = company.third_party_catalog.iter()
+        .position(|e| e.design.name == crate::third_party::DACTYL_NAME)
+        .expect("the catalogue carries the legacy hydrolox engine");
+    company.contract_third_party(dactyl, crate::calendar::GameDate::default_start(), seed, balance)
+        .expect("the legacy engine is available from the start");
+    let upper_engine = company.contracted_engines.last().expect("just contracted").design.clone();
 
-    // Complexities are the families' own, as a player's engine of the
-    // same cycle and propellant would get (hydrolox gas generator 7,
-    // hydrolox expander 8); hydrogen's build premium comes from
-    // `PropellantHandlingConfig`, as it does for the player.
-    let family = |cycle| crate::balance::combined_complexity(cycle, &PropellantPreset::Hydrolox.propellants());
-    for (design, complexity) in [
-        (booster_engine.clone(), family(EngineCycle::GasGenerator)),
-        (upper_engine.clone(), family(EngineCycle::Expander)),
-    ] {
+    // The booster engine is DinoSoar's own. Its complexity is the
+    // family's, as a player's hydrolox gas generator would get (7);
+    // hydrogen's build premium comes from `PropellantHandlingConfig`,
+    // as it does for the player.
+    {
+        let complexity = crate::balance::combined_complexity(
+            EngineCycle::GasGenerator, &PropellantPreset::Hydrolox.propellants(),
+        );
+        let design = booster_engine.clone();
         let project_id = company.next_project_id.mint();
         let size = crate::engine_project::natural_size(&design);
         company.engine_projects.push(EngineProject {
@@ -235,8 +232,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             flights: 0,
         });
         // Mature product line: the learning curve starts well down.
-        let ep_id = company.engine_projects.last().unwrap().project_id;
-        company.engine_build_counts.insert(ep_id, cfg.prior_builds);
+        company.engine_build_counts.insert(project_id, cfg.prior_builds);
     }
 
     let design_id = RocketDesignId(20_001);
@@ -367,7 +363,12 @@ mod tests {
             d.company.manufacturing_teams.len() as u32,
             cfg.competitor.production_lines,
         );
-        assert_eq!(d.company.engine_projects.len(), 2);
+        // It builds its booster engine and buys its upper-stage engine.
+        assert_eq!(d.company.engine_projects.len(), 1);
+        assert_eq!(d.company.contracted_engines.len(), 1);
+        assert_eq!(d.company.contracted_engines[0].design.name, crate::third_party::DACTYL_NAME);
+        let upper = &d.company.rocket_projects[0].design.stage_groups[1][0].engine;
+        assert_eq!(upper.id, d.company.contracted_engines[0].design.id);
         assert_eq!(d.company.rocket_projects.len(), 1);
         let rp = &d.company.rocket_projects[0];
         assert!(matches!(rp.status, RocketDesignStatus::Testing { .. }));
