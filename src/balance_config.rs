@@ -1049,7 +1049,12 @@ pub struct NozzleConfig {
     /// structure work) this, not a fixed size, bounds the long bell, so
     /// its expansion ratio is this squared times the short bell's.
     pub vacuum_bell_exit_ratio: f64,
-    /// Cap on a vacuum bell's expansion ratio; past ~300 the Isp gain
+    /// Any vacuum bell may reach an exit this wide (m) even when that
+    /// is more than `vacuum_bell_exit_ratio` allows: a small or
+    /// low-pressure engine is not held to a stubby bell (RL10B-2's
+    /// ~2.1 m exit is ε 280, Vinci's ~2.2 m ε 240).
+    pub min_vacuum_bell_exit_m: f64,
+    /// Cap on a vacuum bell's expansion ratio; past ~250 the Isp gain
     /// has flattened to under 1 % per 50.
     pub max_expansion_ratio: f64,
     /// Mass of bell extension per square metre of added exit area
@@ -1068,7 +1073,8 @@ impl Default for NozzleConfig {
         NozzleConfig {
             sea_level_exit_pressure_pa: 0.4 * 101_325.0,
             vacuum_bell_exit_ratio: 3.0,
-            max_expansion_ratio: 300.0,
+            min_vacuum_bell_exit_m: 2.0,
+            max_expansion_ratio: 250.0,
             bell_areal_density_kg_m2: 20.0,
             separation_risk_start_ratio: 3.0,
             separation_risk_slope: 0.2,

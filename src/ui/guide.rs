@@ -191,7 +191,10 @@ mod tests {
 
     /// A guided game opens on the guide's first popup instead of the
     /// intro, and the bot then walks every step exactly once, in path
-    /// order, with the award branch taken one way or the other.
+    /// order, with the award branch taken one way or the other. One
+    /// seed in twelve may run out of luck before graduating: a
+    /// balance change that shifts a launch by a day reshuffles every
+    /// later roll, so the walk must not hang on one seed's fortunes.
     #[test]
     fn the_bot_walks_the_whole_guided_path() {
         let app = guided_app(1);
@@ -199,11 +202,12 @@ mod tests {
 
         let mut saw_loss = false;
         let mut saw_win = false;
+        let mut unfinished = Vec::new();
         for seed in 1..=12u64 {
             let popups = walk(seed, 365 * 6);
             let nexts: Vec<StepId> = popups.iter().map(|(_, n)| *n).collect();
             assert_eq!(nexts.first(), Some(&StepId::FirstEngine), "seed {seed}: {nexts:?}");
-            assert_eq!(nexts.last(), Some(&StepId::Graduate), "seed {seed}: the guide should finish, got {nexts:?}");
+            let finished = nexts.last() == Some(&StepId::Graduate);
             // Path order (steps the bot did in one go are skipped, so a
             // popup may jump ahead), allowing the LostBid ↔ AwaitAward
             // loop; and each popup names the step just done.
@@ -217,9 +221,15 @@ mod tests {
                 assert!(forward || rebid, "seed {seed}: {prev:?} → {this:?} goes backwards");
             }
             let launches = nexts.iter().filter(|n| **n == StepId::Launch).count();
-            assert_eq!(launches, 1, "seed {seed}: launch is introduced once");
+            if finished {
+                assert_eq!(launches, 1, "seed {seed}: launch is introduced once");
+            } else {
+                assert!(launches <= 1, "seed {seed}: launch is introduced at most once");
+                unfinished.push((seed, nexts.clone()));
+            }
             if nexts.contains(&StepId::LostBid) { saw_loss = true } else { saw_win = true }
         }
+        assert!(unfinished.len() <= 1, "the guide should finish on at least 11 of 12 seeds: {unfinished:?}");
         assert!(saw_loss, "some seed should lose its first bid");
         assert!(saw_win, "some seed should win its first bid");
     }

@@ -811,6 +811,44 @@ gas generator 325 vac / ~283 pad, staged combustion ~345, full‑flow
 ~351. 685 tests; bands pass; oracle identical (the bot flies no
 methalox).
 
+### Playtest fix: expander vs gas generator Isp (2026‑09‑30)
+
+USER: a hydrolox gas generator gets more Isp than an expander. It did
+(457 vs 451 s at 110 kN), for two reasons. The reference Isp was quoted
+at each cycle's own sea‑level bell, so the cycle multipliers carried
+chamber pressure a second time (the expander's 0.97 compensated for
+the old ε 300 cap); and the vacuum bell was 3× the sea‑level exit
+diameter, which holds a low‑pressure engine to a stubby bell (ε 116
+for the expander, where real hydrogen upper engines fly ε 84–280).
+
+- `EngineBaseline::isp_ref_s` is now the vacuum Isp through a common
+  bell, `REFERENCE_EXPANSION_RATIO` = 20; each design's bells follow
+  from the nozzle relations. The per‑propellant table is chosen so the
+  gas generator's own sea‑level bell keeps its figure (kerolox 311,
+  hydrolox 420, methalox 325, hypergolic 285; solid 262; NTR 822 at
+  ε 20, unchanged at its bells).
+- Cycle multipliers now carry combustion efficiency only: gas
+  generator and pressure‑fed 0.98 (turbine exhaust dumped; incomplete
+  low‑pressure burn), expander, staged combustion and full‑flow 1.00.
+- `NozzleConfig::min_vacuum_bell_exit_m` = 2.0: a vacuum bell may be
+  3× the sea‑level exit or 2 m across, whichever is larger;
+  `max_expansion_ratio` 300 → 250.
+
+Hydrolox at 110 kN, vacuum: pressure‑fed 449, gas generator 459,
+expander 468, staged combustion and full‑flow 468 (all at the ε 250
+cap). Sea‑level bells still rank by chamber pressure (kerolox SC/FF
+329, GG 311). Full‑flow no longer beats staged combustion on Isp at
+equal chamber pressure; it keeps its thrust and TWR edge. Small
+vacuum engines take the 2 m bell: AJ10‑class 302 → 315 s but TWR
+30 → 20 (real 23), Kestrel 326 → 340 s and TWR 50 → 31 (real 60).
+Yardstick TWR median ×1.04 → ×1.01, 17 → 15 of 21 within 0.8–1.25×.
+Falcon 9 probe unchanged. Bands pass. Oracle re‑baselined: the bot's
+hydrolox upper stage goes ε 214 → 250 (457 → 459 s, slightly heavier),
+first launch a day later, and the launch rolls reshuffle — 40‑seed
+average final $179M → $184M, bankruptcies 3 → 4 (seed 39). The same
+reshuffle leaves guided seed 11 losing every bid, so the guide's bot
+walk now asks for at least 11 of 12 seeds to graduate.
+
 ## 5. Questions
 
 1. Size ladder (§2.1): the class label reads each family's thrust, so

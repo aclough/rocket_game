@@ -3,6 +3,7 @@ use rand::rngs::StdRng;
 use serde::{Serialize, Deserialize};
 
 use crate::balance;
+use crate::nozzle;
 use crate::engine::{Propulsion, EngineDesign, EngineCycle, EngineId, PropellantFraction, G0};
 use crate::balance_config::NozzleConfig;
 use crate::balance_config::{BalanceConfig, FlawsConfig};
@@ -117,6 +118,11 @@ impl PropellantPreset {
 /// the baseline: `design` derives the sea-level bell from the chamber
 /// pressure (19_NOZZLES.md §2) and `EngineDesign::with_vacuum_bell`
 /// the long one from the throat that thrust and chamber pressure imply.
+/// The bell every nozzle engine's reference Isp is quoted at
+/// (`EngineBaseline::isp_ref_s`): one expansion ratio for all cycles,
+/// so the cycle table carries combustion efficiency only.
+pub const REFERENCE_EXPANSION_RATIO: f64 = 20.0;
+
 #[derive(Debug, Clone, Copy)]
 pub struct EngineBaseline {
     /// Vacuum thrust of the sea-level bell at scale 1.0 (N).
@@ -128,9 +134,10 @@ pub struct EngineBaseline {
     /// gently with size (`TWR_SIZE_EXPONENT`); 1 for kinds whose mass is
     /// simply proportional (solids, reactors, ion engines, sails).
     pub mass_size_exponent: f64,
-    /// Vacuum Isp of the *sea-level* bell (s): the recognisable figure
-    /// (kerolox ~311, hydrolox ~420). The pad figure and the vacuum
-    /// bell's are derived from it. 0 for a sail.
+    /// Vacuum Isp (s) through a bell of `REFERENCE_EXPANSION_RATIO`
+    /// for engines with a nozzle, so cycles compare at the same bell;
+    /// each design's own bells are derived from it. The engine's Isp
+    /// for an ion drive, 0 for a sail.
     pub isp_ref_s: f64,
     /// Chamber pressure (Pa); 0 for engines without a nozzle.
     pub chamber_pressure_pa: f64,
@@ -163,13 +170,20 @@ impl EngineBaseline {
                 self.chamber_pressure_pa, cfg.sea_level_exit_pressure_pa, self.gamma, true,
             ),
         };
+        let isp_s = match propulsion.bell() {
+            Some((_, eps, gamma)) => {
+                self.isp_ref_s * nozzle::thrust_coefficient_vacuum(eps, gamma)
+                    / nozzle::thrust_coefficient_vacuum(REFERENCE_EXPANSION_RATIO, gamma)
+            }
+            None => self.isp_ref_s,
+        };
         let design = EngineDesign {
             id,
             name,
             cycle,
             thrust_n: self.thrust_n * scale,
             mass_kg: self.mass_kg * scale.powf(self.mass_size_exponent),
-            isp_s: self.isp_ref_s,
+            isp_s,
             propellant_mix: preset.propellant_mix(),
             propulsion,
         };
@@ -372,9 +386,9 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
             thrust_n: 330_000.0,          // ~NERVA class (~73 klbf)
             mass_kg: 10_000.0,            // very heavy (reactor + shielding)
             mass_size_exponent: 1.0,
-            // Sea-level-bell reference; the vacuum bell it always flies
+            // At the reference bell; the vacuum bell it always flies
             // lands near NERVA's ~850 s.
-            isp_ref_s: 785.0,
+            isp_ref_s: 822.0,
             chamber_pressure_pa: chamber_pressure_pa(cycle, preset)?,
             gamma: exhaust_gamma(preset),
             vacuum_only: true,
@@ -399,34 +413,38 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         return None;
     }
 
-    // Vacuum Isp of the sea-level bell by propellant (gas-generator
-    // reference), then the cycle adjusts. Merlin 1D 311, J-2 / Vulcain
-    // class ~420, AJ10-class hypergolic ~285, Castor-class solid ~285.
+    // Vacuum Isp by propellant for a closed cycle at the common
+    // reference bell (`REFERENCE_EXPANSION_RATIO`), then the cycle
+    // adjusts. Chosen so the gas generator's own short bell keeps its
+    // recognisable figure: Merlin 1D 311, J-2 / Vulcain class ~420,
+    // AJ10-class hypergolic ~285; the solid's keeps Castor-class ~262.
     // Methalox sits ~14 s above kerolox at the same bell: TQ-12's 337 s
     // on its larger bell is ~324 s on Merlin's, and Raptor 1 (350 s,
-    // full-flow, 250 bar) is ~12 s over the RD-180 (338 s). It was 350
-    // here until 2026-09-30, a ~40 s edge in every cycle.
+    // full-flow, 250 bar) is ~12 s over the RD-180 (338 s).
     let base_isp_ref = match preset {
-        PropellantPreset::Kerolox => 311.0,
-        PropellantPreset::Hydrolox => 420.0,
-        PropellantPreset::Methalox => 325.0,
-        PropellantPreset::Hypergolic => 285.0,
-        PropellantPreset::Solid => 285.0,
+        PropellantPreset::Kerolox => 316.7,
+        PropellantPreset::Hydrolox => 424.6,
+        PropellantPreset::Methalox => 330.5,
+        PropellantPreset::Hypergolic => 295.4,
+        PropellantPreset::Solid => 270.4,
         PropellantPreset::Hydrogen => unreachable!(),
         PropellantPreset::Xenon => unreachable!(),
         PropellantPreset::Photon => unreachable!(),
     };
 
-    // Cycle multipliers for the sea-level-bell reference Isp (relative
-    // to GasGenerator). The expander's low chamber pressure gives it a
-    // poor short bell; its long bell (the only one it flies) then gains
-    // the most, landing hydrolox at RL10's ~465 s.
+    // Cycle efficiency at the same bell. Chamber pressure already sets
+    // how far each cycle's bells expand (and so most of the spread);
+    // this carries only what the bell doesn't: a gas generator dumps
+    // its turbine exhaust at low Isp (HM7B 446 s against RL10A-4's
+    // 451 s on the same ε ~84), and a pressure-fed chamber burns less
+    // completely. Expanders, staged combustion and full-flow burn all
+    // their propellant in the chamber.
     let isp_mult = match cycle {
-        EngineCycle::PressureFed => 0.92,
-        EngineCycle::GasGenerator => 1.00,
-        EngineCycle::Expander => 0.97,
-        EngineCycle::StagedCombustion => 1.06,
-        EngineCycle::FullFlow => 1.08,
+        EngineCycle::PressureFed => 0.98,
+        EngineCycle::GasGenerator => 0.98,
+        EngineCycle::Expander => 1.00,
+        EngineCycle::StagedCombustion => 1.00,
+        EngineCycle::FullFlow => 1.00,
         EngineCycle::NuclearThermal => unreachable!(),
         EngineCycle::ElectricPropulsion => unreachable!(),
         EngineCycle::SolarSail => unreachable!(),
@@ -1113,9 +1131,9 @@ mod tests {
         assert!(vac.mass_kg > sl.mass_kg && vac.mass_kg < sl.mass_kg * 1.4,
             "bell extension adds mass: {} vs {}", vac.mass_kg, sl.mass_kg);
         assert_eq!(vac.id, sl.id);
-        // The sea-level bell is the reference figure; it is charged the
+        // The sea-level bell keeps Merlin's figure; it is charged the
         // pad by the ascent, not here.
-        assert!((sl.isp_s - 311.0).abs() < 1e-9);
+        assert!((sl.isp_s - 311.0).abs() < 0.5, "got {}", sl.isp_s);
         let pad = sl.isp_fraction_at(101_325.0);
         assert!(pad > 0.85 && pad < 0.90, "90 bar sea-level bell keeps ~87 % at the pad, got {pad}");
         // The project's canonical design is the sea-level form.

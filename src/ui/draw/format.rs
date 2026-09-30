@@ -239,7 +239,7 @@ mod bell_tests {
         let ep = project(EngineCycle::Expander, PropellantPreset::Hydrolox);
         let bells = BellFigures::of_project(&ep, &bal().nozzle);
         assert!(!bells.is_pair());
-        assert_eq!(bells.isp(), "451 s");
+        assert_eq!(bells.isp(), "468 s");
         let ion = project(EngineCycle::ElectricPropulsion, PropellantPreset::Xenon);
         let bells = BellFigures::of_project(&ion, &bal().nozzle);
         assert_eq!(bells.isp(), "3000 s");

@@ -407,7 +407,8 @@ impl EngineDesign {
     }
 
     /// This design with the long bell: an exit `cfg.vacuum_bell_exit_ratio`
-    /// times the short bell's diameter (so ε × the ratio squared), capped
+    /// times the short bell's diameter (so ε × the ratio squared) or
+    /// `cfg.min_vacuum_bell_exit_m` across, whichever is larger, capped
     /// at `cfg.max_expansion_ratio`. Isp and thrust rise by the thrust-
     /// coefficient ratio (same chamber, same mass flow); mass grows by
     /// the added bell area at `cfg.bell_areal_density_kg_m2`. A design
@@ -422,9 +423,11 @@ impl EngineDesign {
             return vac;
         };
         let throat = self.throat_area_m2();
-        let eps_vac = (eps_sl * cfg.vacuum_bell_exit_ratio.powi(2))
-            .min(cfg.max_expansion_ratio)
-            .max(eps_sl);
+        let eps_by_ratio = eps_sl * cfg.vacuum_bell_exit_ratio.powi(2);
+        let eps_by_exit = nozzle::expansion_ratio_for_exit_diameter(
+            throat, cfg.min_vacuum_bell_exit_m, cfg.max_expansion_ratio, eps_sl,
+        );
+        let eps_vac = eps_by_ratio.max(eps_by_exit).min(cfg.max_expansion_ratio).max(eps_sl);
         let gain = nozzle::thrust_coefficient_vacuum(eps_vac, gamma)
             / nozzle::thrust_coefficient_vacuum(eps_sl, gamma);
         vac.isp_s = self.isp_s * gain;
