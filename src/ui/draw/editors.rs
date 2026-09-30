@@ -54,6 +54,33 @@ pub(super) fn draw_engine_editor_modal(
         format!(" {} Preset: {}", row_label(2, true), ep.spec.preset.name()),
         row_style(2),
     )));
+    // An experimental propellant carries its technology's deficiencies,
+    // which stay hidden until the design completes.
+    if let Some(tech) = ep.technology_id
+        .and_then(|id| app.game.technologies.iter().find(|t| t.id == id))
+    {
+        let risk = match tech.difficulty {
+            0 => "low risk",
+            1 => "moderate risk",
+            _ => "high risk",
+        };
+        let detail = if ep.tech_deficiency_ids.is_empty() && matches!(
+            ep.status,
+            crate::engine_project::EngineDesignStatus::Proposed { .. }
+                | crate::engine_project::EngineDesignStatus::InDesign { .. }
+        ) {
+            "deficiencies show when designed".to_string()
+        } else if ep.tech_deficiency_ids.is_empty() {
+            "no deficiencies left to solve".to_string()
+        } else {
+            format!("{} deficienc{} to revise out", ep.tech_deficiency_ids.len(),
+                if ep.tech_deficiency_ids.len() == 1 { "y" } else { "ies" })
+        };
+        lines.push(Line::from(Span::styled(
+            format!("   ⚗ Experimental {} ({}): {}", tech.name, risk, detail),
+            Style::default().fg(Color::Magenta),
+        )));
+    }
     // Size reads as the figure the player knows it by; the stored size
     // (throat, power, area) sits behind it.
     let size_label = match crate::engine_project::SizeUnit::of_cycle(ep.design.cycle) {

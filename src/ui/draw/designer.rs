@@ -277,44 +277,37 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
             // Show losses sub-line after the last inner stage of a group
             if is_last_in_group {
                 if let Some(s) = stats.get(gi) {
+                    // What the climb costs this group, in m/s of Δv: gravity,
+                    // drag, and the nozzle's lower Isp in the air.
                     let mut loss_parts = Vec::new();
                     if s.gravity_loss >= 0.5 {
-                        loss_parts.push(format!("grav: -{:.0}", s.gravity_loss));
+                        loss_parts.push(format!("gravity -{:.0}", s.gravity_loss));
                     }
                     if s.aero_drag_loss >= 0.5 {
-                        loss_parts.push(format!("aero: -{:.0}", s.aero_drag_loss));
+                        loss_parts.push(format!("drag -{:.0}", s.aero_drag_loss));
                     }
                     if s.overexpansion_loss >= 0.5 {
-                        loss_parts.push(format!("nozzle: -{:.0}", s.overexpansion_loss));
+                        loss_parts.push(format!("Isp in air -{:.0}", s.overexpansion_loss));
                     }
                     if !loss_parts.is_empty() {
-                        lines.push(hint_line(format!("{}                 ({})", group_indent, loss_parts.join("  "))));
+                        lines.push(hint_line(format!("{}      Δv losses: {}", group_indent, loss_parts.join(" · "))));
                     }
                 }
 
-                // Overexpansion warning for first stage group launching from atmosphere
+                // A bell too big for sea level can tear itself apart on the
+                // pad; the Isp it loses in the air is already in the Δv
+                // losses above.
                 if gi == 0 && state.launch_from == "earth_surface" {
                     let ambient = 101_325.0_f64;
-                    let isp_frac = stage.engine.isp_fraction_at(ambient);
                     let risk = stage.engine.overexpansion_destruction_risk(ambient, &app.game.balance.nozzle);
                     if risk > 0.0 {
                         lines.push(Line::from(Span::styled(
                             format!(
-                                "        ▲ Flow separation risk: {:.0}%/engine, Isp penalty: {:.0}%  (exit {:.0} kPa)",
+                                "        ▲ Flow separation risk at sea level: {:.0}%/engine  (exit {:.0} kPa)",
                                 risk * 100.0,
-                                (1.0 - isp_frac) * 100.0,
                                 stage.engine.exit_pressure_pa() / 1000.0,
                             ),
                             Style::default().fg(Color::Red),
-                        )));
-                    } else if isp_frac < 0.95 {
-                        lines.push(Line::from(Span::styled(
-                            format!(
-                                "        Isp penalty: {:.0}%  (exit {:.0} kPa at sea level)",
-                                (1.0 - isp_frac) * 100.0,
-                                stage.engine.exit_pressure_pa() / 1000.0,
-                            ),
-                            Style::default().fg(Color::Yellow),
                         )));
                     }
                 }

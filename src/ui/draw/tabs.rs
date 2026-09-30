@@ -202,6 +202,14 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
             bells.isp(),
             legend,
         )));
+        if let Some(tech) = project.technology_id
+            .and_then(|id| app.game.technologies.iter().find(|t| t.id == id))
+        {
+            lines.push(Line::from(Span::styled(
+                format!("      ⚗ Experimental: {}", tech.name),
+                Style::default().fg(Color::Magenta),
+            )));
+        }
         let power_str = if project.design.power_draw_w() > 0.0 {
             format!("    Power: {}", format_power_w(project.design.power_draw_w()))
         } else {
