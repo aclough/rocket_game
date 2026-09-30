@@ -96,10 +96,17 @@ pub(super) fn push_improvement_lines<K: std::fmt::Display>(lines: &mut Vec<Line<
             Style::default().fg(Color::Green),
         )));
     }
-    for imp in improvements.iter().filter(|i| !i.actualized) {
+    for imp in improvements.iter().filter(|i| !i.actualized && i.accepted) {
         lines.push(Line::from(Span::styled(
             format!("        ★ {}: {} (pending revision)", imp.description, imp.kind),
             Style::default().fg(Color::Cyan),
+        )));
+    }
+    // Uprates on offer wait for the player: they risk new flaws.
+    for imp in improvements.iter().filter(|i| !i.actualized && !i.accepted) {
+        lines.push(Line::from(Span::styled(
+            format!("        ▲ {}: {} — [U] accept", imp.description, imp.kind),
+            Style::default().fg(Color::Yellow),
         )));
     }
 }

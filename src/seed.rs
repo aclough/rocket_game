@@ -42,6 +42,12 @@ pub enum WorldQuery<'a> {
     ThirdPartyFlaws(&'a str),
     /// A market archetype's presence and shape, by its key.
     MarketArchetype(&'a str),
+    /// Whether an engine project finds an uprate in one testing cycle,
+    /// and which (21_ENGINES.md step 7). Its own stream, so an engine
+    /// becoming eligible does not reshuffle the contingent one.
+    Uprate { project: &'a str, cycle: u32 },
+    /// The flaws an accepted uprate adds when a revision applies it.
+    UprateFlaws { project: &'a str, improvement: u64 },
     /// An ad-hoc question, for tests only.
     Test(&'a str),
 }
@@ -65,6 +71,8 @@ impl std::fmt::Display for WorldQuery<'_> {
             WorldQuery::DinoBlockBid(id) => write!(f, "dino_block_bid_{}", id.0),
             WorldQuery::ThirdPartyFlaws(name) => write!(f, "3p_flaws_{}", name),
             WorldQuery::MarketArchetype(key) => write!(f, "{}", key),
+            WorldQuery::Uprate { project, cycle } => write!(f, "uprate_{}_{}", project, cycle),
+            WorldQuery::UprateFlaws { project, improvement } => write!(f, "uprate_flaws_{}_{}", project, improvement),
             WorldQuery::Test(q) => write!(f, "{}", q),
         }
     }
@@ -146,11 +154,23 @@ impl GameSeed {
 
     /// Derive a deterministic sub-seed from the world seed and a question string.
     fn derive_seed(&self, question: &str) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.seed.hash(&mut hasher);
-        question.hash(&mut hasher);
-        hasher.finish()
+        derive_seed(self.seed, question)
     }
+}
+
+/// The world-query stream for `question` in the world with seed
+/// `world_seed` — what `GameSeed::world_query` gives, for code that holds
+/// the seed's value but cannot borrow the `GameSeed` (it is lending out
+/// the contingent RNG at the same time).
+pub fn world_query_for(world_seed: u64, question: WorldQuery<'_>) -> StdRng {
+    StdRng::seed_from_u64(derive_seed(world_seed, &question.to_string()))
+}
+
+fn derive_seed(world_seed: u64, question: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    world_seed.hash(&mut hasher);
+    question.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(test)]

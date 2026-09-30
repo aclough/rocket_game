@@ -325,6 +325,14 @@ impl Company {
         }
     }
 
+    /// Accept the uprates on offer on `r` (21_ENGINES.md step 7), so the
+    /// next revision actualises them: the project's name and how many.
+    pub fn accept_uprates(&mut self, r: ProjectRef) -> Option<(String, usize)> {
+        let p = self.project_mut(r)?;
+        let n = p.accept_uprates();
+        Some((p.name().to_string(), n))
+    }
+
     /// Flip auto-revise on `r`; the project's name and the new setting.
     pub fn toggle_auto_revise(&mut self, r: ProjectRef) -> Option<(String, bool)> {
         let p = self.project_mut(r)?;

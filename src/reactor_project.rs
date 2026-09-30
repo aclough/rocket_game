@@ -61,6 +61,7 @@ fn generate_reactor_improvement(
         description: description.to_string(),
         kind,
         actualized: false,
+        accepted: true,
     }
 }
 
@@ -231,7 +232,7 @@ mod tests {
         );
         p.teams_assigned = 2;
         let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
-        let events = p.apply_daily_work(&mut rng(), &mut next_flaw, &bal());
+        let events = p.apply_daily_work(&mut rng(), &mut next_flaw, &bal(), 0);
         assert!(events.is_empty());
         assert!(matches!(p.status, ReactorDesignStatus::Proposed { .. }));
     }
@@ -266,7 +267,7 @@ mod tests {
         // Hard cap iterations so a runaway loop fails the test rather
         // than the process.
         for _ in 0..10_000 {
-            let events = p.apply_daily_work(&mut rng(), &mut next_flaw, &bal());
+            let events = p.apply_daily_work(&mut rng(), &mut next_flaw, &bal(), 0);
             if events.iter().any(|e| matches!(e, WorkEvent::DesignComplete)) {
                 saw_complete = true;
                 break;
@@ -290,7 +291,7 @@ mod tests {
             let mut r = StdRng::seed_from_u64(seed);
             let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
             for _ in 0..10_000 {
-                let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
+                let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal(), 0);
                 if events.iter().any(|e| matches!(e, WorkEvent::DesignComplete)) {
                     break;
                 }
@@ -314,7 +315,7 @@ mod tests {
         let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
         // Advance to Testing.
         for _ in 0..10_000 {
-            let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
+            let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal(), 0);
             if events.iter().any(|e| matches!(e, WorkEvent::DesignComplete)) {
                 break;
             }
@@ -327,7 +328,7 @@ mod tests {
         let total = p.flaws.len();
         let mut discovered_any = false;
         for _ in 0..200 {
-            let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal());
+            let events = p.apply_daily_work(&mut r, &mut next_flaw, &bal(), 0);
             if events.iter().any(|e| matches!(e, WorkEvent::FlawDiscovered { .. })) {
                 discovered_any = true;
             }
@@ -365,7 +366,7 @@ mod tests {
         let mut r = rng();
         let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(2);
         for _ in 0..50 {
-            p.apply_daily_work(&mut r, &mut next_flaw, &bal());
+            p.apply_daily_work(&mut r, &mut next_flaw, &bal(), 0);
             if matches!(p.status, ReactorDesignStatus::Testing { .. }) {
                 break;
             }
@@ -387,14 +388,14 @@ mod tests {
             id: ImprovementId(0),
             description: "Optimized coolant flow raises output".into(),
             kind: ReactorImprovementKind::Power(0.05),
-            actualized: false,
+            actualized: false, accepted: true,
         });
         p.teams_assigned = 4;
         assert!(p.start_revision());
         let mut r = rng();
         let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
         for _ in 0..50 {
-            p.apply_daily_work(&mut r, &mut next_flaw, &bal());
+            p.apply_daily_work(&mut r, &mut next_flaw, &bal(), 0);
             if matches!(p.status, ReactorDesignStatus::Testing { .. }) {
                 break;
             }
@@ -414,14 +415,14 @@ mod tests {
             id: ImprovementId(0),
             description: "Lighter radiation shielding".into(),
             kind: ReactorImprovementKind::Mass(0.10),
-            actualized: false,
+            actualized: false, accepted: true,
         });
         p.teams_assigned = 4;
         p.start_revision();
         let mut r = rng();
         let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(1);
         for _ in 0..50 {
-            p.apply_daily_work(&mut r, &mut next_flaw, &bal());
+            p.apply_daily_work(&mut r, &mut next_flaw, &bal(), 0);
             if matches!(p.status, ReactorDesignStatus::Testing { .. }) {
                 break;
             }

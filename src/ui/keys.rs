@@ -96,6 +96,7 @@ const ENGINES: &[KeyBinding] = &[
         "Revise discovered flaws and pending improvements"),
     on_item("O", Some("[O] Order"), "Order a standalone engine build"),
     on_item("A", Some("[A] Auto"), "Toggle auto-revise (on by default)"),
+    on_item("U", None, "Accept offered uprates (they risk new flaws)"),
     on_item("E", Some("[E] Hire"), "Hire a new engineering team"),
     on_item("X", Some("[X] Retire"), "Retire this design (asks first)"),
 ];

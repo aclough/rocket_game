@@ -73,9 +73,10 @@ impl GameState {
             tech_def_attempts,
             newly_designed_reactors,
             reactor_tech_def_attempts,
-        } = self.player_company.tick_daily_research(
-            &mut self.seed.contingent_rng, &self.balance,
-        );
+        } = {
+            let world_seed = self.seed.seed();
+            self.player_company.tick_daily_research(&mut self.seed.contingent_rng, &self.balance, world_seed)
+        };
         self.emit_all(events, research_events);
 
         self.resolve_tech_attempts::<crate::engine_project::EngineProject>(

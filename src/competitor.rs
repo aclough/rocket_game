@@ -232,6 +232,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             tech_deficiency_ids: Vec::new(),
             technology_id: None,
             build_time_multiplier: 1.0,
+            flights: 0,
         });
         // Mature product line: the learning curve starts well down.
         let ep_id = company.engine_projects.last().unwrap().project_id;

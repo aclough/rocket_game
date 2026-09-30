@@ -35,6 +35,7 @@ pub struct BalanceConfig {
     pub economy: EconomyConfig,
     pub technology: TechnologyConfig,
     pub improvements: ImprovementsConfig,
+    pub uprates: UpratesConfig,
 }
 
 impl BalanceConfig {
@@ -1291,6 +1292,62 @@ pub struct ImprovementRoll {
     pub weight: f64,
     pub min: f64,
     pub max: f64,
+}
+
+/// Tier-2 improvements: uprates (21_ENGINES.md step 7). Larger than an
+/// improvement, and each one risks new hidden flaws — the player sees
+/// the risk and chooses whether to accept it. They become discoverable
+/// only once an engine has both a testing record and flight heritage
+/// (question 5), then roll per testing cycle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpratesConfig {
+    /// Testing cycles an engine must have run ("Thoroughly Tested").
+    pub min_testing_cycles: u32,
+    /// Flights an engine must have flown on the company's rockets.
+    pub min_flights: u32,
+    /// Chance per testing cycle, once both are met, while no uprate is
+    /// already on offer.
+    pub chance_per_cycle: f64,
+    /// Raise chamber pressure on the existing hardware: thrust up by the
+    /// fraction at the same mass, pad Isp up through the nozzle model
+    /// (RD-253 → RD-275 → RD-276, Merlin 1C → 1D, RS-68 → 68A).
+    pub chamber_pressure: UprateRoll,
+    /// Lighter turbomachinery: mass down by the fraction (Merlin 1D,
+    /// Raptor 2 → 3, NK-33's single shaft).
+    pub turbomachinery: UprateRoll,
+    /// Better injection and combustion: Isp up by the fraction.
+    pub injector: UprateRoll,
+    /// A production-process change (fewer welds, printed parts): build
+    /// work divided by the drawn factor (Vulcain 2.1's nozzle, RS-25E).
+    pub production: UprateRoll,
+}
+
+/// One uprate kind: how often it comes up relative to the others, the
+/// range its size is drawn from, and its risk — `flaw_rolls` chances of
+/// `flaw_chance` each to add a new hidden flaw when it is actualised.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UprateRoll {
+    pub weight: f64,
+    pub min: f64,
+    pub max: f64,
+    pub flaw_rolls: u32,
+    pub flaw_chance: f64,
+}
+
+impl Default for UpratesConfig {
+    fn default() -> Self {
+        let r = |weight, min, max, flaw_rolls, flaw_chance| UprateRoll { weight, min, max, flaw_rolls, flaw_chance };
+        UpratesConfig {
+            min_testing_cycles: 10,
+            min_flights: 5,
+            chance_per_cycle: 0.03,
+            chamber_pressure: r(0.25, 0.15, 0.30, 3, 0.25),
+            turbomachinery: r(0.25, 0.10, 0.20, 2, 0.25),
+            injector: r(0.25, 0.03, 0.06, 2, 0.20),
+            production: r(0.25, 1.3, 2.0, 1, 0.25),
+        }
+    }
 }
 
 /// The three improvement kinds an engine family can discover.

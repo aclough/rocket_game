@@ -281,3 +281,23 @@ fn rocket_designs_follow_their_engines_improvements() {
         assert!(new.supply_w(1.0) > old.supply_w(1.0));
     }
 }
+
+/// 21_ENGINES.md step 7: each launch credits one flight to every
+/// distinct player engine design on the rocket, whatever the outcome.
+#[test]
+fn launches_credit_flight_heritage_to_engine_designs() {
+    let mut gs = GameState::with_money("Heritage".into(), 1_000_000_000.0, 5);
+    let mut policy = crate::policy::BasicPolicy::new();
+    for _ in 0..(365 * 3) {
+        if !gs.player_company.rocket_projects.is_empty() { break; }
+        crate::policy::CompanyPolicy::act(&mut policy, &mut gs);
+        gs.advance_day();
+    }
+    let rp = gs.player_company.rocket_projects[0].project_id;
+    let before: Vec<u32> = gs.player_company.engine_projects.iter().map(|e| e.flights).collect();
+    gs.credit_engine_flights(rp);
+    let after: Vec<u32> = gs.player_company.engine_projects.iter().map(|e| e.flights).collect();
+    // The bot's rocket carries both its engines (booster and upper): each
+    // gains exactly one flight even though the booster stage has two.
+    assert_eq!(after.iter().zip(&before).map(|(a, b)| a - b).collect::<Vec<_>>(), vec![1, 1]);
+}

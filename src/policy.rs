@@ -43,7 +43,7 @@ impl CompanyPolicy for NullPolicy {
 /// Honest-but-naive baseline player. Runs the game's actual core
 /// loop, dumbly:
 ///
-/// 1. Hire up to 2 engineering + 3 manufacturing teams.
+/// 1. Hire up to 3 engineering + 4 manufacturing teams.
 /// 2. Design a kerolox gas-generator booster engine and a hydrolox
 ///    upper-stage engine (the hydrolox path exercises the hydrogen
 ///    problems factor every run).
@@ -52,7 +52,8 @@ impl CompanyPolicy for NullPolicy {
 /// 4. When the rocket design reaches Testing, set an auto-build
 ///    target of 1 so the game keeps one rocket in inventory.
 /// 5. Keep idle engineers testing; whenever a project in Testing has
-///    discovered flaws, revise them. (Skipping revision entirely is
+///    discovered flaws, revise them; accept every uprate offered and
+///    revise to apply it. (Skipping revision entirely is
 ///    not viable: unrevised first flights nearly always fail, and a
 ///    company with negative reputation and no successes is locked out
 ///    of every market permanently.)
@@ -87,14 +88,26 @@ impl BasicPolicy {
     }
 
     /// Start revisions on any Testing project with discovered flaws
-    /// (or pending improvements / tech deficiencies for engines).
+    /// (or pending improvements / tech deficiencies for engines). The
+    /// bot takes every uprate it is offered (21_ENGINES.md step 7) and
+    /// revises to apply it, accepting the flaw risk.
     fn revise_discovered_flaws(game: &mut GameState) {
         let company = &mut game.player_company;
+        let offered: Vec<ProjectRef> = company.engine_projects.iter()
+            .filter(|ep| ep.offered_uprates().next().is_some())
+            .map(|ep| ProjectRef::Engine(ep.project_id))
+            .collect();
+        let mut accepted: Vec<ProjectRef> = Vec::new();
+        for r in offered {
+            if company.accept_uprates(r).is_some_and(|(_, n)| n > 0) {
+                accepted.push(r);
+            }
+        }
         // Engines and rockets only; the bot doesn't run reactors.
         let due: Vec<ProjectRef> = company.projects()
             .filter(|p| matches!(p.kind(), ProjectKind::Engine | ProjectKind::Rocket))
             .filter(|p| matches!(p.status(), EngineDesignStatus::Testing { .. })
-                && p.discovered_flaw_count() > 0)
+                && (p.discovered_flaw_count() > 0 || accepted.contains(&p.project_ref())))
             .map(|p| p.project_ref())
             .collect();
         for r in due {

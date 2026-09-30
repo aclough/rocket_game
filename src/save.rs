@@ -579,6 +579,7 @@ mod tests {
                     description: format!("imp {i}"),
                     kind: crate::engine_project::EngineImprovementKind::Isp(0.02),
                     actualized,
+                    accepted: true,
                 });
             }
             ep.next_improvement_id = crate::id::IdAllocator::starting_at(2);

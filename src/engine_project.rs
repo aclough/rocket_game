@@ -638,6 +638,41 @@ impl Designable for EngineDesign {
             EngineImprovementKind::Isp(frac) => self.isp_s *= 1.0 + frac,
             EngineImprovementKind::Mass(frac) => self.mass_kg *= 1.0 - frac,
             EngineImprovementKind::Thrust(frac) => self.thrust_n *= 1.0 + frac,
+            EngineImprovementKind::Uprate { kind, magnitude, .. } => match kind {
+                UprateKind::ChamberPressure => {
+                    // Same throat and bell, more pressure behind them.
+                    self.thrust_n *= 1.0 + magnitude;
+                    if let Some((pc, eps, gamma)) = self.propulsion.bell() {
+                        self.set_nozzle(pc * (1.0 + magnitude), eps, gamma);
+                    }
+                }
+                UprateKind::Turbomachinery => self.mass_kg *= 1.0 - magnitude,
+                UprateKind::Injector => self.isp_s *= 1.0 + magnitude,
+                // Build work is the project's, not the design's.
+                UprateKind::Production => {}
+            },
+        }
+    }
+
+    fn roll_uprate(&self, rng: &mut StdRng, id: ImprovementId, balance_cfg: &BalanceConfig) -> Option<EngineImprovement> {
+        // Sails and ion engines have no chamber, turbopump or injector.
+        if !self.propulsion.has_nozzle() {
+            return None;
+        }
+        Some(generate_uprate(rng, self.cycle, id, &balance_cfg.uprates))
+    }
+
+    fn is_uprate(kind: &EngineImprovementKind) -> bool {
+        matches!(kind, EngineImprovementKind::Uprate { .. })
+    }
+
+    fn improvement_side_effects(kind: &EngineImprovementKind) -> (u32, f64, f64) {
+        match kind {
+            EngineImprovementKind::Uprate { kind, magnitude, flaw_rolls, flaw_chance } => {
+                let divisor = if *kind == UprateKind::Production { *magnitude } else { 1.0 };
+                (*flaw_rolls, *flaw_chance, divisor)
+            }
+            _ => (0, 0.0, 1.0),
         }
     }
 
@@ -780,6 +815,25 @@ pub enum EngineImprovementKind {
     Mass(f64),
     /// Increase thrust by this fraction (e.g. 0.02 = +2%).
     Thrust(f64),
+    /// A tier-2 uprate (21_ENGINES.md step 7): bigger, and risky —
+    /// actualising it rolls `flaw_rolls` chances of `flaw_chance` to add
+    /// a new hidden flaw. `magnitude` is a fraction, except for
+    /// `Production`, where it divides build work.
+    Uprate { kind: UprateKind, magnitude: f64, flaw_rolls: u32, flaw_chance: f64 },
+}
+
+/// What an uprate changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UprateKind {
+    /// Chamber pressure up on the same hardware: thrust up by the same
+    /// fraction at the same mass; pad Isp follows through the nozzle model.
+    ChamberPressure,
+    /// Lighter turbomachinery: mass down.
+    Turbomachinery,
+    /// Better injection and combustion: Isp up.
+    Injector,
+    /// A production-process change: build work divided.
+    Production,
 }
 
 impl std::fmt::Display for EngineImprovementKind {
@@ -788,6 +842,17 @@ impl std::fmt::Display for EngineImprovementKind {
             EngineImprovementKind::Isp(frac) => write!(f, "+{:.0}% Isp", frac * 100.0),
             EngineImprovementKind::Mass(frac) => write!(f, "-{:.0}% mass", frac * 100.0),
             EngineImprovementKind::Thrust(frac) => write!(f, "+{:.0}% thrust", frac * 100.0),
+            EngineImprovementKind::Uprate { kind, magnitude, flaw_rolls, flaw_chance } => {
+                let effect = match kind {
+                    UprateKind::ChamberPressure => format!("+{:.0}% chamber pressure and thrust", magnitude * 100.0),
+                    UprateKind::Turbomachinery => format!("-{:.0}% mass", magnitude * 100.0),
+                    UprateKind::Injector => format!("+{:.0}% Isp", magnitude * 100.0),
+                    UprateKind::Production => format!("build time ÷{:.1}", magnitude),
+                };
+                let expected = *flaw_rolls as f64 * flaw_chance;
+                write!(f, "{effect} · may add up to {flaw_rolls} flaw{} ({expected:.2} expected)",
+                    if *flaw_rolls == 1 { "" } else { "s" })
+            }
         }
     }
 }
@@ -831,6 +896,7 @@ fn generate_improvement(
         description: description.to_string(),
         kind,
         actualized: false,
+        accepted: true,
     }
 }
 
@@ -893,7 +959,42 @@ fn improvement_description(cycle: EngineCycle, kind: &EngineImprovementKind, pic
             1 => "Improved injector throughput",
             _ => "Better regenerative cooling allows hotter burn",
         },
+        (_, K::Uprate { kind, .. }) => match (kind, pick) {
+            (UprateKind::ChamberPressure, 0) => "Uprate: run the chamber hotter on flight-proven hardware",
+            (UprateKind::ChamberPressure, _) => "Uprate: higher turbopump power level",
+            (UprateKind::Turbomachinery, 0) => "Uprate: single-shaft turbopump redesign",
+            (UprateKind::Turbomachinery, _) => "Uprate: lighter turbomachinery from flight data",
+            (UprateKind::Injector, 0) => "Uprate: new injector pattern",
+            (UprateKind::Injector, _) => "Uprate: combustion stability margin traded for efficiency",
+            (UprateKind::Production, 0) => "Uprate: printed parts replace welded assemblies",
+            (UprateKind::Production, _) => "Uprate: fewer parts, simpler tooling",
+        },
     }
+}
+
+/// Roll a tier-2 uprate (21_ENGINES.md step 7) by the configured weights.
+fn generate_uprate(
+    rng: &mut StdRng, cycle: EngineCycle, id: ImprovementId, cfg: &crate::balance_config::UpratesConfig,
+) -> EngineImprovement {
+    let options = [
+        (UprateKind::ChamberPressure, &cfg.chamber_pressure),
+        (UprateKind::Turbomachinery, &cfg.turbomachinery),
+        (UprateKind::Injector, &cfg.injector),
+        (UprateKind::Production, &cfg.production),
+    ];
+    let total: f64 = options.iter().map(|(_, r)| r.weight).sum();
+    let mut roll = rng.gen::<f64>() * total;
+    let (kind, r) = options.iter()
+        .find(|(_, r)| { roll -= r.weight; roll < 0.0 })
+        .copied()
+        .unwrap_or(options[options.len() - 1]);
+    let magnitude = rng.gen_range(r.min..=r.max);
+    let pick = rng.gen_range(0u32..2);
+    let kind = EngineImprovementKind::Uprate {
+        kind, magnitude, flaw_rolls: r.flaw_rolls, flaw_chance: r.flaw_chance,
+    };
+    let description = improvement_description(cycle, &kind, pick);
+    EngineImprovement { id, description: description.to_string(), kind, actualized: false, accepted: false }
 }
 
 #[cfg(test)]
@@ -1042,7 +1143,7 @@ mod tests {
         // Apply enough days
         let mut all_events = Vec::new();
         for _ in 0..(work_needed.ceil() as u32 + 1) {
-            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
+            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal(), 0);
             all_events.extend(events);
         }
 
@@ -1059,7 +1160,7 @@ mod tests {
         let mut next_flaw_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
 
         for _ in 0..100 {
-            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
+            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal(), 0);
             assert!(events.is_empty());
         }
         // Should still be in design at 0 work
@@ -1085,8 +1186,8 @@ mod tests {
 
         // After 10 days, proj2 should have more work done
         for _ in 0..10 {
-            proj1.apply_daily_work(&mut rng1, &mut id1, &bal());
-            proj2.apply_daily_work(&mut rng2, &mut id2, &bal());
+            proj1.apply_daily_work(&mut rng1, &mut id1, &bal(), 0);
+            proj2.apply_daily_work(&mut rng2, &mut id2, &bal(), 0);
         }
 
         let work1 = match &proj1.status {
@@ -1111,7 +1212,7 @@ mod tests {
 
         // Fast-forward to testing
         for _ in 0..300 {
-            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
+            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal(), 0);
         }
 
         // Manually add a discovered flaw for testing
@@ -1136,7 +1237,7 @@ mod tests {
 
         // Work through all revisions (30 work units each, sqrt(4) = 2/day)
         for _ in 0..50 {
-            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
+            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal(), 0);
         }
 
         assert_eq!(proj.flaws.len(), count_before - discovered_count);
@@ -1176,5 +1277,90 @@ mod tests {
         let proj = create_test_project();
         // GG Kerolox: cycle=6, fuel=4 → max(6,4)=6
         assert_eq!(proj.complexity, 6);
+    }
+
+    /// Run testing cycles until something happens or `cycles` pass.
+    fn test_cycles(p: &mut EngineProject, cfg: &BalanceConfig, cycles: u32) {
+        let mut rng = test_rng();
+        let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(100);
+        p.teams_assigned = 1;
+        let days = (cfg.work.testing_cycle_work / crate::team::effective_work_rate(1)).ceil() as u32 * cycles;
+        for _ in 0..days {
+            p.apply_daily_work(&mut rng, &mut next_flaw, cfg, 0);
+        }
+    }
+
+    /// 21_ENGINES.md step 7: an uprate needs both a testing record and
+    /// flight heritage; it waits for acceptance; a revision then applies
+    /// it and rolls its flaws.
+    #[test]
+    fn uprates_need_heritage_wait_for_acceptance_and_risk_flaws() {
+        let mut cfg = bal();
+        cfg.uprates.chance_per_cycle = 1.0;
+        cfg.flaws.improvement_discovery_chance = 0.0;
+        // Only chamber-pressure uprates, each certain to add all 3 flaws.
+        cfg.uprates.turbomachinery.weight = 0.0;
+        cfg.uprates.injector.weight = 0.0;
+        cfg.uprates.production.weight = 0.0;
+        cfg.uprates.chamber_pressure.flaw_chance = 1.0;
+        let mut p = create_test_project();
+        p.status = EngineDesignStatus::Testing { work_completed: 0.0 };
+        p.flaws.clear();
+        p.cumulative_testing_work = cfg.work.testing_cycle_work * 20.0;
+
+        // Thoroughly tested but never flown: nothing on offer.
+        test_cycles(&mut p, &cfg, 3);
+        assert_eq!(p.offered_uprates().count(), 0, "no uprate without flight heritage");
+
+        p.flights = cfg.uprates.min_flights;
+        test_cycles(&mut p, &cfg, 3);
+        assert_eq!(p.offered_uprates().count(), 1, "one uprate on offer at a time");
+        // An offered uprate is not something a revision will apply.
+        assert!(!p.start_revision(), "nothing accepted, nothing to revise");
+
+        let before = p.design.clone();
+        let (pc_before, eps, _) = before.propulsion.bell().unwrap();
+        let magnitude = match p.offered_uprates().next().unwrap().kind {
+            EngineImprovementKind::Uprate { magnitude, .. } => magnitude,
+            _ => unreachable!(),
+        };
+        assert_eq!(p.accept_uprates(), 1);
+        assert!(p.start_revision());
+        // Run the revision out (no flaws discovered, so testing resumes).
+        let mut rng = test_rng();
+        let mut next_flaw = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(100);
+        for _ in 0..200 {
+            p.apply_daily_work(&mut rng, &mut next_flaw, &cfg, 0);
+            if matches!(p.status, EngineDesignStatus::Testing { .. }) { break; }
+        }
+        assert!(p.improvements.iter().all(|i| i.actualized));
+        assert_eq!(p.flaws.len(), 3, "three rolls at 100 % leave three hidden flaws");
+        assert!(p.flaws.iter().all(|f| !f.discovered));
+        // Chamber pressure: thrust and pressure up together, same bell,
+        // same mass; the pad keeps a larger share of the vacuum thrust.
+        assert!((p.design.thrust_n / before.thrust_n - (1.0 + magnitude)).abs() < 1e-9);
+        let (pc_after, eps_after, _) = p.design.propulsion.bell().unwrap();
+        assert!((pc_after / pc_before - (1.0 + magnitude)).abs() < 1e-9);
+        assert_eq!(eps_after, eps);
+        assert_eq!(p.design.mass_kg, before.mass_kg);
+        assert!(p.design.isp_fraction_at(101_325.0) > before.isp_fraction_at(101_325.0));
+    }
+
+    /// A production uprate shortens every later build; it touches
+    /// nothing on the design.
+    #[test]
+    fn a_production_uprate_divides_build_work() {
+        let kind = EngineImprovementKind::Uprate {
+            kind: UprateKind::Production, magnitude: 1.6, flaw_rolls: 1, flaw_chance: 0.25,
+        };
+        assert_eq!(EngineDesign::improvement_side_effects(&kind), (1, 0.25, 1.6));
+        let mut d = create_test_project().design;
+        let before = d.clone();
+        d.apply_improvement(&kind);
+        assert_eq!(d.thrust_n, before.thrust_n);
+        assert_eq!(d.mass_kg, before.mass_kg);
+        assert_eq!(d.isp_s, before.isp_s);
+        // Tier-1 improvements carry no risk.
+        assert_eq!(EngineDesign::improvement_side_effects(&EngineImprovementKind::Isp(0.02)), (0, 0.0, 1.0));
     }
 }

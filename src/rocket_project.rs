@@ -165,7 +165,7 @@ mod tests {
 
         let mut all_events = Vec::new();
         for _ in 0..(work_needed as u32 + 10) {
-            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
+            let events = proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal(), 0);
             all_events.extend(events);
         }
 
@@ -183,7 +183,7 @@ mod tests {
 
         // Advance to testing
         for _ in 0..200 {
-            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
+            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal(), 0);
         }
 
         // Clear any generated flaws and add controlled test flaws
@@ -212,7 +212,7 @@ mod tests {
         assert!(proj.start_revision());
 
         for _ in 0..50 {
-            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal());
+            proj.apply_daily_work(&mut rng, &mut next_flaw_id, &bal(), 0);
         }
 
         assert_eq!(proj.flaws.len(), 0);

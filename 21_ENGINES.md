@@ -660,6 +660,88 @@ check and the bot never bid again (200 seeds: $115M, 45 bankrupt).
 **Effect, 200 seeds:** $142M, 25 bankrupt, 172 ever profitable →
 $152M, 24, 175. Bands pass; 682 tests; oracle re‑baselined
 (`oracle_21_base6b`: 40 seeds $183.1M, 3/40 bankrupt).
+### Step 7 record (2026‑09‑29)
+
+**Built** (working tree): `UpratesConfig` (min 10 testing cycles, 5
+flights, 3 % per cycle, one on offer at a time; the four kinds and
+their flaw rolls as in the table above);
+`EngineImprovementKind::Uprate { kind, magnitude, flaw_rolls,
+flaw_chance }` with `UprateKind::{ChamberPressure, Turbomachinery,
+Injector, Production}`; `Improvement::accepted` (serde default true;
+uprates start false, revisions only take accepted ones);
+`DesignProject::flights`, credited once per launch to each distinct
+player engine design on the rocket; actualising an uprate applies it
+and rolls its flaws as hidden flaws, and a production uprate divides
+`build_time_multiplier`. A chamber‑pressure uprate raises thrust and
+the bell's chamber pressure together (same ε, same mass), so pad Isp
+improves through the nozzle model. Engines tab: offered uprates show
+as "▲ … — [U] accept"; [U] accepts, [R] then applies. The bot accepts
+every uprate and revises. Tests cover the lifecycle (no offer without
+heritage, not revised until accepted, three certain flaws, the
+chamber‑pressure effects) and flight crediting.
+
+**First measurement** (before the two fixes below). The 200‑seed
+bankruptcy band (≤ 15 %, 30/200) failed:
+
+| 200 seeds | final | bankrupt | ever profitable |
+|---|---|---|---|
+| step 5/6 | $142M | 25 | 172 |
+| step 7, bot accepts uprates | $134M | 34 (bands run) / 32 | 171 |
+| step 7, bot declines uprates | $139M | 32 / 31 | 171 |
+
+Declining costs nearly as much as accepting: most of the move is the
+random stream shifting once engines qualify for the uprate roll, on an
+economy step 5 left at 12.5 % bankrupt against a 15 % ceiling. The
+guided‑start walk fails on seed 11 in both modes for the same reason
+(a bankruptcy seed that used to win one contract before failing).
+Accepting uprates costs the bot ~$5M and about one bankruptcy against
+declining — within noise.
+
+### Step 7, isolated randomness (2026‑09‑29)
+
+Option 1 from question 13: an uprate's randomness no longer touches the
+contingent stream. The eligibility roll and the choice of uprate draw
+from `WorldQuery::Uprate { project, cycle }`, and the flaw rolls on
+actualisation from `WorldQuery::UprateFlaws { project, improvement }`,
+through `seed::world_query_for(world_seed, ..)` (the world seed's value
+is passed down the research tick, since the `GameSeed` is lending out
+its contingent RNG at the time). Two leaks found on the way: offered
+uprates counted toward the tier‑1 improvement decay (now only tier‑1
+improvements count, `Designable::is_uprate`), and the bot started a
+revision for an uprate it had only been offered (now only for accepted
+ones). With the bot declining every uprate the 40‑seed oracle is
+byte‑identical to step 6, so what remains is the effect of accepting.
+The guided walk now passes. 684 tests.
+
+**The effect of accepting, 200 seeds:**
+
+| bot policy | final | bankrupt | ever profitable | bands |
+|---|---|---|---|---|
+| step 6 / declines every uprate | $141M | 26 | 172 | pass |
+| accepts only production uprates | $142M | 27 | 171 | — |
+| accepts every uprate | $134M | 33 (35 in the bands run) | 166 | fail |
+
+The bot flies a fixed template for fixed‑payload contracts, so more
+thrust, less mass or more Isp earns it nothing, while each uprate's
+hidden flaws cost it launches. Only production uprates pay it back.
+
+### Step 7, final measurement (2026‑09‑29)
+
+After the rocket refresh (the commit before this one), an uprate's
+benefit reaches the bot's rocket as well as its risk. 200 seeds:
+
+| bot uprate policy | final | bankrupt | ever profitable | bands |
+|---|---|---|---|---|
+| declines (= the refresh commit) | $152M | 24 | 175 | pass |
+| accepts only production uprates | $151M | 25 | 173 | — |
+| accepts every uprate (plan; committed) | $149M | 28 | 171 | pass |
+
+Accepting everything still costs the bot ~$3M and a few bankruptcies:
+its fixed‑payload contracts rarely need the extra performance, and each
+uprate's hidden flaws are flown before testing finds them. It passes the
+bands, so the bot keeps the plan's behaviour and exercises the mechanic.
+685 tests, clippy clean; oracle re‑baselined (`oracle_21_base7`: 40
+seeds $178.9M, 3/40 bankrupt, 37/40 ever profitable).
 
 ## 5. Questions
 
@@ -755,3 +837,11 @@ $152M, 24, 175. Bands pass; 682 tests; oracle re‑baselined
     scaling, 4 lines; keep the bot's hydrolox upper stage for comparison.
     CLAUDE: Done (step 5 record). The +1 also multiplies build work by
     1.43, so the handling multiplier is 2.5 to keep the total at 3.5.
+13. (Step 7, bands fail) The bankruptcy band has no headroom after
+    step 5. Options in the reply that goes with this.
+    USER (2026‑09‑29): do option 1 (isolate the randomness) first; then
+    asked why better engines didn't help the bot, which found the
+    rocket refresh gap; apply engine changes to rockets automatically
+    and free for now.
+    CLAUDE: Both done; with them the plan's bot policy passes (step 7,
+    final measurement).

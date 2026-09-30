@@ -62,6 +62,7 @@ impl Company {
         &mut self,
         rng: &mut rand::rngs::StdRng,
         balance_cfg: &BalanceConfig,
+        world_seed: u64,
     ) -> ResearchTick {
         let mut events: Vec<GameEvent> = Vec::new();
         let mut newly_designed_engines = Vec::new();
@@ -72,16 +73,16 @@ impl Company {
         let next_flaw_id = &mut self.next_flaw_id;
 
         for project in self.engine_projects.iter_mut() {
-            let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
+            let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg, world_seed);
             report_work(project, work_events, &mut events, &mut newly_designed_engines, &mut tech_def_attempts);
         }
         for project in self.rocket_projects.iter_mut() {
-            let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
+            let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg, world_seed);
             // Rockets carry no technology, so nothing lands in these.
             report_work(project, work_events, &mut events, &mut Vec::new(), &mut Vec::new());
         }
         for project in self.reactor_projects.iter_mut() {
-            let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg);
+            let work_events = project.apply_daily_work(rng, next_flaw_id, balance_cfg, world_seed);
             report_work(project, work_events, &mut events, &mut newly_designed_reactors, &mut reactor_tech_def_attempts);
         }
 

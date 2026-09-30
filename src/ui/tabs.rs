@@ -130,6 +130,14 @@ impl App {
         let index = selected.and_then(|r| self.game.player_company.list_index(r));
         match (kind, key) {
             // ── Engines ──
+            (ProjectKind::Engine, KeyCode::Char('u') | KeyCode::Char('U')) => {
+                self.status_message = Some(match selected.and_then(|r| self.game.player_company.accept_uprates(r)) {
+                    Some((name, 0)) => format!("{}: no uprates on offer", name),
+                    Some((name, n)) => format!(
+                        "{}: {} uprate{} accepted — revise [R] to apply", name, n, if n == 1 { "" } else { "s" }),
+                    None => "No engine selected".into(),
+                });
+            }
             (ProjectKind::Engine, KeyCode::Char('n') | KeyCode::Char('N')) => {
                 // Design a new engine standalone (parity with the Reactors
                 // pane). Seeds a Proposed engine with sensible defaults and
@@ -540,13 +548,13 @@ mod reactor_render_tests {
             id: crate::project::ImprovementId(0),
             description: "Compact reactor core design".into(),
             kind: ReactorImprovementKind::Mass(0.03),
-            actualized: true,
+            actualized: true, accepted: true,
         });
         project.improvements.push(ReactorImprovement {
             id: crate::project::ImprovementId(1),
             description: "Optimized coolant flow raises output".into(),
             kind: ReactorImprovementKind::Power(0.02),
-            actualized: false,
+            actualized: false, accepted: true,
         });
         // Attach the fission-reactor tech's real deficiency ids so the
         // deficiency block renders against live technology data.

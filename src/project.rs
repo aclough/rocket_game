@@ -165,6 +165,15 @@ pub struct Improvement<K> {
     pub kind: K,
     /// Whether this improvement has been actualized via revision.
     pub actualized: bool,
+    /// Whether a revision may actualise it. Improvements are accepted as
+    /// found; an uprate (21_ENGINES.md step 7) waits for the player,
+    /// since it risks new flaws.
+    #[serde(default = "accepted_default")]
+    pub accepted: bool,
+}
+
+fn accepted_default() -> bool {
+    true
 }
 
 /// Improvement kind for designs that have no improvements (rockets).
@@ -241,6 +250,26 @@ pub trait Designable: Clone + fmt::Debug {
     /// Land an actualised improvement on the design's stats.
     fn apply_improvement(&mut self, kind: &Self::ImprovementKind);
 
+    /// Roll a tier-2 uprate (21_ENGINES.md step 7). Only engines have
+    /// them; the project decides when one is due.
+    fn roll_uprate(
+        &self, _rng: &mut StdRng, _id: ImprovementId, _balance_cfg: &BalanceConfig,
+    ) -> Option<Improvement<Self::ImprovementKind>> {
+        None
+    }
+
+    /// What actualising `kind` risks and changes beyond the design's
+    /// stats: `(flaw_rolls, flaw_chance, build_time_divisor)`. Plain
+    /// improvements risk nothing.
+    fn improvement_side_effects(_kind: &Self::ImprovementKind) -> (u32, f64, f64) {
+        (0, 0.0, 1.0)
+    }
+
+    /// Whether `kind` is a tier-2 uprate rather than an improvement.
+    fn is_uprate(_kind: &Self::ImprovementKind) -> bool {
+        false
+    }
+
     /// Apply or revert one technology deficiency's stat effect.
     /// Complexity penalties are handled by the project, not here.
     fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction);
@@ -287,6 +316,10 @@ pub struct DesignProject<D: Designable> {
     /// build-cost estimate both read it, so labour cost follows.
     #[serde(default = "crate::project::unit_multiplier")]
     pub build_time_multiplier: f64,
+    /// Launches this design has flown on the company's rockets: the
+    /// flight heritage an uprate needs (21_ENGINES.md step 7).
+    #[serde(default)]
+    pub flights: u32,
     /// Automatically start a revision as soon as testing discovers a
     /// flaw. Default on: for a project you aren't yet mass-producing,
     /// revising promptly is what you'd do anyway. Turn it off on a
@@ -329,6 +362,7 @@ impl<D: Designable> DesignProject<D> {
             tech_deficiency_ids: Vec::new(),
             technology_id,
             build_time_multiplier: 1.0,
+            flights: 0,
             auto_revise: crate::flaw::auto_revise_default(),
             retired: false,
         }
@@ -382,6 +416,7 @@ impl<D: Designable> DesignProject<D> {
         rng: &mut StdRng,
         next_flaw_id: &mut crate::id::IdAllocator<crate::flaw::FlawId>,
         balance_cfg: &BalanceConfig,
+        world_seed: u64,
     ) -> Vec<WorkEvent> {
         if self.teams_assigned == 0 {
             return Vec::new();
@@ -416,8 +451,11 @@ impl<D: Designable> DesignProject<D> {
                         });
                     }
                     if let Some(base_chance) = D::improvement_chance(&balance_cfg.flaws) {
+                        // Decays with improvements found; uprates are a
+                        // different vein and don't count.
+                        let found = self.improvements.iter().filter(|i| !D::is_uprate(&i.kind)).count();
                         let chance = base_chance
-                            * balance_cfg.flaws.improvement_decay.powi(self.improvements.len() as i32);
+                            * balance_cfg.flaws.improvement_decay.powi(found as i32);
                         if rng.gen::<f64>() < chance {
                             let id = self.next_improvement_id.mint();
                             let improvement = self.design.roll_improvement(rng, id, balance_cfg);
@@ -425,6 +463,28 @@ impl<D: Designable> DesignProject<D> {
                                 description: format!("{}: {}", improvement.description, improvement.kind),
                             });
                             self.improvements.push(improvement);
+                        }
+                    }
+                    // A tier-2 uprate once the engine has a testing record and
+                    // flight heritage, one on offer at a time. Drawn from its
+                    // own world stream, keyed by project and cycle, so an
+                    // engine qualifying leaves the contingent stream alone.
+                    let cycles = (self.cumulative_testing_work / balance_cfg.work.testing_cycle_work) as u32;
+                    let up = &balance_cfg.uprates;
+                    let offered = self.improvements.iter().any(|i| !i.accepted && !i.actualized);
+                    let project_key = format!("{:?}", self.project_id);
+                    let mut uprng = crate::seed::world_query_for(
+                        world_seed, crate::seed::WorldQuery::Uprate { project: &project_key, cycle: cycles },
+                    );
+                    if cycles >= up.min_testing_cycles && self.flights >= up.min_flights && !offered
+                        && uprng.gen::<f64>() < up.chance_per_cycle
+                    {
+                        let id = self.next_improvement_id.mint();
+                        if let Some(uprate) = self.design.roll_uprate(&mut uprng, id, balance_cfg) {
+                            events.push(WorkEvent::ImprovementDiscovered {
+                                description: format!("{}: {}", uprate.description, uprate.kind),
+                            });
+                            self.improvements.push(uprate);
                         }
                     }
                     events.push(WorkEvent::TestingCycleComplete);
@@ -455,6 +515,28 @@ impl<D: Designable> DesignProject<D> {
                         events.push(WorkEvent::ImprovementActualized {
                             description: format!("{}: {}", imp.description, imp.kind),
                         });
+                        // An uprate's risk: each roll may leave a new hidden
+                        // flaw for testing to find; a production uprate also
+                        // shortens every later build.
+                        let (rolls, chance, divisor) = D::improvement_side_effects(&imp.kind);
+                        self.build_time_multiplier /= divisor;
+                        let project_key = format!("{:?}", self.project_id);
+                        let mut frng = crate::seed::world_query_for(
+                            world_seed,
+                            crate::seed::WorldQuery::UprateFlaws { project: &project_key, improvement: imp.id.0 },
+                        );
+                        for _ in 0..rolls {
+                            if frng.gen::<f64>() < chance {
+                                let domain = self.design.flaw_domain();
+                                let trigger = match domain.endurance_fraction(&balance_cfg.flaws) {
+                                    Some(fraction) if frng.gen::<f64>() < fraction => crate::flaw::FlawTrigger::PerDay,
+                                    _ => crate::flaw::FlawTrigger::PerFlight,
+                                };
+                                self.flaws.push(crate::flaw::generate_single_flaw(
+                                    domain, next_flaw_id.mint(), trigger, &mut frng, &balance_cfg.flaws,
+                                ));
+                            }
+                        }
                     }
                 }
                 // Then attempt tech deficiency fixes (resolved by the game state).
@@ -488,7 +570,7 @@ impl<D: Designable> DesignProject<D> {
             .map(|f| f.id)
             .collect();
         let improvement_ids: Vec<ImprovementId> = self.improvements.iter()
-            .filter(|imp| !imp.actualized)
+            .filter(|imp| !imp.actualized && imp.accepted)
             .map(|imp| imp.id)
             .collect();
         let tech_def_ids = self.tech_deficiency_ids.clone();
@@ -529,9 +611,26 @@ impl<D: Designable> DesignProject<D> {
         self.flaws.len()
     }
 
-    /// Improvements found but not yet actualised.
+    /// Improvements found but not yet actualised (offered uprates
+    /// included).
     pub fn pending_improvement_count(&self) -> usize {
         self.improvements.iter().filter(|imp| !imp.actualized).count()
+    }
+
+    /// Uprates on offer: found, not yet accepted.
+    pub fn offered_uprates(&self) -> impl Iterator<Item = &Improvement<D::ImprovementKind>> {
+        self.improvements.iter().filter(|imp| !imp.accepted && !imp.actualized)
+    }
+
+    /// Accept every uprate on offer, so the next revision actualises
+    /// them (and rolls their flaws). Returns how many.
+    pub fn accept_uprates(&mut self) -> usize {
+        let mut n = 0;
+        for imp in self.improvements.iter_mut().filter(|imp| !imp.accepted && !imp.actualized) {
+            imp.accepted = true;
+            n += 1;
+        }
+        n
     }
 
     /// Testing level description based on cumulative work in testing.
@@ -573,6 +672,8 @@ pub trait ProjectCore {
     /// Start a revision. What got queued, or `None` when not in Testing
     /// or there was nothing to revise.
     fn begin_revision(&mut self) -> Option<RevisionPlan>;
+    /// Accept every uprate on offer; how many.
+    fn accept_uprates(&mut self) -> usize;
 }
 
 impl<D: Designable> ProjectCore for DesignProject<D> {
@@ -596,6 +697,7 @@ impl<D: Designable> ProjectCore for DesignProject<D> {
     fn begin_revision(&mut self) -> Option<RevisionPlan> {
         if self.start_revision() { self.revision_plan() } else { None }
     }
+    fn accept_uprates(&mut self) -> usize { DesignProject::accept_uprates(self) }
 }
 
 /// Serde default for multipliers that are 1 unless something changed them.

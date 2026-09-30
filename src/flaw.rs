@@ -126,7 +126,7 @@ pub enum FlawDomain {
 impl FlawDomain {
     /// Fraction of generated flaws that are `PerDay`. `None` means the
     /// domain has no endurance flaws and draws no trigger roll.
-    fn endurance_fraction(self, cfg: &FlawsConfig) -> Option<f64> {
+    pub(crate) fn endurance_fraction(self, cfg: &FlawsConfig) -> Option<f64> {
         match self {
             FlawDomain::Engine(_) => None,
             FlawDomain::Rocket => Some(cfg.rocket_endurance_fraction),

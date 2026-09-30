@@ -150,6 +150,10 @@ impl GameState {
         self.apply_flaw_discoveries(discoveries, &mut discovered);
         self.emit_all(&mut events, discovered);
 
+        // Flight heritage: every player engine design on this rocket has
+        // flown once more, whatever the outcome (21_ENGINES.md step 7).
+        self.credit_engine_flights(inv_rocket.rocket_project_id);
+
 
         // Update launch tracking
         self.player_company.last_launch_date = Some(self.date);
@@ -1056,4 +1060,25 @@ fn tick_flight(
         return Some(FlightEnd::Stranded);
     }
     None
+}
+
+impl GameState {
+    /// Count one flight on each distinct player engine design the rocket
+    /// project's stages carry. Contracted engines have no project.
+    pub(super) fn credit_engine_flights(&mut self, rocket_project_id: crate::rocket_project::RocketProjectId) {
+        let Some(rp) = self.player_company.rocket_projects.iter().find(|rp| rp.project_id == rocket_project_id) else {
+            return;
+        };
+        let mut engine_ids: Vec<crate::engine::EngineId> = rp.design.stage_groups.iter()
+            .flatten()
+            .map(|stage| stage.engine.id)
+            .collect();
+        engine_ids.sort_by_key(|id| id.0);
+        engine_ids.dedup();
+        for id in engine_ids {
+            if let Some(ep) = self.player_company.engine_projects.iter_mut().find(|ep| ep.design.id == id) {
+                ep.flights += 1;
+            }
+        }
+    }
 }
