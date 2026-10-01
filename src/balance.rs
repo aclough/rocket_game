@@ -6,12 +6,14 @@
 use crate::engine::EngineCycle;
 use crate::propellant::Propellant;
 
-/// Complexity of an engine cycle type (5-9 range).
+/// Complexity of an engine cycle type (5-9 range). The expander sits
+/// level with the gas generator: no gas generator to light, one fewer
+/// combustion device, failures that tend to be benign (21_2 §A).
 pub fn cycle_complexity(cycle: EngineCycle) -> u32 {
     match cycle {
         EngineCycle::PressureFed => 5,
         EngineCycle::GasGenerator => 6,
-        EngineCycle::Expander => 7,
+        EngineCycle::Expander => 6,
         EngineCycle::StagedCombustion => 8,
         EngineCycle::FullFlow => 9,
         EngineCycle::NuclearThermal => 10,
@@ -89,7 +91,7 @@ mod tests {
     fn test_cycle_complexity_range() {
         assert_eq!(cycle_complexity(EngineCycle::PressureFed), 5);
         assert_eq!(cycle_complexity(EngineCycle::GasGenerator), 6);
-        assert_eq!(cycle_complexity(EngineCycle::Expander), 7);
+        assert_eq!(cycle_complexity(EngineCycle::Expander), 6);
         assert_eq!(cycle_complexity(EngineCycle::StagedCombustion), 8);
         assert_eq!(cycle_complexity(EngineCycle::FullFlow), 9);
     }
@@ -147,12 +149,13 @@ mod tests {
 
     #[test]
     fn test_combined_complexity_hydrolox_expander() {
-        // Expander=7, Hydrolox fuel=5 → max(7,5)=7, plus hydrogen's
-        // problems factor → 8
+        // Expander=6, Hydrolox fuel=5 → max(6,5)=6, plus hydrogen's
+        // problems factor → 7, level with the hydrolox gas generator
         let c = combined_complexity(EngineCycle::Expander, &[Propellant::LOX, Propellant::LH2]);
-        assert_eq!(c, 8);
+        assert_eq!(c, 7);
+        assert_eq!(c, combined_complexity(EngineCycle::GasGenerator, &[Propellant::LOX, Propellant::LH2]));
         // Design work and flaws see the same figure as build work.
-        assert_eq!(effective_complexity(EngineCycle::Expander, &[Propellant::LOX, Propellant::LH2]), 8);
+        assert_eq!(effective_complexity(EngineCycle::Expander, &[Propellant::LOX, Propellant::LH2]), 7);
     }
 
     #[test]
@@ -164,9 +167,9 @@ mod tests {
 
     #[test]
     fn test_effective_complexity_includes_problems() {
-        // Hydrolox Expander: combined=7, problems=1 → 8
+        // Hydrolox Expander: max(6,5)=6, problems=1 → 7
         let e = effective_complexity(EngineCycle::Expander, &[Propellant::LOX, Propellant::LH2]);
-        assert_eq!(e, 8);
+        assert_eq!(e, 7);
         // Kerolox GG: combined=6, problems=0 → 6
         let e = effective_complexity(EngineCycle::GasGenerator, &[Propellant::LOX, Propellant::RP1]);
         assert_eq!(e, 6);
