@@ -55,7 +55,10 @@ pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
 /// v4: an engine project's `spec.scale` (a multiple of its family's
 /// default) became `spec.size`, the engine's size in its kind's natural
 /// unit — throat area, input power or sail area (21_ENGINES.md step 3).
-pub const SAVE_VERSION: u32 = 4;
+///
+/// v5: kerosene and hypergolic expanders no longer exist; projects of
+/// those families become gas generators (21_2_ENGINE_CYCLES.md step 4).
+pub const SAVE_VERSION: u32 = 5;
 
 /// Load game state from a JSON file, running any migrations the file
 /// needs, then stamping it with the current version.
@@ -73,7 +76,7 @@ pub fn load_game(path: &Path) -> io::Result<GameState> {
     let mut state: GameState = serde_json::from_value(raw).map_err(invalid)?;
 
     sanitize(&mut state);
-    migrate(&mut state);
+    migrate(&mut state, from);
     // Saves from before the ledger, or written mid-month by an older
     // writer, may have no row for the current month yet.
     state.open_ledger_month();
@@ -367,9 +370,23 @@ fn migrate_project_to_v2(project: &mut serde_json::Value) {
     }
 }
 
-/// Version-gated migrations that need the typed state. Empty today;
-/// shape changes belong in `migrate_json`.
-fn migrate(_state: &mut GameState) {}
+/// Version-gated migrations that need the typed state; shape changes
+/// belong in `migrate_json`. `from` is the version the file was written at.
+fn migrate(state: &mut GameState, from: u32) {
+    if from < 5 {
+        // v4 -> v5: a kerosene or hypergolic expander project becomes a
+        // gas generator of the same propellant and vacuum thrust. Built
+        // engines keep the designs they were built with.
+        let balance = state.balance.clone();
+        let companies = std::iter::once(&mut state.player_company)
+            .chain(state.competitors.iter_mut().map(|c| &mut c.company));
+        for company in companies {
+            for project in &mut company.engine_projects {
+                project.migrate_removed_family(&balance);
+            }
+        }
+    }
+}
 
 /// How many rotating autosave slots each company keeps.
 pub const AUTOSAVE_SLOTS: u32 = 3;
@@ -658,6 +675,54 @@ mod tests {
         assert!((ep.spec.size - 2.0 * base).abs() < 1e-12, "size = scale × the family default");
         assert!((ep.scale(&loaded.balance.nozzle) - 2.0).abs() < 1e-12);
         assert_eq!(ep.design.thrust_n, thrust, "the design is not re-derived on load");
+    }
+
+    /// v4 -> v5: a kerosene expander (a family that no longer exists)
+    /// loads as a kerosene gas generator with the same vacuum thrust,
+    /// keeping its flaws and its actualized Isp improvement.
+    #[test]
+    fn v4_kerosene_expander_becomes_a_gas_generator() {
+        use crate::engine::EngineCycle;
+        use crate::engine_project::{EngineImprovementKind, PropellantPreset};
+        use crate::project::{Improvement, ImprovementId};
+        let mut state = GameState::with_money("V4".into(), 1_000_000_000.0, 1);
+        state.player_company.start_engine_project(
+            "Coker".into(), EngineCycle::GasGenerator, PropellantPreset::Kerolox, 0.2, None, &state.balance,
+        );
+        let vac_thrust = 150_000.0;
+        {
+            let ep = &mut state.player_company.engine_projects[0];
+            ep.design = ep.design.with_vacuum_bell(&state.balance.nozzle);
+            ep.design.cycle = EngineCycle::Expander;
+            ep.design.thrust_n = vac_thrust;
+            ep.complexity = 7;
+            ep.improvements.push(Improvement {
+                id: ImprovementId(0), description: "injector".into(),
+                kind: EngineImprovementKind::Isp(0.02), actualized: true, accepted: true,
+            });
+        }
+        let flaws = state.player_company.engine_projects[0].flaws.len();
+        let mut raw = serde_json::to_value(&state).unwrap();
+        raw["save_version"] = serde_json::json!(4);
+
+        let path = temp_path();
+        fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
+        let loaded = load_game(&path).expect("v4 save should load");
+        let _ = fs::remove_file(&path);
+
+        let ep = &loaded.player_company.engine_projects[0];
+        assert_eq!(ep.design.cycle, EngineCycle::GasGenerator);
+        assert_eq!(ep.spec.preset, PropellantPreset::Kerolox);
+        assert_eq!(ep.complexity, 6);
+        assert_eq!(ep.flaws.len(), flaws);
+        assert!(!ep.design.is_vacuum_variant(), "the project holds the sea-level form");
+        let vac = ep.design_variant(true, &loaded.balance.nozzle);
+        assert!((vac.thrust_n / vac_thrust - 1.0).abs() < 0.01, "vacuum thrust kept: {}", vac.thrust_n);
+        let plain = crate::engine_project::engine_baseline(EngineCycle::GasGenerator, PropellantPreset::Kerolox)
+            .unwrap()
+            .design(ep.design.id, String::new(), EngineCycle::GasGenerator, PropellantPreset::Kerolox,
+                ep.scale(&loaded.balance.nozzle), false, &loaded.balance.nozzle);
+        assert!((ep.design.isp_s / plain.isp_s - 1.02).abs() < 1e-9, "Isp improvement re-applied");
     }
 
     #[test]

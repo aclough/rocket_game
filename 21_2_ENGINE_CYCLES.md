@@ -250,3 +250,18 @@ Hydrolox, vacuum: 500 kN expander 37 bar, 455 s, TWR 49 (gas generator
 TWR 39 (GG 65). Below 250 kN nothing changes. LE‑9 (an expander bleed,
 outside the model) falls to TWR 41 against a real 60. Oracle identical
 (the bot's 110 kN expander is under the ceiling); bands pass.
+
+### Step 4 — no kerosene or hypergolic expanders (2026‑10‑04)
+
+`PropellantPreset::compatible_cycles` drops the expander for kerolox and
+hypergolic, and `chamber_pressure_pa` drops their rows, so the editor
+no longer offers them; a new test checks the editor list and the
+baseline table agree both ways. Save format v5: on load,
+`EngineProject::migrate_removed_family` turns such a project into the
+gas generator of the same propellant delivering the same vacuum thrust,
+re-applying actualized Isp and mass improvements and keeping flaws,
+work and status; built engines keep their designs
+(`chamber_pressure_for_legacy` falls back to the hydrolox expander's
+pressure so an old built engine keeps its bell). No new corpus save:
+the corpus is per era, and `v4_kerosene_expander_becomes_a_gas_generator`
+covers the migration. Oracle identical; bands pass.

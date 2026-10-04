@@ -100,6 +100,14 @@ impl PropellantPreset {
             PropellantPreset::Hydrogen => &[EngineCycle::NuclearThermal],
             PropellantPreset::Xenon => &[EngineCycle::ElectricPropulsion],
             PropellantPreset::Photon => &[EngineCycle::SolarSail],
+            // Kerosene cokes and hypergolics decompose in a cooling
+            // jacket hot enough to drive a turbine: no expanders.
+            PropellantPreset::Kerolox | PropellantPreset::Hypergolic => &[
+                EngineCycle::PressureFed,
+                EngineCycle::GasGenerator,
+                EngineCycle::StagedCombustion,
+                EngineCycle::FullFlow,
+            ],
             _ => &[
                 EngineCycle::PressureFed,
                 EngineCycle::GasGenerator,
@@ -219,7 +227,7 @@ impl EngineBaseline {
 /// at 9–10 bar, Merlin/F-1 gas generators at 70–97, RL10/Vinci
 /// expanders at 44–60, RD-180/RS-25/BE-4 staged combustion at 134–257,
 /// Raptor full-flow at 300. Kerosene and hypergolics are poor expander
-/// coolants; those rows stay legal at low pressure. `None` for the
+/// coolants and have no expander rows (21_2 step 4). `None` for the
 /// nozzle-less kinds and for combinations that don't exist.
 pub fn chamber_pressure_pa(cycle: EngineCycle, preset: PropellantPreset) -> Option<f64> {
     use EngineCycle as C;
@@ -231,7 +239,6 @@ pub fn chamber_pressure_pa(cycle: EngineCycle, preset: PropellantPreset) -> Opti
         (C::GasGenerator, P::Kerolox | P::Methalox) => 90.0,
         (C::GasGenerator, P::Hydrolox) => 100.0,
         (C::GasGenerator, P::Hypergolic) => 60.0,
-        (C::Expander, P::Kerolox | P::Hypergolic) => 40.0,
         (C::Expander, P::Hydrolox | P::Methalox) => 45.0,
         (C::StagedCombustion, P::Kerolox) => 250.0,
         (C::StagedCombustion, P::Hydrolox) => 200.0,
@@ -263,12 +270,15 @@ pub fn exhaust_gamma(preset: PropellantPreset) -> f64 {
 
 /// The chamber pressure to assume for a design that predates nozzles
 /// (`EngineDesignRepr`): its family's if the propellant mix names one,
-/// else the cycle's kerolox figure, else nothing (no nozzle).
+/// else the cycle's kerolox figure, else nothing (no nozzle). A family
+/// since removed (a kerosene or hypergolic expander) takes the cycle's
+/// hydrolox figure, so an old built engine keeps its bell.
 pub fn chamber_pressure_for_legacy(cycle: EngineCycle, mix: &[crate::engine::PropellantFraction]) -> Option<(f64, f64)> {
+    let fallback = || chamber_pressure_pa(cycle, PropellantPreset::Kerolox)
+        .or_else(|| chamber_pressure_pa(cycle, PropellantPreset::Hydrolox));
     match preset_for_mix(mix) {
-        Some(p) => chamber_pressure_pa(cycle, p).map(|pc| (pc, exhaust_gamma(p))),
-        None => chamber_pressure_pa(cycle, PropellantPreset::Kerolox)
-            .map(|pc| (pc, crate::engine::DEFAULT_GAMMA)),
+        Some(p) => chamber_pressure_pa(cycle, p).or_else(fallback).map(|pc| (pc, exhaust_gamma(p))),
+        None => fallback().map(|pc| (pc, crate::engine::DEFAULT_GAMMA)),
     }
 }
 
@@ -300,8 +310,8 @@ pub const TWR_SIZE_EXPONENT: f64 = 0.10;
 /// - pressure-fed: Kestrel 60, AJ10-118K 47, Aestus 27 (all small).
 ///
 /// Combinations nobody has flown (full-flow kerolox, hydrolox or
-/// hypergolic; kerolox or hypergolic expanders) sit beside their nearest
-/// real relatives.
+/// hypergolic; methalox expanders) sit beside their nearest real
+/// relatives.
 pub fn first_production_twr_1mn(cycle: EngineCycle, preset: PropellantPreset) -> f64 {
     use EngineCycle as C;
     use PropellantPreset as P;
@@ -844,6 +854,50 @@ impl EngineProject {
         true
     }
 
+    /// Move a project whose (cycle, propellant) family no longer exists
+    /// onto the gas generator of the same propellant (21_2 step 4: the
+    /// kerosene and hypergolic expanders). The new design delivers the
+    /// same vacuum thrust; actualized Isp and mass improvements are
+    /// re-applied (thrust ones are already in that thrust). Flaws,
+    /// improvements, work and status stay as they were. Returns whether
+    /// anything changed; a project whose family exists is left alone.
+    pub fn migrate_removed_family(&mut self, balance_cfg: &BalanceConfig) -> bool {
+        let preset = self.spec.preset;
+        if engine_baseline(self.design.cycle, preset).is_some() {
+            return false;
+        }
+        let cycle = EngineCycle::GasGenerator;
+        let (Some(baseline), Some(base)) = (
+            engine_baseline(cycle, preset),
+            default_size(cycle, preset, &balance_cfg.nozzle),
+        ) else {
+            return false;
+        };
+        let nozzle = &balance_cfg.nozzle;
+        let target = self.design.thrust_n;
+        let vacuum_thrust = |scale: f64| {
+            baseline.design(self.design.id, String::new(), cycle, preset, scale, true, nozzle).thrust_n
+        };
+        let mut scale = target / vacuum_thrust(DEFAULT_SCALE);
+        for _ in 0..6 {
+            scale *= target / vacuum_thrust(scale);
+        }
+        let mut design = baseline.design(self.design.id, self.design.name.clone(), cycle, preset, scale, false, nozzle);
+        for imp in self.improvements.iter().filter(|i| i.actualized) {
+            match &imp.kind {
+                EngineImprovementKind::Isp(_) | EngineImprovementKind::Mass(_)
+                | EngineImprovementKind::Uprate { kind: UprateKind::Injector | UprateKind::Turbomachinery, .. } => {
+                    design.apply_improvement(&imp.kind);
+                }
+                _ => {}
+            }
+        }
+        self.design = design;
+        self.spec = EngineSpec { preset, size: scale * base };
+        self.complexity = balance::combined_complexity(cycle, &preset.propellants());
+        true
+    }
+
     /// The project's size as a multiple of its family's default
     /// (`DEFAULT_SCALE`), for the formulas that still take a scale.
     pub fn scale(&self, cfg: &NozzleConfig) -> f64 {
@@ -1097,6 +1151,30 @@ mod tests {
             1.0,
             &bal(),
         ).unwrap()
+    }
+
+    /// The editor's list and the baseline table agree both ways: no
+    /// family the editor can't offer has a baseline (21_2 step 4 took
+    /// out the kerosene and hypergolic expanders).
+    #[test]
+    fn only_compatible_combos_have_baselines() {
+        let cycles = [
+            EngineCycle::PressureFed, EngineCycle::GasGenerator, EngineCycle::Expander,
+            EngineCycle::StagedCombustion, EngineCycle::FullFlow, EngineCycle::NuclearThermal,
+            EngineCycle::ElectricPropulsion, EngineCycle::SolarSail,
+        ];
+        for preset in PropellantPreset::ALL {
+            for cycle in cycles {
+                assert_eq!(
+                    engine_baseline(cycle, *preset).is_some(),
+                    preset.compatible_cycles().contains(&cycle),
+                    "{cycle:?}/{preset:?}",
+                );
+            }
+        }
+        assert!(engine_baseline(EngineCycle::Expander, PropellantPreset::Kerolox).is_none());
+        assert!(engine_baseline(EngineCycle::Expander, PropellantPreset::Hypergolic).is_none());
+        assert!(engine_baseline(EngineCycle::Expander, PropellantPreset::Methalox).is_some());
     }
 
     #[test]

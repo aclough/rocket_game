@@ -1411,7 +1411,7 @@ mod nozzle_variant_tests {
         // Editor: GasGenerator -> Expander (vacuum only) ...
         let balance = app.game.balance.clone();
         app.game.player_company.find_engine_project_mut(pid).unwrap()
-            .apply_edit("Family".into(), EngineCycle::Expander, PropellantPreset::Kerolox, 1.0, &balance);
+            .apply_edit("Family".into(), EngineCycle::Expander, PropellantPreset::Methalox, 1.0, &balance);
         sync_stages_to_projects(&mut state, &app.game.player_company, &app.game.balance.nozzle);
         assert!(state.stage_groups[0][0].engine.is_vacuum_variant(),
             "an expander family has only the vacuum form");
