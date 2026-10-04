@@ -212,3 +212,25 @@ $1.65M → $1.21M, Vinci $2.23M → $1.65M, LE‑9 $7.94M → $6.15M).
 DinoSoar's Dactyl gets cheaper with it: its marginal launch cost falls
 $46.8M → $42.1M; awards over the 8 probe seeds 16–22 (was 17–22).
 Oracle identical (the bot flies no expander). Bands pass.
+
+### Step 2 — fixed turbomachinery mass (2026‑10‑04)
+
+`turbomachinery_mass_kg(cycle)` (gas generator 40, expander 20, staged
+combustion and full‑flow 60, others 0) as `EngineBaseline::fixed_mass_kg`;
+`mass = (mass_kg − fixed) · scale^0.9 + fixed`, the 1 MN anchor unchanged.
+Yardstick gains Aestus II (hypergolic GG, 55 kN, TWR 41) and RD‑58M
+(kerolox SC, 83 kN, TWR 27). Small engines: HM7B 46 → 36 (real 38),
+S5.98M 60 → 28 (21), Aestus II 45 (41), RL10 44 → 41 (59), RD‑58M 42
+(27, the one miss: a heavy 1970s engine, left alone). Large engines move
+≤ 3 %. Core TWR median ×0.99, 16 of 23 within 0.8–1.25×. Falcon 9 probe
+unchanged.
+
+Bands first failed: 36/200 bankrupt. HEAD itself was at 29/200 (14.5 %)
+against the 15 % ceiling, and on fresh seeds 201–600 bankruptcies were
+level (44 → 45), final cash −3 %: the bot's 110 kN hydrolox gas‑generator
+upper stage had got heavier. USER chose to switch the bot's upper engine
+to a hydrolox expander, now the better engine at that size, and to raise
+the 200‑seed bankruptcy ceiling to 20 %. Result: band seeds 31/200
+bankrupt, avg final $154M (HEAD $150M); fresh seeds 42/400, $158M (HEAD
+44, $149M). Bands pass; oracle re‑baselined (40 seeds: avg final $186M,
+3 bankrupt).

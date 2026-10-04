@@ -231,7 +231,7 @@ mod bell_tests {
         assert!(bells.is_pair());
         assert_eq!(bells.isp(), "271 / 337 s");
         assert_eq!(bells.thrust(), "900 kN / 976 kN");
-        assert_eq!(bells.mass(), "1,078 kg / 1,263 kg");
+        assert_eq!(bells.mass(), "1,082 kg / 1,266 kg");
     }
 
     #[test]

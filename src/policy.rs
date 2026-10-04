@@ -240,7 +240,7 @@ impl BasicPolicy {
         if self.upper.is_none() {
             if let Some(evt) = game.player_company.start_engine_project(
                 "BLV Upper".into(),
-                EngineCycle::GasGenerator,
+                EngineCycle::Expander,
                 PropellantPreset::Hydrolox,
                 1.0,
                 None,

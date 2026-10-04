@@ -641,6 +641,8 @@ mod engines {
             r("Aestus", C::PressureFed, P::Hypergolic, V, 29.6, 27.0, None, "core"),
             r("Kestrel", C::PressureFed, P::Kerolox, V, 31.0, 60.0, None, "core"),
             r("S5.98M", C::GasGenerator, P::Hypergolic, V, 19.6, 21.0, None, "core"),
+            r("Aestus II", C::GasGenerator, P::Hypergolic, V, 55.4, 41.0, None, "core"),
+            r("RD-58M", C::StagedCombustion, P::Kerolox, V, 83.4, 27.0, None, "core"),
             // §3.2 outliers
             r("Merlin 1D B5", C::GasGenerator, P::Kerolox, SL, 845.0, 183.0, Some((1.0, "weak, $0.4-2M")), "outlier"),
             r("NK-33", C::StagedCombustion, P::Kerolox, SL, 1_510.0, 124.0, Some((1.1, "surplus sale, not production")), "outlier"),

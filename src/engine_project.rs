@@ -129,7 +129,12 @@ pub struct EngineBaseline {
     pub thrust_n: f64,
     /// Mass at scale 1.0 with the sea-level bell (kg).
     pub mass_kg: f64,
-    /// How mass grows with size: `mass_kg × scale^mass_size_exponent`.
+    /// Part of `mass_kg` that doesn't scale with size: turbomachinery's
+    /// minimum practical size (`turbomachinery_mass_kg`). 0 for
+    /// pressure-fed engines and the kinds without a pump.
+    pub fixed_mass_kg: f64,
+    /// How the rest of the mass grows with size:
+    /// `(mass_kg − fixed_mass_kg) × scale^mass_size_exponent + fixed_mass_kg`.
     /// Below 1 for pump-fed liquid engines, so thrust-to-weight rises
     /// gently with size (`TWR_SIZE_EXPONENT`); 1 for kinds whose mass is
     /// simply proportional (solids, reactors, ion engines, sails).
@@ -182,7 +187,8 @@ impl EngineBaseline {
             name,
             cycle,
             thrust_n: self.thrust_n * scale,
-            mass_kg: self.mass_kg * scale.powf(self.mass_size_exponent),
+            mass_kg: (self.mass_kg - self.fixed_mass_kg) * scale.powf(self.mass_size_exponent)
+                + self.fixed_mass_kg,
             isp_s,
             propellant_mix: preset.propellant_mix(),
             propulsion,
@@ -308,6 +314,24 @@ pub fn first_production_twr_1mn(cycle: EngineCycle, preset: PropellantPreset) ->
     }
 }
 
+/// Mass every pump-fed engine of a cycle carries whatever its size
+/// (21_2_ENGINE_CYCLES.md §C): bearings, seals, valves, igniter, gas
+/// generator or preburner — the parts with a minimum practical size.
+/// It makes small turbopump engines heavy per kN, leaving the small end
+/// to pressure-fed engines and expanders. Calibrated on the yardstick's
+/// small engines: HM7B, S5.98M, Aestus II, RD-58M, RL10, LE-5B.
+pub fn turbomachinery_mass_kg(cycle: EngineCycle) -> f64 {
+    match cycle {
+        EngineCycle::GasGenerator => 40.0,
+        EngineCycle::Expander => 20.0,
+        EngineCycle::StagedCombustion | EngineCycle::FullFlow => 60.0,
+        EngineCycle::PressureFed
+        | EngineCycle::NuclearThermal
+        | EngineCycle::ElectricPropulsion
+        | EngineCycle::SolarSail => 0.0,
+    }
+}
+
 /// The preset whose propellant mix this design carries, if any — the
 /// way back from a built engine to the family it came from.
 pub fn preset_for_mix(mix: &[crate::engine::PropellantFraction]) -> Option<PropellantPreset> {
@@ -348,6 +372,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
             // implicitly carries its own power supply (panels are
             // provisioned separately on the stage).
             mass_kg: 35.0,
+            fixed_mass_kg: 0.0,
             mass_size_exponent: 1.0,
             isp_ref_s: 3000.0,           // very high Isp
             chamber_pressure_pa: 0.0,    // no nozzle the air can act on
@@ -366,6 +391,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         return Some(EngineBaseline {
             thrust_n: 0.01,              // 10 millinewtons at 1 AU, scale 1.0
             mass_kg: 100.0,              // sail + structure
+            fixed_mass_kg: 0.0,
             mass_size_exponent: 1.0,
             isp_ref_s: 0.0,              // not meaningful for sails
             chamber_pressure_pa: 0.0,
@@ -385,6 +411,7 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
         return Some(EngineBaseline {
             thrust_n: 330_000.0,          // ~NERVA class (~73 klbf)
             mass_kg: 10_000.0,            // very heavy (reactor + shielding)
+            fixed_mass_kg: 0.0,
             mass_size_exponent: 1.0,
             // At the reference bell; the vacuum bell it always flies
             // lands near NERVA's ~850 s.
@@ -476,17 +503,23 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
 
     let thrust = base_thrust * thrust_mult;
     // A solid motor's case is its tank; its mass stays in proportion.
-    let (mass, mass_size_exponent) = if preset == PropellantPreset::Solid {
-        (thrust / (40.0 * G0), 1.0)
+    // A pump-fed engine's 1 MN mass is split into a fixed turbomachinery
+    // part and the rest, which scales as size^0.9; the 1 MN anchor
+    // stays where the TWR table puts it.
+    let (mass, fixed_mass_kg, mass_size_exponent) = if preset == PropellantPreset::Solid {
+        (thrust / (40.0 * G0), 0.0, 1.0)
     } else {
-        let twr = first_production_twr_1mn(cycle, preset)
-            * (thrust / TWR_REFERENCE_THRUST_N).powf(TWR_SIZE_EXPONENT);
-        (thrust / (twr * G0), 1.0 - TWR_SIZE_EXPONENT)
+        let fixed = turbomachinery_mass_kg(cycle);
+        let mass_1mn = TWR_REFERENCE_THRUST_N / (first_production_twr_1mn(cycle, preset) * G0);
+        let exponent = 1.0 - TWR_SIZE_EXPONENT;
+        let mass = (mass_1mn - fixed) * (thrust / TWR_REFERENCE_THRUST_N).powf(exponent) + fixed;
+        (mass, fixed, exponent)
     };
 
     Some(EngineBaseline {
         thrust_n: thrust,
         mass_kg: mass,
+        fixed_mass_kg,
         mass_size_exponent,
         isp_ref_s: base_isp_ref * isp_mult,
         chamber_pressure_pa: chamber_pressure_pa(cycle, preset)?,
@@ -1092,10 +1125,12 @@ mod tests {
             EngineCycle::GasGenerator, PropellantPreset::Kerolox, 2.0, &bal(),
         ).unwrap();
         // Thrust scales linearly; mass a little slower, so the bigger
-        // engine has the better thrust-to-weight (TWR_SIZE_EXPONENT).
+        // engine has the better thrust-to-weight (TWR_SIZE_EXPONENT),
+        // with the fixed turbomachinery mass not scaling at all.
         assert!((p2.design.thrust_n / p1.design.thrust_n - 4.0).abs() < 0.01);
+        let fixed = turbomachinery_mass_kg(EngineCycle::GasGenerator);
         let mass_ratio = 4.0_f64.powf(1.0 - TWR_SIZE_EXPONENT);
-        assert!((p2.design.mass_kg / p1.design.mass_kg - mass_ratio).abs() < 1e-9);
+        assert!(((p2.design.mass_kg - fixed) / (p1.design.mass_kg - fixed) - mass_ratio).abs() < 1e-9);
         // Isp doesn't change
         assert_eq!(p1.design.isp_s, p2.design.isp_s);
     }
