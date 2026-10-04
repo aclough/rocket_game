@@ -164,6 +164,19 @@ impl EngineBaseline {
         &self, id: EngineId, name: String, cycle: EngineCycle, preset: PropellantPreset,
         scale: f64, vacuum: bool, cfg: &NozzleConfig,
     ) -> EngineDesign {
+        let nominal_thrust = self.thrust_n * scale;
+        // An expander past its heat-transfer ceiling can't hold chamber
+        // pressure: pc falls as (F / ceiling)^−p in the thrust F it
+        // actually delivers. The same thrust then needs a bigger, heavier
+        // chamber and throat, and a smaller bell (less Isp). Solving
+        // F = nominal · (F / ceiling)^−p for F gives the factor below.
+        let pressure_factor = if cycle == EngineCycle::Expander {
+            let p = EXPANDER_CEILING_PRESSURE_EXPONENT;
+            (nominal_thrust / EXPANDER_CEILING_THRUST_N).max(1.0).powf(-p / (1.0 + p))
+        } else {
+            1.0
+        };
+        let chamber_pressure_pa = self.chamber_pressure_pa * pressure_factor;
         let propulsion = match cycle {
             EngineCycle::ElectricPropulsion => Propulsion::Electric {
                 // Power draw: scales with thrust for ion drives (~30 kW/N
@@ -172,7 +185,7 @@ impl EngineBaseline {
             },
             EngineCycle::SolarSail => Propulsion::Sail,
             _ => Propulsion::nozzle_for_exit_pressure(
-                self.chamber_pressure_pa, cfg.sea_level_exit_pressure_pa, self.gamma, true,
+                chamber_pressure_pa, cfg.sea_level_exit_pressure_pa, self.gamma, true,
             ),
         };
         let isp_s = match propulsion.bell() {
@@ -186,7 +199,7 @@ impl EngineBaseline {
             id,
             name,
             cycle,
-            thrust_n: self.thrust_n * scale,
+            thrust_n: nominal_thrust * pressure_factor,
             mass_kg: (self.mass_kg - self.fixed_mass_kg) * scale.powf(self.mass_size_exponent)
                 + self.fixed_mass_kg,
             isp_s,
@@ -313,6 +326,16 @@ pub fn first_production_twr_1mn(cycle: EngineCycle, preset: PropellantPreset) ->
         (C::NuclearThermal | C::ElectricPropulsion | C::SolarSail, _) => 0.0,
     }
 }
+
+/// Thrust (at the family's base chamber pressure) above which a closed
+/// expander runs out of heat to drive its turbine (21_2_ENGINE_CYCLES.md
+/// §B): jacket heat grows with wall area, ~F^⅔, while the turbine power
+/// it must supply grows with F. RL10, Vinci and LE-5 all sit below it.
+pub const EXPANDER_CEILING_THRUST_N: f64 = 250_000.0;
+/// Past the ceiling, chamber pressure falls as (F / ceiling)^−this. The
+/// mass penalty follows from it: the bigger chamber the same thrust
+/// then needs (and so, with the size law, more mass per kN).
+pub const EXPANDER_CEILING_PRESSURE_EXPONENT: f64 = 1.0 / 3.0;
 
 /// Mass every pump-fed engine of a cycle carries whatever its size
 /// (21_2_ENGINE_CYCLES.md §C): bearings, seals, valves, igniter, gas
@@ -1112,6 +1135,33 @@ mod tests {
         assert_eq!(proj.teams_assigned, 0);
         assert_eq!(proj.revision, 0);
         assert!(proj.flaws.is_empty());
+    }
+
+    /// Past ~250 kN a closed expander loses chamber pressure: a 1 MN
+    /// hydrolox expander is clearly worse than a gas generator of the
+    /// same thrust, while a 110 kN one is at full pressure (21_2 §B).
+    #[test]
+    fn expanders_lose_pressure_past_the_heat_transfer_ceiling() {
+        let cfg = bal().nozzle;
+        let at = |cycle, thrust: f64| {
+            let scale = scale_for_headline(cycle, PropellantPreset::Hydrolox, thrust, &cfg).unwrap();
+            engine_baseline(cycle, PropellantPreset::Hydrolox).unwrap()
+                .design(EngineId(0), String::new(), cycle, PropellantPreset::Hydrolox, scale, true, &cfg)
+        };
+        let base_pc = chamber_pressure_pa(EngineCycle::Expander, PropellantPreset::Hydrolox).unwrap();
+        let small = at(EngineCycle::Expander, 110_000.0);
+        assert_eq!(small.propulsion.bell().unwrap().0, base_pc);
+
+        let big = at(EngineCycle::Expander, 1_000_000.0);
+        let gg = at(EngineCycle::GasGenerator, 1_000_000.0);
+        assert!((big.thrust_n / 1e6 - 1.0).abs() < 0.01);
+        // pc falls as (F / 250 kN)^(-1/3), F the rated (short-bell)
+        // thrust: ~890 kN behind this 1 MN vacuum figure, so ≈ 0.65.
+        let pc_ratio = big.propulsion.bell().unwrap().0 / base_pc;
+        assert!(pc_ratio > 0.62 && pc_ratio < 0.68, "pc ratio {pc_ratio}");
+        let twr = |e: &EngineDesign| e.thrust_n / (e.mass_kg * G0);
+        assert!(twr(&big) < 0.8 * twr(&gg), "expander TWR {} vs GG {}", twr(&big), twr(&gg));
+        assert!(big.isp_s < gg.isp_s, "expander Isp {} vs GG {}", big.isp_s, gg.isp_s);
     }
 
     #[test]

@@ -234,3 +234,19 @@ the 200‑seed bankruptcy ceiling to 20 %. Result: band seeds 31/200
 bankrupt, avg final $154M (HEAD $150M); fresh seeds 42/400, $158M (HEAD
 44, $149M). Bands pass; oracle re‑baselined (40 seeds: avg final $186M,
 3 bankrupt).
+
+### Step 3 — expander heat-transfer ceiling (2026‑10‑04)
+
+`EXPANDER_CEILING_THRUST_N` 250 kN, `EXPANDER_CEILING_PRESSURE_EXPONENT`
+⅓, applied in `EngineBaseline::design`. Deviation from §B: pc falls with
+the thrust the engine *delivers* (the factor solves F = nominal ·
+(F/F_c)^−⅓), and there is no separate mass factor. Applying both on the
+throat size stacked them (1 MN hydrolox expander at TWR 22); the lower
+pressure already demands a bigger, heavier chamber for the same thrust,
+which is the mass penalty.
+
+Hydrolox, vacuum: 500 kN expander 37 bar, 455 s, TWR 49 (gas generator
+457 s, 55); 1 MN 29 bar, 453 s, TWR 44 (GG 457, 60); 2 MN 23 bar, 450 s,
+TWR 39 (GG 65). Below 250 kN nothing changes. LE‑9 (an expander bleed,
+outside the model) falls to TWR 41 against a real 60. Oracle identical
+(the bot's 110 kN expander is under the ceiling); bands pass.
