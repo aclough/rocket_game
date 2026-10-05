@@ -150,6 +150,10 @@ fn modes(app: &App, bid_basis: crate::game_state::BidBasis) -> Vec<(&'static str
         }),
         ("third party", InputMode::SelectThirdParty { selected: 0 }),
         ("rocket name", InputMode::RocketName { buffer: "Smoke".into() }),
+        ("report note", InputMode::ReportNote {
+            buffer: "The ullage flaw fired but no screen shows it on the rocket or the engine".into(),
+            back: None,
+        }),
         ("bid entry", InputMode::BidEntry { contract_index: 0, buffer: "12".into(), basis: bid_basis }),
         ("bid rules", InputMode::BidRules { selected: 0 }),
         ("award history", InputMode::AwardHistory { scroll: 0 }),

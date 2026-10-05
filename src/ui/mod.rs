@@ -225,6 +225,10 @@ pub enum InputMode {
     SelectThirdParty { selected: usize },
     /// Typing rocket name.
     RocketName { buffer: String },
+    /// F12: the player describes what went wrong before the report is
+    /// written. `back` is the modal F12 was pressed over, restored after
+    /// (`None` when it was pressed from the main screen).
+    ReportNote { buffer: String, back: Option<Box<InputMode>> },
     /// Entering a sealed bid (in $M) on an available solicitation.
     BidEntry { contract_index: usize, buffer: String, basis: crate::game_state::BidBasis },
     /// Editing standing per-market bid rules (enable + margin). The
@@ -562,6 +566,12 @@ impl App {
     }
 
     fn handle_key_inner(&mut self, key: KeyCode) {
+        // F12 works over any screen: a bug is as likely to show in a
+        // popup as on a tab, and the report should capture it there.
+        if key == KeyCode::F(12) && !matches!(self.input_mode, InputMode::ReportNote { .. }) {
+            self.open_report_note();
+            return;
+        }
         // Check if we're in an input mode first
         if !matches!(self.input_mode, InputMode::Normal) {
             self.handle_input_mode_key(key);
@@ -578,7 +588,6 @@ impl App {
                 self.autosave();
                 self.running = false;
             }
-            KeyCode::F(12) => self.write_report(),
             KeyCode::Char('?') => {
                 self.enter_modal(InputMode::Help {
                     tab: self.active_tab,
@@ -678,12 +687,37 @@ impl App {
         }
     }
 
-    /// Write a session report (F12). Tells the player exactly where it
-    /// went — a diagnostic they can't find is a diagnostic that doesn't
-    /// exist.
-    fn write_report(&mut self) {
-        self.status_message = Some(match crate::report::write_session_report(&self.game) {
-            Ok(path) => format!("Report written to {}", path.display()),
+    /// F12: ask what went wrong, over whatever is on screen.
+    fn open_report_note(&mut self) {
+        let back = std::mem::replace(&mut self.input_mode, InputMode::Normal);
+        if matches!(back, InputMode::Normal) {
+            self.enter_modal(InputMode::ReportNote { buffer: String::new(), back: None });
+        } else {
+            // Already in a modal, so the game is already paused.
+            self.input_mode = InputMode::ReportNote { buffer: String::new(), back: Some(Box::new(back)) };
+        }
+    }
+
+    /// Leave the report prompt for whatever F12 was pressed over.
+    pub(super) fn close_report_note(&mut self, back: Option<Box<InputMode>>) {
+        match back {
+            Some(mode) => self.input_mode = *mode,
+            None => self.exit_modal(),
+        }
+    }
+
+    /// Write a session report (F12) led by the player's `note`. Tells
+    /// the player exactly where the report and its save went — a
+    /// diagnostic they can't find is a diagnostic that doesn't exist.
+    pub(super) fn write_report(&mut self, note: Option<&str>) {
+        self.status_message = Some(match crate::report::write_session_report(&self.game, note) {
+            Ok(written) => match written.save {
+                Some(save) => format!(
+                    "Report written to {} — attach the save too: {}",
+                    written.report.display(), save.display(),
+                ),
+                None => format!("Report written to {} (the save could not be written)", written.report.display()),
+            },
             Err(e) => format!("Could not write report: {e}"),
         });
     }

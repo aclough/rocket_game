@@ -296,6 +296,19 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             }
             render_modal(frame, modal_area, " Contract Third-Party Engine ", lines);
         }
+        InputMode::ReportNote { buffer, .. } => {
+            let width = modal_area.width.saturating_sub(6) as usize;
+            let mut lines = vec![
+                Line::from(""),
+                Line::from("  What went wrong? (optional — it leads the report)"),
+                Line::from(""),
+            ];
+            let typed = format!("> {buffer}█");
+            lines.extend(wrap_words(&typed, width).into_iter().map(|l| Line::from(format!("  {l}"))));
+            lines.push(Line::from(""));
+            lines.push(hint_line("  Enter writes the report and a save · Esc cancels"));
+            render_modal(frame, modal_area, " Bug Report ", lines);
+        }
         InputMode::RocketName { buffer } => {
             let lines = vec![
                 Line::from(""),

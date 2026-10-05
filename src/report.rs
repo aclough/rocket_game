@@ -50,10 +50,14 @@ pub fn take_panic_text() -> Option<String> {
 /// `panic_text` is `Some` only when this came from the crash path; on
 /// demand (`F12`) the report is the same document without that section,
 /// so a player and a crash produce comparable output.
+///
+/// `note` is the player's own description of what went wrong (F12 asks
+/// for one); it leads the report, since it is what a reader needs first.
 pub fn report(
     game: &crate::game_state::GameState,
     panic_text: Option<&str>,
     save_path: Option<&std::path::Path>,
+    note: Option<&str>,
 ) -> String {
     let c = &game.player_company;
     let mut out = String::new();
@@ -62,6 +66,12 @@ pub fn report(
     out.push_str(&format!("Rocket Tycoon {kind} report\n"));
     out.push_str(&"=".repeat(21 + kind.len()));
     out.push_str("\n\n");
+
+    if let Some(note) = note {
+        out.push_str("What happened (from the player)\n-------------------------------\n");
+        out.push_str(note);
+        out.push_str("\n\n");
+    }
 
     // --- Build ---
     out.push_str(&format!("version:   {}\n", env!("CARGO_PKG_VERSION")));
@@ -248,32 +258,43 @@ pub fn snapshot_save_path(company_name: &str) -> std::path::PathBuf {
     snapshot_save_path_in(&crate::save::data_dir(), company_name)
 }
 
-/// Write a session report on demand (the `F12` path).
+/// Where an on-demand report and its snapshot save went.
+#[derive(Debug, Clone)]
+pub struct SessionReport {
+    pub report: std::path::PathBuf,
+    /// `None` when the snapshot save could not be written.
+    pub save: Option<std::path::PathBuf>,
+}
+
+/// Write a session report on demand (the `F12` path), led by the
+/// player's `note` when they gave one.
 ///
-/// Writes a snapshot save beside it and names that save in the text,
+/// Writes a snapshot save too and names that save in the text,
 /// because the save is what actually reproduces a bug — the text is
-/// what gets pasted into chat. Returns the report path on success.
+/// what gets pasted into chat. Returns where both went.
 pub fn write_session_report_in(
     data_dir: &std::path::Path,
     game: &crate::game_state::GameState,
-) -> std::io::Result<std::path::PathBuf> {
+    note: Option<&str>,
+) -> std::io::Result<SessionReport> {
     let name = &game.player_company.name;
 
     let save_path = snapshot_save_path_in(data_dir, name);
     let saved = crate::save::save_game(game, &save_path).is_ok();
 
-    let body = report(game, None, saved.then_some(save_path.as_path()));
+    let body = report(game, None, saved.then_some(save_path.as_path()), note);
     let path = report_path_in(data_dir, name, "session", game.date);
     std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")))?;
     std::fs::write(&path, body)?;
-    Ok(path)
+    Ok(SessionReport { report: path, save: saved.then_some(save_path) })
 }
 
 /// Write a session report to the default data directory.
 pub fn write_session_report(
     game: &crate::game_state::GameState,
-) -> std::io::Result<std::path::PathBuf> {
-    write_session_report_in(&crate::save::data_dir(), game)
+    note: Option<&str>,
+) -> std::io::Result<SessionReport> {
+    write_session_report_in(&crate::save::data_dir(), game, note)
 }
 
 /// Rescue what we can after a caught panic: write the save, write the
@@ -292,7 +313,7 @@ pub fn handle_panic_in(
         .join(format!("{}.crash.json", sanitize(name)));
     let saved = crate::save::save_game(game, &save_path).is_ok();
 
-    let body = report(game, Some(panic_text), saved.then_some(save_path.as_path()));
+    let body = report(game, Some(panic_text), saved.then_some(save_path.as_path()), None);
 
     let report_path = report_path_in(data_dir, name, "crash", game.date);
     let report_written = std::fs::create_dir_all(
@@ -347,7 +368,7 @@ mod tests {
     #[test]
     fn report_carries_what_a_repro_needs() {
         let g = game();
-        let text = report(&g, None, None);
+        let text = report(&g, None, None, None);
 
         assert!(text.contains("Report Co"));
         assert!(text.contains("seed:      3"), "the seed reproduces the world");
@@ -365,8 +386,8 @@ mod tests {
     #[test]
     fn crash_and_session_reports_differ_only_by_the_panic_section() {
         let g = game();
-        let session = report(&g, None, None);
-        let crash = report(&g, Some("panicked at 'boom'"), None);
+        let session = report(&g, None, None, None);
+        let crash = report(&g, Some("panicked at 'boom'"), None, None);
 
         assert!(session.starts_with("Rocket Tycoon session report"));
         assert!(crash.starts_with("Rocket Tycoon crash report"));
@@ -387,7 +408,7 @@ mod tests {
         let g = game();
         assert!(!g.player_company.engine_projects.is_empty(),
             "precondition: the bot built engines");
-        let text = report(&g, None, None);
+        let text = report(&g, None, None, None);
 
         assert!(text.contains("engine  "), "engine projects should be listed");
         assert!(text.contains("auto-revise"), "the flag changes behaviour, so report it");
@@ -439,11 +460,16 @@ mod tests {
     fn a_session_report_writes_a_snapshot_beside_it() {
         let dir = temp_data_dir("session");
         let g = game();
-        let path = write_session_report_in(&dir, &g).expect("report should write");
+        let written = write_session_report_in(&dir, &g, Some("Ullage flaw fired but no screen shows it"))
+            .expect("report should write");
+        let path = written.report;
 
         let body = std::fs::read_to_string(&path).unwrap();
         let snapshot = snapshot_save_path_in(&dir, "Report Co");
         assert!(snapshot.exists(), "a snapshot save should sit beside the report");
+        assert_eq!(written.save.as_deref(), Some(snapshot.as_path()), "the caller learns where the save went");
+        let note_at = body.find("Ullage flaw fired but no screen shows it").expect("the player's note is in the report");
+        assert!(note_at < body.find("version:").unwrap(), "and it leads the report");
         assert!(
             body.contains(&snapshot.display().to_string()),
             "the report must name the save to attach",
@@ -458,7 +484,7 @@ mod tests {
     #[test]
     fn a_brand_new_company_reports_without_panicking() {
         let g = GameState::new("Day One".into(), 1);
-        let text = report(&g, None, None);
+        let text = report(&g, None, None, None);
         assert!(text.contains("Day One"));
         assert!(text.contains("(none)"), "no projects yet, and that's fine");
     }

@@ -280,6 +280,22 @@ impl App {
                     }
                 }
             }
+            InputMode::ReportNote { buffer, back } => {
+                match edit_text_field(key, buffer, FieldKind::Text) {
+                    FieldEdit::Continue => {}
+                    FieldEdit::Cancel => {
+                        let back = back.take();
+                        self.close_report_note(back);
+                        self.status_message = Some("Report cancelled".into());
+                    }
+                    FieldEdit::Commit => {
+                        let note = buffer.trim().to_string();
+                        let back = back.take();
+                        self.close_report_note(back);
+                        self.write_report((!note.is_empty()).then_some(note.as_str()));
+                    }
+                }
+            }
             InputMode::RocketName { buffer } => {
                 match edit_text_field(key, buffer, FieldKind::Text) {
                     FieldEdit::Continue => {}
@@ -1122,5 +1138,49 @@ mod onboarding_tests {
         let reloaded: crate::game_state::GameState =
             serde_json::from_value(json).expect("pre-M5 save should load");
         assert!(reloaded.player_company.engine_projects[0].auto_revise);
+    }
+}
+
+#[cfg(test)]
+mod report_note_tests {
+    use super::*;
+
+    /// F12 asks what went wrong before writing anything, and pauses
+    /// the game while the player types; Esc puts everything back.
+    #[test]
+    fn f12_asks_for_a_note_and_esc_cancels() {
+        let mut app = help_tests::app();
+        app.input_mode = InputMode::Normal;
+        app.game.speed = GameSpeed::Fast;
+        app.handle_key(KeyCode::F(12));
+        assert!(matches!(app.input_mode, InputMode::ReportNote { back: None, .. }));
+        assert_eq!(app.game.speed, GameSpeed::Paused);
+        for c in "boom".chars() {
+            app.handle_key(KeyCode::Char(c));
+        }
+        let InputMode::ReportNote { buffer, .. } = &app.input_mode else { panic!("still asking") };
+        assert_eq!(buffer, "boom");
+        let rendered = help_tests::render(&app, 120, 40);
+        assert!(rendered.contains("What went wrong?"), "{rendered}");
+        assert!(rendered.contains("> boom"), "{rendered}");
+
+        app.handle_key(KeyCode::Esc);
+        assert!(matches!(app.input_mode, InputMode::Normal));
+        assert_eq!(app.game.speed, GameSpeed::Fast, "cancelling restores the speed");
+        assert_eq!(app.status_message.as_deref(), Some("Report cancelled"));
+    }
+
+    /// A bug can show in a popup; F12 over it returns to that popup.
+    #[test]
+    fn f12_over_a_popup_returns_to_it() {
+        let mut app = help_tests::app();
+        app.input_mode = InputMode::Normal;
+        app.handle_key(KeyCode::Char('?'));
+        assert!(matches!(app.input_mode, InputMode::Help { .. }));
+        app.handle_key(KeyCode::F(12));
+        assert!(matches!(app.input_mode, InputMode::ReportNote { back: Some(_), .. }));
+        app.handle_key(KeyCode::Esc);
+        assert!(matches!(app.input_mode, InputMode::Help { .. }), "back on the help popup");
+        assert_eq!(app.game.speed, GameSpeed::Paused, "still paused under the popup");
     }
 }

@@ -82,7 +82,7 @@ pub const GLOBAL: &[KeyBinding] = &[
     always("S", Some("[S] Save"), "Save the game"),
     always("?", None, "Show this help"),
     always("F12", Some("[F12] Report"),
-        "Write a bug report (state summary + a save to attach)"),
+        "Bug report: asks what went wrong, writes a summary + save"),
     always("Q", Some("[Q] Quit"), "Quit"),
 ];
 

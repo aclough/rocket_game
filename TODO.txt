@@ -20,3 +20,6 @@ Fold into the dry-mass / rocket-body work above (21_2_ENGINE_CYCLES.md §3).
 [] A pressure-fed vacuum engine always takes the 2 m bell (its large
 throat makes 3x the sea-level exit stubby), trading TWR for Isp whether
 or not it pays: AJ10-class TWR 20 (real 23), Kestrel-class 31 (real 60).
+
+[] We should review different strategies adn whether they're viable.  Smallsat,
+LEO, low end GTO.  Maybe have a set of seeds pursuing each.
