@@ -1,6 +1,6 @@
 # 21_2 — Engine cycles by size
 
-Status: draft for review (2026‑09‑30). Subsidiary to 21_ENGINES.md.
+Status: done (2026‑10‑05), steps 1–4. Subsidiary to 21_ENGINES.md.
 
 ## 1. Why
 
@@ -131,7 +131,8 @@ into rockets keep their `EngineDesign` and fly as they are.
 
 ## 3. Pressure-fed engines (USER's question)
 
-USER: (the small pressure-fed vacuum engine question goes here)
+USER: (2026‑10‑05) Curiosity about small pressure-fed engines satisfied
+by steps 1–4; no step 5. The two notes below stay open.
 
 Two things I noticed that may bear on it:
 

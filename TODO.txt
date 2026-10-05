@@ -12,3 +12,11 @@ cue). Solved state moves from the world's Technology to the company, so
 a rival adopting the tech faces the full list; the solved-elsewhere
 multiplier then has nothing left to do. Tackle with the flaws and
 deficiencies pass.
+
+[] Pressure-fed stages carry no heavier tanks or pressurant; real ones
+need thick walls, which is what keeps pressure-fed to small stages.
+Fold into the dry-mass / rocket-body work above (21_2_ENGINE_CYCLES.md §3).
+
+[] A pressure-fed vacuum engine always takes the 2 m bell (its large
+throat makes 3x the sea-level exit stubby), trading TWR for Isp whether
+or not it pays: AJ10-class TWR 20 (real 23), Kestrel-class 31 (real 60).
