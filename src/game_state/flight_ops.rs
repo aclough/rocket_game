@@ -862,15 +862,15 @@ fn roll_reactor_flaws(
     use crate::flaw::{FlawConsequence, FlawTrigger};
 
     let mut roll = FlawRoll::default();
-    let mut instances: Vec<(usize, usize, crate::reactor::ReactorId)> = Vec::new();
+    let mut instances: Vec<(usize, usize, crate::reactor::ReactorId, String)> = Vec::new();
     for (gi, si, stage, _) in rocket.attached_stages(design) {
         for src in &stage.power_sources {
             if let crate::power::PowerSourceKind::Reactor { design: rd } = &src.kind {
-                instances.push((gi, si, rd.id));
+                instances.push((gi, si, rd.id, rd.name.clone()));
             }
         }
     }
-    'reactors: for (gi, si, reactor_id) in instances {
+    'reactors: for (gi, si, reactor_id, reactor_name) in instances {
         for rf in table.iter().filter(|f| f.owner == FlawOwner::Reactor(reactor_id)) {
             if roll.lost.is_some() {
                 break 'reactors;
@@ -887,7 +887,7 @@ fn roll_reactor_flaws(
                 roll.activations.push(launch::FlawActivation {
                     flaw_description: rf.description.clone(),
                     consequence: rf.consequence.clone(),
-                    engine_name: String::new(),
+                    source: format!("Reactor {reactor_name}"),
                 });
                 roll.discoveries.push((rf.owner, rf.flaw_index));
                 if matches!(rf.consequence, FlawConsequence::StageLoss) {

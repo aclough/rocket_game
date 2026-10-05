@@ -630,7 +630,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 )));
                 for flaw in &record.flaws_activated {
                     lines.push(Line::from(format!("    {} ({}): {}",
-                        flaw.engine_name, flaw.consequence, flaw.flaw_description)));
+                        flaw.source, flaw.consequence, flaw.flaw_description)));
                 }
                 lines.push(Line::from(""));
             }

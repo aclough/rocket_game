@@ -141,7 +141,7 @@ pub fn roll_engine_flaws(
                 roll.activations.push(FlawActivation {
                     flaw_description: flaw.description.clone(),
                     consequence: flaw.consequence.clone(),
-                    engine_name: engine_name.clone(),
+                    source: engine_source(&engine_name),
                 });
                 roll.discoveries.push((flaw.owner, flaw.flaw_index));
                 apply_consequence_to_stage(design, &flaw.consequence, gi, si);
@@ -183,11 +183,12 @@ pub fn roll_endurance_flaws(
             continue;
         }
         let Some((gi, si)) = random_attached_stage(rng, design, rocket) else { continue };
+        let source = rocket_source(&design.stage_groups[gi][si].name);
         apply_consequence_to_stage(design, &flaw.consequence, gi, si);
         roll.activations.push(FlawActivation {
             flaw_description: flaw.description.clone(),
             consequence: flaw.consequence.clone(),
-            engine_name: String::new(),
+            source,
         });
         roll.discoveries.push((flaw.owner, flaw.flaw_index));
         if matches!(flaw.consequence, FlawConsequence::StageLoss) {
@@ -236,7 +237,22 @@ pub fn roll_overexpansion(
 pub struct FlawActivation {
     pub flaw_description: String,
     pub consequence: FlawConsequence,
-    pub engine_name: String,
+    /// Whose flaw it was, as the player reads it: "Engine Merlin",
+    /// "Rocket Upgoer 5 S1", "Reactor Kilopower". (Saved as
+    /// `engine_name` before rocket and reactor flaws stopped borrowing
+    /// the first stage's engine name.)
+    #[serde(alias = "engine_name")]
+    pub source: String,
+}
+
+/// `FlawActivation::source` for an engine flaw.
+pub fn engine_source(engine_name: &str) -> String {
+    format!("Engine {engine_name}")
+}
+
+/// `FlawActivation::source` for a rocket flaw on a stage.
+pub fn rocket_source(stage_name: &str) -> String {
+    format!("Rocket {stage_name}")
 }
 
 /// Record of a launch attempt.
@@ -339,19 +355,17 @@ pub fn simulate_launch(
                 // Pick a random stage group among those that will fire
                 if groups_needed > 0 {
                     let gi = rng.gen_range(0..groups_needed);
-                    let engine_name = degraded.stage_groups.get(gi)
-                        .and_then(|g| g.first())
-                        .map(|s| s.engine.name.clone())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    activations.push(FlawActivation {
-                        flaw_description: flaw.description.clone(),
-                        consequence: flaw.consequence.clone(),
-                        engine_name,
-                    });
                     // Pick a random stage within the group
                     let si = if !degraded.stage_groups[gi].is_empty() {
                         rng.gen_range(0..degraded.stage_groups[gi].len())
                     } else { 0 };
+                    let source = degraded.stage_groups[gi].get(si)
+                        .map_or_else(|| rocket_source(&design.name), |s| rocket_source(&s.name));
+                    activations.push(FlawActivation {
+                        flaw_description: flaw.description.clone(),
+                        consequence: flaw.consequence.clone(),
+                        source,
+                    });
                     apply_consequence_to_stage(&mut degraded, &flaw.consequence, gi, si);
                     if matches!(flaw.consequence, FlawConsequence::StageLoss) {
                         rocket_flaw_discoveries.push(fi);
@@ -369,7 +383,7 @@ pub fn simulate_launch(
     let ambient = 101_325.0_f64;
     if groups_needed > 0 && !vehicle_lost {
         for stage in degraded.stage_groups[0].iter_mut() {
-            let engine_name = stage.engine.name.clone();
+            let source = engine_source(&stage.engine.name);
             let Some(loss) = roll_overexpansion(rng, stage, ambient, nozzle_cfg) else { continue };
             let total = loss.engines_lost >= loss.engines_before;
             activations.push(FlawActivation {
@@ -386,7 +400,7 @@ pub fn simulate_launch(
                     )
                 },
                 consequence: if total { FlawConsequence::StageLoss } else { FlawConsequence::EngineLoss },
-                engine_name,
+                source,
             });
         }
     }
@@ -739,7 +753,7 @@ mod tests {
         let degradation = |desc: &str, frac: f64| FlawActivation {
             flaw_description: desc.into(),
             consequence: FlawConsequence::PerformanceDegradation(frac),
-            engine_name: "Lifter".into(),
+            source: "Engine Lifter".into(),
         };
 
         // Nothing activated: the vehicle simply never had the delta-v.
@@ -765,7 +779,7 @@ mod tests {
             FlawActivation {
                 flaw_description: "Engine shutdown".into(),
                 consequence: FlawConsequence::EngineLoss,
-                engine_name: "Lifter".into(),
+                source: "Engine Lifter".into(),
             },
         ], 3.0);
         assert!(reason.starts_with("Engine shutdown"), "got {reason:?}");
@@ -858,6 +872,9 @@ mod tests {
 
         assert_eq!(result.flaws_activated.len(), 1);
         assert_eq!(result.rocket_flaw_discoveries.len(), 1);
+        // A rocket flaw names the stage it struck, not its engine.
+        let stage = &design.stage_groups[0][0].name;
+        assert_eq!(result.flaws_activated[0].source, format!("Rocket {stage}"));
     }
 
     /// An endurance flaw's chance is over a year of service; it rolls
@@ -888,6 +905,14 @@ mod tests {
             assert!(result.flaws_activated.is_empty(), "seed {seed}: {:?}", result.flaws_activated);
             assert!(result.rocket_flaw_discoveries.is_empty());
         }
+    }
+
+    /// Launch records saved before `source` read `engine_name`.
+    #[test]
+    fn an_old_activation_record_still_loads() {
+        let old = r#"{"flaw_description":"Turbopump seal failure","consequence":"EngineLoss","engine_name":"Flamey"}"#;
+        let a: FlawActivation = serde_json::from_str(old).unwrap();
+        assert_eq!(a.source, "Flamey");
     }
 
     fn reactor_stage(engine_id: u64, reactor_id: u64) -> Stage {

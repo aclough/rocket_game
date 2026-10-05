@@ -127,7 +127,7 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
         flaws_activated: vec![crate::launch::FlawActivation {
             flaw_description: "Coolant loop chatter".into(),
             consequence: crate::flaw::FlawConsequence::PerformanceDegradation(0.01),
-            engine_name: "Upper".into(),
+            source: "Engine Upper".into(),
         }],
         launch_date: gs.date,
         persist: false,
