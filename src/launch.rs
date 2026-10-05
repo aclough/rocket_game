@@ -325,9 +325,16 @@ pub fn simulate_launch(
     // rocket-destroying flaw and rolls no overexpansion risk.
     let mut vehicle_lost = engine_roll.lost.is_some();
 
-    // Roll rocket project flaws — only target groups that will fire
+    // Roll the rocket's per-flight flaws — only target groups that will
+    // fire. Endurance (`PerDay`) flaws are not a launch event: their
+    // chance is over a year of service, and they roll daily in flight
+    // (`roll_endurance_flaws`). Rolling them here once at that yearly
+    // chance made wear a launch failure.
     if !vehicle_lost {
         for (fi, flaw) in rocket_flaws.iter().enumerate() {
+            if flaw.trigger != FlawTrigger::PerFlight {
+                continue;
+            }
             if rng.gen::<f64>() < flaw.activation_chance {
                 // Pick a random stage group among those that will fire
                 if groups_needed > 0 {
@@ -851,6 +858,36 @@ mod tests {
 
         assert_eq!(result.flaws_activated.len(), 1);
         assert_eq!(result.rocket_flaw_discoveries.len(), 1);
+    }
+
+    /// An endurance flaw's chance is over a year of service; it rolls
+    /// daily in flight, never as a one-shot on the pad. Even a certain
+    /// one stays quiet at launch.
+    #[test]
+    fn endurance_rocket_flaws_do_not_roll_on_the_pad() {
+        let design = make_design();
+        let ep1 = make_engine_project(1, vec![]);
+        let ep2 = make_engine_project(2, vec![]);
+        let flaw = Flaw {
+            id: FlawId(1),
+            description: "Ullage motor propellant slowly vents".into(),
+            consequence: FlawConsequence::EngineLoss,
+            activation_chance: 1.0,
+            discovery_probability: 0.5,
+            discovered: false, trigger: FlawTrigger::PerDay,
+        };
+        let rp = make_rocket_project(design.clone(), vec![flaw]);
+        for seed in 0..20 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let result = simulate_launch(
+                &design, "leo", 0.0,
+                &[ep1.clone(), ep2.clone()], &rp.flaws, &[], &mut rng,
+                &crate::balance_config::FlightConfig::default(),
+                &crate::balance_config::NozzleConfig::default(),
+            );
+            assert!(result.flaws_activated.is_empty(), "seed {seed}: {:?}", result.flaws_activated);
+            assert!(result.rocket_flaw_discoveries.is_empty());
+        }
     }
 
     fn reactor_stage(engine_id: u64, reactor_id: u64) -> Stage {
