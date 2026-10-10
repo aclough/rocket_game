@@ -285,6 +285,7 @@ mod tests {
                 design_id: crate::rocket::RocketDesignId(1),
                 rocket_name: "Built".into(),
                 build_cost: 1.0e7, revision: 0, rocket_flaws: Vec::new(),
+                grounded_until: None,
             },
         );
         app.handle_key(KeyCode::Char(' '));

@@ -396,7 +396,8 @@ impl BasicPolicy {
     fn accept_and_launch(&mut self, game: &mut GameState) {
         // Need a rocket in inventory to do anything.
         let Some(rocket_item_id) = game.player_company.manufacturing
-            .inventory.rockets.first().map(|r| r.item_id)
+            .inventory.rockets.iter().map(|r| r.item_id)
+            .find(|id| game.rocket_grounded_until(*id).is_none())
         else {
             return;
         };

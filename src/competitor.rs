@@ -305,6 +305,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             build_cost: cfg.catalog_cost,
             revision: 0,
             rocket_flaws: vec![flaw.clone()],
+            grounded_until: None,
         });
     }
 

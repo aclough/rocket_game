@@ -100,6 +100,15 @@ pub enum FlawConsequence {
     EngineLoss,
     /// The entire stage fails.
     StageLoss,
+    /// The launch is called off at first ignition: the flaw is found,
+    /// the vehicle goes back to the shelf grounded for the stand-down,
+    /// and the contract clock keeps running (22_FLAWS.md §3.3).
+    PadAbort { delay_days: u32 },
+    /// The vehicle flies nominally but the payload is lost at deploy.
+    PayloadLoss,
+    /// The part draws this much more bus power, in watts, for the rest
+    /// of the flight.
+    PowerDraw(f64),
 }
 
 impl FlawConsequence {
@@ -110,6 +119,9 @@ impl FlawConsequence {
                 format!("{:.0}% perf loss", frac * 100.0),
             FlawConsequence::EngineLoss => "engine loss".to_string(),
             FlawConsequence::StageLoss => "stage loss".to_string(),
+            FlawConsequence::PadAbort { delay_days } => format!("pad abort, {delay_days}-day stand-down"),
+            FlawConsequence::PayloadLoss => "payload lost".to_string(),
+            FlawConsequence::PowerDraw(w) => format!("+{w:.0} W draw"),
         }
     }
 
@@ -121,6 +133,7 @@ impl FlawConsequence {
                 format!("{:.0}% power loss", frac * 100.0),
             FlawConsequence::EngineLoss => "reactor shutdown".to_string(),
             FlawConsequence::StageLoss => "stage loss".to_string(),
+            other => other.short_label(),
         }
     }
 }
@@ -132,6 +145,9 @@ impl std::fmt::Display for FlawConsequence {
                 write!(f, "{:.0}% performance loss", frac * 100.0),
             FlawConsequence::EngineLoss => write!(f, "engine loss"),
             FlawConsequence::StageLoss => write!(f, "stage loss"),
+            FlawConsequence::PadAbort { delay_days } => write!(f, "pad abort, {delay_days}-day stand-down"),
+            FlawConsequence::PayloadLoss => write!(f, "payload lost"),
+            FlawConsequence::PowerDraw(w) => write!(f, "+{w:.0} W power draw"),
         }
     }
 }
@@ -243,7 +259,8 @@ fn stage_group_for(phase: FlawPhase, stage_groups: usize, rng: &mut StdRng) -> u
 /// The pool entry with this exact text, if any pool has it.
 fn entry_for_description(text: &str) -> Option<&'static FlawEntry> {
     ALL_POOLS.iter()
-        .flat_map(|pool| pool.degradation.iter().chain(pool.part_loss.iter()).chain(pool.stage_loss.iter()))
+        .flat_map(|pool| pool.degradation.iter().chain(pool.part_loss.iter()).chain(pool.stage_loss.iter())
+            .chain(pool.pad_abort.iter()).chain(pool.payload_loss.iter()).chain(pool.power_draw.iter()))
         .find(|e| e.text == text)
 }
 
@@ -327,12 +344,19 @@ pub fn generate_single_flaw(
     domain: FlawDomain, id: FlawId, trigger: FlawTrigger, stage_groups: usize, features: &[Feature],
     rng: &mut StdRng, cfg: &FlawsConfig,
 ) -> Flaw {
-    let (consequence, activation_chance, discovery_roll) = roll_flaw_core(rng, cfg);
+    let pool = FlawPool::for_flaw(domain, trigger);
+    let (consequence, activation_chance, discovery_roll) = roll_flaw_core(domain, pool, rng, cfg);
     let wanted = draw_exposure(&cfg.exposure_mix(domain), rng);
-    let entry = FlawPool::for_flaw(domain, trigger).pick(&consequence, wanted, features, rng);
+    let entry = pool.pick(&consequence, wanted, features, rng);
     let phase = if trigger == FlawTrigger::PerDay { FlawPhase::Endurance } else { entry.phase };
     let stage_group = (domain == FlawDomain::Rocket && trigger == FlawTrigger::PerFlight)
         .then(|| stage_group_for(phase, stage_groups, rng));
+    // A pad abort is the first stage's moment whatever the words.
+    let stage_group = if matches!(consequence, FlawConsequence::PadAbort { .. }) {
+        stage_group.map(|_| 0)
+    } else {
+        stage_group
+    };
     Flaw {
         id,
         description: entry.text.to_string(),
@@ -345,6 +369,48 @@ pub fn generate_single_flaw(
         stage_group,
         exposure: entry.exposure,
     }
+}
+
+/// Draw a consequence from the domain's weights, redrawing without a
+/// class the pool has no words for (endurance pools have no pad
+/// aborts; reactors lose no payloads). Magnitudes come from the config
+/// ranges.
+fn draw_consequence(domain: FlawDomain, pool: &FlawPool, rng: &mut StdRng, cfg: &FlawsConfig) -> FlawConsequence {
+    let mut weights = cfg.consequence_weights(domain);
+    let shape = |k: usize, rng: &mut StdRng| match k {
+        0 => FlawConsequence::PerformanceDegradation(rng.gen_range(cfg.degradation_min..cfg.degradation_max)),
+        1 => FlawConsequence::EngineLoss,
+        2 => FlawConsequence::StageLoss,
+        3 => FlawConsequence::PadAbort {
+            delay_days: rng.gen_range(cfg.pad_abort_delay_days[0]..=cfg.pad_abort_delay_days[1].max(cfg.pad_abort_delay_days[0])),
+        },
+        4 => FlawConsequence::PayloadLoss,
+        _ => FlawConsequence::PowerDraw(rng.gen_range(cfg.power_draw_w[0]..cfg.power_draw_w[1].max(cfg.power_draw_w[0] + 1.0))),
+    };
+    // A class whose words this pool lacks cannot be drawn.
+    for (k, w) in weights.iter_mut().enumerate() {
+        let probe = match k { 0 => FlawConsequence::PerformanceDegradation(0.0), 1 => FlawConsequence::EngineLoss,
+            2 => FlawConsequence::StageLoss, 3 => FlawConsequence::PadAbort { delay_days: 0 },
+            4 => FlawConsequence::PayloadLoss, _ => FlawConsequence::PowerDraw(0.0) };
+        if pool.entries(&probe).is_empty() {
+            *w = 0.0;
+        }
+    }
+    let total: f64 = weights.iter().filter(|w| **w > 0.0).sum();
+    if total <= 0.0 {
+        return FlawConsequence::EngineLoss;
+    }
+    let mut r = rng.gen::<f64>() * total;
+    for (k, w) in weights.iter().enumerate() {
+        if *w <= 0.0 {
+            continue;
+        }
+        if r < *w {
+            return shape(k, rng);
+        }
+        r -= w;
+    }
+    shape(2, rng)
 }
 
 /// Draw an exposure class from a domain's `[bench, integrated,
@@ -376,16 +442,8 @@ fn draw_exposure(mix: &[f64; 3], rng: &mut StdRng) -> FlawExposure {
 /// the discovery draw is a plain uniform, raised to the exposure's
 /// exponent and scaled by sqrt(activation) when a cycle rolls it
 /// (`Flaw::discovery_probability`).
-fn roll_flaw_core(rng: &mut StdRng, cfg: &FlawsConfig) -> (FlawConsequence, f64, f64) {
-    let roll: f64 = rng.gen();
-    let consequence = if roll < cfg.performance_degradation_weight {
-        let degradation = rng.gen_range(cfg.degradation_min..cfg.degradation_max);
-        FlawConsequence::PerformanceDegradation(degradation)
-    } else if roll < cfg.performance_degradation_weight + cfg.engine_loss_weight {
-        FlawConsequence::EngineLoss
-    } else {
-        FlawConsequence::StageLoss
-    };
+fn roll_flaw_core(domain: FlawDomain, pool: &FlawPool, rng: &mut StdRng, cfg: &FlawsConfig) -> (FlawConsequence, f64, f64) {
+    let consequence = draw_consequence(domain, pool, rng, cfg);
 
     let activation_chance: f64 = rng.gen::<f64>().powi(2);
     let discovery_roll: f64 = rng.gen();
@@ -413,6 +471,15 @@ pub struct FlawPool {
     pub part_loss: &'static [FlawEntry],
     /// `StageLoss`: the whole stage is lost.
     pub stage_loss: &'static [FlawEntry],
+    /// `PadAbort`: the launch is called off at first ignition. Rocket
+    /// and chemical-engine pools; always `Ignition`, stage 1.
+    pub pad_abort: &'static [FlawEntry],
+    /// `PayloadLoss`: the payload is lost at deploy. Rocket pool only;
+    /// always `PayloadDeploy`, the top stage.
+    pub payload_loss: &'static [FlawEntry],
+    /// `PowerDraw`: the part draws more bus power. Engine and reactor
+    /// pools.
+    pub power_draw: &'static [FlawEntry],
 }
 
 /// What a flaw's words assume the design has (22_FLAWS.md §3.4). A
@@ -512,6 +579,9 @@ impl FlawPool {
             FlawConsequence::PerformanceDegradation(_) => self.degradation,
             FlawConsequence::EngineLoss => self.part_loss,
             FlawConsequence::StageLoss => self.stage_loss,
+            FlawConsequence::PadAbort { .. } => self.pad_abort,
+            FlawConsequence::PayloadLoss => self.payload_loss,
+            FlawConsequence::PowerDraw(_) => self.power_draw,
         }
     }
 
@@ -594,6 +664,21 @@ pub const ENGINE_FLAWS: FlawPool = FlawPool {
         e("Nozzle extension tears away at ignition", FlawPhase::Ignition, FlawExposure::Analysis, &[]),
         e("Fuel-rich start pool ignites outside the chamber", FlawPhase::Ignition, FlawExposure::Analysis, &[Feature::Igniter, Feature::LiquidFeed]),
     ],
+    pad_abort: &[
+        e("Igniter fails to light on the pad", FlawPhase::Ignition, FlawExposure::Integrated, &[Feature::Igniter]),
+        e("Start sequence aborts on a slow main valve", FlawPhase::Ignition, FlawExposure::Integrated, &[Feature::LiquidFeed]),
+        e("Turbopump spin-up stalls at ignition", FlawPhase::Ignition, FlawExposure::Bench, &[Feature::Turbopump]),
+        e("Chamber pressure fails to build, automatic abort", FlawPhase::Ignition, FlawExposure::Bench, &[]),
+        e("Hypergolic leak check fails on the pad", FlawPhase::Ignition, FlawExposure::Integrated, &[Feature::Hypergolic]),
+        e("Gas generator fails to light, pumps never spin", FlawPhase::Ignition, FlawExposure::Integrated, &[Feature::GasGenerator]),
+    ],
+    payload_loss: &[],
+    power_draw: &[
+        e("Igniter exciter stays powered through the burn", FlawPhase::Burn, FlawExposure::Bench, &[Feature::Igniter]),
+        e("Valve actuators draw well over spec", FlawPhase::Burn, FlawExposure::Integrated, &[Feature::LiquidFeed]),
+        e("Engine controller heaters never cycle off", FlawPhase::Burn, FlawExposure::Bench, &[]),
+        e("Gimbal hydraulics run continuously", FlawPhase::Burn, FlawExposure::Integrated, &[]),
+    ],
 };
 
 /// Engines and their plumbing over a long mission.
@@ -622,6 +707,9 @@ pub const ENGINE_ENDURANCE_FLAWS: FlawPool = FlawPool {
         e("Wiring harness insulation breakdown", FlawPhase::Endurance, FlawExposure::Integrated, &[]),
         e("Pressurization system leak", FlawPhase::Endurance, FlawExposure::Integrated, &[Feature::LiquidFeed]),
     ],
+    pad_abort: &[],
+    payload_loss: &[],
+    power_draw: &[],
 };
 
 /// Ion and Hall thrusters: grids, cathodes, xenon feed, the PPU.
@@ -649,6 +737,13 @@ pub const ELECTRIC_FLAWS: FlawPool = FlawPool {
         e("Power bus overcurrent shutdown", FlawPhase::Burn, FlawExposure::Bench, &[]),
         e("Propellant management unit leak", FlawPhase::Burn, FlawExposure::Bench, &[]),
         e("Electromagnetic interference with avionics", FlawPhase::Burn, FlawExposure::Analysis, &[]),
+    ],
+    pad_abort: &[],
+    payload_loss: &[],
+    power_draw: &[
+        e("PPU standby losses higher than spec", FlawPhase::Burn, FlawExposure::Bench, &[]),
+        e("Cathode heater never drops to keep-alive", FlawPhase::Burn, FlawExposure::Bench, &[]),
+        e("Xenon flow controller heaters stay on", FlawPhase::Burn, FlawExposure::Integrated, &[]),
     ],
 };
 
@@ -678,6 +773,12 @@ pub const NUCLEAR_FLAWS: FlawPool = FlawPool {
         e("Uncontrolled criticality excursion risk", FlawPhase::Burn, FlawExposure::Bench, &[]),
         e("Nozzle detachment from thermal cycling", FlawPhase::Burn, FlawExposure::Bench, &[]),
     ],
+    pad_abort: &[],
+    payload_loss: &[],
+    power_draw: &[
+        e("Control drum actuators hold current continuously", FlawPhase::Burn, FlawExposure::Bench, &[]),
+        e("Instrumentation heaters never cycle off", FlawPhase::Burn, FlawExposure::Integrated, &[]),
+    ],
 };
 
 /// Solar sails: film, booms, deployment.
@@ -706,6 +807,9 @@ pub const SOLAR_SAIL_FLAWS: FlawPool = FlawPool {
         e("Complete attitude loss from sail asymmetry", FlawPhase::Burn, FlawExposure::Analysis, &[]),
         e("Sail connection point failure", FlawPhase::Burn, FlawExposure::Bench, &[]),
     ],
+    pad_abort: &[],
+    payload_loss: &[],
+    power_draw: &[],
 };
 
 /// The vehicle rather than its engines: tankage, structure, separation,
@@ -757,6 +861,22 @@ pub const ROCKET_FLAWS: FlawPool = FlawPool {
         e("Aero loads exceed the fin attachment", FlawPhase::MaxQ, FlawExposure::Analysis, &[]),
         e("Hold-down release jams on one side", FlawPhase::Ignition, FlawExposure::Bench, &[]),
     ],
+    pad_abort: &[
+        e("Hold-down release sensor reads unlatched", FlawPhase::Ignition, FlawExposure::Integrated, &[]),
+        e("Umbilical retract jams at T-zero", FlawPhase::Ignition, FlawExposure::Integrated, &[]),
+        e("Propellant load aborts on a stuck fill valve", FlawPhase::Ignition, FlawExposure::Integrated, &[Feature::LiquidFeed]),
+        e("Range safety link drops at T-minus zero", FlawPhase::Ignition, FlawExposure::Analysis, &[]),
+        e("Pad abort on a stale pressurant reading", FlawPhase::Ignition, FlawExposure::Bench, &[Feature::LiquidFeed]),
+        e("Flight computer fails its pre-launch self-test", FlawPhase::Ignition, FlawExposure::Bench, &[]),
+    ],
+    payload_loss: &[
+        e("Payload adapter release springs stick", FlawPhase::PayloadDeploy, FlawExposure::Analysis, &[]),
+        e("Fairing debris strikes the payload", FlawPhase::PayloadDeploy, FlawExposure::Analysis, &[Feature::Fairing]),
+        e("Deploy sequencer fires with the stage still rotating", FlawPhase::PayloadDeploy, FlawExposure::Analysis, &[]),
+        e("Payload clamp band hangs up", FlawPhase::PayloadDeploy, FlawExposure::Integrated, &[]),
+        e("Vibration environment exceeds payload qualification", FlawPhase::PayloadDeploy, FlawExposure::Bench, &[]),
+    ],
+    power_draw: &[],
 };
 
 /// The airframe and its systems wearing and drifting in transit —
@@ -786,6 +906,9 @@ pub const ROCKET_ENDURANCE_FLAWS: FlawPool = FlawPool {
         e("Structural adhesive creeps under sustained load", FlawPhase::Endurance, FlawExposure::Integrated, &[]),
         e("Flight computer accumulates uncorrected bit flips", FlawPhase::Endurance, FlawExposure::Analysis, &[]),
     ],
+    pad_abort: &[],
+    payload_loss: &[],
+    power_draw: &[],
 };
 
 /// Reactors at power. Degradation reads as lost output; part loss as a
@@ -815,6 +938,13 @@ pub const REACTOR_FLAWS: FlawPool = FlawPool {
         e("Thermal runaway destroys the stage", FlawPhase::Burn, FlawExposure::Bench, &[]),
         e("Reactor debris severs stage structure", FlawPhase::Burn, FlawExposure::Analysis, &[]),
     ],
+    pad_abort: &[],
+    payload_loss: &[],
+    power_draw: &[
+        e("Coolant pump parasitic draw over spec", FlawPhase::Burn, FlawExposure::Bench, &[]),
+        e("Control drum actuators hold current continuously", FlawPhase::Burn, FlawExposure::Integrated, &[]),
+        e("Shield heater never cycles off", FlawPhase::Burn, FlawExposure::Bench, &[]),
+    ],
 };
 
 /// Reactors over a long mission: burnup, fouling, embrittlement, creep.
@@ -843,6 +973,9 @@ pub const REACTOR_ENDURANCE_FLAWS: FlawPool = FlawPool {
         e("Radiator manifold fatigue ruptures the coolant loop", FlawPhase::Endurance, FlawExposure::Integrated, &[]),
         e("Structural creep severs the stage under load", FlawPhase::Endurance, FlawExposure::Integrated, &[]),
     ],
+    pad_abort: &[],
+    payload_loss: &[],
+    power_draw: &[],
 };
 
 /// What a flight exercised, granted to the projects whose hardware flew
@@ -1499,5 +1632,46 @@ mod description_pool_tests {
         assert!(long.covers(&mk(FlawPhase::Endurance, None, FlawTrigger::PerDay), 2));
         // A stage past the design clamps to the last group, as rolls do.
         assert!(review.covers(&mk(FlawPhase::Burn, Some(7), FlawTrigger::PerFlight), 1));
+    }
+
+    /// The new consequences land where they belong: a pad abort is the
+    /// first stage's ignition, a payload loss the top stage's deploy,
+    /// and wear pools never carry either.
+    #[test]
+    fn new_consequences_sit_at_their_events() {
+        let cfg = cfg();
+        let mut saw = [false; 3];
+        for seed in 0..80u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut next_id = crate::id::IdAllocator::<FlawId>::starting_at(0);
+            for f in generate_flaws(FlawDomain::Rocket, 12, 3, &ALL_ROCKET_FEATURES, &mut rng, &mut next_id, &cfg) {
+                match f.consequence {
+                    FlawConsequence::PadAbort { delay_days } => {
+                        saw[0] = true;
+                        assert_eq!((f.phase, f.stage_group), (FlawPhase::Ignition, Some(0)), "{}", f.description);
+                        assert!((cfg.pad_abort_delay_days[0]..=cfg.pad_abort_delay_days[1]).contains(&delay_days));
+                    }
+                    FlawConsequence::PayloadLoss => {
+                        saw[1] = true;
+                        assert_eq!((f.phase, f.stage_group), (FlawPhase::PayloadDeploy, Some(2)), "{}", f.description);
+                    }
+                    FlawConsequence::PowerDraw(_) => panic!("rockets have no power-draw words"),
+                    _ => {}
+                }
+                if f.trigger == FlawTrigger::PerDay {
+                    assert!(matches!(f.consequence,
+                        FlawConsequence::PerformanceDegradation(_) | FlawConsequence::EngineLoss | FlawConsequence::StageLoss));
+                }
+            }
+            for f in generate_flaws(FlawDomain::Engine(None), 12, 0, &gg_kerolox(), &mut rng, &mut next_id, &cfg) {
+                if let FlawConsequence::PowerDraw(w) = f.consequence {
+                    saw[2] = true;
+                    assert!(w >= cfg.power_draw_w[0] && w < cfg.power_draw_w[1]);
+                    assert_eq!(f.phase, FlawPhase::Burn);
+                }
+                assert!(!matches!(f.consequence, FlawConsequence::PayloadLoss), "engines lose no payloads");
+            }
+        }
+        assert_eq!(saw, [true, true, true], "pad abort, payload loss and power draw all get drawn");
     }
 }

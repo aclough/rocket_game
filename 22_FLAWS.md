@@ -858,3 +858,45 @@ $25M floor and profitable years are still suspended misses. The shape
 is now the target's: a hard first flight, a real jump on the second
 and third, a 93–95 % plateau. Step 7 tunes the levels.
 
+**Step 6 — new consequences.** `FlawConsequence::{PadAbort { delay_days },
+PayloadLoss, PowerDraw(watts)}`. Pools gain `pad_abort` /
+`payload_loss` / `power_draw` entry lists (engine pad aborts and power
+draws; rocket pad aborts and payload losses; reactor power draws;
+electric and nuclear power draws), and the consequence is drawn from
+per-domain weights `[degradation, part loss, stage loss, pad abort,
+payload loss, power draw]` — engine 45/30/12/8/0/5, rocket
+40/25/15/12/8/0, reactor 50/33/12/0/0/5 — redrawing without a class the
+pool has no words for (wear pools have none of the new three). Pad
+aborts are pinned to stage 1 ignition and roll only on the pad; a
+scrub ends the ascent walk, the launch outcome is
+`LaunchOutcome::Scrubbed`, the vehicle goes back on the shelf with
+`InventoryRocket::grounded_until` = today + stand-down (3–14 days),
+the flaw is found, the ascent's hardware gets its flight review, and
+`launch_rocket` refuses a grounded vehicle (the UI says so; the bot
+picks another or waits). Payload losses are pinned to the top stage's
+`PayloadDeploy`, which now rolls when a flight arrives: the vehicle is
+fine, contracts on the manifest are forfeit and unpaid with the
+lost-payload reputation hit, spacecraft payloads for that stop are
+destroyed, the record reads as a partial failure. Power draw
+accumulates on the flying `Rocket::extra_draw_w` and is charged with
+housekeeping every day, so it strands long flights by brownout and
+costs a LEO delivery nothing. Events `LaunchScrubbed`, `PayloadLost`;
+popup and history show SCRUBBED. 712 tests, clippy clean.
+
+| | step 5 | step 6 |
+|---|---|---|
+| 100 × 6 y: 1st / 2nd / 3rd / 4th+ | 25 / 45 / 79 / 93 | 40 / 54 / 69 / 93 |
+| 100 × 6 y: bankrupt | 19 | 18 |
+| 200 × 8 y: 1st / 2nd / 3rd / 4th+ | 24 / 46 / 73 / 95 | 34 / 53 / 70 / 95 |
+| 200 × 8 y: bankrupt | 42 | 36 |
+| 200 × 8 y: kept $25M / profitable year | 108 / 167 | 108 / 168 |
+
+First launches, 100 seeds: 57 pad failures, 4 partial, 39 clean — and
+85 scrubs before them, not counted as launches. The first flight got
+easier because a share of what used to be stage and engine losses is
+now pad aborts, which find the flaw without losing the vehicle (the
+survey's ground/range class). The bankruptcy band passes again
+(36/200 ≤ 20 %); the $25M and profitable-year floors are the two
+remaining suspended misses. Whether ~0.85 scrubs per programme before
+the first flight is the right feel is step 7's question.
+

@@ -750,6 +750,7 @@ pub(super) mod help_tests {
                 build_cost: 1_000_000.0,
                 revision: 0,
                 rocket_flaws: Vec::new(),
+                grounded_until: None,
             },
         );
 

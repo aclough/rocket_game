@@ -113,6 +113,11 @@ impl GameState {
     ) -> Option<(Vec<GameEvent>, Option<LaunchRecord>)> {
         let total_payload_kg: f64 = payloads.iter().map(|p| p.mass_kg()).sum();
 
+        // A vehicle standing down after a pad abort cannot launch yet.
+        if self.rocket_grounded_until(rocket_item_id).is_some() {
+            return None;
+        }
+
         // Take the rocket from inventory
         let inv_rocket = self.player_company.manufacturing.inventory.take_rocket(rocket_item_id)?;
 
@@ -151,6 +156,37 @@ impl GameState {
         let mut discovered = Vec::new();
         self.apply_flaw_discoveries(discoveries, &mut discovered);
         self.emit_all(&mut events, discovered);
+
+        // Scrubbed at first ignition: the flaw is found (above), the
+        // vehicle goes back on the shelf grounded for the stand-down,
+        // nothing flew. The record carries the scrub so the popup and
+        // the launch history show it.
+        if let LaunchOutcome::Scrubbed { reason, delay_days } = &sim.outcome {
+            let until = self.date.add_days(*delay_days);
+            let mut grounded = inv_rocket;
+            grounded.grounded_until = Some(until);
+            let rocket_name = grounded.rocket_name.clone();
+            let rocket_project_id = grounded.rocket_project_id;
+            self.player_company.manufacturing.inventory.rockets.push(grounded);
+            // The ascent's hardware was lit, so review what it reached.
+            self.open_flight_reviews(
+                rocket_project_id, &rocket_name, &rp_design_for_review, &sim.events_reached, 0, &mut events,
+            );
+            self.emit(&mut events, GameEvent::LaunchScrubbed {
+                rocket_name: rocket_name.clone(), reason: reason.clone(), delay_days: *delay_days,
+            });
+            let record = LaunchRecord {
+                launch_date: self.date,
+                rocket_name,
+                contract_id: None,
+                destination: destination.to_string(),
+                payload_kg: total_payload_kg,
+                outcome: sim.outcome.clone(),
+                flaws_activated: sim.flaws_activated,
+            };
+            self.speed = GameSpeed::Paused;
+            return Some((events, Some(record)));
+        }
 
         // Flight heritage: every player engine design on this rocket has
         // flown once more, whatever the outcome (21_ENGINES.md step 7).
@@ -253,9 +289,10 @@ impl GameState {
 
         // Instantiate a Rocket with per-stage propellant tracking
         let rocket_instance_id = self.next_rocket_id.mint();
-        let rocket_instance = sim.degraded_design.instantiate(
+        let mut rocket_instance = sim.degraded_design.instantiate(
             rocket_instance_id, total_payload_kg,
         );
+        rocket_instance.extra_draw_w = sim.extra_draw_w;
 
         let leg_days = route.first().map(|l| l.total_days()).unwrap_or(0);
 
@@ -327,10 +364,29 @@ impl GameState {
         // Resolve arrived / stranded / lost flights. Process in reverse
         // index order so removals don't shift the indices still to remove.
         ended.sort_by_key(|&(i, _)| std::cmp::Reverse(i));
+        let mut arrival_discoveries = FlawDiscoveries::default();
         for (i, end) in ended {
-            let flight = self.active_flights.remove(i);
+            let mut flight = self.active_flights.remove(i);
             let location = crate::contract::destination_display_name(flight.current_location.name())
                 .to_string();
+            // Arriving: the top stage releases the payload, and the
+            // flaws of that moment roll (22_FLAWS.md §3.3).
+            let mut payload_lost: Option<String> = None;
+            if matches!(end, FlightEnd::Arrived) && !flight.design.stage_groups.is_empty() {
+                let event = launch::FlightEvent::PayloadDeploy;
+                flight.events_reached.push(event);
+                let rockets = launch::rocket_flaw_table(flight.rocket_project_id, &flight.rocket_flaws);
+                let roll = launch::roll_event_flaws(
+                    &mut self.seed.contingent_rng, &mut flight.design, event, &tables.engines, &rockets, false,
+                );
+                flight.rocket.extra_draw_w += roll.extra_draw_w;
+                flight.flaws_activated.extend(roll.activations.iter().cloned());
+                push_activation_events(&mut events, &flight.rocket_name, &roll);
+                arrival_discoveries.record(&roll);
+                payload_lost = roll.activations.iter()
+                    .find(|a| matches!(a.consequence, crate::flaw::FlawConsequence::PayloadLoss))
+                    .map(|a| a.flaw_description.clone());
+            }
             // However it ended, the flight exercised what it reached.
             let days = flight.launch_date.days_until(&self.date);
             let (rp_id, name, design, reached) = (
@@ -340,7 +396,7 @@ impl GameState {
             self.open_flight_reviews(rp_id, &name, &design, &reached, days, &mut events);
             match end {
                 FlightEnd::Arrived => {
-                    let arrival_events = self.resolve_arrived_flight(flight);
+                    let arrival_events = self.resolve_arrived_flight(flight, payload_lost);
                     events.extend(arrival_events);
                 }
                 FlightEnd::Stranded => {
@@ -373,6 +429,7 @@ impl GameState {
                 }
             }
         }
+        self.apply_flaw_discoveries(arrival_discoveries, &mut events);
 
         events
     }
@@ -450,7 +507,12 @@ impl GameState {
     }
 
     /// Resolve a flight that has arrived at its destination.
-    pub(super) fn resolve_arrived_flight(&mut self, flight: Flight) -> Vec<GameEvent> {
+    /// `payload_lost` is the words of a `PayloadLoss` flaw that fired at
+    /// deploy: the vehicle is fine, the payload is gone — contracts on
+    /// the manifest fail with the lost-payload reputation hit, nothing
+    /// is paid, spacecraft payloads for this stop are destroyed, and the
+    /// record reads as a partial failure.
+    pub(super) fn resolve_arrived_flight(&mut self, flight: Flight, payload_lost: Option<String>) -> Vec<GameEvent> {
         let mut events = Vec::new();
         let destination = flight.destination().to_string();
         let dest_display = crate::contract::destination_display_name(&destination);
@@ -463,10 +525,23 @@ impl GameState {
         events.push(evt);
 
         // Determine outcome based on launch sim result (stored in flight)
-        let partial_reason = flight.launch_partial.clone();
+        let partial_reason = match &payload_lost {
+            Some(words) => Some(format!("Payload lost at deploy: {words}")),
+            None => flight.launch_partial.clone(),
+        };
         let is_partial = partial_reason.is_some();
 
-        if is_partial {
+        if let Some(words) = &payload_lost {
+            let manifest: Vec<crate::contract::ContractId> = flight.payloads.iter()
+                .filter_map(|p| match p {
+                    Payload::ContractDelivery { contract_id, .. } => Some(*contract_id),
+                    _ => None,
+                })
+                .collect();
+            let severity = self.manifest_failure_severity(&manifest);
+            self.player_company.reputation.on_launch_failure(&self.balance.reputation, severity);
+            events.push(GameEvent::PayloadLost { rocket_name: flight.rocket_name.clone(), reason: words.clone() });
+        } else if is_partial {
             let manifest: Vec<crate::contract::ContractId> = flight.payloads.iter()
                 .filter_map(|p| match p {
                     Payload::ContractDelivery { contract_id, .. } => Some(*contract_id),
@@ -495,6 +570,12 @@ impl GameState {
                     if let Some(ci) = self.player_company.active_contracts.iter()
                         .position(|c| c.id == contract_id)
                     {
+                        if payload_lost.is_some() {
+                            // The customer's satellite is gone: the contract
+                            // is forfeit, nothing is paid.
+                            self.player_company.active_contracts.remove(ci);
+                            continue;
+                        }
                         let contract = &self.player_company.active_contracts[ci];
                         let payment = if is_partial {
                             contract.payment * self.balance.flight.partial_payment_fraction
@@ -518,7 +599,9 @@ impl GameState {
                     // No payment for test launches.
                 }
                 Payload::Spacecraft { deploy_at: Some(ref d), .. } if *d == destination => {
-                    deployed_spacecraft.push(payload);
+                    if payload_lost.is_none() {
+                        deployed_spacecraft.push(payload);
+                    }
                 }
                 other => {
                     // Spacecraft payload bound for some other waypoint —
@@ -814,6 +897,7 @@ impl GameState {
                 &mut self.seed.contingent_rng, &mut sc.design, &sc.rocket,
                 sc.rocket_project_id, &tables.rockets,
             );
+            sc.rocket.extra_draw_w += roll.extra_draw_w;
             for activation in &roll.activations {
                 news.push(GameEvent::MidFlightFlawActivated {
                     rocket_name: sc.name.clone(),
@@ -912,6 +996,9 @@ fn roll_reactor_flaws(
                 launch::apply_reactor_consequence_to_stage(
                     design, &rf.consequence, gi, si, reactor_id,
                 );
+                if let FlawConsequence::PowerDraw(w) = rf.consequence {
+                    roll.extra_draw_w += w;
+                }
                 roll.activations.push(launch::FlawActivation {
                     flaw_description: rf.description.clone(),
                     consequence: rf.consequence.clone(),
@@ -964,6 +1051,7 @@ fn tick_flight(
                 !flight.reactor_flaws_rolled, &tables.reactors,
             );
             push_activation_events(events, &flight.rocket_name, &roll);
+            flight.rocket.extra_draw_w += roll.extra_draw_w;
             discoveries.record(&roll);
             flight_lost = roll.lost;
         }
@@ -1029,7 +1117,8 @@ fn tick_flight(
                 let rockets = launch::rocket_flaw_table(flight.rocket_project_id, &flight.rocket_flaws);
                 for event in launch::ascent_events(&new_burned, false) {
                     flight.events_reached.push(event);
-                    let roll = launch::roll_event_flaws(rng, &mut flight.design, event, &tables.engines, &rockets);
+                    let roll = launch::roll_event_flaws(rng, &mut flight.design, event, &tables.engines, &rockets, false);
+                    flight.rocket.extra_draw_w += roll.extra_draw_w;
                     flight.flaws_activated.extend(roll.activations.iter().cloned());
                     push_activation_events(events, &flight.rocket_name, &roll);
                     discoveries.record(&roll);
@@ -1095,6 +1184,15 @@ fn tick_flight(
 impl GameState {
     /// Count one flight on each distinct player engine design the rocket
     /// project's stages carry. Contracted engines have no project.
+    /// The date an inventory rocket's pad-abort stand-down ends, if it is
+    /// still grounded today.
+    pub fn rocket_grounded_until(&self, rocket_item_id: crate::manufacturing::InventoryItemId) -> Option<crate::calendar::GameDate> {
+        self.player_company.manufacturing.inventory.rockets.iter()
+            .find(|r| r.item_id == rocket_item_id)
+            .and_then(|r| r.grounded_until)
+            .filter(|until| *until > self.date)
+    }
+
     /// A flight ended: open a flight review on the rocket project and on
     /// every player engine project whose engine fired (22_FLAWS.md
     /// §3.2). The rocket's review carries the (phase, group) events the

@@ -61,6 +61,11 @@ pub enum GameEvent {
     LaunchSuccess { rocket_name: String, destination: String },
     LaunchPartialFailure { rocket_name: String, reason: String },
     LaunchFailure { rocket_name: String, reason: String },
+    /// Called off at first ignition by a pad-abort flaw; the vehicle is
+    /// grounded for `delay_days`.
+    LaunchScrubbed { rocket_name: String, reason: String, delay_days: u32 },
+    /// The vehicle arrived but its payload was lost at deploy.
+    PayloadLost { rocket_name: String, reason: String },
     PaymentReceived { amount: f64, contract_name: String },
     EngineBuildOrdered { engine_name: String },
     // Flight events
@@ -287,6 +292,10 @@ impl fmt::Display for GameEvent {
                 write!(f, "Ordered engine build: {}", engine_name),
             GameEvent::FlightDeparted { rocket_name, destination } =>
                 write!(f, "Flight departed: {} → {}", rocket_name, destination),
+            GameEvent::LaunchScrubbed { rocket_name, reason, delay_days } =>
+                write!(f, "Launch scrubbed: {} — {} ({}-day stand-down)", rocket_name, reason, delay_days),
+            GameEvent::PayloadLost { rocket_name, reason } =>
+                write!(f, "Payload lost at deploy on {}: {}", rocket_name, reason),
             GameEvent::FlightReviewOpened { rocket_name, projects, cycles } =>
                 write!(f, "Flight review of {}: the next {} test cycles on {} find what flew",
                     rocket_name, cycles, projects.join(", ")),
@@ -425,7 +434,9 @@ impl GameEvent {
             // competitor awards.
             | GameEvent::CampaignAwardedToCompetitor { .. }
             | GameEvent::CampaignMissionIssued { .. }
-            | GameEvent::CampaignMissionMissed { .. } => EventImportance::Notable,
+            | GameEvent::CampaignMissionMissed { .. }
+            | GameEvent::LaunchScrubbed { .. }
+            | GameEvent::PayloadLost { .. } => EventImportance::Notable,
             // Losing your own program is a Critical stop-the-presses
             // moment; a competitor fumbling theirs is market news.
             GameEvent::CampaignCancelled { by_player, .. } => {

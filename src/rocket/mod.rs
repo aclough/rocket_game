@@ -77,6 +77,10 @@ pub struct Rocket {
     pub design_id: RocketDesignId,
     pub payload_mass_kg: f64,
     pub stage_states: Vec<Vec<StageState>>,
+    /// Extra bus draw put on this vehicle by power-draw flaws, watts;
+    /// charged with housekeeping every day.
+    #[serde(default)]
+    pub extra_draw_w: f64,
 }
 
 impl Rocket {
@@ -296,6 +300,7 @@ impl RocketDesign {
             design_id: self.id,
             payload_mass_kg,
             stage_states,
+            extra_draw_w: 0.0,
         }
     }
 }

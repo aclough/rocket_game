@@ -354,6 +354,9 @@ pub struct InventoryRocket {
     /// Snapshot of rocket project flaws at build time.
     #[serde(default)]
     pub rocket_flaws: Vec<crate::flaw::Flaw>,
+    /// After a pad abort: the vehicle cannot launch before this date.
+    #[serde(default)]
+    pub grounded_until: Option<crate::calendar::GameDate>,
 }
 
 /// Inventory of manufactured items.
@@ -549,6 +552,7 @@ impl Manufacturing {
                         build_cost: total_build_cost,
                         revision: *revision,
                         rocket_flaws: rocket_flaws.clone(),
+                        grounded_until: None,
                     });
                     events.push(ManufacturingEvent::RocketIntegrated {
                         order_id: order.id,

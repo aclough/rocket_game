@@ -50,6 +50,11 @@ impl App {
             }
         };
 
+        if let Some(until) = self.game.rocket_grounded_until(rocket_item_id) {
+            self.status_message = Some(format!("Grounded until {} after a pad abort", until));
+            self.exit_modal();
+            return;
+        }
         match self.game.launch_rocket(rocket_item_id, &destination, payloads, persist) {
             Some((_events, Some(record))) => {
                 self.input_mode = InputMode::LaunchResult { record };
@@ -1181,6 +1186,7 @@ mod ready_rocket_order_tests {
             build_cost: 1_000_000.0,
             revision,
             rocket_flaws: Vec::new(),
+            grounded_until: None,
         });
     }
 

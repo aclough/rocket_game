@@ -127,6 +127,11 @@ pub struct FlawRoll {
     /// Set when a `StageLoss` fired: the vehicle is gone and the roll
     /// stopped there, since nothing after the loss can be observed.
     pub lost: Option<String>,
+    /// Set when a `PadAbort` fired: the launch is called off, with the
+    /// flaw's words and the stand-down in days.
+    pub scrub: Option<(String, u32)>,
+    /// Extra bus draw the roll put on the vehicle (`PowerDraw`), watts.
+    pub extra_draw_w: f64,
 }
 
 /// A moment in a flight at which flaws roll, in the order
@@ -242,10 +247,13 @@ pub fn roll_event_flaws(
     event: FlightEvent,
     engines: &[FlawRef],
     rockets: &[FlawRef],
+    on_pad: bool,
 ) -> FlawRoll {
     let mut roll = FlawRoll::default();
     let phase = event.phase();
     let gi = event.group(design);
+    // A pad abort can only happen on the pad, at the first ignition.
+    let pad_aborts_roll = on_pad && event == (FlightEvent::Ignition { group: 0 });
     let Some(group) = design.stage_groups.get(gi) else { return roll };
     let stage_count = group.len();
     if stage_count == 0 {
@@ -261,6 +269,9 @@ pub fn roll_event_flaws(
         for flaw in engines.iter().filter(|f| f.phase == phase
             && matches!(f.owner, FlawOwner::Engine { engine_id: id, .. } if id == engine_id))
         {
+            if matches!(flaw.consequence, FlawConsequence::PadAbort { .. }) && !pad_aborts_roll {
+                continue;
+            }
             let effective_p = 1.0 - (1.0 - flaw.activation_chance).powi(engine_count as i32);
             if rng.gen::<f64>() < effective_p {
                 roll.activations.push(FlawActivation {
@@ -270,9 +281,7 @@ pub fn roll_event_flaws(
                     event: Some(event),
                 });
                 roll.discoveries.push((flaw.owner, flaw.flaw_index, flaw.id));
-                apply_consequence_to_stage(design, &flaw.consequence, gi, si);
-                if matches!(flaw.consequence, FlawConsequence::StageLoss) {
-                    roll.lost = Some(flaw.description.clone());
+                if roll.apply(design, &flaw.consequence, gi, si, &flaw.description) {
                     return roll;
                 }
             }
@@ -282,6 +291,9 @@ pub fn roll_event_flaws(
     for flaw in rockets.iter().filter(|f| f.trigger == FlawTrigger::PerFlight && f.phase == phase
         && f.stage_group.map_or(gi == 0, |g| g.min(last_group) == gi))
     {
+        if matches!(flaw.consequence, FlawConsequence::PadAbort { .. }) && !pad_aborts_roll {
+            continue;
+        }
         if rng.gen::<f64>() >= flaw.activation_chance {
             continue;
         }
@@ -294,13 +306,37 @@ pub fn roll_event_flaws(
             event: Some(event),
         });
         roll.discoveries.push((flaw.owner, flaw.flaw_index, flaw.id));
-        apply_consequence_to_stage(design, &flaw.consequence, gi, si);
-        if matches!(flaw.consequence, FlawConsequence::StageLoss) {
-            roll.lost = Some(flaw.description.clone());
+        if roll.apply(design, &flaw.consequence, gi, si, &flaw.description) {
             return roll;
         }
     }
     roll
+}
+
+impl FlawRoll {
+    /// Put a fired consequence onto the vehicle. Returns true when the
+    /// roll must stop: the vehicle is lost, or the launch is scrubbed.
+    fn apply(&mut self, design: &mut RocketDesign, consequence: &FlawConsequence, gi: usize, si: usize, words: &str) -> bool {
+        match consequence {
+            FlawConsequence::StageLoss => {
+                apply_consequence_to_stage(design, consequence, gi, si);
+                self.lost = Some(words.to_string());
+                true
+            }
+            FlawConsequence::PadAbort { delay_days } => {
+                self.scrub = Some((words.to_string(), *delay_days));
+                true
+            }
+            FlawConsequence::PowerDraw(w) => {
+                self.extra_draw_w += w;
+                false
+            }
+            other => {
+                apply_consequence_to_stage(design, other, gi, si);
+                false
+            }
+        }
+    }
 }
 
 /// A random stage still attached to a flying vehicle, as (group, stage).
@@ -427,6 +463,9 @@ pub enum LaunchOutcome {
     Success,
     PartialFailure { reason: String },
     Failure { reason: String },
+    /// Called off at first ignition by a pad-abort flaw; the vehicle is
+    /// back on the shelf, grounded for the stand-down.
+    Scrubbed { reason: String, delay_days: u32 },
 }
 
 /// Result of simulating a launch, before applying to game state.
@@ -445,6 +484,11 @@ pub struct LaunchSimResult {
     /// Every event the ascent walked, in order, up to and including the
     /// one that lost the vehicle: what a flight review covers.
     pub events_reached: Vec<FlightEvent>,
+    /// Extra bus draw the ascent's flaws put on the vehicle, watts.
+    pub extra_draw_w: f64,
+    /// Set when the launch was scrubbed: the flaw's words and the
+    /// stand-down.
+    pub scrub: Option<(String, u32)>,
 }
 
 /// Simulate a launch. This does not modify any state — it returns a result
@@ -490,11 +534,14 @@ pub fn simulate_launch(
     let mut engine_discoveries: Vec<(FlawOwner, usize)> = Vec::new();
     let mut rocket_flaw_discoveries: Vec<FlawId> = Vec::new();
     let mut events_reached: Vec<FlightEvent> = Vec::new();
+    let mut scrub: Option<(String, u32)> = None;
+    let mut extra_draw_w = 0.0;
 
     for event in ascent_events(&groups, ambient > 0.0) {
         events_reached.push(event);
-        let roll = roll_event_flaws(rng, &mut degraded, event, &engines, &rockets);
+        let roll = roll_event_flaws(rng, &mut degraded, event, &engines, &rockets, true);
         activations.extend(roll.activations);
+        extra_draw_w += roll.extra_draw_w;
         for (owner, fi, id) in roll.discoveries {
             match owner {
                 FlawOwner::Engine { .. } => engine_discoveries.push((owner, fi)),
@@ -503,6 +550,10 @@ pub fn simulate_launch(
             }
         }
         if roll.lost.is_some() {
+            break;
+        }
+        if roll.scrub.is_some() {
+            scrub = roll.scrub;
             break;
         }
         // Flow separation: the first group fires into pad pressure.
@@ -545,7 +596,9 @@ pub fn simulate_launch(
     // a shortfall with no attribution tells the player nothing they can act
     // on, and the reason built here is the one carried all the way to the
     // arrival event and the launch record.
-    let outcome = if degraded_dv >= required_dv {
+    let outcome = if let Some((reason, delay_days)) = scrub.clone() {
+        LaunchOutcome::Scrubbed { reason, delay_days }
+    } else if degraded_dv >= required_dv {
         LaunchOutcome::Success
     } else {
         let shortfall = ((1.0 - degraded_dv / required_dv) * 100.0).round();
@@ -565,6 +618,8 @@ pub fn simulate_launch(
         rocket_flaw_discoveries,
         flaw_rolled_groups: groups.into_iter().collect(),
         events_reached,
+        extra_draw_w,
+        scrub,
     }
 }
 
@@ -576,6 +631,7 @@ fn severity(activation: &FlawActivation) -> f64 {
         FlawConsequence::StageLoss => f64::INFINITY,
         FlawConsequence::EngineLoss => 1.0e6,
         FlawConsequence::PerformanceDegradation(frac) => frac,
+        FlawConsequence::PadAbort { .. } | FlawConsequence::PayloadLoss | FlawConsequence::PowerDraw(_) => 0.0,
     }
 }
 
@@ -640,6 +696,10 @@ pub fn apply_consequence_to_stage(
             }
         }
         FlawConsequence::StageLoss => group[stage_index].disable(),
+        // Not the stage's problem: a scrub keeps the vehicle whole, a
+        // lost payload is the payload's, and extra draw goes on the
+        // flying vehicle (`FlawRoll::extra_draw_w`).
+        FlawConsequence::PadAbort { .. } | FlawConsequence::PayloadLoss | FlawConsequence::PowerDraw(_) => {}
     }
 }
 
@@ -688,6 +748,7 @@ pub fn apply_reactor_consequence_to_stage(
             }
         }
         FlawConsequence::StageLoss => stage.disable(),
+        FlawConsequence::PadAbort { .. } | FlawConsequence::PayloadLoss | FlawConsequence::PowerDraw(_) => {}
     }
 }
 
@@ -953,7 +1014,7 @@ mod tests {
 
         let reason = match &result.outcome {
             LaunchOutcome::PartialFailure { reason } | LaunchOutcome::Failure { reason } => reason,
-            LaunchOutcome::Success => panic!("a 50% performance loss should not fly nominally"),
+            LaunchOutcome::Success | LaunchOutcome::Scrubbed { .. } => panic!("a 50% performance loss should not fly nominally"),
         };
         assert!(reason.contains("Turbopump seal failure"), "got {reason:?}");
     }
@@ -1193,7 +1254,7 @@ mod tests {
             let mut degraded = design.clone();
             let mut out = Vec::new();
             for event in ascent_events(&[0, 1], atmosphere) {
-                let roll = roll_event_flaws(&mut rng, &mut degraded, event, &engines, &rockets);
+                let roll = roll_event_flaws(&mut rng, &mut degraded, event, &engines, &rockets, true);
                 out.extend(roll.activations.into_iter().map(|a| (a.flaw_description, a.event.unwrap())));
             }
             out
@@ -1216,7 +1277,7 @@ mod tests {
         let rockets = rocket_flaw_table(RocketProjectId(1), &[rocket_flaw(1, FlawPhase::Burn, 5)]);
         let mut rng = StdRng::seed_from_u64(1);
         let mut degraded = design.clone();
-        let roll = roll_event_flaws(&mut rng, &mut degraded, FlightEvent::Burn { group: 1 }, &[], &rockets);
+        let roll = roll_event_flaws(&mut rng, &mut degraded, FlightEvent::Burn { group: 1 }, &[], &rockets, false);
         assert_eq!(roll.activations.len(), 1);
         assert_eq!(roll.discoveries[0].2, FlawId(1));
     }
@@ -1258,5 +1319,35 @@ mod tests {
         }
         assert!(ep.flight_review.is_none(), "the review lapses after its cycles");
         assert_eq!(exponent(&ep), cfg.flaws.discovery_exponent_analysis);
+    }
+
+    /// A pad abort rolls only on the pad at first ignition and ends the
+    /// walk as a scrub; power draw accumulates on the roll instead of
+    /// touching the stage.
+    #[test]
+    fn pad_aborts_only_on_the_pad_and_power_draw_accumulates() {
+        use crate::flaw::FlawPhase;
+        let design = make_design();
+        let mut abort = rocket_flaw(1, FlawPhase::Ignition, 0);
+        abort.consequence = FlawConsequence::PadAbort { delay_days: 5 };
+        let mut draw = rocket_flaw(2, FlawPhase::Burn, 0);
+        draw.consequence = FlawConsequence::PowerDraw(250.0);
+        draw.stage_group = None;
+        let engines = engine_flaw_table(&[make_engine_project(1, vec![draw])], &[]);
+        let rockets = rocket_flaw_table(RocketProjectId(1), &[abort]);
+
+        let mut rng = StdRng::seed_from_u64(1);
+        let mut degraded = design.clone();
+        let on_pad = roll_event_flaws(&mut rng, &mut degraded, FlightEvent::Ignition { group: 0 }, &engines, &rockets, true);
+        assert_eq!(on_pad.scrub, Some(("rocket flaw 1".to_string(), 5)));
+        assert_eq!(on_pad.activations.len(), 1);
+        assert_eq!(degraded.stage_groups[0][0].engine_count, design.stage_groups[0][0].engine_count, "a scrub leaves the vehicle whole");
+
+        let later = roll_event_flaws(&mut rng, &mut degraded, FlightEvent::Ignition { group: 0 }, &engines, &rockets, false);
+        assert!(later.scrub.is_none() && later.activations.is_empty(), "off the pad a pad abort never rolls");
+
+        let burn = roll_event_flaws(&mut rng, &mut degraded, FlightEvent::Burn { group: 0 }, &engines, &rockets, false);
+        assert_eq!(burn.extra_draw_w, 250.0);
+        assert!((degraded.stage_groups[0][0].engine.thrust_n - design.stage_groups[0][0].engine.thrust_n).abs() < 1e-9);
     }
 }

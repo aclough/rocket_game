@@ -858,6 +858,7 @@ mod first_launch_outcomes {
     #[ignore]
     fn first_launch_by_outcome() {
         let mut counts = std::collections::BTreeMap::<&str, u32>::new();
+        let mut scrubs = 0u32;
         for seed in 1..=100u64 {
             let mut policy = BasicPolicy::new();
             let mut gs = GameState::new("Bot".into(), seed);
@@ -874,6 +875,7 @@ mod first_launch_outcomes {
                         GameEvent::SpacecraftLost { .. } => "lost in flight",
                         GameEvent::SpacecraftStranded { .. } => "stranded",
                         GameEvent::LaunchSuccess { .. } => "success",
+                        GameEvent::LaunchScrubbed { .. } => { scrubs += 1; continue; }
                         _ => continue,
                     };
                     if outcome.is_none() { outcome = Some(label); }
@@ -885,5 +887,6 @@ mod first_launch_outcomes {
         for (k, v) in &counts {
             println!("{v:>4}  {k}");
         }
+        println!("{scrubs:>4}  scrubs before the first launch (not counted as launches)");
     }
 }

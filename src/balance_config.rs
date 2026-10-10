@@ -711,11 +711,23 @@ impl PropellantHandlingConfig {
 pub struct FlawsConfig {
     /// Stddev of the gaussian flaw count (mean = effective complexity).
     pub count_stddev: f64,
-    /// Probability a flaw is a performance degradation.
-    pub performance_degradation_weight: f64,
-    /// Probability a flaw is an engine/part loss (the remainder after
-    /// degradation + engine loss is stage loss).
-    pub engine_loss_weight: f64,
+    /// Relative weights of an engine flaw's consequence, in the order
+    /// `[degradation, part loss, stage loss, pad abort, payload loss,
+    /// power draw]` (22_FLAWS.md §3.3); normalised when drawn, and a
+    /// consequence the pool has no words for in a domain is redrawn.
+    pub engine_consequence_weights: [f64; 6],
+    /// The same for a rocket's flaws. The 2026 launch survey has ground
+    /// and range problems at 15 % of early losses, which is where pad
+    /// aborts come from.
+    pub rocket_consequence_weights: [f64; 6],
+    /// The same for a reactor's flaws.
+    pub reactor_consequence_weights: [f64; 6],
+    /// A pad abort grounds the vehicle for a stand-down drawn uniformly
+    /// from `[min, max]` days.
+    pub pad_abort_delay_days: [u32; 2],
+    /// A power-draw flaw adds a bus load drawn uniformly from
+    /// `[min, max]` watts to the flying vehicle.
+    pub power_draw_w: [f64; 2],
     /// Minimum performance-degradation fraction.
     pub degradation_min: f64,
     /// Maximum performance-degradation fraction.
@@ -793,6 +805,16 @@ impl FlawsConfig {
         }
     }
 
+    /// The consequence weights a domain's flaws are drawn from.
+    pub fn consequence_weights(&self, domain: crate::flaw::FlawDomain) -> [f64; 6] {
+        use crate::flaw::FlawDomain;
+        match domain {
+            FlawDomain::Engine(_) => self.engine_consequence_weights,
+            FlawDomain::Rocket => self.rocket_consequence_weights,
+            FlawDomain::Reactor => self.reactor_consequence_weights,
+        }
+    }
+
     /// The exposure mix a domain's flaws are drawn from.
     pub fn exposure_mix(&self, domain: crate::flaw::FlawDomain) -> [f64; 3] {
         use crate::flaw::FlawDomain;
@@ -808,8 +830,11 @@ impl Default for FlawsConfig {
     fn default() -> Self {
         FlawsConfig {
             count_stddev: 1.5,
-            performance_degradation_weight: 0.50,
-            engine_loss_weight: 0.35,
+            engine_consequence_weights: [0.45, 0.30, 0.12, 0.08, 0.0, 0.05],
+            rocket_consequence_weights: [0.40, 0.25, 0.15, 0.12, 0.08, 0.0],
+            reactor_consequence_weights: [0.50, 0.33, 0.12, 0.0, 0.0, 0.05],
+            pad_abort_delay_days: [3, 14],
+            power_draw_w: [100.0, 1000.0],
             degradation_min: 0.03,
             degradation_max: 0.15,
             rocket_endurance_fraction: 0.30,

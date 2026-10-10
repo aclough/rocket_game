@@ -66,6 +66,7 @@ fn rich_app() -> App {
             build_cost: 15_000_000.0,
             revision: rp.revision,
             rocket_flaws: Vec::new(),
+            grounded_until: None,
         });
     }
     let launched = game.launch_rocket(inventory_id(1), "lunar_orbit", vec![Payload::TestMass { mass_kg: 100.0 }], true);

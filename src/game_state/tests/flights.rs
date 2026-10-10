@@ -87,7 +87,7 @@ fn arrive_test_flight(
         events_reached: Vec::new(),
         reactor_flaws_rolled: false,
     };
-    gs.resolve_arrived_flight(flight)
+    gs.resolve_arrived_flight(flight, None)
 }
 
 /// Arrival used to re-derive the partial-failure reason from
@@ -139,7 +139,7 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
         rocket_flaws: Vec::new(),
         events_reached: Vec::new(),
         reactor_flaws_rolled: false,
-    });
+    }, None);
 
     let reported = events.iter().find_map(|e| match e {
         crate::event::GameEvent::LaunchPartialFailure { reason, .. } => Some(reason.clone()),

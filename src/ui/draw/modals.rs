@@ -626,6 +626,10 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     format!("  LAUNCH FAILURE: {}", reason),
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 )),
+                LaunchOutcome::Scrubbed { reason, delay_days } => Line::from(Span::styled(
+                    format!("  LAUNCH SCRUBBED: {} — back on the shelf, {}-day stand-down", reason, delay_days),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )),
             };
             lines.push(outcome_line);
             lines.push(Line::from(""));

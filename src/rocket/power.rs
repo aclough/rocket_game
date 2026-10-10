@@ -187,7 +187,7 @@ impl Rocket {
         &mut self, design: &RocketDesign, sun_distance_au: f64,
     ) -> bool {
         let free_supply_w = self.free_supply_w(design, sun_distance_au);
-        let demand_w = self.total_housekeeping_w(design);
+        let demand_w = self.total_housekeeping_w(design) + self.extra_draw_w;
         let net_w = free_supply_w - demand_w;
         if net_w >= 0.0 {
             // Surplus: recharge batteries proportionally.

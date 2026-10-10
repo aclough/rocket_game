@@ -836,6 +836,7 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
                 LaunchOutcome::Success => Span::styled("SUCCESS", Style::default().fg(Color::Green)),
                 LaunchOutcome::PartialFailure { .. } => Span::styled("PARTIAL", Style::default().fg(Color::Yellow)),
                 LaunchOutcome::Failure { .. } => Span::styled("FAILURE", Style::default().fg(Color::Red)),
+                LaunchOutcome::Scrubbed { .. } => Span::styled("SCRUBBED", Style::default().fg(Color::DarkGray)),
             };
             lines.push(Line::from(vec![
                 Span::raw(format!("  {} {} →{} ", record.launch_date, record.rocket_name, dest_name)),

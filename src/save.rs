@@ -1084,6 +1084,7 @@ mod tests {
             item_id: crate::manufacturing::InventoryItemId(9), rocket_project_id: project_id, design_id,
             rocket_name: "Legacy".into(), build_cost: 0.0, revision: 0,
             rocket_flaws: vec![legacy(2, "Interstage buckles under max-Q loading")],
+            grounded_until: None,
         });
         state.player_company.start_engine_project(
             "Igniter".into(), crate::engine::EngineCycle::GasGenerator,
