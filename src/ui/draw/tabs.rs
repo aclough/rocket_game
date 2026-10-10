@@ -24,7 +24,10 @@ pub(super) fn push_project_row<D: Designable>(
     let status_str = match &project.status {
         DesignStatus::Proposed { .. } => unreachable!("panes hide Proposed drafts"),
         DesignStatus::InDesign { .. } => "In Design".to_string(),
-        DesignStatus::Testing { .. } => format!("Testing  {}", project.testing_level(balance)),
+        DesignStatus::Testing { .. } => match &project.flight_review {
+            Some(r) => format!("Testing  {}  ✈ review {}", project.testing_level(balance), r.cycles_left),
+            None => format!("Testing  {}", project.testing_level(balance)),
+        },
         DesignStatus::Revising { .. } => project.revision_plan()
             .map(|plan| plan.describe())
             .unwrap_or_default(),

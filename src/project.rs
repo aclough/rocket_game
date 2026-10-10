@@ -328,6 +328,11 @@ pub struct DesignProject<D: Designable> {
     /// build-cost estimate both read it, so labour cost follows.
     #[serde(default = "crate::project::unit_multiplier")]
     pub build_time_multiplier: f64,
+    /// An open flight review: what the last flight exercised, and how
+    /// many testing cycles still roll those flaws at the review
+    /// exponent (22_FLAWS.md §3.2).
+    #[serde(default)]
+    pub flight_review: Option<flaw::FlightReview>,
     /// Launches this design has flown on the company's rockets: the
     /// flight heritage an uprate needs (21_ENGINES.md step 7).
     #[serde(default)]
@@ -364,6 +369,7 @@ impl<D: Designable> DesignProject<D> {
             spec,
             status: DesignStatus::InDesign { work_completed: 0.0, work_required },
             flaws: Vec::new(),
+            flight_review: None,
             revision: 0,
             teams_assigned: 0,
             complexity,
@@ -457,7 +463,19 @@ impl<D: Designable> DesignProject<D> {
                 self.cumulative_testing_work += work;
                 while *work_completed >= balance_cfg.work.testing_cycle_work {
                     *work_completed -= balance_cfg.work.testing_cycle_work;
-                    let discovered = flaw::roll_discoveries_with_rng(&mut self.flaws, rng, &balance_cfg.flaws);
+                    let review = self.flight_review.clone();
+                    let groups = self.design.flaw_stage_groups();
+                    let discovered = flaw::roll_discoveries_with_rng(&mut self.flaws, rng, |f| {
+                        Self::discovery_exponent_for(f, review.as_ref(), groups, &balance_cfg.flaws)
+                    });
+                    // The review is spent cycle by cycle, whether or not
+                    // a cycle finds anything.
+                    if let Some(r) = &mut self.flight_review {
+                        r.cycles_left = r.cycles_left.saturating_sub(1);
+                        if r.cycles_left == 0 {
+                            self.flight_review = None;
+                        }
+                    }
                     for idx in discovered {
                         events.push(WorkEvent::FlawDiscovered {
                             flaw_description: self.flaws[idx].description.clone(),
@@ -613,6 +631,30 @@ impl<D: Designable> DesignProject<D> {
             }),
             _ => None,
         }
+    }
+
+    /// The discovery exponent a testing cycle rolls `flaw` at: the
+    /// flight-review exponent while an open review covers it, else its
+    /// exposure class's.
+    pub fn discovery_exponent_for(
+        flaw: &Flaw, review: Option<&flaw::FlightReview>, stage_groups: usize, cfg: &FlawsConfig,
+    ) -> f64 {
+        match review {
+            Some(r) if r.covers(flaw, stage_groups) => cfg.discovery_exponent_flight_review,
+            _ => cfg.discovery_exponent(flaw.exposure),
+        }
+    }
+
+    /// A flight just ended: for the next `cfg.flight_review_cycles`
+    /// testing cycles, the flaws it exercised roll at the review
+    /// exponent. A newer flight replaces an older review.
+    pub fn open_flight_review(&mut self, exercised: Vec<(flaw::FlawPhase, usize)>, endurance: bool, cfg: &FlawsConfig) {
+        if cfg.flight_review_cycles == 0 || (exercised.is_empty() && !endurance) {
+            return;
+        }
+        self.flight_review = Some(flaw::FlightReview {
+            cycles_left: cfg.flight_review_cycles, exercised, endurance,
+        });
     }
 
     /// Number of discovered flaws.

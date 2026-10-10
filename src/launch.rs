@@ -442,6 +442,9 @@ pub struct LaunchSimResult {
     /// The stage groups the ascent fired — every group the first leg
     /// burns — so the flight loop does not roll them again.
     pub flaw_rolled_groups: std::collections::HashSet<usize>,
+    /// Every event the ascent walked, in order, up to and including the
+    /// one that lost the vehicle: what a flight review covers.
+    pub events_reached: Vec<FlightEvent>,
 }
 
 /// Simulate a launch. This does not modify any state — it returns a result
@@ -486,8 +489,10 @@ pub fn simulate_launch(
     let mut activations: Vec<FlawActivation> = Vec::new();
     let mut engine_discoveries: Vec<(FlawOwner, usize)> = Vec::new();
     let mut rocket_flaw_discoveries: Vec<FlawId> = Vec::new();
+    let mut events_reached: Vec<FlightEvent> = Vec::new();
 
     for event in ascent_events(&groups, ambient > 0.0) {
+        events_reached.push(event);
         let roll = roll_event_flaws(rng, &mut degraded, event, &engines, &rockets);
         activations.extend(roll.activations);
         for (owner, fi, id) in roll.discoveries {
@@ -559,6 +564,7 @@ pub fn simulate_launch(
         engine_discoveries,
         rocket_flaw_discoveries,
         flaw_rolled_groups: groups.into_iter().collect(),
+        events_reached,
     }
 }
 
@@ -1213,5 +1219,44 @@ mod tests {
         let roll = roll_event_flaws(&mut rng, &mut degraded, FlightEvent::Burn { group: 1 }, &[], &rockets);
         assert_eq!(roll.activations.len(), 1);
         assert_eq!(roll.discoveries[0].2, FlawId(1));
+    }
+
+    /// An open review rolls the flaws it covers at the review exponent
+    /// for exactly the configured number of testing cycles, then lapses.
+    #[test]
+    fn a_flight_review_lowers_the_exponent_for_three_cycles() {
+        use crate::flaw::{FlawExposure, FlawPhase};
+        use crate::project::{DesignProject, DesignStatus};
+        let cfg = crate::balance_config::BalanceConfig::default();
+        let mut flaw = rocket_flaw(1, FlawPhase::Burn, 0);
+        flaw.stage_group = None;
+        flaw.exposure = FlawExposure::Analysis;
+        flaw.discovery_roll = 0.0; // never found, so the state stays simple
+        let mut ep = make_engine_project(1, vec![flaw.clone()]);
+        ep.status = DesignStatus::Testing { work_completed: 0.0 };
+        ep.teams_assigned = 1;
+
+        let exponent = |ep: &EngineProject| DesignProject::<EngineDesign>::discovery_exponent_for(&flaw, ep.flight_review.as_ref(), 0, &cfg.flaws);
+        assert_eq!(exponent(&ep), cfg.flaws.discovery_exponent_analysis);
+        ep.open_flight_review(vec![(FlawPhase::Burn, 0)], false, &cfg.flaws);
+        assert_eq!(exponent(&ep), cfg.flaws.discovery_exponent_flight_review);
+        // A flaw the flight did not exercise keeps its class exponent.
+        let mut other = flaw.clone();
+        other.phase = FlawPhase::Separation;
+        assert_eq!(DesignProject::<EngineDesign>::discovery_exponent_for(&other, ep.flight_review.as_ref(), 0, &cfg.flaws),
+            cfg.flaws.discovery_exponent_analysis);
+
+        let mut rng = StdRng::seed_from_u64(1);
+        let mut ids = crate::id::IdAllocator::<FlawId>::starting_at(100);
+        let days_per_cycle = (cfg.work.testing_cycle_work / crate::team::effective_work_rate(1)).ceil() as u32;
+        for cycle in 1..=cfg.flaws.flight_review_cycles {
+            for _ in 0..days_per_cycle {
+                ep.apply_daily_work(&mut rng, &mut ids, &cfg, 0);
+            }
+            let left = ep.flight_review.as_ref().map_or(0, |r| r.cycles_left);
+            assert_eq!(left, cfg.flaws.flight_review_cycles - cycle, "after cycle {cycle}");
+        }
+        assert!(ep.flight_review.is_none(), "the review lapses after its cycles");
+        assert_eq!(exponent(&ep), cfg.flaws.discovery_exponent_analysis);
     }
 }

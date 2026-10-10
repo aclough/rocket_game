@@ -141,6 +141,10 @@ pub struct Flight {
     /// flights from before vehicles carried them.
     #[serde(default)]
     pub rocket_flaws: Vec<crate::flaw::Flaw>,
+    /// Every flight event reached so far, the ascent's first: what the
+    /// flight review covers when the flight ends.
+    #[serde(default)]
+    pub events_reached: Vec<crate::launch::FlightEvent>,
     /// Whether this flight's reactors have had their one-shot `PerFlight`
     /// flaws rolled yet. Reactors run from flight start, so their
     /// per-flight flaws roll once on the first in-transit tick rather
@@ -562,6 +566,7 @@ mod tests {
             launch_partial: None,
             flaw_rolled_groups: std::collections::HashSet::new(),
             rocket_flaws: Vec::new(),
+            events_reached: Vec::new(),
             reactor_flaws_rolled: false,
         };
         // On leg 0 with 1 day remaining + leg 1 has 0+1=1 day
@@ -700,6 +705,7 @@ mod tests {
             launch_partial: None,
             flaw_rolled_groups: std::collections::HashSet::new(),
             rocket_flaws: Vec::new(),
+            events_reached: Vec::new(),
             reactor_flaws_rolled: false,
         }
     }

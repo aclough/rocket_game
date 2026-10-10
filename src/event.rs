@@ -65,6 +65,10 @@ pub enum GameEvent {
     EngineBuildOrdered { engine_name: String },
     // Flight events
     FlightDeparted { rocket_name: String, destination: String },
+    /// A flight ended and the projects whose hardware flew get a flight
+    /// review: their next `cycles` testing cycles find what flew far
+    /// more easily (22_FLAWS.md §3.2).
+    FlightReviewOpened { rocket_name: String, projects: Vec<String>, cycles: u32 },
     FlightArrived { rocket_name: String, destination: String },
     SpacecraftDeployed { spacecraft_name: String, location: String },
     SpacecraftDocked { small: String, large: String, location: String },
@@ -283,6 +287,9 @@ impl fmt::Display for GameEvent {
                 write!(f, "Ordered engine build: {}", engine_name),
             GameEvent::FlightDeparted { rocket_name, destination } =>
                 write!(f, "Flight departed: {} → {}", rocket_name, destination),
+            GameEvent::FlightReviewOpened { rocket_name, projects, cycles } =>
+                write!(f, "Flight review of {}: the next {} test cycles on {} find what flew",
+                    rocket_name, cycles, projects.join(", ")),
             GameEvent::FlightArrived { rocket_name, destination } =>
                 write!(f, "Flight arrived: {} at {}", rocket_name, destination),
             GameEvent::SpacecraftDeployed { spacecraft_name, location } =>
@@ -402,6 +409,7 @@ impl GameEvent {
             | GameEvent::PaymentReceived { .. }
             | GameEvent::EngineBuildOrdered { .. }
             | GameEvent::FlightDeparted { .. }
+            | GameEvent::FlightReviewOpened { .. }
             | GameEvent::FlightArrived { .. }
             | GameEvent::SpacecraftDeployed { .. }
             | GameEvent::SpacecraftDocked { .. }

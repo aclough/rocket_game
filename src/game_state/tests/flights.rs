@@ -84,6 +84,7 @@ fn arrive_test_flight(
         launch_partial: None,
         flaw_rolled_groups: std::collections::HashSet::new(),
         rocket_flaws: Vec::new(),
+        events_reached: Vec::new(),
         reactor_flaws_rolled: false,
     };
     gs.resolve_arrived_flight(flight)
@@ -136,6 +137,7 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
         launch_partial: Some(reason.to_string()),
         flaw_rolled_groups: std::collections::HashSet::new(),
         rocket_flaws: Vec::new(),
+        events_reached: Vec::new(),
         reactor_flaws_rolled: false,
     });
 
@@ -556,6 +558,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
         launch_partial: None,
         flaw_rolled_groups: sim.flaw_rolled_groups,
         rocket_flaws: Vec::new(),
+        events_reached: Vec::new(),
         reactor_flaws_rolled: false,
     });
 

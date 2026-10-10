@@ -845,14 +845,44 @@ pub const REACTOR_ENDURANCE_FLAWS: FlawPool = FlawPool {
     ],
 };
 
-/// Roll for flaw discovery during a testing cycle.
-/// Returns indices of newly discovered flaws.
-pub fn roll_discoveries_with_rng(flaws: &mut [Flaw], rng: &mut StdRng, cfg: &FlawsConfig) -> Vec<usize> {
+/// What a flight exercised, granted to the projects whose hardware flew
+/// (22_FLAWS.md §3.2): for the next `cycles_left` testing cycles the
+/// flaws it covers roll discovery at the flight-review exponent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlightReview {
+    pub cycles_left: u32,
+    /// The (phase, stage group) events the flight reached. Engine flaws
+    /// match on phase alone; rocket flaws on both.
+    pub exercised: Vec<(FlawPhase, usize)>,
+    /// Whether the flight lasted long enough to review endurance flaws.
+    pub endurance: bool,
+}
+
+impl FlightReview {
+    /// Whether this review covers `flaw`, on a design of `stage_groups`
+    /// groups (a rocket flaw's group is clamped the way rolls clamp it).
+    pub fn covers(&self, flaw: &Flaw, stage_groups: usize) -> bool {
+        if flaw.trigger == FlawTrigger::PerDay {
+            return self.endurance;
+        }
+        let last = stage_groups.saturating_sub(1);
+        self.exercised.iter().any(|(phase, group)| {
+            *phase == flaw.phase && flaw.stage_group.is_none_or(|g| g.min(last) == *group)
+        })
+    }
+}
+
+/// Roll for flaw discovery during a testing cycle, each undiscovered
+/// flaw at the exponent `exponent_of` gives it (its class's, or a flight
+/// review's). Returns indices of newly discovered flaws.
+pub fn roll_discoveries_with_rng(
+    flaws: &mut [Flaw], rng: &mut StdRng, exponent_of: impl Fn(&Flaw) -> f64,
+) -> Vec<usize> {
     let mut discovered = Vec::new();
     for (i, flaw) in flaws.iter_mut().enumerate() {
         if !flaw.discovered {
             let roll: f64 = rng.gen();
-            if roll < flaw.discovery_probability(cfg.discovery_exponent(flaw.exposure)) {
+            if roll < flaw.discovery_probability(exponent_of(flaw)) {
                 flaw.discovered = true;
                 discovered.push(i);
             }
@@ -991,7 +1021,7 @@ mod tests {
         let mut discovered_first = false;
         for seed in 0..100 {
             let mut roll_rng = StdRng::seed_from_u64(seed + 1000);
-            let newly = roll_discoveries_with_rng(&mut flaws, &mut roll_rng, &cfg());
+            let newly = roll_discoveries_with_rng(&mut flaws, &mut roll_rng, |f| cfg().discovery_exponent(f.exposure));
             if newly.contains(&0) {
                 discovered_first = true;
                 break;
@@ -1442,5 +1472,32 @@ mod description_pool_tests {
         for needed in ["Separation", "fairing", "Booster"] {
             assert!(full.iter().any(|w| w.contains(needed)), "a full-featured rocket never drew a {needed} flaw");
         }
+    }
+
+    /// A review covers the events the flight reached: a rocket flaw on
+    /// its phase and stage, an engine flaw on its phase, wear only on a
+    /// long flight.
+    #[test]
+    fn a_flight_review_covers_what_flew() {
+        let mk = |phase: FlawPhase, group: Option<usize>, trigger: FlawTrigger| Flaw {
+            id: FlawId(1), description: String::new(), consequence: FlawConsequence::EngineLoss,
+            activation_chance: 0.2, discovery_roll: 0.5, discovered: false, trigger,
+            phase, stage_group: group, exposure: FlawExposure::Analysis,
+        };
+        let review = FlightReview {
+            cycles_left: 3,
+            exercised: vec![(FlawPhase::Ignition, 0), (FlawPhase::Burn, 0), (FlawPhase::Separation, 0), (FlawPhase::Ignition, 1)],
+            endurance: false,
+        };
+        assert!(review.covers(&mk(FlawPhase::Burn, Some(0), FlawTrigger::PerFlight), 2));
+        assert!(!review.covers(&mk(FlawPhase::Burn, Some(1), FlawTrigger::PerFlight), 2), "stage 2 never burned");
+        assert!(review.covers(&mk(FlawPhase::Ignition, Some(1), FlawTrigger::PerFlight), 2));
+        assert!(review.covers(&mk(FlawPhase::Ignition, None, FlawTrigger::PerFlight), 2), "engine flaws match on phase");
+        assert!(!review.covers(&mk(FlawPhase::MaxQ, Some(0), FlawTrigger::PerFlight), 2));
+        assert!(!review.covers(&mk(FlawPhase::Endurance, None, FlawTrigger::PerDay), 2));
+        let long = FlightReview { endurance: true, ..review.clone() };
+        assert!(long.covers(&mk(FlawPhase::Endurance, None, FlawTrigger::PerDay), 2));
+        // A stage past the design clamps to the last group, as rolls do.
+        assert!(review.covers(&mk(FlawPhase::Burn, Some(7), FlawTrigger::PerFlight), 1));
     }
 }

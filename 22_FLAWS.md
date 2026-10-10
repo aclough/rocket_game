@@ -828,3 +828,33 @@ step 2 and 3 lifts are undone so the constants are the pre-22 values
 step 7 starts from. Per-seed sanity bands (debt limit, launch count
 3–35, per-seed success ≥ 65 %, first profitable year) stay live.
 
+**Step 5 — flight review.** `FlightReview { cycles_left, exercised:
+Vec<(FlawPhase, usize)>, endurance }` on every project
+(`DesignProject::flight_review`); `FlawsConfig::flight_review_cycles`
+= 3, `discovery_exponent_flight_review` = 1, `flight_review_min_days`
+= 30. The launch sim returns `events_reached` and the flight carries
+them on (`Flight::events_reached`, later groups appended by the flight
+loop); when a flight ends — pad failure, arrival, loss or stranding —
+`open_flight_reviews` gives the rocket project the (phase, group)
+events reached and each engine project the phases of the groups its
+engine is on; endurance flaws join only on a flight of ≥ 30 days.
+Testing cycles roll a covered flaw at the review exponent
+(`discovery_exponent_for`), and each completed cycle spends one of the
+review's cycles whether or not it found anything, so a company that
+stops testing learns nothing. `roll_discoveries_with_rng` takes an
+exponent-per-flaw closure. Event `FlightReviewOpened` (routine); the
+Testing status reads "✈ review 3". 708 tests, clippy clean.
+
+| | step 4 | step 5 |
+|---|---|---|
+| 100 × 6 y: 1st / 2nd / 3rd / 4th+ | 27 / 37 / 68 / 90 | 25 / 45 / 79 / 93 |
+| 100 × 6 y: bankrupt | 30 | 19 |
+| 200 × 8 y: 1st / 2nd / 3rd / 4th+ | — | 24 / 46 / 73 / 95 |
+| 200 × 8 y: bankrupt | 59 | 42 |
+| 200 × 8 y: kept $25M / profitable year | 82 / 148 | 108 / 167 |
+
+The aggregate-success band (85 %) passes again; bankruptcies, the
+$25M floor and profitable years are still suspended misses. The shape
+is now the target's: a hard first flight, a real jump on the second
+and third, a 93–95 % plateau. Step 7 tunes the levels.
+

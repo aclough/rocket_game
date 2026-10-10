@@ -123,6 +123,7 @@ impl GameState {
         // Use snapshotted rocket flaws from the inventory item
         let rocket_flaws = &inv_rocket.rocket_flaws;
         let flight_rocket_flaws = inv_rocket.rocket_flaws.clone();
+        let rp_design_for_review = rp.design.clone();
 
         // Simulate flaw activation at launch
         let sim = launch::simulate_launch(
@@ -154,6 +155,13 @@ impl GameState {
         // Flight heritage: every player engine design on this rocket has
         // flown once more, whatever the outcome (21_ENGINES.md step 7).
         self.credit_engine_flights(inv_rocket.rocket_project_id);
+        // A vehicle lost on the way up is still a flight: review it now.
+        if matches!(sim.outcome, LaunchOutcome::Failure { .. }) {
+            self.open_flight_reviews(
+                inv_rocket.rocket_project_id, &inv_rocket.rocket_name, &rp_design_for_review,
+                &sim.events_reached, 0, &mut events,
+            );
+        }
 
 
         // Update launch tracking
@@ -277,6 +285,7 @@ impl GameState {
             },
             flaw_rolled_groups: sim.flaw_rolled_groups,
             rocket_flaws: flight_rocket_flaws,
+            events_reached: sim.events_reached,
             reactor_flaws_rolled: false,
         };
 
@@ -322,6 +331,13 @@ impl GameState {
             let flight = self.active_flights.remove(i);
             let location = crate::contract::destination_display_name(flight.current_location.name())
                 .to_string();
+            // However it ended, the flight exercised what it reached.
+            let days = flight.launch_date.days_until(&self.date);
+            let (rp_id, name, design, reached) = (
+                flight.rocket_project_id, flight.rocket_name.clone(), flight.design.clone(),
+                flight.events_reached.clone(),
+            );
+            self.open_flight_reviews(rp_id, &name, &design, &reached, days, &mut events);
             match end {
                 FlightEnd::Arrived => {
                     let arrival_events = self.resolve_arrived_flight(flight);
@@ -662,6 +678,7 @@ impl GameState {
             // A parked craft's rocket flaws were the launch's; the
             // groups it fires from orbit roll their engine flaws only.
             rocket_flaws: Vec::new(),
+            events_reached: Vec::new(),
             reactor_flaws_rolled: false,
         };
 
@@ -1011,6 +1028,7 @@ fn tick_flight(
                 flight.flaw_rolled_groups.extend(new_burned.iter().copied());
                 let rockets = launch::rocket_flaw_table(flight.rocket_project_id, &flight.rocket_flaws);
                 for event in launch::ascent_events(&new_burned, false) {
+                    flight.events_reached.push(event);
                     let roll = launch::roll_event_flaws(rng, &mut flight.design, event, &tables.engines, &rockets);
                     flight.flaws_activated.extend(roll.activations.iter().cloned());
                     push_activation_events(events, &flight.rocket_name, &roll);
@@ -1077,6 +1095,60 @@ fn tick_flight(
 impl GameState {
     /// Count one flight on each distinct player engine design the rocket
     /// project's stages carry. Contracted engines have no project.
+    /// A flight ended: open a flight review on the rocket project and on
+    /// every player engine project whose engine fired (22_FLAWS.md
+    /// §3.2). The rocket's review carries the (phase, group) events the
+    /// flight reached; an engine's the phases of the groups its engine
+    /// is on. Endurance flaws are covered only on a flight of at least
+    /// `flight_review_min_days`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn open_flight_reviews(
+        &mut self,
+        rocket_project_id: crate::rocket_project::RocketProjectId,
+        rocket_name: &str,
+        design: &RocketDesign,
+        events_reached: &[launch::FlightEvent],
+        days: u32,
+        events: &mut Vec<GameEvent>,
+    ) {
+        if events_reached.is_empty() {
+            return;
+        }
+        let cfg = self.balance.flaws.clone();
+        let endurance = days >= cfg.flight_review_min_days;
+        let exercised: Vec<(crate::flaw::FlawPhase, usize)> = events_reached.iter()
+            .map(|e| (e.phase(), e.group(design)))
+            .collect();
+        let mut reviewed = Vec::new();
+        if let Some(rp) = self.player_company.rocket_projects.iter_mut()
+            .find(|rp| rp.project_id == rocket_project_id)
+        {
+            rp.open_flight_review(exercised.clone(), endurance, &cfg);
+            reviewed.push(rp.design.name.clone());
+        }
+        // Each engine: the phases of the groups it is on.
+        let mut by_engine: std::collections::BTreeMap<u64, Vec<(crate::flaw::FlawPhase, usize)>> =
+            std::collections::BTreeMap::new();
+        for &(phase, group) in &exercised {
+            for stage in design.stage_groups.get(group).into_iter().flatten() {
+                by_engine.entry(stage.engine.id.0).or_default().push((phase, group));
+            }
+        }
+        for (engine_id, exercised) in by_engine {
+            if let Some(ep) = self.player_company.engine_projects.iter_mut()
+                .find(|ep| ep.design.id.0 == engine_id)
+            {
+                ep.open_flight_review(exercised, endurance, &cfg);
+                reviewed.push(ep.design.name.clone());
+            }
+        }
+        if !reviewed.is_empty() {
+            self.emit(events, GameEvent::FlightReviewOpened {
+                rocket_name: rocket_name.to_string(), projects: reviewed, cycles: cfg.flight_review_cycles,
+            });
+        }
+    }
+
     pub(super) fn credit_engine_flights(&mut self, rocket_project_id: crate::rocket_project::RocketProjectId) {
         let Some(rp) = self.player_company.rocket_projects.iter().find(|rp| rp.project_id == rocket_project_id) else {
             return;

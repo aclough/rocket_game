@@ -766,6 +766,20 @@ pub struct FlawsConfig {
     pub rocket_exposure_mix: [f64; 3],
     /// The same for a reactor's flaws.
     pub reactor_exposure_mix: [f64; 3],
+    /// How many testing cycles after a flight the flaws that flight
+    /// exercised roll discovery at `discovery_exponent_flight_review`
+    /// instead of their class's exponent (22_FLAWS.md §3.2). A bonus on
+    /// testing the company is already paying for, not an instant
+    /// reveal: a company that stops testing after a flight learns
+    /// nothing from it.
+    pub flight_review_cycles: u32,
+    /// N while a flight review is open — below `Bench`, since flight
+    /// data beats any stand.
+    pub discovery_exponent_flight_review: f64,
+    /// Endurance (`PerDay`) flaws join a flight review only when the
+    /// flight lasted at least this many days: a LEO delivery does not
+    /// review a year's wear.
+    pub flight_review_min_days: u32,
 }
 
 impl FlawsConfig {
@@ -810,6 +824,9 @@ impl Default for FlawsConfig {
             engine_exposure_mix: [0.70, 0.25, 0.05],
             rocket_exposure_mix: [0.15, 0.55, 0.30],
             reactor_exposure_mix: [0.70, 0.25, 0.05],
+            flight_review_cycles: 3,
+            discovery_exponent_flight_review: 1.0,
+            flight_review_min_days: 30,
         }
     }
 }

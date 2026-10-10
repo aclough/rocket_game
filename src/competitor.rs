@@ -219,6 +219,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             },
             status: EngineDesignStatus::Testing { work_completed: 0.0 },
             flaws: Vec::new(),
+            flight_review: None,
             revision: 0,
             teams_assigned: 0,
             complexity,

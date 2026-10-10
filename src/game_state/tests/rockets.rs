@@ -121,6 +121,12 @@ fn test_flaw_scoping_by_stage_usage() {
         .expect("Should find engine project 102");
     assert!(ep2.flaws[0].discovered,
         "Upper engine flaw should be discovered after stage 3 jettison");
+    // The flight that ended opened a review on the engine that fired in
+    // it, covering the phases its stage reached.
+    let review = ep2.flight_review.as_ref().expect("the Upper gets a flight review");
+    assert_eq!(review.cycles_left, gs.balance.flaws.flight_review_cycles);
+    assert!(review.exercised.contains(&(crate::flaw::FlawPhase::Burn, 2)), "{:?}", review.exercised);
+    assert!(gs.event_log.iter().any(|(_, e)| matches!(e, GameEvent::FlightReviewOpened { .. })));
 
     // Check the event log for the mid-flight flaw activation
     let flaw_events: Vec<_> = gs.event_log.iter()
@@ -189,6 +195,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
         launch_partial: None,
         flaw_rolled_groups: sim.flaw_rolled_groups,
         rocket_flaws: Vec::new(),
+        events_reached: Vec::new(),
         reactor_flaws_rolled: false,
     };
 
