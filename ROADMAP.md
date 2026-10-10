@@ -93,9 +93,15 @@ not committed to until then.
 Vertical loops, each individually shippable. Order should be revisited
 against player feedback.
 
+- Rework and rebalance flaws.  Look for new categories of maluses and make sure
+  that each description makes sense with the engines it's paired with.  Make
+  things a bit harder so that we expect a failure on most first launches.  Look
+  at early launchs of Falcon 1, Electron, Firefly Alpha, Astra Rocket 1.
+- Add different strategies to the automatic balance testing with different
+  rocket designs.
 - Entry, Descent, and Landing features with as much detail and risk as launch
   has right now.  Heat shields, parachuets, and retropropulsion.  Reusable
-  rocket stages.
+  rocket stages.  Different rocket structure materials maybe.
 - Animations for launch and landing.
 - Rework technilogical unlocks.
 - **Propellant depot loop** — depot module, fuel-delivery contracts,
