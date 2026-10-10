@@ -323,7 +323,9 @@ mod tests {
         // Force a high discovery probability on every flaw so testing
         // surfaces them deterministically.
         for f in &mut p.flaws {
-            f.discovery_probability = 0.99;
+            f.discovery_roll = 1.0;
+            f.activation_chance = 1.0;
+            f.exposure = crate::flaw::FlawExposure::Bench;
         }
         let total = p.flaws.len();
         let mut discovered_any = false;
@@ -354,10 +356,10 @@ mod tests {
             description: "Coolant loop flow restriction".into(),
             consequence: crate::flaw::FlawConsequence::PerformanceDegradation(0.05),
             activation_chance: 0.1,
-            discovery_probability: 0.5,
+            discovery_roll: 0.5,
             discovered: true,
             trigger: crate::flaw::FlawTrigger::PerFlight,
-            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         });
         p.teams_assigned = 4;
 

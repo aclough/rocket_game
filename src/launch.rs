@@ -853,9 +853,9 @@ mod tests {
             description: "Turbopump seal failure".into(),
             consequence: FlawConsequence::PerformanceDegradation(0.5),
             activation_chance: 1.0, // guaranteed activation
-            discovery_probability: 0.5,
+            discovery_roll: 0.5,
             discovered: false, trigger: FlawTrigger::PerFlight,
-            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         };
         let ep1 = make_engine_project(1, vec![flaw]);
         let ep2 = make_engine_project(2, vec![]);
@@ -927,9 +927,9 @@ mod tests {
             description: "Turbopump seal failure".into(),
             consequence: FlawConsequence::PerformanceDegradation(0.5),
             activation_chance: 1.0,
-            discovery_probability: 0.5,
+            discovery_roll: 0.5,
             discovered: false, trigger: FlawTrigger::PerFlight,
-            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         };
         let rp = make_rocket_project(design.clone(), vec![]);
         let mut rng = StdRng::seed_from_u64(42);
@@ -960,9 +960,9 @@ mod tests {
             description: "Structural failure".into(),
             consequence: FlawConsequence::StageLoss,
             activation_chance: 1.0,
-            discovery_probability: 0.5,
+            discovery_roll: 0.5,
             discovered: false, trigger: FlawTrigger::PerFlight,
-            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         };
         let ep1 = make_engine_project(1, vec![flaw]);
         let ep2 = make_engine_project(2, vec![]);
@@ -991,9 +991,9 @@ mod tests {
             description: "Separation failure".into(),
             consequence: FlawConsequence::StageLoss,
             activation_chance: 1.0,
-            discovery_probability: 0.5,
+            discovery_roll: 0.5,
             discovered: false, trigger: FlawTrigger::PerFlight,
-            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         };
         let rp = make_rocket_project(design.clone(), vec![flaw]);
         let mut rng = StdRng::seed_from_u64(42);
@@ -1025,9 +1025,9 @@ mod tests {
             description: "Ullage motor propellant slowly vents".into(),
             consequence: FlawConsequence::EngineLoss,
             activation_chance: 1.0,
-            discovery_probability: 0.5,
+            discovery_roll: 0.5,
             discovered: false, trigger: FlawTrigger::PerDay,
-            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         };
         let rp = make_rocket_project(design.clone(), vec![flaw]);
         for seed in 0..20 {
@@ -1111,9 +1111,9 @@ mod tests {
             description: "Hidden flaw".into(),
             consequence: FlawConsequence::StageLoss,
             activation_chance: 0.0,
-            discovery_probability: 0.5,
+            discovery_roll: 0.5,
             discovered: false, trigger: FlawTrigger::PerFlight,
-            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         };
         let ep1 = make_engine_project(1, vec![flaw]);
         let ep2 = make_engine_project(2, vec![]);
@@ -1157,9 +1157,9 @@ mod tests {
             id: FlawId(id),
             description: format!("rocket flaw {id}"),
             consequence: FlawConsequence::PerformanceDegradation(0.01),
-            activation_chance: 1.0, discovery_probability: 0.5, discovered: false,
+            activation_chance: 1.0, discovery_roll: 0.5, discovered: false,
             trigger: FlawTrigger::PerFlight,
-            phase, stage_group: Some(group),
+            phase, stage_group: Some(group), exposure: crate::flaw::FlawExposure::Bench,
         }
     }
 

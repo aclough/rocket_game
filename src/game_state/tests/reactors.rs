@@ -235,10 +235,10 @@ fn test_reactor_flaw_activates_mid_flight() {
         description: "Fuel burnup lowers reactivity over time".into(),
         consequence: FlawConsequence::PerformanceDegradation(0.2),
         activation_chance: 1.0, // PerDay daily_rate → 1.0 (fires every day)
-        discovery_probability: 1.0,
+        discovery_roll: 1.0,
         discovered: false,
         trigger: FlawTrigger::PerDay,
-        phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+        phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
     }];
     gs.player_company.reactor_projects.push(rproj);
 
@@ -329,10 +329,10 @@ fn test_reactor_perflight_flaw_fires_at_flight_start() {
         description: "Reactor overheats and trips offline".into(),
         consequence: FlawConsequence::PerformanceDegradation(0.1),
         activation_chance: 1.0, // guaranteed PerFlight
-        discovery_probability: 1.0,
+        discovery_roll: 1.0,
         discovered: false,
         trigger: FlawTrigger::PerFlight,
-        phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+        phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
     }];
     gs.player_company.reactor_projects.push(rproj);
 
@@ -406,7 +406,9 @@ fn test_reactor_flaw_discovery_and_revision_through_daily_loop() {
     }
     // Force all flaws visible so testing surfaces them deterministically.
     for f in &mut gs.player_company.reactor_projects[0].flaws {
-        f.discovery_probability = 0.99;
+        f.discovery_roll = 1.0;
+        f.activation_chance = 1.0;
+        f.exposure = crate::flaw::FlawExposure::Bench;
     }
     let total_flaws = gs.player_company.reactor_projects[0].flaws.len();
 
@@ -429,7 +431,10 @@ fn test_reactor_flaw_discovery_and_revision_through_daily_loop() {
     // Revise: the loop should remove flaws and log revision completion.
     let discovered_before = gs.player_company.reactor_projects[0].discovered_flaw_count();
     if discovered_before > 0 {
-        assert!(gs.player_company.reactor_projects[0].start_revision());
+        // Auto-revise may already have started the revision the day the
+        // flaws were found; either way the project must be revising.
+        let started = gs.player_company.reactor_projects[0].start_revision();
+        assert!(started || matches!(gs.player_company.reactor_projects[0].status, ReactorDesignStatus::Revising { .. }));
         let mut saw_revision = false;
         for _ in 0..600 {
             let events = gs.advance_day();

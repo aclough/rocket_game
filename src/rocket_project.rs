@@ -197,20 +197,20 @@ mod tests {
             description: "Test flaw 1".into(),
             consequence: crate::flaw::FlawConsequence::StageLoss,
             activation_chance: 0.1,
-            discovery_probability: 0.5,
+            discovery_roll: 0.5,
             discovered: true,
             trigger: crate::flaw::FlawTrigger::PerFlight,
-            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         });
         proj.flaws.push(Flaw {
             id: crate::flaw::FlawId(901),
             description: "Test flaw 2".into(),
             consequence: crate::flaw::FlawConsequence::EngineLoss,
             activation_chance: 0.05,
-            discovery_probability: 0.3,
+            discovery_roll: 0.3,
             discovered: true,
             trigger: crate::flaw::FlawTrigger::PerFlight,
-            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         });
 
         assert_eq!(proj.flaws.len(), 2);

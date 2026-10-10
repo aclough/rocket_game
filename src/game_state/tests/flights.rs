@@ -421,10 +421,10 @@ fn test_mid_flight_stage_loss_destroys_vehicle() {
         description: "Uncontrolled criticality excursion".into(),
         consequence: FlawConsequence::StageLoss,
         activation_chance: 1.0, // PerDay daily_rate → 1.0
-        discovery_probability: 1.0,
+        discovery_roll: 1.0,
         discovered: false,
         trigger: FlawTrigger::PerDay,
-        phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+        phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
     }];
     gs.player_company.reactor_projects.push(rproj);
 

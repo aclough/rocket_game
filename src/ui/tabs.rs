@@ -540,10 +540,10 @@ mod reactor_render_tests {
             description: "Coolant loop flow restriction".into(),
             consequence: FlawConsequence::PerformanceDegradation(0.07),
             activation_chance: 0.1,
-            discovery_probability: 0.5,
+            discovery_roll: 0.5,
             discovered: true,
             trigger: FlawTrigger::PerFlight,
-            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         });
         project.improvements.push(ReactorImprovement {
             id: crate::project::ImprovementId(0),

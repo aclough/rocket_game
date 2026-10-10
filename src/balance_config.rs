@@ -738,18 +738,56 @@ pub struct FlawsConfig {
     /// Flat probability that a rocket modification introduces a new
     /// undiscovered flaw.
     pub modification_flaw_prob: f64,
-    /// Exponent N in the per-flaw ground-discovery roll:
-    /// discovery_probability = uniform^N * sqrt(activation_chance).
-    /// 1.0 is the original uniform draw; higher N skews discovery
-    /// probabilities low (mean scales as 1/(N+1)), so test campaigns
-    /// converge slower and the low tail becomes a de-facto
-    /// "never saw it on the stand" class. Flight activations are
-    /// always discovered regardless. The M4 Task 3 sweep (2026-07)
-    /// chose 2.0: mean discovery drops to 1/3 of the sqrt cap (from
-    /// 1/2), leaving ~8 undiscovered flaws at the BasicPolicy's first
-    /// launch (was ~7) and putting 200-seed bankruptcies in the
-    /// 2-4/100 roguelike band together with the work exponents.
-    pub flaw_discovery_exponent: f64,
+    /// Exponent N in the per-flaw ground-discovery roll for a `Bench`
+    /// flaw: discovery = uniform^N * sqrt(activation_chance), with the
+    /// uniform draw stored on the flaw (`Flaw::discovery_roll`). 1.0 is
+    /// a plain uniform draw; higher N skews discovery low (mean scales
+    /// as 1/(N+1)), so test campaigns converge slower and the low tail
+    /// becomes a de-facto "never saw it on the stand" class. Flight
+    /// activations are always discovered regardless. The M4 Task 3
+    /// sweep (2026-07) chose 2.0 for what was then every flaw; 22_FLAWS
+    /// step 3 kept it for the bench class and gave the others their
+    /// own (§3.1 of that plan).
+    pub discovery_exponent_bench: f64,
+    /// N for an `Integrated` flaw — feed lines, pressurisation,
+    /// harnesses: things a full-up stage test or wet dress finds, which
+    /// a component stand does not.
+    pub discovery_exponent_integrated: f64,
+    /// N for an `Analysis` flaw — staging, fairing jettison,
+    /// upper-stage ignition, slosh, max-Q structure: found by review
+    /// and simulation, slowly, or by flying.
+    pub discovery_exponent_analysis: f64,
+    /// Share of an engine's flaws drawn from each exposure class,
+    /// `[bench, integrated, analysis]`; normalised when used.
+    pub engine_exposure_mix: [f64; 3],
+    /// The same for a rocket's flaws. The 2026 launch survey has
+    /// plumbing on the integrated vehicle as the big early killer and
+    /// staging / ignition / guidance second (22_FLAWS.md §1).
+    pub rocket_exposure_mix: [f64; 3],
+    /// The same for a reactor's flaws.
+    pub reactor_exposure_mix: [f64; 3],
+}
+
+impl FlawsConfig {
+    /// The discovery exponent for a flaw of this exposure.
+    pub fn discovery_exponent(&self, exposure: crate::flaw::FlawExposure) -> f64 {
+        use crate::flaw::FlawExposure;
+        match exposure {
+            FlawExposure::Bench => self.discovery_exponent_bench,
+            FlawExposure::Integrated => self.discovery_exponent_integrated,
+            FlawExposure::Analysis => self.discovery_exponent_analysis,
+        }
+    }
+
+    /// The exposure mix a domain's flaws are drawn from.
+    pub fn exposure_mix(&self, domain: crate::flaw::FlawDomain) -> [f64; 3] {
+        use crate::flaw::FlawDomain;
+        match domain {
+            FlawDomain::Engine(_) => self.engine_exposure_mix,
+            FlawDomain::Rocket => self.rocket_exposure_mix,
+            FlawDomain::Reactor => self.reactor_exposure_mix,
+        }
+    }
 }
 
 impl Default for FlawsConfig {
@@ -766,7 +804,12 @@ impl Default for FlawsConfig {
             reactor_improvement_discovery_chance: 0.08,
             improvement_decay: 0.7,
             modification_flaw_prob: 0.10,
-            flaw_discovery_exponent: 2.0,
+            discovery_exponent_bench: 2.0,
+            discovery_exponent_integrated: 3.0,
+            discovery_exponent_analysis: 4.0,
+            engine_exposure_mix: [0.70, 0.25, 0.05],
+            rocket_exposure_mix: [0.15, 0.55, 0.30],
+            reactor_exposure_mix: [0.70, 0.25, 0.05],
         }
     }
 }

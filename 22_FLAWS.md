@@ -207,8 +207,8 @@ Add `FlawExposure` to `Flaw`:
 | Exposure | Found by | Discovery exponent N | Mean of U^N | Typical flaws |
 |---|---|---|---|---|
 | `Bench` | component test stand | 2 (today's) | 0.33 | injector, pump, chamber, igniter, valve timing |
-| `Integrated` | full-up stage test, wet dress | ~5 | 0.17 | feed lines, pogo, harness, pressurisation, engine bay thermal |
-| `Analysis` | simulation, review, or flight | ~9 | 0.10 | staging, fairing jettison, upper-stage ignition, slosh/GNC, max-Q structure |
+| `Integrated` | full-up stage test, wet dress | 3 (step 3; 5 proposed) | 0.25 | feed lines, pogo, harness, pressurisation, engine bay thermal |
+| `Analysis` | simulation, review, or flight | 4 (step 3; 9 proposed) | 0.20 | staging, fairing jettison, upper-stage ignition, slosh/GNC, max-Q structure |
 
 Discovery stays `U^N · √activation`; the exposure picks N
 (`FlawsConfig::discovery_exponent_{bench,integrated,analysis}`,
@@ -229,9 +229,12 @@ survey's early-flight causes: engines ~70 % `Bench`, 25 %
 `Integrated` (feed, pressurisation, harness), 30 % `Analysis`
 (staging, ignition, GNC, range).
 
-`Analysis` at N≈9 is what makes the "ULA path" exist: three times the
-mean testing finds them, with a long tail that takes far longer, and
-that costs the team-months.
+A high `Analysis` N is what makes the "ULA path" exist: several times
+the mean testing finds them, with a long tail that takes far longer,
+and that costs the team-months. Step 3 landed at 2 / 3 / 4 because the
+proposed 2 / 5 / 9 put the bot at 39 % bankrupt before the flight
+review (step 5) exists to find analysis flaws; step 7's sweep decides
+how far apart the classes end up once it does.
 
 USER:  This is what the `U² · √activation` discovery chance is meant to do.
 Having different categories being easier or harder to discover can be good
@@ -746,3 +749,34 @@ moved come down with them: seeds keeping $25M 62 → 50 % (measured
 smoke run). Every other band holds, including the 85 % aggregate
 success floor. Each carries a comment pointing here. The "stranded at
 LEO" wording for an ascent that fell short is a TODO.
+
+**Step 3 — exposure.** `FlawExposure`
+(`Bench` / `Integrated` / `Analysis`) on every flaw, taken from its
+pool entry; `discovery_roll` stored instead of the finished
+probability, with `Flaw::discovery_probability(exponent)` computed at
+roll time; `FlawsConfig::discovery_exponent_{bench,integrated,analysis}`
+replacing `flaw_discovery_exponent`; per-domain exposure
+mixes (engine 70/25/5, rocket 15/55/30, reactor 70/25/5) drawn before
+the entry is picked, falling back to any entry when a pool has no
+entry of that class for the consequence; save v7 (`discovery_roll`
+recovered at the JSON level as `sqrt(p / sqrt(activation))`, exposure
+from the words). 702 tests, clippy clean.
+
+First cut at the proposed 2 / 5 / 9, then the user's choice (option 3
+of three: continue with fleet bands suspended, lift the bands again,
+or soften the exponents) — soften:
+
+| 100 seeds × 6 years | step 2 | 2 / 5 / 9 | 2 / 4 / 6 | **2 / 3 / 4** |
+|---|---|---|---|---|
+| 1st / 2nd / 3rd / 4th+ | 33 / 54 / 75 / 92 | 29 / 43 / 61 / 88 | 33 / 42 / 65 / 89 | 33 / 41 / 73 / 90 |
+| Bankrupt | 22 | 39 | 34 | 25 |
+| Hidden flaws at first launch | 7.5 | 8.7 | 8.3 | — |
+| Rocket flaws fixed before first launch (of ~4.8) | 1.9 | 0.9 | — | 1.4 |
+| 200 × 8 y bankrupt | 41 | 75 | 68 | 49 |
+
+At 2 / 5 / 9 the plateau fell because `Analysis` flaws are rarely
+found on the ground and the flight review meant to find them is step
+5. At 2 / 3 / 4 the 25 % bankruptcy ceiling holds (49/200); the $25M
+floor moves 50 → 40 % (89/200; smoke 30 %) and the launch cap 30 → 35
+(one seed re-flying failures reached 31). The class gap is small for
+now; step 7 widens it once flights review.

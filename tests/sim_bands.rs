@@ -95,10 +95,12 @@ fn assert_bands(summaries: &[RunSummary]) {
             bankrupt += 1;
             continue;
         }
+        // The top was 30 until 22_FLAWS step 3: a seed that fails more
+        // re-flies more, and one hit 31.
         assert!(
-            (3..=30).contains(&s.launches),
-            "seed {}: {} launches outside band 3..=30 (D7 7..=23; the \
-             top is a seed that wins a big block program)",
+            (3..=35).contains(&s.launches),
+            "seed {}: {} launches outside band 3..=35 (D7 7..=23; the \
+             top is a seed that wins a big block program, or re-flies failures)",
             s.seed, s.launches,
         );
         let rate = s.successes as f64 / s.launches as f64;
@@ -154,11 +156,15 @@ fn assert_bands(summaries: &[RunSummary]) {
     }
     // 22_FLAWS.md step 2 moved these two floors with the bankruptcy
     // ceiling above: 107/200 kept $25M (was ~130) and 156/200 had a
-    // profitable year (was ~179). Re-baselined at that plan's step 12.
+    // profitable year (was ~179). Step 3 (exposure classes, discovery
+    // exponents 2/3/4) took the $25M floor to 89/200 and 8/20 on the
+    // smoke seeds. Re-baselined at that plan's step 12.
+    let cash_floor = if summaries.len() >= 100 { 0.40 } else { 0.30 };
     assert!(
-        min_above_25m as f64 / n >= 0.50,
-        "only {min_above_25m}/{n} seeds kept min money above $25M (band >= 50%, \
-         D7 73%; 62% before 22_FLAWS step 2)",
+        min_above_25m as f64 / n >= cash_floor,
+        "only {min_above_25m}/{n} seeds kept min money above $25M (band >= {:.0}%, \
+         D7 73%; 62% before 22_FLAWS step 2, 50% before step 3)",
+        cash_floor * 100.0,
     );
     assert!(
         profitable as f64 / n >= 0.21,

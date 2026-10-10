@@ -451,7 +451,7 @@ impl<D: Designable> DesignProject<D> {
                 self.cumulative_testing_work += work;
                 while *work_completed >= balance_cfg.work.testing_cycle_work {
                     *work_completed -= balance_cfg.work.testing_cycle_work;
-                    let discovered = flaw::roll_discoveries_with_rng(&mut self.flaws, rng);
+                    let discovered = flaw::roll_discoveries_with_rng(&mut self.flaws, rng, &balance_cfg.flaws);
                     for idx in discovered {
                         events.push(WorkEvent::FlawDiscovered {
                             flaw_description: self.flaws[idx].description.clone(),

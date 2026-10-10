@@ -58,7 +58,7 @@ pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
 ///
 /// v5: kerosene and hypergolic expanders no longer exist; projects of
 /// those families become gas generators (21_2_ENGINE_CYCLES.md step 4).
-pub const SAVE_VERSION: u32 = 6;
+pub const SAVE_VERSION: u32 = 7;
 
 /// Load game state from a JSON file, running any migrations the file
 /// needs, then stamping it with the current version.
@@ -161,6 +161,37 @@ fn migrate_json(root: &mut serde_json::Value, from: u32) {
     }
     if from < 4 {
         migrate_engine_scale_to_size_v4(root);
+    }
+    if from < 7 {
+        migrate_discovery_rolls_to_v7(root);
+    }
+}
+
+/// v6 -> v7: a flaw stores the uniform draw behind its discoverability
+/// (`discovery_roll`) rather than the finished probability, so the
+/// exponent can differ per exposure class. Every flaw before v7 was
+/// rolled at exponent 2, so the draw is recovered as
+/// `sqrt(probability / sqrt(activation))`; a flaw that could never fire
+/// keeps a draw of 1. Flaws live on projects, contracted engines,
+/// inventory, orders, flights and competitors, so this walks the whole
+/// document and recognises a flaw by its `discovery_probability`.
+fn migrate_discovery_rolls_to_v7(value: &mut serde_json::Value) {
+    use serde_json::{json, Value};
+    match value {
+        Value::Object(map) => {
+            if let (Some(p), Some(act)) = (
+                map.get("discovery_probability").and_then(Value::as_f64),
+                map.get("activation_chance").and_then(Value::as_f64),
+            ) {
+                let cap = act.max(0.0).sqrt();
+                let roll = if cap > 0.0 { (p / cap).clamp(0.0, 1.0).sqrt() } else { 1.0 };
+                map.remove("discovery_probability");
+                map.insert("discovery_roll".into(), json!(roll));
+            }
+            map.values_mut().for_each(migrate_discovery_rolls_to_v7);
+        }
+        Value::Array(items) => items.iter_mut().for_each(migrate_discovery_rolls_to_v7),
+        _ => {}
     }
 }
 
@@ -374,7 +405,16 @@ fn migrate_project_to_v2(project: &mut serde_json::Value) {
 /// belong in `migrate_json`. `from` is the version the file was written at.
 fn migrate(state: &mut GameState, from: u32) {
     if from < 6 {
-        migrate_flaw_phases_to_v6(state);
+        for_each_flaw(state, |flaw, is_rocket, groups, seed| {
+            let mut rng = seed.world_query(crate::seed::WorldQuery::FlawPhase(flaw.id));
+            flaw.assign_legacy_phase(is_rocket, groups, &mut rng);
+        });
+    }
+    if from < 7 {
+        // v6 -> v7: every flaw gets its exposure class from its words
+        // (22_FLAWS.md step 3); the discovery draw was recovered at the
+        // JSON level.
+        for_each_flaw(state, |flaw, is_rocket, _, _| flaw.assign_legacy_exposure(is_rocket));
     }
     if from < 5 {
         // v4 -> v5: a kerosene or hypergolic expander project becomes a
@@ -391,19 +431,18 @@ fn migrate(state: &mut GameState, from: u32) {
     }
 }
 
-/// v5 -> v6: every flaw gets the flight event it rolls at, and a rocket
-/// flaw the stage group it lives on (22_FLAWS.md step 2). The phase
-/// comes from the description's pool entry; the group is drawn from
+/// Visit every flaw in a save — on projects, contracted engines,
+/// inventory rockets, pending integration orders and flights, for the
+/// player and each competitor — with whether it is a rocket's and how
+/// many stage groups that rocket has. v5 -> v6 assigned phases and
+/// stages this way (phase from the description's pool entry, group from
 /// the world seed keyed by flaw id, so the same save migrates the same
-/// way every time. Vehicles' snapshots — inventory rockets, pending
-/// integration orders, flights in the air — are flaws too.
-fn migrate_flaw_phases_to_v6(state: &mut GameState) {
-    use crate::seed::WorldQuery;
+/// way every time); v6 -> v7 assigned exposures.
+fn for_each_flaw(
+    state: &mut GameState,
+    mut visit: impl FnMut(&mut crate::flaw::Flaw, bool, usize, &crate::seed::GameSeed),
+) {
     let seed = &state.seed;
-    let assign = |flaw: &mut crate::flaw::Flaw, is_rocket: bool, groups: usize| {
-        let mut rng = seed.world_query(WorldQuery::FlawPhase(flaw.id));
-        flaw.assign_legacy_phase(is_rocket, groups, &mut rng);
-    };
     let companies = std::iter::once(&mut state.player_company)
         .chain(state.competitors.iter_mut().map(|c| &mut c.company));
     for company in companies {
@@ -413,23 +452,26 @@ fn migrate_flaw_phases_to_v6(state: &mut GameState) {
                 .map_or(1, |rp| rp.design.stage_groups.len())
         };
         for p in &mut company.engine_projects {
-            for f in &mut p.flaws { assign(f, false, 0); }
+            for f in &mut p.flaws { visit(f, false, 0, seed); }
         }
         for p in &mut company.reactor_projects {
-            for f in &mut p.flaws { assign(f, false, 0); }
+            for f in &mut p.flaws { visit(f, false, 0, seed); }
         }
         for ce in &mut company.contracted_engines {
-            for f in &mut ce.flaws { assign(f, false, 0); }
+            for f in &mut ce.flaws { visit(f, false, 0, seed); }
         }
         for p in &mut company.rocket_projects {
             let groups = p.design.stage_groups.len();
-            for f in &mut p.flaws { assign(f, true, groups); }
+            for f in &mut p.flaws { visit(f, true, groups, seed); }
         }
-        let rocket_groups: Vec<(crate::manufacturing::InventoryItemId, usize)> = company.manufacturing.inventory.rockets.iter()
-            .map(|r| (r.item_id, groups_of(company, r.rocket_project_id)))
+        let rocket_groups: Vec<usize> = company.manufacturing.inventory.rockets.iter()
+            .map(|r| groups_of(company, r.rocket_project_id))
             .collect();
-        for (r, (_, groups)) in company.manufacturing.inventory.rockets.iter_mut().zip(rocket_groups) {
-            for f in &mut r.rocket_flaws { assign(f, true, groups); }
+        for (r, groups) in company.manufacturing.inventory.rockets.iter_mut().zip(rocket_groups) {
+            for f in &mut r.rocket_flaws { visit(f, true, groups, seed); }
+        }
+        for e in &mut company.manufacturing.inventory.engines {
+            for f in &mut e.flaws { visit(f, false, 0, seed); }
         }
         let order_groups: Vec<Option<usize>> = company.manufacturing.orders.iter()
             .map(|o| match &o.order_type {
@@ -439,16 +481,20 @@ fn migrate_flaw_phases_to_v6(state: &mut GameState) {
             })
             .collect();
         for (o, groups) in company.manufacturing.orders.iter_mut().zip(order_groups) {
-            if let (crate::manufacturing::ManufacturingOrderType::RocketIntegration { rocket_flaws, .. }, Some(groups)) =
-                (&mut o.order_type, groups)
-            {
-                for f in rocket_flaws.iter_mut() { assign(f, true, groups); }
+            match (&mut o.order_type, groups) {
+                (crate::manufacturing::ManufacturingOrderType::RocketIntegration { rocket_flaws, .. }, Some(groups)) => {
+                    for f in rocket_flaws.iter_mut() { visit(f, true, groups, seed); }
+                }
+                (crate::manufacturing::ManufacturingOrderType::Engine { flaws, .. }, _) => {
+                    for f in flaws.iter_mut() { visit(f, false, 0, seed); }
+                }
+                _ => {}
             }
         }
     }
     for flight in &mut state.active_flights {
         let groups = flight.design.stage_groups.len();
-        for f in &mut flight.rocket_flaws { assign(f, true, groups); }
+        for f in &mut flight.rocket_flaws { visit(f, true, groups, seed); }
     }
 }
 
@@ -649,10 +695,10 @@ mod tests {
                     description: format!("flaw {id}"),
                     consequence: FlawConsequence::EngineLoss,
                     activation_chance: 0.1,
-                    discovery_probability: 0.5,
+                    discovery_roll: 0.5,
                     discovered,
                     trigger: FlawTrigger::PerFlight,
-                    phase: crate::flaw::FlawPhase::Burn, stage_group: None,
+                    phase: crate::flaw::FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
                 });
             }
             for (i, actualized) in [(0u64, true), (1, false)] {
@@ -1012,14 +1058,14 @@ mod tests {
     /// v5 -> v6: flaws get the event they roll at from their own words,
     /// and a rocket flaw a stage; a built rocket's snapshot too.
     #[test]
-    fn v5_flaws_get_phases_and_stages() {
+    fn v5_flaws_get_phases_stages_exposures_and_draws() {
         use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawPhase, FlawTrigger};
         let mut state = GameState::with_money("V5".into(), 1_000_000_000.0, 1);
         let legacy = |id: u64, text: &str| Flaw {
             id: FlawId(id), description: text.into(),
             consequence: FlawConsequence::StageLoss, activation_chance: 0.3,
-            discovery_probability: 0.1, discovered: false, trigger: FlawTrigger::PerFlight,
-            phase: FlawPhase::Burn, stage_group: None,
+            discovery_roll: 0.6, discovered: false, trigger: FlawTrigger::PerFlight,
+            phase: FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
         };
         let stage = |id: u64| crate::stage::Stage {
             id: crate::stage::StageId(id), name: format!("S{id}"),
@@ -1050,9 +1096,13 @@ mod tests {
         fn strip(v: &mut serde_json::Value) {
             match v {
                 serde_json::Value::Object(map) => {
-                    if map.contains_key("activation_chance") {
+                    if let Some(act) = map.get("activation_chance").and_then(|a| a.as_f64()) {
                         map.remove("phase");
                         map.remove("stage_group");
+                        map.remove("exposure");
+                        // v5 stored the finished probability at exponent 2.
+                        let roll = map.remove("discovery_roll").and_then(|r| r.as_f64()).unwrap_or(1.0);
+                        map.insert("discovery_probability".into(), serde_json::json!(roll * roll * act.sqrt()));
                     }
                     map.values_mut().for_each(strip);
                 }
@@ -1070,12 +1120,16 @@ mod tests {
         let f = &loaded.player_company.rocket_projects[0].flaws[0];
         assert_eq!(f.phase, FlawPhase::Separation);
         assert!(matches!(f.stage_group, Some(g) if g < 2));
+        assert_eq!(f.exposure, crate::flaw::FlawExposure::Analysis);
+        assert!((f.discovery_roll - 0.6).abs() < 1e-9, "draw recovered from the v5 probability: {}", f.discovery_roll);
         let built = &loaded.player_company.manufacturing.inventory.rockets[0].rocket_flaws[0];
         assert_eq!(built.phase, FlawPhase::MaxQ);
         assert_eq!(built.stage_group, Some(0));
+        assert_eq!(built.exposure, crate::flaw::FlawExposure::Analysis);
         let e = &loaded.player_company.engine_projects[0].flaws[0];
         assert_eq!(e.phase, FlawPhase::Ignition);
         assert_eq!(e.stage_group, None);
+        assert_eq!(e.exposure, crate::flaw::FlawExposure::Integrated);
     }
 }
 

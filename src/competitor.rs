@@ -271,11 +271,11 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
         description: "Booster core separation ordnance defect".into(),
         consequence: FlawConsequence::StageLoss,
         activation_chance: failure_rate,
-        discovery_probability: 0.0,
+        discovery_roll: 0.0,
         discovered: false,
         trigger: FlawTrigger::PerFlight,
         phase: crate::flaw::FlawPhase::Separation,
-        stage_group: Some(0),
+        stage_group: Some(0), exposure: crate::flaw::FlawExposure::Bench,
     };
 
     let mut project = RocketProject::new(
