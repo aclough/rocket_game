@@ -1,5 +1,7 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
+[] Failure, even without a customer payload, seems to trigger a lost payload.
+
 [] Booster fuel size seems a bit borked, especially for solid boosters.
 
 [] Hard to find Solid in the UI, maybe make it both a Cycle and a Preset?

@@ -97,6 +97,7 @@ against player feedback.
   that each description makes sense with the engines it's paired with.  Make
   things a bit harder so that we expect a failure on most first launches.  Look
   at early launchs of Falcon 1, Electron, Firefly Alpha, Astra Rocket 1.
+- More significant deficiencies
 - Add different strategies to the automatic balance testing with different
   rocket designs.
 - Entry, Descent, and Landing features with as much detail and risk as launch
