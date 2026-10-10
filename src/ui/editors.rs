@@ -4,21 +4,63 @@
 use super::*;
 use super::designer::sync_stages_to_projects;
 
-/// Engine cycles available to the player based on unlocked tech.
-fn available_engine_cycles(game: &GameState) -> Vec<EngineCycle> {
-    let mut cycles = vec![
-        EngineCycle::PressureFed,
-        EngineCycle::GasGenerator,
-        EngineCycle::Expander,
-        EngineCycle::StagedCombustion,
-        EngineCycle::FullFlow,
+/// What the Cycle row steps through: every cycle the player can use,
+/// plus "Solid motor" as its own entry. A solid is a pressure-fed cycle
+/// on the solid preset, which nobody looking for a solid thinks to try;
+/// listing it beside the cycles is what makes it findable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CycleChoice {
+    Cycle(EngineCycle),
+    SolidMotor,
+}
+
+impl CycleChoice {
+    /// The choice a project's (cycle, preset) shows on the row.
+    pub(super) fn of(cycle: EngineCycle, preset: PropellantPreset) -> Self {
+        if preset == PropellantPreset::Solid { CycleChoice::SolidMotor } else { CycleChoice::Cycle(cycle) }
+    }
+
+    /// The (cycle, preset) a choice sets, keeping `preset` where the
+    /// cycle still takes it.
+    fn family(self, preset: PropellantPreset) -> (EngineCycle, PropellantPreset) {
+        match self {
+            CycleChoice::SolidMotor => (EngineCycle::PressureFed, PropellantPreset::Solid),
+            CycleChoice::Cycle(cycle) => {
+                let keep = preset != PropellantPreset::Solid && preset.compatible_cycles().contains(&cycle);
+                let preset = if keep { preset } else {
+                    PropellantPreset::ALL.iter().copied()
+                        .find(|p| *p != PropellantPreset::Solid && p.compatible_cycles().contains(&cycle))
+                        .unwrap_or(preset)
+                };
+                (cycle, preset)
+            }
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            CycleChoice::SolidMotor => "Solid motor",
+            CycleChoice::Cycle(cycle) => cycle.display_name(),
+        }
+    }
+}
+
+/// The Cycle row's entries, in order, for the player's unlocked tech.
+pub(super) fn available_cycle_choices(game: &GameState) -> Vec<CycleChoice> {
+    let mut choices = vec![
+        CycleChoice::Cycle(EngineCycle::PressureFed),
+        CycleChoice::SolidMotor,
+        CycleChoice::Cycle(EngineCycle::GasGenerator),
+        CycleChoice::Cycle(EngineCycle::Expander),
+        CycleChoice::Cycle(EngineCycle::StagedCombustion),
+        CycleChoice::Cycle(EngineCycle::FullFlow),
     ];
     if game.tech_unlocked(crate::technology::TECH_NUCLEAR_THERMAL) {
-        cycles.push(EngineCycle::NuclearThermal);
+        choices.push(CycleChoice::Cycle(EngineCycle::NuclearThermal));
     }
-    cycles.push(EngineCycle::ElectricPropulsion);
-    cycles.push(EngineCycle::SolarSail);
-    cycles
+    choices.push(CycleChoice::Cycle(EngineCycle::ElectricPropulsion));
+    choices.push(CycleChoice::Cycle(EngineCycle::SolarSail));
+    choices
 }
 
 /// How many SI units one typed unit of an engine's size headline is:
@@ -389,20 +431,12 @@ impl App {
                 };
             }
             KeyCode::Left | KeyCode::Right if cursor == 1 => {
-                let cycles = available_engine_cycles(&self.game);
-                let next = wrap_cycle(&cycles, cycle, matches!(key, KeyCode::Right))
-                    .unwrap_or(cycle);
-                // Keep current preset if it's still compatible with the
-                // new cycle; otherwise pick the first compatible preset.
-                let new_preset = if preset.compatible_cycles().contains(&next) {
-                    preset
-                } else {
-                    PropellantPreset::ALL.iter()
-                        .copied()
-                        .find(|p| p.compatible_cycles().contains(&next))
-                        .unwrap_or(preset)
-                };
-                self.apply_engine_family(project_id, name, next, new_preset);
+                let choices = available_cycle_choices(&self.game);
+                let current = CycleChoice::of(cycle, preset);
+                let next = wrap_cycle(&choices, current, matches!(key, KeyCode::Right))
+                    .unwrap_or(current);
+                let (next_cycle, new_preset) = next.family(preset);
+                self.apply_engine_family(project_id, name, next_cycle, new_preset);
                 if let Some(s) = state.as_mut() {
                     sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
                 }

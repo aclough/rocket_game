@@ -47,7 +47,8 @@ pub(super) fn draw_engine_editor_modal(
         row_style(0),
     )));
     lines.push(Line::from(Span::styled(
-        format!(" {} Cycle:  {}", row_label(1, true), ep.design.cycle.display_name()),
+        format!(" {} Cycle:  {}", row_label(1, true),
+            crate::ui::editors::CycleChoice::of(ep.design.cycle, ep.spec.preset).label()),
         row_style(1),
     )));
     lines.push(Line::from(Span::styled(
