@@ -430,6 +430,16 @@ impl GameState {
                     self.player_company.reputation.on_launch_failure(
                         &self.balance.reputation, severity, !manifest.is_empty(),
                     );
+                    // A lost flight is a failed launch in the record too.
+                    self.player_company.launch_history.push(LaunchRecord {
+                        launch_date: flight.launch_date,
+                        rocket_name: flight.rocket_name.clone(),
+                        contract_id: manifest.first().copied(),
+                        destination: flight.destination().to_string(),
+                        payload_kg: flight.total_payload_kg(),
+                        outcome: LaunchOutcome::Failure { reason: reason.clone() },
+                        flaws_activated: flight.flaws_activated.clone(),
+                    });
                     events.push(GameEvent::SpacecraftLost {
                         rocket_name: flight.rocket_name.clone(),
                         location,
@@ -1160,8 +1170,20 @@ fn tick_flight(
                 }
             }
 
-            // A burn that fell significantly short strands the flight.
+            // A burn that fell significantly short strands the flight —
+            // unless the leg was an ascent from a surface, where short of
+            // orbit means the vehicle came back down: lost, not parked.
             if burn_result.dv_achieved < dv_cost * flight_cfg.short_burn_strand_cut {
+                if crate::location::DELTA_V_MAP.surface_properties(from.name()).is_some() {
+                    flight.current_location = from;
+                    flight.status = FlightStatus::Failed {
+                        reason: format!(
+                            "Fell short of orbit: {:.0} of {:.0} m/s on the ascent",
+                            burn_result.dv_achieved, dv_cost,
+                        ),
+                    };
+                    return Some(FlightEnd::Lost);
+                }
                 flight.status = FlightStatus::Stranded;
                 return Some(FlightEnd::Stranded);
             }
