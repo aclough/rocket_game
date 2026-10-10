@@ -1039,3 +1039,56 @@ chance for a resize — in place of the flat 10 % per modification.
 (47 / 70 / 83 / 96, 6/100), the 200-seed band passes with no misses
 and DinoSoar's marginal cost sits where it was.
 
+**Step 12 — bot prudence sweep and bands.** Second sweep from step
+11's state (47 / 70 / 83 / 96, 6/100 bankrupt), 100 seeds × 6 years:
+
+| Variant | 1st / 2nd / 3rd / 4th+ | Bankrupt |
+|---|---|---|
+| activation exponent 1.8 | 39 / 65 / 83 / 96 | 9 |
+| **activation exponent 1.6** | **35 / 63 / 81 / 97** | **7** |
+| exposure exponents 2/6/12 | 49 / 70 / 84 / 96 | 6 |
+| flight review exponent 1.0 | 47 / 62 / 69 / 94 | 13 |
+| activation 1.8 + review 1.0 | 39 / 59 / 78 / 94 | 11 |
+| engineering salary $200k | 47 / 70 / 83 / 96 | 6 |
+
+Chosen: `activation_exponent` 1.6 — 36 / 63 / 81 / 97 with 19/200
+bankrupt on the long run, the target curve. The exposure exponents no
+longer move anything (retrofits and reviews find what the stand can't
+reach), the review exponent is the plateau's lever and stays at 0.5,
+and the salary lever does nothing to the curve, so it stays at $150k.
+
+The ULA path, measured with a prudent bot (`--policy prudent`,
+`prudent:<teams>,<quiet cycles>`: more engineering teams, and no first
+launch until every design has gone that many test cycles without a
+discovery with nothing known left unrevised; `DesignProject::
+quiet_cycles` counts them):
+
+| Policy | 1st / 2nd / 3rd / 4th+ | First launch (month) | Hidden at launch | Bankrupt |
+|---|---|---|---|---|
+| basic (3 teams, launch when built) | 35 / 63 / 81 / 97 | 19.5 | 7.5 | 7 |
+| prudent:3,3 | 33 / 58 / 80 / 95 | 24.6 | 6.7 | 10 |
+| prudent:6,3 | 45 / 72 / 87 / 95 | 19.0 | 6.5 | 12 |
+| prudent:6,6 | 40 / 68 / 88 / 95 | 23.7 | 5.8 | 15 |
+| prudent:9,3 | 44 / 74 / 90 / 95 | 17.8 | 6.3 | 13 |
+
+Effort buys the first flight ten points (doubling the teams: 35 →
+45 %) and the third a few; waiting with the same teams buys nothing
+but time, and the extra salary costs more companies than the extra
+reliability saves within six years. Nobody buys 98 % on the ground:
+the analysis-class flaws that remain are found by flying, which is
+what the survey says and what the user wanted the exponents to do.
+The "scrappy start-up" reading of §3.10 holds; a company that wants
+ULA's record flies ULA's number of flights.
+
+Bands: `FLEET_BANDS_SUSPENDED` back to `false`; the fleet bands
+re-baselined under the 200 × 8 figures (bankrupt ≤ 15 %, kept $25M
+≥ 55 %, profitable ≥ 45 %, profitable year ≥ 85 %, aggregate ≥ 85 %;
+smoke-run floors lower) with the `[fleet]` figures printed on every
+run; per-seed bands unchanged. The Next Steps launch text now says
+most first flights fail and that the flight review finds more of what
+flew. 720 tests, clippy clean.
+
+The plan is complete. Open for later: the stranded-at-LEO wording
+(TODO), unit defects (§3.11, deferred), the difficulty setting (next
+roadmap item), and a strategy-variety bot (the roadmap's next line).
+

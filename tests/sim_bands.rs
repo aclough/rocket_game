@@ -1,5 +1,15 @@
 //! M1 Task 4: determinism smoke test + metric-band regression tests.
 //!
+//! **22 baseline (22_FLAWS.md step 12, 2026-10-10).** Flaws roll at
+//! flight events, carry an exposure class, are found faster after a
+//! flight, include pad aborts and payload losses, travel with built
+//! units and are retrofitted; activation exponent 1.6. Measured, 200
+//! seeds × 8 years, basic policy: 19/200 bankrupt, 123/200 keep min
+//! money above $25M, 114/200 end above starting money, 184/200 have a
+//! profitable year, aggregate success 90.8%, success by launch
+//! 36 / 63 / 81 / 97 %. The fleet bands below sit under those with
+//! seed-noise room; the per-seed bands are unchanged.
+//!
 //! **D7 baseline (17_3_PHYSICS.md, 2026-09-10).** The ascent integrator
 //! flies a pitch program instead of a pure gravity turn, the bot's
 //! template grew to two booster engines under 90 t with a 15 t upper
@@ -33,17 +43,14 @@ use rocket_tycoon::policy::policy_by_name;
 use rocket_tycoon::sim::{run_seed, RunSummary};
 
 /// The fleet-level bands — bankruptcies, seeds keeping $25M, seeds
-/// profitable, seeds with a profitable year, aggregate success — are
-/// suspended while 22_FLAWS.md remakes the flaw model (steps 2–7). Each
-/// step so far has made the default game harder on purpose (step 2:
-/// 41/200 bankrupt; step 3: 49/200; step 4: 59/200), the counterweight
-/// (flights reviewing their own flaws) arrives at step 5, and step 7
-/// sweeps to the target curve. Lifting the ceilings step by step made
-/// them meaningless, so until step 7 re-baselines them these bands are
-/// measured and printed (`[fleet band suspended]`) but do not fail the
-/// run. The per-seed sanity bands stay live. Set back to `false` in
-/// the step that re-baselines.
-const FLEET_BANDS_SUSPENDED: bool = true;
+/// profitable, seeds with a profitable year, aggregate success — were
+/// suspended while 22_FLAWS.md remade the flaw model (steps 2–11): each
+/// step moved them on purpose, and lifting ceilings step by step had
+/// made them meaningless. Step 12 re-baselined them to the new default
+/// and switched this back on. Suspend again, rather than lift, when a
+/// plan is going to move them for several steps; the figures print as
+/// `[fleet]` either way.
+const FLEET_BANDS_SUSPENDED: bool = false;
 
 /// Assert a fleet-level band, or, while suspended, print the miss.
 fn fleet_band(ok: bool, message: String) {
@@ -141,6 +148,12 @@ fn assert_bands(summaries: &[RunSummary]) {
     // 146/200 keep min money above $25M, 23/200 bankrupt, 179/200 have
     // a profitable year).
     let n = summaries.len() as f64;
+    let aggregate_now = successes as f64 / launches as f64;
+    println!(
+        "[fleet] bankrupt {bankrupt}/{n}, kept $25M {min_above_25m}/{n}, profitable {profitable}/{n}, \
+         profitable year {with_fpy}/{n}, aggregate success {:.1}%",
+        aggregate_now * 100.0,
+    );
     // The agreed roguelike guard band was 1-6 bankruptcies per 100 seeds
     // (target 2-4/100); D7 measured 11.5/100 at the $250M start the user
     // chose, so the 200-seed ceiling sat at 15%; since 21_2 step 2
@@ -157,8 +170,10 @@ fn assert_bands(summaries: &[RunSummary]) {
     // about 3% of the time instead, which is what a smoke check should
     // feel like. The 200-seed run keeps the real 6% ceiling.
     //
-    // These are the pre-22_FLAWS values; see FLEET_BANDS_SUSPENDED.
-    let ceiling = if summaries.len() >= 100 { 0.20 } else { 0.25 };
+    // 22 baseline: 19/200 (9.5%). The ceiling leaves seed-noise room;
+    // the smoke run gets more (five in twenty happens one run in forty
+    // at this rate).
+    let ceiling = if summaries.len() >= 100 { 0.15 } else { 0.25 };
     fleet_band(
         bankrupt as f64 / n <= ceiling,
         format!(
@@ -176,26 +191,34 @@ fn assert_bands(summaries: &[RunSummary]) {
             ),
         );
     }
+    // 22 baseline: 123/200 keep $25M, 114/200 profitable, 184/200 with a
+    // profitable year; floors sit ~6 points under, the smoke run lower.
+    let cash_floor = if summaries.len() >= 100 { 0.55 } else { 0.40 };
     fleet_band(
-        min_above_25m as f64 / n >= 0.62,
+        min_above_25m as f64 / n >= cash_floor,
         format!(
-            "only {min_above_25m}/{n} seeds kept min money above $25M (band >= 62%, \
-             D7 73%)",
+            "only {min_above_25m}/{n} seeds kept min money above $25M (band >= {:.0}%, \
+             22 baseline 61.5%, D7 73%)",
+            cash_floor * 100.0,
         ),
     );
+    let profitable_floor = if summaries.len() >= 100 { 0.45 } else { 0.30 };
     fleet_band(
-        profitable as f64 / n >= 0.21,
-        format!("only {profitable}/{n} seeds profitable after run (band >= 21%, D7 32.5%)"),
+        profitable as f64 / n >= profitable_floor,
+        format!("only {profitable}/{n} seeds profitable after run (band >= {:.0}%, 22 baseline 57%, D7 32.5%)",
+            profitable_floor * 100.0),
     );
+    let fpy_floor = if summaries.len() >= 100 { 0.85 } else { 0.70 };
     fleet_band(
-        with_fpy as f64 / n >= 0.85,
-        format!("only {with_fpy}/{n} seeds ever had a profitable year (band >= 85%, D7 89.5%)"),
+        with_fpy as f64 / n >= fpy_floor,
+        format!("only {with_fpy}/{n} seeds ever had a profitable year (band >= {:.0}%, 22 baseline 92%, D7 89.5%)",
+            fpy_floor * 100.0),
     );
 
     let aggregate = successes as f64 / launches as f64;
     fleet_band(
         aggregate >= 0.85,
-        format!("aggregate launch success rate {:.1}% below 85% (D7 88.2%)", aggregate * 100.0),
+        format!("aggregate launch success rate {:.1}% below 85% (22 baseline 90.8%, D7 88.2%)", aggregate * 100.0),
     );
 }
 

@@ -333,6 +333,11 @@ pub struct DesignProject<D: Designable> {
     /// exponent (22_FLAWS.md §3.2).
     #[serde(default)]
     pub flight_review: Option<flaw::FlightReview>,
+    /// Testing cycles completed in a row without finding a flaw, reset
+    /// by a discovery or a revision: the measure a prudent programme
+    /// launches on ("three quiet cycles on everything").
+    #[serde(default)]
+    pub quiet_cycles: u32,
     /// Launches this design has flown on the company's rockets: the
     /// flight heritage an uprate needs (21_ENGINES.md step 7).
     #[serde(default)]
@@ -376,6 +381,7 @@ impl<D: Designable> DesignProject<D> {
             status: DesignStatus::InDesign { work_completed: 0.0, work_required },
             flaws: Vec::new(),
             flight_review: None,
+            quiet_cycles: 0,
             revision: 0,
             teams_assigned: 0,
             complexity,
@@ -482,6 +488,11 @@ impl<D: Designable> DesignProject<D> {
                         if r.cycles_left == 0 {
                             self.flight_review = None;
                         }
+                    }
+                    if discovered.is_empty() {
+                        self.quiet_cycles += 1;
+                    } else {
+                        self.quiet_cycles = 0;
                     }
                     for idx in discovered {
                         events.push(WorkEvent::FlawDiscovered {
@@ -617,6 +628,7 @@ impl<D: Designable> DesignProject<D> {
             return false;
         }
         self.revision += 1;
+        self.quiet_cycles = 0;
         self.status = DesignStatus::Revising {
             remaining_flaw_ids: flaw_ids,
             remaining_improvement_ids: improvement_ids,

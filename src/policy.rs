@@ -73,6 +73,13 @@ pub struct BasicPolicy {
     bid_rules_set: bool,
     /// Markup the policy's standing rules use: bid = cost × (1 + margin).
     bid_margin: f64,
+    /// Engineering teams to hire (the basic bot: 3).
+    engineering_teams: usize,
+    /// Before the first success, launch only once every project the
+    /// template flies has had this many testing cycles in a row without
+    /// a discovery and nothing known left unrevised — the "ULA path"
+    /// of 22_FLAWS.md §3.10. `None` launches the day a rocket exists.
+    launch_after_quiet_cycles: Option<u32>,
 }
 
 impl BasicPolicy {
@@ -145,7 +152,41 @@ impl BasicPolicy {
             auto_build_set: false,
             bid_rules_set: false,
             bid_margin,
+            engineering_teams: 3,
+            launch_after_quiet_cycles: None,
         }
+    }
+
+    /// A prudent programme: more engineers, and no first launch until
+    /// every design has gone `quiet_cycles` test cycles without
+    /// finding anything (`--policy prudent`, `prudent:<teams>,<cycles>`).
+    pub fn prudent(engineering_teams: usize, quiet_cycles: u32) -> Self {
+        BasicPolicy {
+            engineering_teams,
+            launch_after_quiet_cycles: Some(quiet_cycles),
+            ..Self::new()
+        }
+    }
+
+    /// Whether the prudent gate is open: every project the template
+    /// flies is in Testing, has nothing discovered and unrevised, and
+    /// has been quiet for the required cycles.
+    fn ready_to_launch(&self, game: &GameState) -> bool {
+        let Some(quiet) = self.launch_after_quiet_cycles else { return true };
+        let company = &game.player_company;
+        let engines_ready = [self.booster, self.upper].iter().flatten().all(|id| {
+            company.engine_projects.iter().find(|ep| ep.project_id == *id).is_some_and(|ep| {
+                matches!(ep.status, EngineDesignStatus::Testing { .. })
+                    && ep.discovered_flaw_count() == 0 && ep.quiet_cycles >= quiet
+            })
+        });
+        let rocket_ready = self.rocket.is_some_and(|id| {
+            company.rocket_projects.iter().find(|rp| rp.project_id == id).is_some_and(|rp| {
+                matches!(rp.status, RocketDesignStatus::Testing { .. })
+                    && rp.discovered_flaw_count() == 0 && rp.quiet_cycles >= quiet
+            })
+        });
+        engines_ready && rocket_ready
     }
 
     /// Bid campaign blocks at the same markup as the standing rules.
@@ -202,7 +243,7 @@ impl BasicPolicy {
         if game.player_company.money < MONEY_FLOOR {
             return;
         }
-        if game.player_company.teams.len() < 3 {
+        if game.player_company.teams.len() < self.engineering_teams {
             let name = format!("Team {}", game.player_company.teams.len() + 1);
             if let Some(evt) = game.player_company.hire_team(name, &game.balance) {
                 game.log(evt);
@@ -407,7 +448,7 @@ impl BasicPolicy {
         // (which the revision loop then fixes) without burning
         // contracts or wrecking reputation beyond recovery.
         if !Self::had_first_success(game) {
-            if Self::flight_in_transit(game) {
+            if Self::flight_in_transit(game) || !self.ready_to_launch(game) {
                 return;
             }
             let Ok((dest, payloads)) = game.build_launch_payloads(&[], &[]) else {
@@ -501,7 +542,7 @@ impl CompanyPolicy for BasicPolicy {
     }
 
     fn name(&self) -> &'static str {
-        "basic"
+        if self.launch_after_quiet_cycles.is_some() { "prudent" } else { "basic" }
     }
 }
 
@@ -516,9 +557,14 @@ pub fn policy_by_name(name: &str) -> Option<Box<dyn CompanyPolicy>> {
         }
         return Some(Box::new(BasicPolicy::with_margin(margin)));
     }
+    if let Some(rest) = name.strip_prefix("prudent:") {
+        let (teams, cycles) = rest.split_once(',')?;
+        return Some(Box::new(BasicPolicy::prudent(teams.parse().ok()?, cycles.parse().ok()?)));
+    }
     match name {
         "none" => Some(Box::new(NullPolicy)),
         "basic" => Some(Box::new(BasicPolicy::new())),
+        "prudent" => Some(Box::new(BasicPolicy::prudent(6, 3))),
         _ => None,
     }
 }

@@ -722,7 +722,10 @@ pub struct FlawsConfig {
     pub count_stddev: f64,
     /// Exponent on the uniform draw behind a flaw's activation chance:
     /// `activation = uniform^N`. 2 (mean ⅓, median ¼) skews flaws
-    /// toward rarely-firing ones; higher N more so, 1 is flat.
+    /// toward rarely-firing ones; higher N more so, 1 is flat. 22_FLAWS
+    /// step 12 set 1.6 (mean 0.38): with retrofits keeping built units
+    /// current, 2.0 left the first flight at 47 %, 1.6 puts it on the
+    /// 35 % target.
     pub activation_exponent: f64,
     /// Relative weights of an engine flaw's consequence, in the order
     /// `[degradation, part loss, stage loss, pad abort, payload loss,
@@ -851,7 +854,7 @@ impl Default for FlawsConfig {
     fn default() -> Self {
         FlawsConfig {
             count_stddev: 1.5,
-            activation_exponent: 2.0,
+            activation_exponent: 1.6,
             engine_consequence_weights: [0.45, 0.30, 0.12, 0.08, 0.0, 0.05],
             rocket_consequence_weights: [0.40, 0.25, 0.15, 0.12, 0.08, 0.0],
             reactor_consequence_weights: [0.50, 0.33, 0.12, 0.0, 0.0, 0.05],
