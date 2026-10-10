@@ -445,7 +445,7 @@ fn draw_exposure(mix: &[f64; 3], rng: &mut StdRng) -> FlawExposure {
 fn roll_flaw_core(domain: FlawDomain, pool: &FlawPool, rng: &mut StdRng, cfg: &FlawsConfig) -> (FlawConsequence, f64, f64) {
     let consequence = draw_consequence(domain, pool, rng, cfg);
 
-    let activation_chance: f64 = rng.gen::<f64>().powi(2);
+    let activation_chance: f64 = rng.gen::<f64>().powf(cfg.activation_exponent);
     let discovery_roll: f64 = rng.gen();
 
     (consequence, activation_chance, discovery_roll)

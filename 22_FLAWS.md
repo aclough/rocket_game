@@ -207,8 +207,8 @@ Add `FlawExposure` to `Flaw`:
 | Exposure | Found by | Discovery exponent N | Mean of U^N | Typical flaws |
 |---|---|---|---|---|
 | `Bench` | component test stand | 2 (today's) | 0.33 | injector, pump, chamber, igniter, valve timing |
-| `Integrated` | full-up stage test, wet dress | 3 (step 3; 5 proposed) | 0.25 | feed lines, pogo, harness, pressurisation, engine bay thermal |
-| `Analysis` | simulation, review, or flight | 4 (step 3; 9 proposed) | 0.20 | staging, fairing jettison, upper-stage ignition, slosh/GNC, max-Q structure |
+| `Integrated` | full-up stage test, wet dress | 5 (step 7; 3 during steps 3–6) | 0.17 | feed lines, pogo, harness, pressurisation, engine bay thermal |
+| `Analysis` | simulation, review, or flight | 9 (step 7; 4 during steps 3–6) | 0.10 | staging, fairing jettison, upper-stage ignition, slosh/GNC, max-Q structure |
 
 Discovery stays `U^N · √activation`; the exposure picks N
 (`FlawsConfig::discovery_exponent_{bench,integrated,analysis}`,
@@ -233,8 +233,8 @@ A high `Analysis` N is what makes the "ULA path" exist: several times
 the mean testing finds them, with a long tail that takes far longer,
 and that costs the team-months. Step 3 landed at 2 / 3 / 4 because the
 proposed 2 / 5 / 9 put the bot at 39 % bankrupt before the flight
-review (step 5) exists to find analysis flaws; step 7's sweep decides
-how far apart the classes end up once it does.
+review (step 5) existed to find analysis flaws; step 7's sweep put
+2 / 5 / 9 back once it did, with the review exponent at 0.5.
 
 USER:  This is what the `U² · √activation` discovery chance is meant to do.
 Having different categories being easier or harder to discover can be good
@@ -899,4 +899,36 @@ survey's ground/range class). The bankruptcy band passes again
 (36/200 ≤ 20 %); the $25M and profitable-year floors are the two
 remaining suspended misses. Whether ~0.85 scrubs per programme before
 the first flight is the right feel is step 7's question.
+
+**Step 7 — rebalance to the curve.** `FlawsConfig::activation_exponent`
+(2.0; was a hard-coded square) so the plan's activation lever exists.
+Sweep by TOML override, 100 seeds × 6 years, basic policy; the
+baseline is step 6's 40 / 54 / 69 / 93 with 18 bankrupt:
+
+| Variant | 1st / 2nd / 3rd / 4th+ | Bankrupt |
+|---|---|---|
+| exposure exponents 2/4/6 | 38 / 49 / 68 / 93 | 25 |
+| exposure exponents 2/5/9 | 34 / 48 / 62 / 95 | 22 |
+| activation exponent 1.5 | 30 / 43 / 65 / 93 | 24 |
+| activation exponent 2.5 | 44 / 66 / 77 / 94 | 14 |
+| flight review 5 cycles | 40 / 55 / 73 / 94 | 16 |
+| flight review exponent 0.5 | 39 / 58 / 79 / 96 | 9 |
+| pad-abort weights halved | 32 / 51 / 74 / 95 | 16 |
+| rocket mix 25/50/25 | 37 / 57 / 67 / 94 | 16 |
+| **c1: 2/5/9 + review 0.5** | **35 / 51 / 72 / 97** | **12** |
+| c2: 2/4/6 + review 0.5 | 38 / 54 / 77 / 96 | 13 |
+| c3: c1 + activation 2.2 | 43 / 57 / 72 / 97 | 14 |
+| c4: c1 + pad aborts halved | 30 / 54 / 76 / 97 | 11 |
+
+200 seeds × 8 years: c1 32 / 50 / 74 / 97, 29/200 bankrupt; c2 34 / 54
+/ 77 / 97, 26/200. Chosen: **c1** — the wide class gap is the lever the
+ULA path needs, the first flight sits on the 35 % target, the plateau
+is the real record's, and bankruptcies are back under the pre-rework
+20 % ceiling (14.5 %). The second flight (50 %) is under the 60 %
+target on purpose: the bot's second vehicle was integrated before the
+first flight's fixes and flies the old snapshot, which is what steps
+8–9 (snapshots for engines too, auto-retrofit on) change; the second
+flight is re-measured after step 9 and the final sweep is step 12's.
+The "ULA path" — how far a well-funded test programme can push the
+first flight — needs a prudent policy to measure and is step 12's too.
 

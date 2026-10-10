@@ -549,8 +549,10 @@ mod tests {
         let rp = gs.player_company.rocket_projects.iter()
             .find(|p| Some(p.project_id) == policy.rocket)
             .expect("rocket project present");
+        // Testing or mid-revision: both mean the design is through
+        // design and in the test-revise loop.
         assert!(
-            matches!(rp.status, RocketDesignStatus::Testing { .. }),
+            matches!(rp.status, RocketDesignStatus::Testing { .. } | RocketDesignStatus::Revising { .. }),
             "rocket should reach Testing within 2 years, got {:?}", rp.status,
         );
         assert!(policy.auto_build_set, "auto-build should be enabled");

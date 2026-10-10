@@ -711,6 +711,10 @@ impl PropellantHandlingConfig {
 pub struct FlawsConfig {
     /// Stddev of the gaussian flaw count (mean = effective complexity).
     pub count_stddev: f64,
+    /// Exponent on the uniform draw behind a flaw's activation chance:
+    /// `activation = uniform^N`. 2 (mean ⅓, median ¼) skews flaws
+    /// toward rarely-firing ones; higher N more so, 1 is flat.
+    pub activation_exponent: f64,
     /// Relative weights of an engine flaw's consequence, in the order
     /// `[degradation, part loss, stage loss, pad abort, payload loss,
     /// power draw]` (22_FLAWS.md §3.3); normalised when drawn, and a
@@ -759,7 +763,8 @@ pub struct FlawsConfig {
     /// activations are always discovered regardless. The M4 Task 3
     /// sweep (2026-07) chose 2.0 for what was then every flaw; 22_FLAWS
     /// step 3 kept it for the bench class and gave the others their
-    /// own (§3.1 of that plan).
+    /// own (§3.1 of that plan); step 7's sweep settled on 2 / 5 / 9
+    /// with the flight review at 0.5.
     pub discovery_exponent_bench: f64,
     /// N for an `Integrated` flaw — feed lines, pressurisation,
     /// harnesses: things a full-up stage test or wet dress finds, which
@@ -830,6 +835,7 @@ impl Default for FlawsConfig {
     fn default() -> Self {
         FlawsConfig {
             count_stddev: 1.5,
+            activation_exponent: 2.0,
             engine_consequence_weights: [0.45, 0.30, 0.12, 0.08, 0.0, 0.05],
             rocket_consequence_weights: [0.40, 0.25, 0.15, 0.12, 0.08, 0.0],
             reactor_consequence_weights: [0.50, 0.33, 0.12, 0.0, 0.0, 0.05],
@@ -844,13 +850,13 @@ impl Default for FlawsConfig {
             improvement_decay: 0.7,
             modification_flaw_prob: 0.10,
             discovery_exponent_bench: 2.0,
-            discovery_exponent_integrated: 3.0,
-            discovery_exponent_analysis: 4.0,
+            discovery_exponent_integrated: 5.0,
+            discovery_exponent_analysis: 9.0,
             engine_exposure_mix: [0.70, 0.25, 0.05],
             rocket_exposure_mix: [0.15, 0.55, 0.30],
             reactor_exposure_mix: [0.70, 0.25, 0.05],
             flight_review_cycles: 3,
-            discovery_exponent_flight_review: 1.0,
+            discovery_exponent_flight_review: 0.5,
             flight_review_min_days: 30,
         }
     }
