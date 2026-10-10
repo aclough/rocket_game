@@ -760,9 +760,12 @@ pub struct FlawsConfig {
     /// improvements get harder quickly the more there are"). Applies
     /// to engines and reactors alike.
     pub improvement_decay: f64,
-    /// Flat probability that a rocket modification introduces a new
-    /// undiscovered flaw.
-    pub modification_flaw_prob: f64,
+    /// Chance that each change a rocket modification makes — a stage
+    /// added, removed, re-engined or given a different engine count;
+    /// half for a stage merely resized — introduces a new undiscovered
+    /// flaw (22_FLAWS.md §3.8). Falcon 1 flight 3's new engine on an old
+    /// stage is one change.
+    pub modification_flaw_prob_per_change: f64,
     /// Exponent N in the per-flaw ground-discovery roll for a `Bench`
     /// flaw: discovery = uniform^N * sqrt(activation_chance), with the
     /// uniform draw stored on the flaw (`Flaw::discovery_roll`). 1.0 is
@@ -792,6 +795,10 @@ pub struct FlawsConfig {
     pub rocket_exposure_mix: [f64; 3],
     /// The same for a reactor's flaws.
     pub reactor_exposure_mix: [f64; 3],
+    /// The same for a bought-in engine's flaws: you do not own the
+    /// drawings, so what you find is mostly in the integration and
+    /// in the flying (22_FLAWS.md §3.7).
+    pub third_party_exposure_mix: [f64; 3],
     /// How many testing cycles after a flight the flaws that flight
     /// exercised roll discovery at `discovery_exponent_flight_review`
     /// instead of their class's exponent (22_FLAWS.md §3.2). A bonus on
@@ -857,13 +864,14 @@ impl Default for FlawsConfig {
             improvement_discovery_chance: 0.08,
             reactor_improvement_discovery_chance: 0.08,
             improvement_decay: 0.7,
-            modification_flaw_prob: 0.10,
+            modification_flaw_prob_per_change: 0.10,
             discovery_exponent_bench: 2.0,
             discovery_exponent_integrated: 5.0,
             discovery_exponent_analysis: 9.0,
             engine_exposure_mix: [0.70, 0.25, 0.05],
             rocket_exposure_mix: [0.15, 0.55, 0.30],
             reactor_exposure_mix: [0.70, 0.25, 0.05],
+            third_party_exposure_mix: [0.20, 0.50, 0.30],
             flight_review_cycles: 3,
             discovery_exponent_flight_review: 0.5,
             flight_review_min_days: 30,

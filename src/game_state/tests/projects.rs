@@ -56,8 +56,27 @@ fn test_team_assignment() {
 
 #[test]
 fn test_third_party_catalog() {
+    use crate::third_party::VendorRole;
     let gs = GameState::new("Test".into(), 42);
-    assert_eq!(gs.player_company.third_party_catalog.len(), 4);
+    let catalog = &gs.player_company.third_party_catalog;
+    assert!((4..=5).contains(&catalog.len()), "{}", catalog.len());
+    for role in [VendorRole::SolidKickMotor, VendorRole::HypergolicThruster, VendorRole::KeroloxBooster, VendorRole::LegacyHydroloxUpper] {
+        let e = catalog.iter().find(|e| e.role == Some(role)).unwrap_or_else(|| panic!("every world sells a {}", role.label()));
+        assert!(e.purchase_cost_per_unit > 0.0 && e.design.thrust_n > 0.0 && e.design.mass_kg > 0.0);
+        assert!(e.available_from <= gs.date, "the four roles are on sale from the start");
+    }
+    let legacy = catalog.iter().find(|e| e.role == Some(VendorRole::LegacyHydroloxUpper)).unwrap();
+    assert!(legacy.legacy.is_some() && legacy.build_time_multiplier > 1.0);
+    assert!(legacy.design.is_vacuum_variant(), "an upper-stage engine wears the long bell");
+    // Invented, and invented differently elsewhere.
+    let other = GameState::new("Test".into(), 7);
+    let names = |gs: &GameState| gs.player_company.third_party_catalog.iter().map(|e| e.design.name.clone()).collect::<Vec<_>>();
+    assert_ne!(names(&gs), names(&other));
+    for n in names(&gs) {
+        assert!(!["RD-33K", "HT-40", "KM-15 Kick Motor", "DL-10 Dactyl"].contains(&n.as_str()), "no real names: {n}");
+    }
+    // The same world always sells the same engines.
+    assert_eq!(names(&gs), names(&GameState::new("Again".into(), 42)));
 }
 
 #[test]

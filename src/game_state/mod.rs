@@ -276,6 +276,37 @@ pub(crate) fn realize_world_markets(
         .collect()
 }
 
+
+/// What a modification changed, one weight per change: 1 for a stage
+/// added, removed, re-engined or given a different engine count; 0.5
+/// for a stage only resized (tankage, structure, fairing, power).
+fn modification_changes(old: &[Vec<crate::stage::Stage>], new: &[Vec<crate::stage::Stage>]) -> Vec<f64> {
+    let mut changes = Vec::new();
+    let groups = old.len().max(new.len());
+    for gi in 0..groups {
+        let (og, ng) = (old.get(gi), new.get(gi));
+        let stages = og.map_or(0, |g| g.len()).max(ng.map_or(0, |g| g.len()));
+        for si in 0..stages {
+            match (og.and_then(|g| g.get(si)), ng.and_then(|g| g.get(si))) {
+                (Some(a), Some(b)) => {
+                    if a.engine.id != b.engine.id || a.engine_count != b.engine_count {
+                        changes.push(1.0);
+                    } else if (a.propellant_mass_kg - b.propellant_mass_kg).abs() > 1e-9
+                        || (a.structural_mass_kg - b.structural_mass_kg).abs() > 1e-9
+                        || a.fairing.is_some() != b.fairing.is_some()
+                        || a.power_sources.len() != b.power_sources.len()
+                    {
+                        changes.push(0.5);
+                    }
+                }
+                (None, None) => {}
+                _ => changes.push(1.0),
+            }
+        }
+    }
+    changes
+}
+
 impl GameState {
     /// Whether a technology has been unlocked in this world.
     pub fn tech_unlocked(&self, id: crate::technology::TechnologyId) -> bool {
@@ -408,9 +439,12 @@ impl GameState {
     /// Apply a modification (tankage / power tweak) to an existing
     /// rocket project. Replaces the design's stage_groups, transitions
     /// status back to `InDesign` with `MODIFICATION_WORK_FRACTION` of
-    /// the project's original work_required, and rolls a flat chance to
-    /// introduce one new undiscovered flaw. Caller is responsible for
-    /// only invoking this when the project's status is `InDesign` or
+    /// the project's original work_required, and rolls
+    /// `modification_flaw_prob_per_change` for each change it makes — a
+    /// stage added, removed, re-engined or given a different engine
+    /// count, half a chance for a stage merely resized — to introduce
+    /// a new undiscovered flaw (22_FLAWS.md §3.8). Caller is responsible
+    /// for only invoking this when the project's status is `InDesign` or
     /// `Testing`; Revising is rejected. Returns Some(event) on success.
     pub fn apply_rocket_modification(
         &mut self,
@@ -427,6 +461,7 @@ impl GameState {
         }
         let work_required = self.balance.work.rocket_design_work_required(project.complexity)
             * self.balance.work.rocket_modification_work_fraction;
+        let changes = modification_changes(&project.design.stage_groups, &new_stage_groups);
         project.design.stage_groups = new_stage_groups;
         let stage_groups = project.design.stage_groups.len();
         let features = crate::flaw::rocket_features(&project.design);
@@ -438,12 +473,18 @@ impl GameState {
         // drop every cached capability figure.
         self.clear_capability_caches();
 
-        // Roll for a new undiscovered flaw, the same way a rocket project
-        // rolls its own: shared probability core, vehicle-flavoured
-        // description.
-        let new_flaw = self.seed.contingent_rng.gen::<f64>()
-            < self.balance.flaws.modification_flaw_prob;
-        if new_flaw {
+        // Roll each change for a new undiscovered flaw, the same way a
+        // rocket project rolls its own: shared probability core,
+        // vehicle-flavoured description.
+        let per_change = self.balance.flaws.modification_flaw_prob_per_change;
+        let mut new_flaws = 0usize;
+        for weight in changes {
+            if self.seed.contingent_rng.gen::<f64>() < per_change * weight {
+                new_flaws += 1;
+            }
+        }
+        let new_flaw = new_flaws > 0;
+        for _ in 0..new_flaws {
             let id = self.player_company.next_flaw_id.mint();
             let trigger = if self.seed.contingent_rng.gen::<f64>()
                 < self.balance.flaws.rocket_endurance_fraction

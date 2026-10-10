@@ -364,3 +364,29 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
     assert!(!design.stage_groups[3][0].engine.is_low_thrust(),
         "Lander engine should be high-thrust (chemical)");
 }
+
+/// 22_FLAWS.md §3.8: a modification rolls once per change — a stage
+/// added, removed, re-engined or recounted is a change, a resize half
+/// of one — rather than a flat chance per modification.
+#[test]
+fn modification_flaw_rolls_scale_with_the_changes_made() {
+    let (design, engine_projects) = make_three_stage_design();
+    let old = design.stage_groups.clone();
+    // Unchanged: nothing to roll.
+    assert!(super::super::modification_changes(&old, &old).is_empty());
+    // A resized tank is half a change.
+    let mut resized = old.clone();
+    resized[0][0].propellant_mass_kg *= 1.1;
+    assert_eq!(super::super::modification_changes(&old, &resized), vec![0.5]);
+    // A new engine on an old stage (Falcon 1 flight 3) is one change,
+    // and another engine on the stage is another.
+    let mut re_engined = old.clone();
+    re_engined[1][0].engine = engine_projects[1].design.clone();
+    re_engined[0][0].engine_count += 1;
+    assert_eq!(super::super::modification_changes(&old, &re_engined), vec![1.0, 1.0]);
+    // Dropping the third stage is a change too.
+    let mut dropped = old.clone();
+    dropped.pop();
+    assert_eq!(super::super::modification_changes(&old, &dropped), vec![1.0]);
+}
+

@@ -289,6 +289,9 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     ),
                     style,
                 )));
+                if let Some(role) = entry.role {
+                    lines.push(hint_line(format!("      {} · flaws cannot be revised, only flown out", role.label())));
+                }
                 // Why a legacy engine costs what it does.
                 if let Some(legacy) = &entry.legacy {
                     lines.push(hint_line(format!("      legacy: {}", legacy)));

@@ -1,10 +1,10 @@
 use serde::{Serialize, Deserialize};
 
 use crate::calendar::GameDate;
-use crate::engine::{EngineDesign, Propulsion, EngineCycle, EngineId, PropellantFraction};
+use crate::engine::{EngineDesign, EngineCycle, EngineId};
 use crate::engine_project::PropellantPreset;
+use rand::Rng;
 use crate::flaw::{self, Flaw};
-use crate::propellant::Propellant;
 use crate::seed::{GameSeed, WorldQuery};
 
 /// Unique identifier for a contracted third-party engine.
@@ -45,6 +45,10 @@ pub struct ThirdPartyEngine {
     /// What that legacy is, for the catalogue.
     #[serde(default)]
     pub legacy: Option<String>,
+    /// What the engine is for. `None` on catalogues from before roles
+    /// existed, whose names were fixed.
+    #[serde(default)]
+    pub role: Option<VendorRole>,
 }
 
 /// What a catalogue engine sells for: the vendor's unit cost under the
@@ -63,88 +67,139 @@ pub fn catalogue_price(
     unit * balance.third_party.markup
 }
 
-/// Name of the legacy hydrolox upper-stage engine in the catalogue — the
-/// RL10 analogue DinoSoar buys for its upper stage.
-pub const DACTYL_NAME: &str = "DL-10 Dactyl";
+/// What a vendor engine is for, which is how the game (and the
+/// incumbent) pick one without naming it: names are invented per world
+/// (22_FLAWS.md §3.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VendorRole {
+    /// A small solid kick motor.
+    SolidKickMotor,
+    /// A small hypergolic pressure-fed thruster.
+    HypergolicThruster,
+    /// A big kerolox staged-combustion booster engine (the NK-33 class).
+    KeroloxBooster,
+    /// A mid-size kerolox gas generator, not in every world.
+    KeroloxGasGenerator,
+    /// A hydrolox expander upper-stage engine built the way it was in
+    /// the 1960s (the RL10 class): heavy, dear, and what the incumbent
+    /// flies on top.
+    LegacyHydroloxUpper,
+}
 
-/// The starter third-party engines, priced from the cost model:
-/// 1. Small solid kick motor
-/// 2. Medium kerolox engine (NK-33 analogue)
-/// 3. Small hypergolic thruster
-/// 4. Legacy hydrolox upper-stage engine (RL10 analogue), dear for its
-///    1960s process (21_ENGINES.md step 8)
+impl VendorRole {
+    pub fn label(self) -> &'static str {
+        match self {
+            VendorRole::SolidKickMotor => "solid kick motor",
+            VendorRole::HypergolicThruster => "hypergolic thruster",
+            VendorRole::KeroloxBooster => "kerolox booster",
+            VendorRole::KeroloxGasGenerator => "kerolox gas generator",
+            VendorRole::LegacyHydroloxUpper => "legacy hydrolox upper stage",
+        }
+    }
+}
+
+/// The vendors of a world: an invented name from the seed, as the
+/// catalogue's engines are its products. Two syllables and an ending;
+/// the model number carries the vendor's initials.
+fn vendor_name(rng: &mut rand::rngs::StdRng) -> String {
+    const FIRST: [&str; 14] = ["Vel", "Kor", "Ast", "Dyn", "Orb", "Sol", "Tor", "Nex", "Zen", "Hel", "Mar", "Cal", "Ard", "Pyr"];
+    const SECOND: [&str; 10] = ["a", "o", "e", "i", "u", "ar", "en", "ir", "on", "al"];
+    const END: [&str; 10] = ["tron", "dyne", "tek", "ion", "ix", "or", "cor", "ex", "ara", "thrust"];
+    format!(
+        "{}{}{}",
+        FIRST[rng.gen_range(0..FIRST.len())],
+        SECOND[rng.gen_range(0..SECOND.len())],
+        END[rng.gen_range(0..END.len())],
+    )
+}
+
+/// "Velotron VT-40": the vendor's initial, its next consonant, and a
+/// number in the role's range.
+fn model_name(vendor: &str, number: u32) -> String {
+    let first = vendor.chars().next().unwrap_or('X').to_ascii_uppercase();
+    let second = vendor.chars().skip(1)
+        .find(|c| c.is_ascii_alphabetic() && !"aeiou".contains(*c))
+        .unwrap_or('X')
+        .to_ascii_uppercase();
+    format!("{vendor} {first}{second}-{number}")
+}
+
+/// The starter catalogue, invented per world from the game's own
+/// engine baselines: every world gets a solid kick motor, a hypergolic
+/// thruster, a kerolox staged-combustion booster and the legacy
+/// hydrolox upper stage, and some worlds a mid-size kerolox gas
+/// generator too. Sizes, masses and Isp sit in a band around the
+/// baseline (a vendor's product is not your design), prices come from
+/// the cost model at the vendor's volume and markup, and the legacy
+/// engine keeps its 1960s process.
 pub fn generate_starter_engines(
-    _seed: &GameSeed, balance: &crate::balance_config::BalanceConfig,
+    seed: &GameSeed, balance: &crate::balance_config::BalanceConfig,
 ) -> Vec<ThirdPartyEngine> {
+    use crate::engine_project::{engine_baseline, scale_for_headline};
+    let mut rng = seed.world_query(WorldQuery::ThirdPartyCatalog);
+    let nozzle = &balance.nozzle;
     let start = GameDate::default_start();
-    let entry = |design: EngineDesign, preset: PropellantPreset, build_time_multiplier: f64, legacy: Option<&str>| {
-        let complexity = crate::balance::combined_complexity(design.cycle, &preset.propellants());
-        ThirdPartyEngine {
+
+    struct RoleTemplate {
+        role: VendorRole,
+        cycle: EngineCycle,
+        preset: PropellantPreset,
+        /// Thrust the vendor's product lands in, N.
+        thrust: (f64, f64),
+        sea_level_bell: bool,
+        /// Mass against the game's baseline for that size.
+        mass_factor: (f64, f64),
+        /// The model number's range.
+        numbers: (u32, u32),
+    }
+    let t = |role, cycle, preset, thrust, sea_level_bell, mass_factor, numbers| RoleTemplate {
+        role, cycle, preset, thrust, sea_level_bell, mass_factor, numbers,
+    };
+    let roles = [
+        t(VendorRole::SolidKickMotor, EngineCycle::PressureFed, PropellantPreset::Solid, (50_000.0, 120_000.0), true, (0.9, 1.15), (10, 30)),
+        t(VendorRole::HypergolicThruster, EngineCycle::PressureFed, PropellantPreset::Hypergolic, (20_000.0, 60_000.0), false, (0.9, 1.15), (30, 60)),
+        t(VendorRole::KeroloxBooster, EngineCycle::StagedCombustion, PropellantPreset::Kerolox, (1_200_000.0, 2_200_000.0), true, (0.95, 1.2), (100, 400)),
+        t(VendorRole::KeroloxGasGenerator, EngineCycle::GasGenerator, PropellantPreset::Kerolox, (500_000.0, 1_000_000.0), true, (0.95, 1.2), (60, 90)),
+        t(VendorRole::LegacyHydroloxUpper, EngineCycle::Expander, PropellantPreset::Hydrolox, (90_000.0, 130_000.0), false, (1.3, 1.6), (5, 20)),
+    ];
+    let has_gas_generator = rng.gen::<f64>() < 0.5;
+
+    let mut out = Vec::new();
+    for (k, RoleTemplate { role, cycle, preset, thrust, sea_level_bell, mass_factor, numbers }) in roles.into_iter().enumerate() {
+        if role == VendorRole::KeroloxGasGenerator && !has_gas_generator {
+            continue;
+        }
+        let vendor = vendor_name(&mut rng);
+        let number = rng.gen_range(numbers.0..=numbers.1);
+        let target_thrust = rng.gen_range(thrust.0..thrust.1);
+        let mass_jitter = rng.gen_range(mass_factor.0..mass_factor.1);
+        let isp_jitter = rng.gen_range(0.97..1.02);
+        let Some(baseline) = engine_baseline(cycle, preset) else { continue };
+        let scale = scale_for_headline(cycle, preset, target_thrust, nozzle).unwrap_or(1.0);
+        let name = model_name(&vendor, number);
+        let mut design = baseline.design(EngineId(10_001 + k as u64), name, cycle, preset, scale, !sea_level_bell, nozzle);
+        design.mass_kg *= mass_jitter;
+        design.isp_s *= isp_jitter;
+        let complexity = crate::balance::combined_complexity(cycle, &preset.propellants());
+        let (build_time_multiplier, legacy, available_from) = match role {
+            VendorRole::LegacyHydroloxUpper =>
+                (3.0, Some("1960s hand-brazed tube-wall chamber, ×3 build time".to_string()), start),
+            VendorRole::KeroloxGasGenerator =>
+                (1.0, None, start.add_days(rng.gen_range(0..=3 * 365))),
+            _ => (1.0, None, start),
+        };
+        out.push(ThirdPartyEngine {
             purchase_cost_per_unit: catalogue_price(&design, preset, complexity, build_time_multiplier, balance),
             design,
             preset,
             complexity,
-            available_from: start,
+            available_from,
             build_time_multiplier,
-            legacy: legacy.map(str::to_string),
-        }
-    };
-
-    vec![
-        entry(EngineDesign {
-            id: EngineId(10001),
-            name: "KM-15 Kick Motor".into(),
-            cycle: EngineCycle::PressureFed,
-            thrust_n: 75_000.0,
-            mass_kg: 35.0,
-            isp_s: 245.0,
-            propellant_mix: vec![
-                PropellantFraction { propellant: Propellant::SolidMix, mass_fraction: 1.0 },
-            ],
-            propulsion: Propulsion::nozzle(6_000_000.0, 10.56, 1.2, true),
-        }, PropellantPreset::Solid, 1.0, None),
-        entry(EngineDesign {
-            id: EngineId(10002),
-            name: "RD-33K".into(),
-            cycle: EngineCycle::StagedCombustion,
-            thrust_n: 1_680_000.0,
-            mass_kg: 1_220.0,
-            isp_s: 297.0,
-            propellant_mix: vec![
-                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.73 },
-                PropellantFraction { propellant: Propellant::RP1, mass_fraction: 0.27 },
-            ],
-            propulsion: Propulsion::nozzle(25_000_000.0, 28.61, 1.2, true),
-        }, PropellantPreset::Kerolox, 1.0, None),
-        entry(EngineDesign {
-            id: EngineId(10003),
-            name: "HT-40".into(),
-            cycle: EngineCycle::PressureFed,
-            thrust_n: 40_000.0,
-            mass_kg: 90.0,
-            isp_s: 267.0,
-            propellant_mix: vec![
-                PropellantFraction { propellant: Propellant::NTO, mass_fraction: 0.57 },
-                PropellantFraction { propellant: Propellant::UDMH, mass_fraction: 0.43 },
-            ],
-            propulsion: Propulsion::nozzle(1_000_000.0, 15.59, 1.2, false),
-        }, PropellantPreset::Hypergolic, 1.0, None),
-        // RL10A-4-class: 110 kN, ~465 s, heavy for its thrust, and built
-        // by hand the way it was in 1962.
-        entry(EngineDesign {
-            id: EngineId(10004),
-            name: DACTYL_NAME.into(),
-            cycle: EngineCycle::Expander,
-            thrust_n: 110_000.0,
-            mass_kg: 300.0,
-            isp_s: 462.0,
-            propellant_mix: vec![
-                PropellantFraction { propellant: Propellant::LOX, mass_fraction: 0.83 },
-                PropellantFraction { propellant: Propellant::LH2, mass_fraction: 0.17 },
-            ],
-            propulsion: Propulsion::nozzle(4_500_000.0, 65.85, 1.2, false),
-        }, PropellantPreset::Hydrolox, 3.0, Some("1960s hand-brazed tube-wall chamber, ×3 build time")),
-    ]
+            legacy,
+            role: Some(role),
+        });
+    }
+    out
 }
 
 /// Generate flaws for a third-party engine using scaled-down complexity.
@@ -159,7 +214,11 @@ pub fn generate_third_party_flaws(
 ) -> Vec<Flaw> {
     let effective = (complexity / 8).max(1);
     let mut rng = seed.world_query(WorldQuery::ThirdPartyFlaws(engine_name));
-    flaw::generate_flaws(flaw::FlawDomain::Engine(None), effective, 0, features, &mut rng, next_flaw_id, flaws_cfg)
+    // Not your drawings: what you find is mostly in the integration and
+    // the flying, so the engine mix gives way to the vendor mix.
+    let mut cfg = flaws_cfg.clone();
+    cfg.engine_exposure_mix = flaws_cfg.third_party_exposure_mix;
+    flaw::generate_flaws(flaw::FlawDomain::Engine(None), effective, 0, features, &mut rng, next_flaw_id, &cfg)
 }
 
 #[cfg(test)]
@@ -173,15 +232,18 @@ mod tests {
 
         let start = GameDate::default_start();
         for e in &engines {
-            assert_eq!(e.available_from, start);
             assert!(e.purchase_cost_per_unit > 0.0);
+            if e.role != Some(VendorRole::KeroloxGasGenerator) {
+                assert_eq!(e.available_from, start);
+            }
         }
-
-        assert_eq!(engines[0].preset, PropellantPreset::Solid);
-        assert_eq!(engines[1].preset, PropellantPreset::Kerolox);
-        assert_eq!(engines[2].preset, PropellantPreset::Hypergolic);
-        assert_eq!(engines[3].design.name, DACTYL_NAME);
-        assert!(engines[3].legacy.is_some());
+        let by_role = |role: VendorRole| engines.iter().find(|e| e.role == Some(role)).expect("role present");
+        assert_eq!(by_role(VendorRole::SolidKickMotor).preset, PropellantPreset::Solid);
+        assert_eq!(by_role(VendorRole::KeroloxBooster).preset, PropellantPreset::Kerolox);
+        assert_eq!(by_role(VendorRole::HypergolicThruster).preset, PropellantPreset::Hypergolic);
+        let legacy = by_role(VendorRole::LegacyHydroloxUpper);
+        assert!(legacy.legacy.is_some());
+        assert!(legacy.design.name.contains('-'), "a model name: {}", legacy.design.name);
     }
 
     #[test]

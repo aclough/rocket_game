@@ -644,6 +644,9 @@ if their design grows during review.
 
    CLAUDE: Added to §3.7 as a seeded invented catalogue, and to the
    steps. Should the stats vary per world too, or only the names?
+   (Step 11 varied both: thrust, mass and Isp sit in a band around
+   the game's own baseline for the role, so a vendor's product is a
+   product and not the player's design renamed.)
 
 10. **Unit defects** (§3.11): in this plan as a step after retrofit,
     or deferred?
@@ -1011,4 +1014,28 @@ to solve on that tech or the draft carries one. Save v9 moves the old
 flags into the player's set at the JSON level. The TODO item is
 removed. 719 tests, clippy clean; the bot flies hydrolox and kerolox,
 so the curve is untouched.
+
+**Step 11 — third-party and modification.** The fixed catalogue
+(`KM-15`, `RD-33K`, `HT-40`, the Dactyl) is replaced by
+`generate_starter_engines` drawing from `WorldQuery::ThirdPartyCatalog`:
+every world sells a solid kick motor, a hypergolic thruster, a kerolox
+staged-combustion booster and the legacy hydrolox expander upper
+stage, and half of them a mid-size kerolox gas generator that comes
+on the market within three years; each is the game's own baseline for
+its role at a seeded thrust, with mass and Isp jittered in a band
+(the legacy engine 1.3–1.6× heavy, ×3 build time, its 1960s note),
+priced by the cost model, and named "Velotron VT-40"-style from a
+seeded vendor syllable name and the role's number range.
+`ThirdPartyEngine::role: Option<VendorRole>` is how the incumbent
+finds its upper stage and how tests pick entries; old catalogues keep
+their names with no role. Vendor flaws draw from
+`FlawsConfig::third_party_exposure_mix` (20/50/30: not your
+drawings), the catalogue says "flaws cannot be revised, only flown
+out" and the Engines pane marks a vendor part's known flaws so.
+Modifications roll `modification_flaw_prob_per_change` (0.10) once per
+change — a stage added, removed, re-engined or recounted; half a
+chance for a resize — in place of the flat 10 % per modification.
+720 tests, clippy clean; the bot buys nothing, the curve is unchanged
+(47 / 70 / 83 / 96, 6/100), the 200-seed band passes with no misses
+and DinoSoar's marginal cost sits where it was.
 

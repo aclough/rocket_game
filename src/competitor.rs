@@ -192,7 +192,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
     // model with its 1960s process (21_ENGINES.md step 8). Buying it
     // puts that cost in the rocket without the ×3 line time.
     let dactyl = company.third_party_catalog.iter()
-        .position(|e| e.design.name == crate::third_party::DACTYL_NAME)
+        .position(|e| e.role == Some(crate::third_party::VendorRole::LegacyHydroloxUpper))
         .expect("the catalogue carries the legacy hydrolox engine");
     company.contract_third_party(dactyl, crate::calendar::GameDate::default_start(), seed, balance)
         .expect("the legacy engine is available from the start");
@@ -372,7 +372,10 @@ mod tests {
         // It builds its booster engine and buys its upper-stage engine.
         assert_eq!(d.company.engine_projects.len(), 1);
         assert_eq!(d.company.contracted_engines.len(), 1);
-        assert_eq!(d.company.contracted_engines[0].design.name, crate::third_party::DACTYL_NAME);
+        let legacy = d.company.third_party_catalog.iter()
+            .find(|e| e.role == Some(crate::third_party::VendorRole::LegacyHydroloxUpper))
+            .expect("the catalogue carries the legacy hydrolox engine");
+        assert_eq!(d.company.contracted_engines[0].design.name, legacy.design.name);
         let upper = &d.company.rocket_projects[0].design.stage_groups[1][0].engine;
         assert_eq!(upper.id, d.company.contracted_engines[0].design.id);
         assert_eq!(d.company.rocket_projects.len(), 1);

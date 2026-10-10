@@ -262,6 +262,10 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
             if let Some(legacy) = &ce.legacy {
                 lines.push(hint_line(format!("      legacy: {}", legacy)));
             }
+            let known = ce.flaws.iter().filter(|f| f.discovered).count();
+            if known > 0 {
+                lines.push(hint_line("      vendor part — its flaws cannot be revised".to_string()));
+            }
             for flaw in ce.flaws.iter().filter(|f| f.discovered) {
                 lines.push(flaw_line(flaw, ProjectKind::Engine));
             }
