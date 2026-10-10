@@ -96,6 +96,7 @@ const ENGINES: &[KeyBinding] = &[
         "Revise discovered flaws and pending improvements"),
     on_item("O", Some("[O] Order"), "Order a standalone engine build"),
     on_item("A", Some("[A] Auto"), "Toggle auto-revise (on by default)"),
+    on_item("T", None, "Toggle auto-retrofit of built units (on by default)"),
     on_item("U", None, "Accept offered uprates (they risk new flaws)"),
     on_item("E", Some("[E] Hire"), "Hire a new engineering team"),
     on_item("X", Some("[X] Retire"), "Retire this design (asks first)"),
@@ -119,6 +120,7 @@ const ROCKETS: &[KeyBinding] = &[
     on_item("R", Some("[R] Revise"), "Revise discovered flaws"),
     on_item("O", Some("[O] Order"), "Order a rocket build"),
     on_item("A", Some("[A] Auto"), "Toggle auto-revise (on by default)"),
+    on_item("T", None, "Toggle auto-retrofit of built units (on by default)"),
     on_item("m", Some("[m] Target"), "Set the auto-build target"),
     // `[M]` rather than `[Shift+M]`: shorter, and sitting next to
     // `[m] Target` it shows the two keys are a case-sensitive pair,
@@ -155,6 +157,7 @@ const LAUNCHES: &[KeyBinding] = &[
     on_item("F", None, "Fly a spacecraft to a new destination"),
     on_item("D", None, "Dock one spacecraft onto another"),
     on_item("U", None, "Undock a payload from its carrier"),
+    always("R", None, "Retrofit every stale rocket and engine on the shelf"),
     always("P", None, "Delta-v planner"),
 ];
 

@@ -211,6 +211,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
         let size = crate::engine_project::natural_size(&design);
         company.engine_projects.push(EngineProject {
             auto_revise: crate::flaw::auto_revise_default(),
+            auto_retrofit: crate::flaw::auto_revise_default(),
             retired: false,
             project_id,
             design,

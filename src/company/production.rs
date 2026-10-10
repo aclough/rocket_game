@@ -3,6 +3,7 @@
 //! and contracting third-party engines.
 
 use super::*;
+use crate::manufacturing::{InventoryItemId, InventoryRocket};
 
 /// What a stage build order is waiting on: which engine it needs, and how
 /// many. `None` for anything that isn't a stage order, or whose rocket
@@ -47,6 +48,13 @@ pub(super) fn stage_engine_source(
         let ce = contracted_engines.iter().find(|ce| ce.design.id == stage.engine.id)?;
         Some(EngineSource::Contracted(ce.id))
     }
+}
+
+/// How many flaws two flaw lists disagree on, by id.
+fn symmetric_difference(a: &[crate::flaw::Flaw], b: &[crate::flaw::Flaw]) -> u32 {
+    let only_a = a.iter().filter(|f| !b.iter().any(|g| g.id == f.id)).count();
+    let only_b = b.iter().filter(|f| !a.iter().any(|g| g.id == f.id)).count();
+    (only_a + only_b) as u32
 }
 
 impl Company {
@@ -359,13 +367,132 @@ impl Company {
                 continue;
             }
             let current = self.manufacturing.inventory.rocket_count(project_id) as u32
-                + self.manufacturing.pending_integration_orders(project_id);
+                + self.manufacturing.pending_integration_orders(project_id)
+                + self.manufacturing.rockets_in_retrofit(project_id);
             for _ in current..min_count {
                 if let Some((_cost, evt)) = self.order_rocket_build(index, balance_cfg) {
                     events.push(evt);
                 }
             }
         }
+        events
+    }
+
+    /// What a retrofit of this shelved rocket would change: the flaws its
+    /// snapshots and its designs' current flaws disagree on, over the
+    /// rocket project and every player engine project on it. `None` when
+    /// the unit is current. A unit is stale only on a revision it missed,
+    /// so hidden flaws added to a design by a modification do not out a
+    /// unit on their own.
+    pub fn rocket_retrofit_changes(&self, r: &InventoryRocket) -> Option<u32> {
+        let rp = self.rocket_projects.iter().find(|rp| rp.project_id == r.rocket_project_id)?;
+        let mut stale = r.revision < rp.revision;
+        let mut changed = symmetric_difference(&r.rocket_flaws, &rp.flaws);
+        for snap in &r.stage_engine_flaws {
+            if let EngineSource::PlayerDesign(pid) = snap.source {
+                if let Some(ep) = self.engine_projects.iter().find(|ep| ep.project_id == pid) {
+                    stale |= snap.revision < ep.revision;
+                    changed += symmetric_difference(&snap.flaws, &ep.flaws);
+                }
+            }
+        }
+        stale.then_some(changed)
+    }
+
+    /// The same for a loose engine on the shelf.
+    pub fn engine_retrofit_changes(&self, e: &InventoryEngine) -> Option<u32> {
+        let EngineSource::PlayerDesign(pid) = e.source else { return None };
+        let ep = self.engine_projects.iter().find(|ep| ep.project_id == pid)?;
+        (e.revision < ep.revision).then(|| symmetric_difference(&e.flaws, &ep.flaws))
+    }
+
+    /// Take a shelved rocket into a retrofit order that will return it
+    /// with its designs' current flaws. `None` when it is current, not
+    /// on the shelf, or standing down after a pad abort.
+    pub fn order_retrofit_rocket(&mut self, item_id: InventoryItemId, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
+        let r = self.manufacturing.inventory.rockets.iter().find(|r| r.item_id == item_id)?;
+        let changed = self.rocket_retrofit_changes(r)?;
+        let rp = self.rocket_projects.iter().find(|rp| rp.project_id == r.rocket_project_id)?;
+        let (revision, rocket_flaws) = (rp.revision, rp.flaws.clone());
+        let stage_engine_flaws: Vec<crate::manufacturing::StageEngineFlaws> = r.stage_engine_flaws.iter()
+            .map(|snap| {
+                let mut snap = snap.clone();
+                if let EngineSource::PlayerDesign(pid) = snap.source {
+                    if let Some(ep) = self.engine_projects.iter().find(|ep| ep.project_id == pid) {
+                        snap.revision = ep.revision;
+                        snap.flaws = ep.flaws.clone();
+                    }
+                }
+                snap
+            })
+            .collect();
+        let rocket = self.manufacturing.inventory.take_rocket(item_id)?;
+        let name = rocket.rocket_name.clone();
+        let (project_id, build_cost) = (rocket.rocket_project_id, rocket.build_cost);
+        let order_id = self.manufacturing.next_order_id.mint();
+        self.manufacturing.orders.push(ManufacturingOrder::new_retrofit(
+            order_id, Some(project_id), name.clone(),
+            crate::manufacturing::RetrofitItem::Rocket { rocket, revision, rocket_flaws, stage_engine_flaws },
+            changed, build_cost, balance_cfg,
+        ));
+        Some(GameEvent::RetrofitOrdered { item: name, flaws: changed })
+    }
+
+    /// The same for a loose engine.
+    pub fn order_retrofit_engine(&mut self, item_id: InventoryItemId, balance_cfg: &BalanceConfig) -> Option<GameEvent> {
+        let e = self.manufacturing.inventory.engines.iter().find(|e| e.item_id == item_id)?;
+        let changed = self.engine_retrofit_changes(e)?;
+        let EngineSource::PlayerDesign(pid) = e.source else { return None };
+        let ep = self.engine_projects.iter().find(|ep| ep.project_id == pid)?;
+        let (revision, flaws) = (ep.revision, ep.flaws.clone());
+        let idx = self.manufacturing.inventory.engines.iter().position(|e| e.item_id == item_id)?;
+        let engine = self.manufacturing.inventory.engines.remove(idx);
+        let name = engine.engine_name.clone();
+        let build_cost = engine.build_cost;
+        let order_id = self.manufacturing.next_order_id.mint();
+        self.manufacturing.orders.push(ManufacturingOrder::new_retrofit(
+            order_id, None, name.clone(),
+            crate::manufacturing::RetrofitItem::Engine { engine, revision, flaws },
+            changed, build_cost, balance_cfg,
+        ));
+        Some(GameEvent::RetrofitOrdered { item: name, flaws: changed })
+    }
+
+    /// Retrofit every stale rocket and engine on the shelf; how many
+    /// orders were placed, with their events.
+    pub fn retrofit_all_stale(&mut self, balance_cfg: &BalanceConfig) -> Vec<GameEvent> {
+        let rockets: Vec<InventoryItemId> = self.manufacturing.inventory.rockets.iter()
+            .filter(|r| self.rocket_retrofit_changes(r).is_some())
+            .map(|r| r.item_id)
+            .collect();
+        let engines: Vec<InventoryItemId> = self.manufacturing.inventory.engines.iter()
+            .filter(|e| self.engine_retrofit_changes(e).is_some())
+            .map(|e| e.item_id)
+            .collect();
+        let mut events = Vec::new();
+        events.extend(rockets.into_iter().filter_map(|id| self.order_retrofit_rocket(id, balance_cfg)));
+        events.extend(engines.into_iter().filter_map(|id| self.order_retrofit_engine(id, balance_cfg)));
+        events
+    }
+
+    /// The daily auto-retrofit: every stale unit whose project has the
+    /// flag on goes in for a retrofit.
+    pub(crate) fn auto_retrofit(&mut self, balance_cfg: &BalanceConfig) -> Vec<GameEvent> {
+        let rockets: Vec<InventoryItemId> = self.manufacturing.inventory.rockets.iter()
+            .filter(|r| self.rocket_projects.iter()
+                .any(|rp| rp.project_id == r.rocket_project_id && rp.auto_retrofit))
+            .filter(|r| self.rocket_retrofit_changes(r).is_some())
+            .map(|r| r.item_id)
+            .collect();
+        let engines: Vec<InventoryItemId> = self.manufacturing.inventory.engines.iter()
+            .filter(|e| matches!(e.source, EngineSource::PlayerDesign(pid)
+                if self.engine_projects.iter().any(|ep| ep.project_id == pid && ep.auto_retrofit)))
+            .filter(|e| self.engine_retrofit_changes(e).is_some())
+            .map(|e| e.item_id)
+            .collect();
+        let mut events = Vec::new();
+        events.extend(rockets.into_iter().filter_map(|id| self.order_retrofit_rocket(id, balance_cfg)));
+        events.extend(engines.into_iter().filter_map(|id| self.order_retrofit_engine(id, balance_cfg)));
         events
     }
 

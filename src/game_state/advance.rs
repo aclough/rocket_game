@@ -426,6 +426,8 @@ impl GameState {
                     self.player_company.rush_projects.remove(&rocket_project_id);
                     GameEvent::RocketIntegrated { rocket_name }
                 }
+                crate::manufacturing::ManufacturingEvent::RetrofitComplete { name, .. } =>
+                    GameEvent::RetrofitComplete { item: name },
             };
             self.emit(events, evt);
         }
@@ -434,6 +436,8 @@ impl GameState {
 
         let auto_events = self.player_company.auto_reorder_rockets(&self.balance);
         self.emit_all(events, auto_events);
+        let retrofit_events = self.player_company.auto_retrofit(&self.balance);
+        self.emit_all(events, retrofit_events);
 
         // A rush job is over once its last order has left the queue —
         // clear before assigning, so the floor goes back to normal on the

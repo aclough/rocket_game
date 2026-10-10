@@ -345,6 +345,12 @@ pub struct DesignProject<D: Designable> {
     /// partially resets the learning curve.
     #[serde(default = "crate::flaw::auto_revise_default")]
     pub auto_revise: bool,
+    /// Order a retrofit for any built unit of this design that falls
+    /// behind its flaws (22_FLAWS.md §3.5). On by default, like
+    /// `auto_revise`; off lets a player fly a stale unit or save the
+    /// manufacturing time.
+    #[serde(default = "crate::flaw::auto_revise_default")]
+    pub auto_retrofit: bool,
     /// Retired by the player — hidden from its pane and from pickers,
     /// but still present so every id that refers to it keeps resolving
     /// (stages of rocket designs, inventory, cost history, flights).
@@ -382,6 +388,7 @@ impl<D: Designable> DesignProject<D> {
             build_time_multiplier: 1.0,
             flights: 0,
             auto_revise: crate::flaw::auto_revise_default(),
+            auto_retrofit: crate::flaw::auto_revise_default(),
             retired: false,
         }
     }
@@ -721,6 +728,8 @@ pub trait ProjectCore {
     fn nre_cost_mut(&mut self) -> &mut f64;
     fn auto_revise(&self) -> bool;
     fn auto_revise_mut(&mut self) -> &mut bool;
+    fn auto_retrofit(&self) -> bool;
+    fn auto_retrofit_mut(&mut self) -> &mut bool;
     fn retired(&self) -> bool;
     fn is_proposed(&self) -> bool;
     fn discovered_flaw_count(&self) -> usize;
@@ -746,6 +755,8 @@ impl<D: Designable> ProjectCore for DesignProject<D> {
     fn nre_cost_mut(&mut self) -> &mut f64 { &mut self.nre_cost }
     fn auto_revise(&self) -> bool { self.auto_revise }
     fn auto_revise_mut(&mut self) -> &mut bool { &mut self.auto_revise }
+    fn auto_retrofit(&self) -> bool { self.auto_retrofit }
+    fn auto_retrofit_mut(&mut self) -> &mut bool { &mut self.auto_retrofit }
     fn retired(&self) -> bool { self.retired }
     fn is_proposed(&self) -> bool { DesignProject::is_proposed(self) }
     fn discovered_flaw_count(&self) -> usize { DesignProject::discovered_flaw_count(self) }

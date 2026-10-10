@@ -505,6 +505,7 @@ pub(super) fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, b
                 ManufacturingOrderType::Engine { .. } => Color::Cyan,
                 ManufacturingOrderType::Stage { .. } => Color::Blue,
                 ManufacturingOrderType::RocketIntegration { .. } => Color::Magenta,
+                ManufacturingOrderType::Retrofit { .. } => Color::Yellow,
             };
             gauges.push(GaugeInfo {
                 line_index: line_idx,

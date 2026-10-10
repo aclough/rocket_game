@@ -83,6 +83,33 @@ pub enum ManufacturingOrderType {
         #[serde(default)]
         stage_engine_flaws: Vec<StageEngineFlaws>,
     },
+    /// Bring a built unit up to its designs' flaws as they were when
+    /// the retrofit was ordered (22_FLAWS.md §3.5). The unit is off the
+    /// shelf while the work runs and comes back with the new snapshots.
+    Retrofit {
+        rocket_project_id: Option<RocketProjectId>,
+        name: String,
+        item: RetrofitItem,
+        /// Flaws the retrofit adds or removes — what the work is sized by.
+        flaws_changed: u32,
+    },
+}
+
+/// What a retrofit order holds while it works, with the snapshots it
+/// will put on the unit when done.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RetrofitItem {
+    Rocket {
+        rocket: InventoryRocket,
+        revision: u32,
+        rocket_flaws: Vec<crate::flaw::Flaw>,
+        stage_engine_flaws: Vec<StageEngineFlaws>,
+    },
+    Engine {
+        engine: InventoryEngine,
+        revision: u32,
+        flaws: Vec<crate::flaw::Flaw>,
+    },
 }
 
 impl ManufacturingOrderType {
@@ -92,6 +119,7 @@ impl ManufacturingOrderType {
             ManufacturingOrderType::Engine { engine_name, .. } => engine_name.clone(),
             ManufacturingOrderType::Stage { stage_name, .. } => stage_name.clone(),
             ManufacturingOrderType::RocketIntegration { rocket_name, .. } => rocket_name.clone(),
+            ManufacturingOrderType::Retrofit { name, .. } => format!("Retrofit {name}"),
         }
     }
 }
@@ -138,6 +166,10 @@ pub enum ManufacturingEvent {
         design_id: RocketDesignId,
         rocket_name: String,
         build_cost: f64,
+    },
+    RetrofitComplete {
+        order_id: ManufacturingOrderId,
+        name: String,
     },
 }
 
@@ -207,6 +239,7 @@ impl ManufacturingOrder {
             ManufacturingOrderType::Stage { rocket_project_id, .. }
             | ManufacturingOrderType::RocketIntegration { rocket_project_id, .. } =>
                 Some(*rocket_project_id),
+            ManufacturingOrderType::Retrofit { rocket_project_id, .. } => *rocket_project_id,
         }
     }
 
@@ -292,6 +325,7 @@ impl ManufacturingOrder {
             ManufacturingOrderType::Engine { engine_name, .. } => engine_name,
             ManufacturingOrderType::Stage { stage_name, .. } => stage_name,
             ManufacturingOrderType::RocketIntegration { rocket_name, .. } => rocket_name,
+            ManufacturingOrderType::Retrofit { name, .. } => name,
         }
     }
 
@@ -301,6 +335,31 @@ impl ManufacturingOrder {
             ManufacturingOrderType::Engine { .. } => "Engine",
             ManufacturingOrderType::Stage { .. } => "Stage",
             ManufacturingOrderType::RocketIntegration { .. } => "Integration",
+            ManufacturingOrderType::Retrofit { .. } => "Retrofit",
+        }
+    }
+
+    /// A retrofit order: `flaws_changed` flaws' worth of work, a slice
+    /// of the unit's build cost in parts.
+    pub fn new_retrofit(
+        id: ManufacturingOrderId,
+        rocket_project_id: Option<RocketProjectId>,
+        name: String,
+        item: RetrofitItem,
+        flaws_changed: u32,
+        build_cost: f64,
+        balance_cfg: &crate::balance_config::BalanceConfig,
+    ) -> Self {
+        ManufacturingOrder {
+            id,
+            order_type: ManufacturingOrderType::Retrofit { rocket_project_id, name, item, flaws_changed },
+            work_completed: 0.0,
+            work_required: balance_cfg.work.retrofit_work_per_flaw * flaws_changed.max(1) as f64,
+            material_cost: build_cost * balance_cfg.costs.retrofit_material_fraction,
+            labor_cost: 0.0,
+            teams_assigned: 0,
+            waiting_for_prerequisites: false,
+            prior_builds: 0,
         }
     }
 
@@ -594,6 +653,26 @@ impl Manufacturing {
                         build_cost: total_build_cost,
                     });
                 }
+                ManufacturingOrderType::Retrofit { name, item, .. } => {
+                    // The unit keeps its item id and adds the retrofit's
+                    // cost to what it cost to build.
+                    match item.clone() {
+                        RetrofitItem::Rocket { mut rocket, revision, rocket_flaws, stage_engine_flaws } => {
+                            rocket.revision = revision;
+                            rocket.rocket_flaws = rocket_flaws;
+                            rocket.stage_engine_flaws = stage_engine_flaws;
+                            rocket.build_cost += total_build_cost;
+                            self.inventory.rockets.push(rocket);
+                        }
+                        RetrofitItem::Engine { mut engine, revision, flaws } => {
+                            engine.revision = revision;
+                            engine.flaws = flaws;
+                            engine.build_cost += total_build_cost;
+                            self.inventory.engines.push(engine);
+                        }
+                    }
+                    events.push(ManufacturingEvent::RetrofitComplete { order_id: order.id, name: name.clone() });
+                }
             }
         }
 
@@ -611,8 +690,8 @@ impl Manufacturing {
             }
 
             let can_unblock = match &order.order_type {
-                ManufacturingOrderType::Engine { .. } => {
-                    // Engines have no prerequisites
+                ManufacturingOrderType::Engine { .. } | ManufacturingOrderType::Retrofit { .. } => {
+                    // Engines and retrofits have no prerequisites
                     true
                 }
                 ManufacturingOrderType::Stage { .. } => {
@@ -637,6 +716,16 @@ impl Manufacturing {
     pub fn pending_integration_orders(&self, rocket_project_id: RocketProjectId) -> u32 {
         self.orders.iter()
             .filter(|o| matches!(&o.order_type, ManufacturingOrderType::RocketIntegration { rocket_project_id: id, .. } if *id == rocket_project_id))
+            .count() as u32
+    }
+
+    /// Rockets of a project off the shelf for a retrofit: still stock,
+    /// for the auto-build count.
+    pub fn rockets_in_retrofit(&self, rocket_project_id: RocketProjectId) -> u32 {
+        self.orders.iter()
+            .filter(|o| matches!(&o.order_type,
+                ManufacturingOrderType::Retrofit { item: RetrofitItem::Rocket { .. }, rocket_project_id: Some(id), .. }
+                if *id == rocket_project_id))
             .count() as u32
     }
 }

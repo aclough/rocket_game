@@ -966,3 +966,34 @@ case §3.5 names and step 9's auto-retrofit answers; this state is
 committed as the honest intermediate (fleet bands suspended, per-seed
 bands pass), and the curve is read again after step 9.
 
+**Step 9 — retrofit.** `ManufacturingOrderType::Retrofit { item:
+RetrofitItem::{Rocket, Engine}, flaws_changed }`: a stale rocket or
+loose engine leaves the shelf for the order and comes back, same item
+id, with the snapshots its designs had when the retrofit was ordered;
+work `WorkConfig::retrofit_work_per_flaw` (8 team-days) × flaws
+changed (the symmetric difference of flaw ids over the rocket project
+and every player engine project on it, at least one), material
+`CostsConfig::retrofit_material_fraction` (5 %) of the unit's build
+cost. A unit is stale when it was built before a revision it missed.
+`Company::{rocket_retrofit_changes, engine_retrofit_changes,
+order_retrofit_rocket, order_retrofit_engine, retrofit_all_stale,
+auto_retrofit}`; `DesignProject::auto_retrofit` (on by default, `T`
+toggles it on the Engines and Rockets panes); `R` on the Launches tab
+retrofits everything stale; a rocket in retrofit counts as stock for
+the auto-build target; events `RetrofitOrdered` / `RetrofitComplete`;
+the floor shows retrofits in yellow. 717 tests, clippy clean.
+
+| | step 7 | step 8 | step 9 |
+|---|---|---|---|
+| 100 × 6 y: 1st / 2nd / 3rd / 4th+ | 35 / 51 / 72 / 97 | 20 / 20 / 36 / 89 | 47 / 70 / 83 / 96 |
+| 100 × 6 y: bankrupt | 12 | 38 | 6 |
+| 200 × 8 y: 1st / 2nd / 3rd / 4th+ | 32 / 50 / 74 / 97 | — | 41 / 69 / 85 / 97 |
+| 200 × 8 y: bankrupt | 29 | 75 | 13 |
+
+Every fleet band passes at its pre-rework value — the first time since
+step 2 — though the suspension stays on until step 12 re-baselines.
+The vehicle now flies its designs' fixes up to the day it launches,
+which is what the second flight needed (50 → 69 %) and what also lifts
+the first flight past the 35 % target (engines ordered eight months
+early no longer fly eight-month-old flaws). Step 12 re-tunes from here.
+

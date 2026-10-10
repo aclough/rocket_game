@@ -66,6 +66,10 @@ pub enum GameEvent {
     LaunchScrubbed { rocket_name: String, reason: String, delay_days: u32 },
     /// The vehicle arrived but its payload was lost at deploy.
     PayloadLost { rocket_name: String, reason: String },
+    /// A shelved unit went in for a retrofit to its designs' current flaws.
+    RetrofitOrdered { item: String, flaws: u32 },
+    /// A retrofit finished; the unit is back on the shelf.
+    RetrofitComplete { item: String },
     PaymentReceived { amount: f64, contract_name: String },
     EngineBuildOrdered { engine_name: String },
     // Flight events
@@ -296,6 +300,10 @@ impl fmt::Display for GameEvent {
                 write!(f, "Launch scrubbed: {} — {} ({}-day stand-down)", rocket_name, reason, delay_days),
             GameEvent::PayloadLost { rocket_name, reason } =>
                 write!(f, "Payload lost at deploy on {}: {}", rocket_name, reason),
+            GameEvent::RetrofitOrdered { item, flaws } =>
+                write!(f, "Retrofit ordered: {} ({} flaw{} to change)", item, flaws, if *flaws == 1 { "" } else { "s" }),
+            GameEvent::RetrofitComplete { item } =>
+                write!(f, "Retrofit complete: {} is back on the shelf", item),
             GameEvent::FlightReviewOpened { rocket_name, projects, cycles } =>
                 write!(f, "Flight review of {}: the next {} test cycles on {} find what flew",
                     rocket_name, cycles, projects.join(", ")),
@@ -419,6 +427,8 @@ impl GameEvent {
             | GameEvent::EngineBuildOrdered { .. }
             | GameEvent::FlightDeparted { .. }
             | GameEvent::FlightReviewOpened { .. }
+            | GameEvent::RetrofitOrdered { .. }
+            | GameEvent::RetrofitComplete { .. }
             | GameEvent::FlightArrived { .. }
             | GameEvent::SpacecraftDeployed { .. }
             | GameEvent::SpacecraftDocked { .. }

@@ -443,6 +443,7 @@ fn the_manufacturing_tree_nests_integration_stages_engines() {
             T::RocketIntegration { .. } => "integration",
             T::Stage { .. } => "stage",
             T::Engine { .. } => "engine",
+            T::Retrofit { .. } => "retrofit",
         }))
         .collect();
 

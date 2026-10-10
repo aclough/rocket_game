@@ -128,6 +128,9 @@ pub struct CostsConfig {
     pub starting_money: f64,
     /// Monthly salary for an engineering team (~8-10 engineers).
     pub engineering_monthly_salary: f64,
+    /// Material cost of a retrofit as a fraction of the unit's build
+    /// cost: parts swapped, not a vehicle rebuilt.
+    pub retrofit_material_fraction: f64,
     /// One-time hiring cost for an engineering team.
     pub engineering_hiring_cost: f64,
     /// Monthly salary for a manufacturing team (~20-25 workers).
@@ -162,6 +165,7 @@ impl Default for CostsConfig {
             // (200 seeds: 47/200 bankrupt at $200M, 20/200 at $250M).
             starting_money: 250_000_000.0,
             engineering_monthly_salary: 150_000.0,
+            retrofit_material_fraction: 0.05,
             engineering_hiring_cost: 150_000.0,
             manufacturing_monthly_salary: 300_000.0,
             manufacturing_hiring_cost: 900_000.0,
@@ -293,6 +297,10 @@ pub struct WorkConfig {
     pub flaw_revision_work: f64,
     /// Work units per testing cycle.
     pub testing_cycle_work: f64,
+    /// Manufacturing work, in team-days, per flaw a retrofit changes on a
+    /// built unit (22_FLAWS.md §3.5): bringing a shelved rocket or engine
+    /// up to its designs' current flaws. At least one flaw's worth.
+    pub retrofit_work_per_flaw: f64,
 }
 
 impl Default for WorkConfig {
@@ -315,6 +323,7 @@ impl Default for WorkConfig {
             rocket_modification_work_fraction: 0.10,
             flaw_revision_work: 30.0,
             testing_cycle_work: 30.0,
+            retrofit_work_per_flaw: 8.0,
         }
     }
 }

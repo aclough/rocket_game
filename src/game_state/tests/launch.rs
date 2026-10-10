@@ -230,3 +230,85 @@ fn a_shelved_rocket_flies_its_engine_snapshot_not_the_project() {
     gs.launch_rocket(item, "leo", vec![Payload::TestMass { mass_kg: 10.0 }], false).expect("launched");
     assert!(gs.player_company.engine_projects[0].flaws[0].discovered, "found on the project by id");
 }
+
+/// A retrofit takes a stale rocket off the shelf, and brings it back with
+/// its designs' current flaws, sized by the flaws it changes.
+#[test]
+fn a_retrofit_brings_a_shelved_rocket_up_to_date() {
+    use crate::flaw::{FlawConsequence, FlawPhase};
+    let mut gs = GameState::new("Test".into(), 1);
+    let old = certain_flaw(1, FlawPhase::Burn, 0, FlawConsequence::EngineLoss);
+    let item = shelve_rocket(&mut gs, vec![old.clone()]);
+    // The engines were built carrying one flaw each; the vehicle holds them.
+    let mut eng = certain_flaw(50, FlawPhase::Burn, 0, FlawConsequence::EngineLoss);
+    eng.stage_group = None;
+    gs.player_company.engine_projects[0].flaws = vec![eng.clone()];
+    let design = gs.player_company.rocket_projects[0].design.clone();
+    gs.player_company.manufacturing.inventory.rockets[0].stage_engine_flaws =
+        crate::launch::engine_snapshots_for(&design, &gs.player_company.engine_projects, &[]);
+    assert!(gs.player_company.rocket_retrofit_changes(&gs.player_company.manufacturing.inventory.rockets[0]).is_none(),
+        "a unit built at the current revision is not stale");
+
+    // The rocket project revises its flaw away; the Lifter fixes its too.
+    gs.player_company.rocket_projects[0].flaws.clear();
+    gs.player_company.rocket_projects[0].revision += 1;
+    gs.player_company.engine_projects[0].flaws.clear();
+    gs.player_company.engine_projects[0].revision += 1;
+    let r = &gs.player_company.manufacturing.inventory.rockets[0];
+    // One rocket flaw plus one engine flaw per stage on the Lifter (stages 1 and 2).
+    assert_eq!(gs.player_company.rocket_retrofit_changes(r), Some(3));
+
+    let balance = gs.balance.clone();
+    let evt = gs.player_company.order_retrofit_rocket(item, &balance).expect("stale, so ordered");
+    assert!(matches!(evt, GameEvent::RetrofitOrdered { flaws: 3, .. }));
+    assert!(gs.player_company.manufacturing.inventory.rockets.is_empty(), "off the shelf while in work");
+    let order = gs.player_company.manufacturing.orders.last().unwrap();
+    assert_eq!(order.work_required, balance.work.retrofit_work_per_flaw * 3.0);
+    assert_eq!(gs.player_company.manufacturing.rockets_in_retrofit(RocketProjectId(1)), 1);
+
+    // Work it off with one manufacturing team.
+    gs.player_company.hire_manufacturing_team("Line 1".into(), &balance);
+    let mut done = false;
+    for _ in 0..200 {
+        let events = gs.advance_day();
+        if events.iter().any(|e| matches!(e, GameEvent::RetrofitComplete { .. })) {
+            done = true;
+            break;
+        }
+    }
+    assert!(done, "the retrofit completes");
+    let r = &gs.player_company.manufacturing.inventory.rockets[0];
+    assert_eq!(r.item_id, item, "the same unit comes back");
+    assert!(r.rocket_flaws.is_empty() && r.stage_engine_flaws.iter().all(|s| s.flaws.is_empty()), "with the fixes");
+    assert_eq!(r.revision, gs.player_company.rocket_projects[0].revision);
+    assert!(gs.player_company.rocket_retrofit_changes(r).is_none());
+}
+
+/// Auto-retrofit orders the retrofit the day a unit falls behind, and
+/// a rocket in retrofit still counts as stock for the auto-build target.
+#[test]
+fn auto_retrofit_orders_on_its_own_and_counts_as_stock() {
+    use crate::flaw::{FlawConsequence, FlawPhase};
+    let mut gs = GameState::new("Test".into(), 1);
+    let old = certain_flaw(1, FlawPhase::Burn, 0, FlawConsequence::EngineLoss);
+    let item = shelve_rocket(&mut gs, vec![old]);
+    gs.player_company.rocket_projects[0].status = crate::rocket_project::RocketDesignStatus::Testing { work_completed: 0.0 };
+    gs.player_company.auto_build_targets.insert(RocketProjectId(1), 1);
+
+    // Off: a revision leaves the unit stale on the shelf.
+    gs.player_company.rocket_projects[0].auto_retrofit = false;
+    gs.player_company.rocket_projects[0].flaws.clear();
+    gs.player_company.rocket_projects[0].revision += 1;
+    gs.advance_day();
+    assert_eq!(gs.player_company.manufacturing.inventory.rockets.len(), 1, "nothing ordered with the flag off");
+
+    // On: it goes in the next day, and the auto-build does not order a replacement.
+    gs.player_company.rocket_projects[0].auto_retrofit = true;
+    let events = gs.advance_day();
+    assert!(events.iter().any(|e| matches!(e, GameEvent::RetrofitOrdered { .. })), "{events:?}");
+    assert!(gs.player_company.manufacturing.inventory.rockets.is_empty());
+    assert_eq!(gs.player_company.manufacturing.rockets_in_retrofit(RocketProjectId(1)), 1);
+    assert_eq!(gs.player_company.manufacturing.pending_integration_orders(RocketProjectId(1)), 0,
+        "a rocket in retrofit is stock, not a gap to fill");
+    let _ = item;
+}

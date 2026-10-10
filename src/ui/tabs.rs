@@ -93,6 +93,13 @@ impl App {
                     None => format!("No {} selected", noun),
                 });
             }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                self.status_message = Some(match selected.and_then(|r| company.toggle_auto_retrofit(r)) {
+                    Some((name, on)) =>
+                        format!("{}: auto-retrofit {}", name, if on { "on" } else { "off" }),
+                    None => format!("No {} selected", noun),
+                });
+            }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 // Add an idle team, or steal one from the busiest project.
                 self.status_message = Some(if selected.is_some_and(|r| company.add_team(r)) {
@@ -407,6 +414,19 @@ impl App {
 
     pub(super) fn handle_launches_key(&mut self, key: KeyCode) {
         match key {
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                let balance = self.game.balance.clone();
+                let events = self.game.player_company.retrofit_all_stale(&balance);
+                let n = events.len();
+                for e in events {
+                    self.game.log(e);
+                }
+                self.status_message = Some(match n {
+                    0 => "Nothing on the shelf is stale".into(),
+                    1 => "1 retrofit ordered".into(),
+                    n => format!("{n} retrofits ordered"),
+                });
+            }
             KeyCode::Char('f') | KeyCode::Char('F') => {
                 // Fly a spacecraft to a new destination
                 if self.game.spacecraft.is_empty() {

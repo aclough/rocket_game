@@ -342,6 +342,15 @@ impl Company {
         Some((p.name().to_string(), on))
     }
 
+    /// Flip a project's auto-retrofit flag; the new state.
+    pub fn toggle_auto_retrofit(&mut self, r: ProjectRef) -> Option<(String, bool)> {
+        let p = self.project_mut(r)?;
+        let flag = p.auto_retrofit_mut();
+        *flag = !*flag;
+        let on = *flag;
+        Some((p.name().to_string(), on))
+    }
+
     /// Put every idle engineering team to work, each on the
     /// least-staffed committed project at that moment. An idle team is
     /// pure waste — testing and revising consume work just as designing
