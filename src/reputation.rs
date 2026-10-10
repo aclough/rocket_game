@@ -51,16 +51,20 @@ impl Reputation {
         self.drought_factor = 0.0;
     }
 
-    /// Called on a failed launch (payload lost). `severity` scales the
-    /// penalties by the harshest market on the manifest (1.0 for
-    /// test-mass flights).
-    pub fn on_launch_failure(&mut self, cfg: &ReputationConfig, severity: f64) {
+    /// Called on a failed launch. `severity` scales the penalties by the
+    /// harshest market on the manifest (1.0 for test-mass flights);
+    /// `customer_payload` is whether a customer's payload was aboard —
+    /// only then is there a lost payload to be known for. A test mass
+    /// lost on a test flight costs the failure, not the trust.
+    pub fn on_launch_failure(&mut self, cfg: &ReputationConfig, severity: f64, customer_payload: bool) {
         // Decay existing factors
         self.success_factor *= cfg.success_decay;
         self.lost_payload_factor *= cfg.lost_payload_decay;
         // Add failure penalties
         self.success_factor -= cfg.failure_penalty * severity;
-        self.lost_payload_factor -= cfg.lost_payload_penalty * severity;
+        if customer_payload {
+            self.lost_payload_factor -= cfg.lost_payload_penalty * severity;
+        }
         // Reset drought (still launched, even if it failed)
         self.drought_factor = 0.0;
     }
@@ -119,7 +123,7 @@ mod tests {
     #[test]
     fn test_failure_decreases_reputation() {
         let mut rep = Reputation::new();
-        rep.on_launch_failure(&cfg(), 1.0);
+        rep.on_launch_failure(&cfg(), 1.0, true);
         assert!(rep.total() < 0.0);
         assert_eq!(rep.success_factor, -cfg().failure_penalty);
         assert_eq!(rep.lost_payload_factor, -cfg().lost_payload_penalty);
@@ -161,9 +165,9 @@ mod tests {
     #[test]
     fn test_severity_scales_penalties() {
         let mut baseline = Reputation::new();
-        baseline.on_launch_failure(&cfg(), 1.0);
+        baseline.on_launch_failure(&cfg(), 1.0, true);
         let mut harsh = Reputation::new();
-        harsh.on_launch_failure(&cfg(), 2.0);
+        harsh.on_launch_failure(&cfg(), 2.0, true);
         assert!((harsh.total() - baseline.total() * 2.0).abs() < 1e-9);
 
         let mut lenient = Reputation::new();
@@ -174,12 +178,22 @@ mod tests {
     #[test]
     fn test_recovery_from_failure() {
         let mut rep = Reputation::new();
-        rep.on_launch_failure(&cfg(), 1.0);
+        rep.on_launch_failure(&cfg(), 1.0, true);
         let after_failure = rep.total();
         // Several successes should recover
         for _ in 0..5 {
             rep.on_launch_success(&cfg());
         }
         assert!(rep.total() > after_failure);
+    }
+
+    /// A test flight that fails costs the failure, not a lost payload:
+    /// nobody's satellite was aboard.
+    #[test]
+    fn a_test_mass_failure_loses_no_payload() {
+        let mut rep = Reputation::new();
+        rep.on_launch_failure(&cfg(), 1.0, false);
+        assert_eq!(rep.success_factor, -cfg().failure_penalty);
+        assert_eq!(rep.lost_payload_factor, 0.0);
     }
 }

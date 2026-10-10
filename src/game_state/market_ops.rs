@@ -812,7 +812,7 @@ impl GameState {
 
                 let comp = &mut self.competitors[ci];
                 if failed {
-                    comp.company.reputation.on_launch_failure(&self.balance.reputation, severity);
+                    comp.company.reputation.on_launch_failure(&self.balance.reputation, severity, true);
                 } else {
                     comp.company.credit(contract.payment);
                     comp.company.reputation.on_launch_success(&self.balance.reputation);

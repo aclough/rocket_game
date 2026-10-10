@@ -223,7 +223,9 @@ impl GameState {
             }
 
             let severity = self.manifest_failure_severity(&manifest_contract_ids);
-            self.player_company.reputation.on_launch_failure(&self.balance.reputation, severity);
+            self.player_company.reputation.on_launch_failure(
+                &self.balance.reputation, severity, !manifest_contract_ids.is_empty(),
+            );
 
             for cid in &manifest_contract_ids {
                 if let Some(ci) = self.player_company.active_contracts.iter()
@@ -425,7 +427,9 @@ impl GameState {
                         })
                         .collect();
                     let severity = self.manifest_failure_severity(&manifest);
-                    self.player_company.reputation.on_launch_failure(&self.balance.reputation, severity);
+                    self.player_company.reputation.on_launch_failure(
+                        &self.balance.reputation, severity, !manifest.is_empty(),
+                    );
                     events.push(GameEvent::SpacecraftLost {
                         rocket_name: flight.rocket_name.clone(),
                         location,
@@ -545,7 +549,7 @@ impl GameState {
                 })
                 .collect();
             let severity = self.manifest_failure_severity(&manifest);
-            self.player_company.reputation.on_launch_failure(&self.balance.reputation, severity);
+            self.player_company.reputation.on_launch_failure(&self.balance.reputation, severity, !manifest.is_empty());
             events.push(GameEvent::PayloadLost { rocket_name: flight.rocket_name.clone(), reason: words.clone() });
         } else if is_partial {
             let manifest: Vec<crate::contract::ContractId> = flight.payloads.iter()
