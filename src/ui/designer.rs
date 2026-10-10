@@ -1185,6 +1185,85 @@ mod autosize_tests {
         st
     }
 
+    /// Measurement, not a check: what the autosizer gives a core with
+    /// side boosters, liquid and solid (TODO: "booster fuel size seems a
+    /// bit borked, especially for solid boosters").
+    #[test]
+    #[ignore]
+    fn probe_booster_sizing() {
+        let core = engine(1, 3_000_000.0, 300.0, 2_000.0, EngineCycle::GasGenerator, Propellant::RP1);
+        let upper = engine(2, 400_000.0, 440.0, 800.0, EngineCycle::Expander, Propellant::LH2);
+        for (label, booster) in [
+            ("liquid kerolox 1.5 MN", engine(3, 1_500_000.0, 290.0, 1_200.0, EngineCycle::GasGenerator, Propellant::RP1)),
+            ("solid 1.5 MN", engine(4, 1_500_000.0, 265.0, 800.0, EngineCycle::PressureFed, Propellant::SolidMix)),
+        ] {
+            let mut st = stack(vec![core.clone(), upper.clone()], 5_000.0);
+            for _ in 0..2 {
+                apply_picked_engine_to_designer(
+                    &mut st, EngineSource::PlayerDesign(crate::engine_project::EngineProjectId(9)),
+                    booster.clone(), PickSlot::BoosterFor(0),
+                );
+            }
+            let design = RocketDesign {
+                id: crate::rocket::RocketDesignId(1), name: "d".into(),
+                stage_groups: st.stage_groups.clone(),
+            };
+            let stats = crate::rocket::compute_stage_stats(&design, st.payload_kg, "earth_surface");
+            println!("== {label}: liftoff TWR {:.2}", stats[0].twr);
+            for (gi, group) in st.stage_groups.iter().enumerate() {
+                for (si, stage) in group.iter().enumerate() {
+                    let burn_s = stage.propellant_mass_kg / stage.mass_flow_kg_s().max(1e-9);
+                    println!("  g{gi} s{si} {:<28} prop {:>9.0} kg  dry {:>7.0} kg  burn {:>6.0} s",
+                        stage.name, stage.propellant_mass_kg, stage.dry_mass_kg(), burn_s);
+                }
+            }
+        }
+    }
+
+    /// Side boosters are sized by burn time and the core by the group's
+    /// liftoff thrust-to-weight with the boosters counted in; the
+    /// boosters no longer come out at the floor with the core carrying
+    /// everything (TODO: "booster fuel size seems a bit borked").
+    #[test]
+    fn side_boosters_get_a_real_load_and_the_core_keeps_the_twr() {
+        use crate::stage::{BOOSTER_BURN_SECONDS, SOLID_BURN_SECONDS};
+        let core = engine(1, 3_000_000.0, 300.0, 2_000.0, EngineCycle::GasGenerator, Propellant::RP1);
+        let upper = engine(2, 400_000.0, 440.0, 800.0, EngineCycle::Expander, Propellant::LH2);
+        for (booster, seconds) in [
+            (engine(3, 1_500_000.0, 290.0, 1_200.0, EngineCycle::GasGenerator, Propellant::RP1), BOOSTER_BURN_SECONDS),
+            (engine(4, 1_500_000.0, 265.0, 800.0, EngineCycle::PressureFed, Propellant::SolidMix), SOLID_BURN_SECONDS),
+        ] {
+            let mut st = stack(vec![core.clone(), upper.clone()], 5_000.0);
+            for _ in 0..2 {
+                apply_picked_engine_to_designer(
+                    &mut st, EngineSource::PlayerDesign(crate::engine_project::EngineProjectId(9)),
+                    booster.clone(), PickSlot::BoosterFor(0),
+                );
+            }
+            for si in 1..=2 {
+                let b = &st.stage_groups[0][si];
+                let burn = b.propellant_mass_kg / b.mass_flow_kg_s();
+                assert!((burn - seconds).abs() < 10.0, "booster {si} burns {burn:.0} s, sized to {seconds}");
+            }
+            let design = RocketDesign {
+                id: crate::rocket::RocketDesignId(1), name: "d".into(),
+                stage_groups: st.stage_groups.clone(),
+            };
+            let stats = crate::rocket::compute_stage_stats(&design, st.payload_kg, "earth_surface");
+            assert!((stats[0].twr - TARGET_LIFTOFF_TWR).abs() < 0.05,
+                "the group lifts off at {TARGET_LIFTOFF_TWR}, got {:.2}", stats[0].twr);
+            let core_burn = st.stage_groups[0][0].propellant_mass_kg / st.stage_groups[0][0].mass_flow_kg_s();
+            assert!(core_burn > seconds, "the core outlasts its boosters: {core_burn:.0} s");
+        }
+        // A lone solid first stage is a grain too.
+        let st = stack(vec![
+            engine(5, 2_000_000.0, 265.0, 1_500.0, EngineCycle::PressureFed, Propellant::SolidMix),
+            upper,
+        ], 2_000.0);
+        let s = &st.stage_groups[0][0];
+        assert!((s.propellant_mass_kg / s.mass_flow_kg_s() - SOLID_BURN_SECONDS).abs() < 10.0);
+    }
+
     /// Liftoff thrust-to-weight is the whole point of the booster rule.
     /// The old flat burn-time default let a stage come out at any TWR at
     /// all — including below 1, where the rocket doesn't leave the pad.

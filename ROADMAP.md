@@ -54,6 +54,15 @@ A snapshot of what exists, for orientation — not a task list.
   the same opening the scripted bot is *tested* to survive, `?` help
   for every key on every tab, idle-team auto-assignment, and
   auto-revise on by default.
+- **Flaws (22_FLAWS.md):** flaws roll at flight events (ignition, max-Q,
+  burn, separation, deploy) on the stage they live on; three exposure
+  classes with their own ground-discovery exponents; flights review
+  what flew; pad aborts, payload losses and power-draw flaws; wording
+  that fits the hardware; built units carry their flaws and are
+  retrofitted (auto by default); deficiencies retire per company; a
+  seeded vendor catalogue; a reliability curve of 36 / 63 / 81 / 97 %
+  by launch against the real new-entrant record
+  (`docs/launch_survey_2026.md`), and a prudent bot for the ULA path.
 - **Robustness:** month-start and on-quit autosave across three
   rotating slots, versioned saves with a compatibility corpus of real
   saves from past versions, a panic handler that gives the terminal
@@ -93,10 +102,6 @@ not committed to until then.
 Vertical loops, each individually shippable. Order should be revisited
 against player feedback.
 
-- Rework and rebalance flaws.  Look for new categories of maluses and make sure
-  that each description makes sense with the engines it's paired with.  Make
-  things a bit harder so that we expect a failure on most first launches.  Look
-  at early launchs of Falcon 1, Electron, Firefly Alpha, Astra Rocket 1.
 - More significant deficiencies
 - Add different strategies to the automatic balance testing with different
   rocket designs.

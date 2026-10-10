@@ -176,6 +176,20 @@ pub const TARGET_LIFTOFF_TWR: f64 = 1.2;
 
 pub const TARGET_STAGE_TWR: f64 = 1.0;
 
+/// Burn time a side booster is sized to, seconds. A booster in a
+/// parallel group cannot be sized by the group's thrust-to-weight — the
+/// core and every booster would be solving the same equation, and the
+/// first one solved took the whole budget while the rest got the floor.
+/// Boosters burn out first and are sized like the real ones: about two
+/// minutes of their own thrust, with the core then sized to the TWR
+/// target given what the boosters add.
+pub const BOOSTER_BURN_SECONDS: f64 = 130.0;
+
+/// Burn time a solid motor is sized to, seconds, wherever it sits: a
+/// solid's load is its grain, cast for its burn, not a tank to top up to
+/// a thrust-to-weight.
+pub const SOLID_BURN_SECONDS: f64 = 100.0;
+
 /// Vacuum delta-v a low-thrust stage is sized towards.
 ///
 /// Spiral transfers out of Earth orbit run roughly 3-8 km/s depending on
@@ -256,6 +270,15 @@ pub fn autosize_propellant(
 
     // Wet mass of this stage at a candidate propellant load.
     let wet_at = |p: f64| p + dry_mass_for(stage, p, is_first, has_interstage);
+
+    // A solid motor, or a side booster, is sized by burn time: the
+    // group's thrust-to-weight is the core's equation, solved with the
+    // boosters' thrust and mass already in it.
+    if stage.engine.is_solid() || inner_index > 0 {
+        let seconds = if stage.engine.is_solid() { SOLID_BURN_SECONDS } else { BOOSTER_BURN_SECONDS };
+        let load = stage.mass_flow_kg_s() * seconds;
+        return ((load / 100.0).ceil() * 100.0).clamp(MIN_AUTOSIZED_PROPELLANT, MAX_AUTOSIZED_PROPELLANT);
+    }
 
     let target = if stage.engine.is_low_thrust() {
         // Electric propulsion is *defined* by having a thrust-to-weight
