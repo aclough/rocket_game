@@ -3,6 +3,7 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 [] Investigate dry masses when we go to do re-entry and start adding other
 options to our rocket bodies.
 
+[] Hard to find Solid in the UI, maybe make it both a Cycle and a Preset?
 
 [] Tech deficiencies retire per company: a new design on a technology
 inherits only the deficiencies that company hasn't solved (existing
