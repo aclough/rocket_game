@@ -74,7 +74,18 @@ pub enum GameEvent {
     /// stack apart), as distinct from merely stranded.
     SpacecraftLost { rocket_name: String, location: String, reason: String },
     PowerLost { rocket_name: String, location: String },
-    MidFlightFlawActivated { rocket_name: String, flaw_description: String, consequence: String },
+    /// A flaw fired on a vehicle in flight or parked. `source` is the
+    /// part it belongs to ("Engine FC 2", "Rocket Upgoer 1 S2",
+    /// "Reactor …"), as the launch popup already shows; an upper
+    /// stage's engine flaws roll here, not on the pad, and used to be
+    /// logged as the rocket's own. Empty in events from older saves.
+    MidFlightFlawActivated {
+        rocket_name: String,
+        #[serde(default)]
+        source: String,
+        flaw_description: String,
+        consequence: String,
+    },
     /// Major economic shift affecting the launch market.
     EconomicShift { condition: String, description: String },
     /// An anchor customer announced a multi-mission program and opened
@@ -287,8 +298,13 @@ impl fmt::Display for GameEvent {
             GameEvent::PowerLost { rocket_name, location } =>
                 write!(f, "Power lost: {} stranded at {} (battery exhausted)",
                     rocket_name, location),
-            GameEvent::MidFlightFlawActivated { rocket_name, flaw_description, consequence } =>
-                write!(f, "In-flight flaw on {}: {} ({})", rocket_name, flaw_description, consequence),
+            GameEvent::MidFlightFlawActivated { rocket_name, source, flaw_description, consequence } => {
+                if source.is_empty() {
+                    write!(f, "In-flight flaw on {}: {} ({})", rocket_name, flaw_description, consequence)
+                } else {
+                    write!(f, "In-flight flaw on {} — {}: {} ({})", rocket_name, source, flaw_description, consequence)
+                }
+            }
             GameEvent::EconomicShift { condition, description } =>
                 write!(f, "Economic shift — {}: {}", condition, description),
             GameEvent::CampaignAnnounced {

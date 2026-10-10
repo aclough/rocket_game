@@ -791,6 +791,7 @@ impl GameState {
             for activation in &roll.activations {
                 news.push(GameEvent::MidFlightFlawActivated {
                     rocket_name: sc.name.clone(),
+                    source: activation.source.clone(),
                     flaw_description: activation.flaw_description.clone(),
                     consequence: activation.consequence.to_string(),
                 });
@@ -840,6 +841,7 @@ fn push_activation_events(events: &mut Vec<GameEvent>, rocket_name: &str, roll: 
     for a in &roll.activations {
         events.push(GameEvent::MidFlightFlawActivated {
             rocket_name: rocket_name.to_string(),
+            source: a.source.clone(),
             flaw_description: a.flaw_description.clone(),
             consequence: a.consequence.to_string(),
         });
@@ -972,6 +974,7 @@ fn tick_flight(
                                 if let Some(loss) = launch::roll_overexpansion(rng, stage, ambient, nozzle_cfg) {
                                     events.push(GameEvent::MidFlightFlawActivated {
                                         rocket_name: flight.rocket_name.clone(),
+                                        source: launch::rocket_source(&stage.name),
                                         flaw_description: format!(
                                             "{} engine(s) destroyed by flow separation",
                                             loss.engines_lost,

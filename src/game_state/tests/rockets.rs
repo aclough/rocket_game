@@ -124,6 +124,12 @@ fn test_flaw_scoping_by_stage_usage() {
         .collect();
     assert_eq!(flaw_events.len(), 1,
         "Should have exactly one mid-flight flaw event, got {}", flaw_events.len());
+    // The log names the engine the flaw belongs to, not just the rocket:
+    // upper-stage engine flaws roll here and used to read as the rocket's.
+    let GameEvent::MidFlightFlawActivated { source, .. } = &flaw_events[0].1 else { unreachable!() };
+    assert!(source.starts_with("Engine "), "mid-flight flaw source should name the engine, got {source:?}");
+    let text = flaw_events[0].1.to_string();
+    assert!(text.contains(source.as_str()), "event text should carry the source: {text}");
 }
 
 #[test]
