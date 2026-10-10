@@ -997,3 +997,18 @@ which is what the second flight needed (50 → 69 %) and what also lifts
 the first flight past the 35 % target (engines ordered eight months
 early no longer fly eight-month-old flaws). Step 12 re-tunes from here.
 
+**Step 10 — deficiencies retire per company.** `TechDeficiency.solved`
+is gone from the world; `Company::solved_deficiencies:
+HashSet<TechDeficiencyId>` holds what this company has solved on any
+design. A design finishing inherits only `Technology::unsolved_for(
+&company.solved_deficiencies)`; a successful attempt adds the id to
+the set and removes it from that project; a design still carrying it
+solves it at `solved_elsewhere_multiplier` (now "solved on another of
+ours"); the world's list is untouched, so a rival would face all of
+it. The ⚗ cue on a project shows only while it carries a deficiency,
+and on the designer's tech line only while the company has one left
+to solve on that tech or the draft carries one. Save v9 moves the old
+flags into the player's set at the JSON level. The TODO item is
+removed. 719 tests, clippy clean; the bot flies hydrolox and kerolox,
+so the curve is untouched.
+

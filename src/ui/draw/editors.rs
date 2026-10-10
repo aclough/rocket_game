@@ -56,8 +56,12 @@ pub(super) fn draw_engine_editor_modal(
     )));
     // An experimental propellant carries its technology's deficiencies,
     // which stay hidden until the design completes.
+    let company_unsolved = |tech: &crate::technology::Technology| {
+        !tech.unsolved_for(&app.game.player_company.solved_deficiencies).is_empty()
+    };
     if let Some(tech) = ep.technology_id
         .and_then(|id| app.game.technologies.iter().find(|t| t.id == id))
+        .filter(|tech| company_unsolved(tech) || !ep.tech_deficiency_ids.is_empty())
     {
         let risk = match tech.difficulty {
             0 => "low risk",

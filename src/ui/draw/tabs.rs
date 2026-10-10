@@ -120,6 +120,7 @@ pub(super) fn push_tech_deficiency_lines<D: Designable>(
     lines: &mut Vec<Line<'static>>,
     project: &DesignProject<D>,
     technologies: &[crate::technology::Technology],
+    solved: &std::collections::HashSet<crate::technology::TechDeficiencyId>,
 ) {
     if project.tech_deficiency_ids.is_empty() {
         return;
@@ -132,8 +133,8 @@ pub(super) fn push_tech_deficiency_lines<D: Designable>(
     lines.push(Line::from(format!("      Tech deficiencies ({}):", tech.name)));
     for def_id in &project.tech_deficiency_ids {
         let Some(def) = tech.deficiencies.iter().find(|d| d.id == *def_id) else { continue };
-        let status = if def.solved {
-            "(solved elsewhere — easy fix)".to_string()
+        let status = if solved.contains(&def.id) {
+            "(solved on another design — easy fix)".to_string()
         } else if def.total_attempts > 0 {
             format!("({} failed attempt{})",
                 def.total_attempts,
@@ -205,7 +206,10 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
             bells.isp(),
             legend,
         )));
+        // Experimental while the design still carries a deficiency of
+        // its technology; once they are all revised out the cue goes.
         if let Some(tech) = project.technology_id
+            .filter(|_| !project.tech_deficiency_ids.is_empty())
             .and_then(|id| app.game.technologies.iter().find(|t| t.id == id))
         {
             lines.push(Line::from(Span::styled(
@@ -238,7 +242,7 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
 
         push_flaw_lines(&mut lines, &project.flaws, ProjectKind::Engine);
         push_improvement_lines(&mut lines, &project.improvements);
-        push_tech_deficiency_lines(&mut lines, project, &app.game.technologies);
+        push_tech_deficiency_lines(&mut lines, project, &app.game.technologies, &app.game.player_company.solved_deficiencies);
     }
 
     // Contracted engines section
@@ -319,7 +323,7 @@ pub(super) fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border
 
         push_flaw_lines(&mut lines, &project.flaws, ProjectKind::Reactor);
         push_improvement_lines(&mut lines, &project.improvements);
-        push_tech_deficiency_lines(&mut lines, project, &app.game.technologies);
+        push_tech_deficiency_lines(&mut lines, project, &app.game.technologies, &app.game.player_company.solved_deficiencies);
     }
 
     render_project_pane(

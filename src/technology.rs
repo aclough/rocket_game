@@ -62,8 +62,6 @@ pub struct TechDeficiency {
     pub kind: TechDeficiencyKind,
     /// How solvable this deficiency is (0.0 = impossible, 1.0 = easy).
     pub solvability: f64,
-    /// Whether any engine in the company has solved this.
-    pub solved: bool,
     /// Number of failed revision attempts across all engines.
     pub total_attempts: u32,
 }
@@ -83,9 +81,11 @@ pub struct Technology {
 }
 
 impl Technology {
-    /// Get unsolved deficiencies.
-    pub fn unsolved_deficiencies(&self) -> Vec<&TechDeficiency> {
-        self.deficiencies.iter().filter(|d| !d.solved).collect()
+    /// The deficiencies a company has not solved yet (22_FLAWS.md §3.6:
+    /// solving is per company, so a rival adopting the tech faces the
+    /// full list).
+    pub fn unsolved_for<'a>(&'a self, solved: &std::collections::HashSet<TechDeficiencyId>) -> Vec<&'a TechDeficiency> {
+        self.deficiencies.iter().filter(|d| !solved.contains(&d.id)).collect()
     }
 }
 
@@ -207,7 +207,6 @@ fn generate_deficiencies(
             description,
             kind,
             solvability,
-            solved: false,
             total_attempts: 0,
         }
     }).collect()
@@ -290,8 +289,10 @@ fn pick_description(rng: &mut rand::rngs::StdRng, options: &[&str]) -> String {
     options[rng.gen_range(0..options.len())].to_string()
 }
 
-/// Attempt to solve a tech deficiency during revision.
-/// Returns true if solved, false if failed.
+/// Attempt to solve a tech deficiency during revision. Returns true if
+/// solved; the caller records it on the company. `already_solved_elsewhere`
+/// is whether another of the company's designs has solved it, which
+/// makes it much easier to solve again.
 pub fn attempt_solve(
     deficiency: &mut TechDeficiency,
     already_solved_elsewhere: bool,
@@ -306,12 +307,7 @@ pub fn attempt_solve(
         deficiency.solvability
     };
 
-    if rng.gen::<f64>() < chance {
-        deficiency.solved = true;
-        true
-    } else {
-        false
-    }
+    rng.gen::<f64>() < chance
 }
 
 /// Message about failed attempts (same regardless of solvability).
@@ -486,7 +482,6 @@ mod tests {
             description: "test".into(),
             kind: TechDeficiencyKind::IspPenalty(0.1),
             solvability: 0.3,
-            solved: false,
             total_attempts: 0,
         };
 

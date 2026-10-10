@@ -69,6 +69,11 @@ pub struct Company {
     pub next_engine_id: IdAllocator<EngineId>,
     pub next_project_id: IdAllocator<EngineProjectId>,
     pub next_flaw_id: IdAllocator<crate::flaw::FlawId>,
+    /// Technology deficiencies this company has solved on some design:
+    /// a new design on the technology no longer inherits them, and a
+    /// design still carrying one solves it easily (22_FLAWS.md §3.6).
+    #[serde(default)]
+    pub solved_deficiencies: std::collections::HashSet<crate::technology::TechDeficiencyId>,
     pub next_rocket_project_id: IdAllocator<RocketProjectId>,
     pub next_contracted_engine_id: IdAllocator<ContractedEngineId>,
     /// Allocator for `ReactorProjectId`.
@@ -165,6 +170,7 @@ impl Company {
             next_engine_id: IdAllocator::starting_at(1),
             next_project_id: IdAllocator::starting_at(1),
             next_flaw_id: IdAllocator::starting_at(1),
+            solved_deficiencies: Default::default(),
             next_rocket_project_id: IdAllocator::starting_at(1),
             next_contracted_engine_id: IdAllocator::starting_at(1),
             next_reactor_project_id: IdAllocator::starting_at(1),

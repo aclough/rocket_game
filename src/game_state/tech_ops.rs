@@ -79,6 +79,8 @@ impl GameState {
         events: &mut Vec<GameEvent>,
     ) {
         let mut news = Vec::new();
+        let solved_before = self.player_company.solved_deficiencies.clone();
+        let mut newly_solved = Vec::new();
         for (pid, def_id) in attempts {
             let Some(project) = P::list(&mut self.player_company).iter_mut().find(|p| p.id() == pid) else {
                 continue;
@@ -86,11 +88,12 @@ impl GameState {
             let Some(tech_id) = project.technology_id() else { continue };
             let Some(tech) = self.technologies.iter_mut().find(|t| t.id == tech_id) else { continue };
             let Some(def) = tech.deficiencies.iter_mut().find(|d| d.id == def_id) else { continue };
-            let already_solved = def.solved;
+            let already_solved = solved_before.contains(&def_id);
             let name = project.name().to_string();
             let def_desc = format!("{}: {}", def.description, def.kind);
 
             if technology::attempt_solve(def, already_solved, &mut self.seed.contingent_rng, &self.balance.technology) {
+                newly_solved.push(def_id);
                 project.tech_deficiency_ids_mut().retain(|id| *id != def_id);
                 match &def.kind {
                     TechDeficiencyKind::ComplexityPenalty(n) => {
@@ -111,6 +114,7 @@ impl GameState {
                 ));
             }
         }
+        self.player_company.solved_deficiencies.extend(newly_solved);
         self.emit_all(events, news);
     }
 
@@ -123,21 +127,25 @@ impl GameState {
         events: &mut Vec<GameEvent>,
     ) {
         let mut news = Vec::new();
+        let solved = self.player_company.solved_deficiencies.clone();
         for pid in newly_designed {
             let Some(project) = P::list(&mut self.player_company).iter_mut().find(|p| p.id() == pid) else {
                 continue;
             };
             let Some(tech_id) = project.technology_id() else { continue };
             let Some(tech) = self.technologies.iter().find(|t| t.id == tech_id) else { continue };
-            for def in &tech.deficiencies {
+            // Only what this company has not solved yet: a solved
+            // deficiency is retired for every design it makes from here.
+            let pending = tech.unsolved_for(&solved);
+            for def in &pending {
                 match &def.kind {
                     TechDeficiencyKind::ComplexityPenalty(n) => *project.complexity_mut() += n,
                     TechDeficiencyKind::BuildTimePenalty(m) => *project.build_time_multiplier_mut() *= m,
                     kind => project.apply_deficiency(kind, Direction::Apply),
                 }
             }
-            *project.tech_deficiency_ids_mut() = tech.deficiencies.iter().map(|d| d.id).collect();
-            let desc: Vec<String> = tech.deficiencies.iter()
+            *project.tech_deficiency_ids_mut() = pending.iter().map(|d| d.id).collect();
+            let desc: Vec<String> = pending.iter()
                 .map(|d| format!("{}: {}", d.description, d.kind))
                 .collect();
             if !desc.is_empty() {

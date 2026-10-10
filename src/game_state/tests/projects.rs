@@ -199,7 +199,6 @@ fn build_time_penalty_applies_to_builds_and_reverts_when_solved() {
         description: "Hand-finished combustion chamber".into(),
         kind: TechDeficiencyKind::BuildTimePenalty(2.0),
         solvability: 1.0,
-        solved: false,
         total_attempts: 0,
     }];
     let bal = gs.balance.clone();
@@ -231,6 +230,59 @@ fn build_time_penalty_applies_to_builds_and_reverts_when_solved() {
     let ep = &gs.player_company.engine_projects[0];
     assert_eq!(ep.build_time_multiplier, 1.0);
     assert!(ep.tech_deficiency_ids.is_empty());
+}
+
+/// 22_FLAWS.md §3.6: solving a deficiency retires it for the company. A
+/// design finished afterwards does not inherit it; one that already
+/// carried it keeps it until its own revision; the cue follows.
+#[test]
+fn solved_deficiencies_retire_per_company() {
+    use crate::engine::EngineCycle;
+    use crate::engine_project::PropellantPreset;
+    use crate::technology::{TechDeficiency, TechDeficiencyId, TechDeficiencyKind, TECH_METHALOX};
+
+    let mut gs = GameState::with_money("Retire".into(), 1_000_000_000.0, 3);
+    let tech = gs.technologies.iter_mut().find(|t| t.id == TECH_METHALOX).unwrap();
+    tech.deficiencies = vec![
+        TechDeficiency {
+            id: TechDeficiencyId(990), description: "Coking injector".into(),
+            kind: TechDeficiencyKind::IspPenalty(0.1), solvability: 1.0, total_attempts: 0,
+        },
+        TechDeficiency {
+            id: TechDeficiencyId(991), description: "Heavy manifold".into(),
+            kind: TechDeficiencyKind::MassPenalty(0.1), solvability: 0.0, total_attempts: 0,
+        },
+    ];
+    let bal = gs.balance.clone();
+    let mut events = Vec::new();
+    let start = |gs: &mut GameState, name: &str| {
+        gs.player_company.start_engine_project(
+            name.into(), EngineCycle::GasGenerator, PropellantPreset::Methalox, 1.0, Some(TECH_METHALOX), &bal,
+        );
+        gs.player_company.engine_projects.last().unwrap().project_id
+    };
+    // Two designs finish before anything is solved: both carry both.
+    let a = start(&mut gs, "A");
+    let c = start(&mut gs, "C");
+    gs.apply_new_design_deficiencies::<crate::engine_project::EngineProject>(vec![a, c], &mut events);
+    assert_eq!(gs.player_company.engine_projects[0].tech_deficiency_ids, vec![TechDeficiencyId(990), TechDeficiencyId(991)]);
+    assert_eq!(gs.player_company.engine_projects[1].tech_deficiency_ids.len(), 2);
+
+    // A solves the solvable one: the company retires it.
+    gs.resolve_tech_attempts::<crate::engine_project::EngineProject>(vec![(a, TechDeficiencyId(990))], &mut events);
+    assert!(gs.player_company.solved_deficiencies.contains(&TechDeficiencyId(990)));
+    assert_eq!(gs.player_company.engine_projects[0].tech_deficiency_ids, vec![TechDeficiencyId(991)]);
+    // C still carries it until its own revision.
+    assert_eq!(gs.player_company.engine_projects[1].tech_deficiency_ids.len(), 2);
+    // A design finished now inherits only what is left unsolved.
+    let b = start(&mut gs, "B");
+    gs.apply_new_design_deficiencies::<crate::engine_project::EngineProject>(vec![b], &mut events);
+    assert_eq!(gs.player_company.engine_projects[2].tech_deficiency_ids, vec![TechDeficiencyId(991)]);
+    // The unsolvable one is still on the technology for everyone.
+    let tech = gs.technologies.iter().find(|t| t.id == TECH_METHALOX).unwrap();
+    assert_eq!(tech.unsolved_for(&gs.player_company.solved_deficiencies).len(), 1);
+    // The world's deficiency list itself is untouched: a rival would face both.
+    assert_eq!(tech.deficiencies.len(), 2);
 }
 
 /// Rocket designs follow their engine projects: an improvement applied

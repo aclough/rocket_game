@@ -58,7 +58,7 @@ pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
 ///
 /// v5: kerosene and hypergolic expanders no longer exist; projects of
 /// those families become gas generators (21_2_ENGINE_CYCLES.md step 4).
-pub const SAVE_VERSION: u32 = 8;
+pub const SAVE_VERSION: u32 = 9;
 
 /// Load game state from a JSON file, running any migrations the file
 /// needs, then stamping it with the current version.
@@ -164,6 +164,37 @@ fn migrate_json(root: &mut serde_json::Value, from: u32) {
     }
     if from < 7 {
         migrate_discovery_rolls_to_v7(root);
+    }
+    if from < 9 {
+        migrate_solved_deficiencies_to_v9(root);
+    }
+}
+
+/// v8 -> v9: a technology deficiency's `solved` flag belonged to the
+/// world; solving is per company now (22_FLAWS.md §3.6). The flags move
+/// into the player's `solved_deficiencies` — only the player ever
+/// solved any — and the field is dropped.
+fn migrate_solved_deficiencies_to_v9(root: &mut serde_json::Value) {
+    use serde_json::{json, Value};
+    let mut solved: Vec<Value> = Vec::new();
+    if let Some(techs) = root.get_mut("technologies").and_then(Value::as_array_mut) {
+        for tech in techs {
+            if let Some(defs) = tech.get_mut("deficiencies").and_then(Value::as_array_mut) {
+                for def in defs {
+                    if let Some(obj) = def.as_object_mut() {
+                        let was_solved = obj.remove("solved").and_then(|v| v.as_bool()).unwrap_or(false);
+                        if was_solved {
+                            if let Some(id) = obj.get("id") {
+                                solved.push(id.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(company) = root.get_mut("player_company").and_then(Value::as_object_mut) {
+        company.entry("solved_deficiencies").or_insert(json!(solved));
     }
 }
 
@@ -1154,6 +1185,32 @@ mod tests {
 
     /// v5 -> v6: flaws get the event they roll at from their own words,
     /// and a rocket flaw a stage; a built rocket's snapshot too.
+    /// v8 -> v9: a deficiency's `solved` flag moves from the world's
+    /// technology into the player's solved set.
+    #[test]
+    fn v8_solved_flags_move_to_the_company() {
+        use crate::technology::{TechDeficiencyId, TECH_METHALOX};
+        let state = GameState::with_money("V8".into(), 1_000_000_000.0, 1);
+        let mut raw = serde_json::to_value(&state).unwrap();
+        raw["save_version"] = serde_json::json!(8);
+        raw["player_company"].as_object_mut().unwrap().remove("solved_deficiencies");
+        let techs = raw["technologies"].as_array_mut().unwrap();
+        let methalox = techs.iter_mut().find(|t| t["id"] == serde_json::json!(TECH_METHALOX.0)).unwrap();
+        let defs = methalox["deficiencies"].as_array_mut().unwrap();
+        assert!(!defs.is_empty(), "the fixture tech has deficiencies");
+        let solved_id = defs[0]["id"].as_u64().unwrap();
+        defs[0]["solved"] = serde_json::json!(true);
+        for d in defs.iter_mut().skip(1) {
+            d["solved"] = serde_json::json!(false);
+        }
+        let path = temp_path();
+        fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
+        let loaded = load_game(&path).expect("v8 save should load");
+        let _ = fs::remove_file(&path);
+        assert!(loaded.player_company.solved_deficiencies.contains(&TechDeficiencyId(solved_id)));
+        assert_eq!(loaded.player_company.solved_deficiencies.len(), 1);
+    }
+
     #[test]
     fn v7_built_units_take_their_engines_snapshots() {
         use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawPhase, FlawTrigger};

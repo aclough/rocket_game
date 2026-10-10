@@ -9,15 +9,6 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 [] Investigate dry masses when we go to do re-entry and start adding other
 options to our rocket bodies.
 
-[] Tech deficiencies retire per company: a new design on a technology
-inherits only the deficiencies that company hasn't solved (existing
-engines still carrying one keep it until revised). Once all are solved
-the technology stops being Experimental for that company (drop the ⚗
-cue). Solved state moves from the world's Technology to the company, so
-a rival adopting the tech faces the full list; the solved-elsewhere
-multiplier then has nothing left to do. Tackle with the flaws and
-deficiencies pass.
-
 [] Pressure-fed stages carry no heavier tanks or pressurant; real ones
 need thick walls, which is what keeps pressure-fed to small stages.
 Fold into the dry-mass / rocket-body work above (21_2_ENGINE_CYCLES.md §3).
