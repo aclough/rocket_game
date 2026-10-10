@@ -200,6 +200,7 @@ fn main() -> ExitCode {
             fmt(unit, 1e6, "M"),
             fmt(payment, 1e6, "M"),
         );
+        println!("{}", rocket_tycoon::sim::curve_line(&summaries));
     }
 
     io::stdout().flush().ok();

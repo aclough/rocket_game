@@ -13,6 +13,7 @@
 //! | `campaigns` | campaign announcement/award/cancel rates over 100 seeds |
 //! | `falcon9` | Falcon 9 replicas through the game's models: where the payload goes |
 //! | `engines` | each surveyed real engine beside its game analogue: TWR, Isp, cost, build time |
+//! | `testing_cadence` | how long the bot tests each project before its first launch, and what it found |
 //!
 //! `seed_fairness::measure_year1_distribution` stays with the floors it
 //! re-derives: it is defined by that suite's own `achievable` filter,
@@ -731,6 +732,115 @@ mod engines {
             let median = rs[rs.len() / 2];
             let within = rs.iter().filter(|r| (0.8..=1.25).contains(*r)).count();
             println!("TWR game/real, {group}: median ×{median:.2}; {within} of {} within 0.8–1.25×", rs.len());
+        }
+    }
+}
+
+mod testing_cadence {
+    //! How long the bot tests before its first launch: per project,
+    //! the testing cycles run, flaws generated / found / fixed / still
+    //! hidden at the first launch, and the months from design complete
+    //! to that launch (22_FLAWS.md §2).
+
+    use std::collections::HashMap;
+
+    use rocket_tycoon::game_state::GameState;
+    use rocket_tycoon::policy::{BasicPolicy, CompanyPolicy};
+    use rocket_tycoon::project::DesignStatus;
+
+    #[derive(Default, Clone)]
+    struct Snap {
+        initial_flaws: usize,
+        designed_day: u32,
+    }
+
+    #[derive(Default)]
+    struct Row {
+        kind: &'static str,
+        cycles: f64,
+        initial: usize,
+        fixed: usize,
+        known: usize,
+        hidden: usize,
+        revisions: u32,
+        months_testing: f64,
+    }
+
+    fn probe_seed(seed: u64, cycle_work: f64) -> Vec<Row> {
+        let mut policy = BasicPolicy::new();
+        let mut gs = GameState::new("Bot".into(), seed);
+        let mut snaps: HashMap<String, Snap> = HashMap::new();
+        let mut day = 0u32;
+        loop {
+            policy.act(&mut gs);
+            gs.advance_day();
+            day += 1;
+            let co = &gs.player_company;
+            for p in &co.engine_projects {
+                let key = format!("E{}", p.design.name);
+                if !snaps.contains_key(&key) && !matches!(p.status, DesignStatus::Proposed { .. } | DesignStatus::InDesign { .. }) {
+                    snaps.insert(key, Snap { initial_flaws: p.flaws.len(), designed_day: day });
+                }
+            }
+            for p in &co.rocket_projects {
+                let key = format!("R{}", p.design.name);
+                if !snaps.contains_key(&key) && !matches!(p.status, DesignStatus::Proposed { .. } | DesignStatus::InDesign { .. }) {
+                    snaps.insert(key, Snap { initial_flaws: p.flaws.len(), designed_day: day });
+                }
+            }
+            if !co.launch_history.is_empty() || day > 365 * 6 {
+                break;
+            }
+        }
+        let co = &gs.player_company;
+        let mut rows = Vec::new();
+        let mut push = |kind: &'static str, name: &str, flaws: &[rocket_tycoon::flaw::Flaw], work: f64, revision: u32| {
+            let Some(s) = snaps.get(&format!("{}{}", if kind == "engine" { "E" } else { "R" }, name)) else { return };
+            let known = flaws.iter().filter(|f| f.discovered).count();
+            rows.push(Row {
+                kind,
+                cycles: work / cycle_work,
+                initial: s.initial_flaws,
+                fixed: s.initial_flaws.saturating_sub(flaws.len()),
+                known,
+                hidden: flaws.len() - known,
+                revisions: revision,
+                months_testing: (day - s.designed_day) as f64 / 30.4,
+            });
+        };
+        for p in &co.engine_projects {
+            push("engine", &p.design.name, &p.flaws, p.cumulative_testing_work, p.revision);
+        }
+        for p in &co.rocket_projects {
+            push("rocket", &p.design.name, &p.flaws, p.cumulative_testing_work, p.revision);
+        }
+        rows
+    }
+
+    #[test]
+    #[ignore]
+    fn bot_testing_before_first_launch() {
+        let cycle_work = rocket_tycoon::balance_config::BalanceConfig::default().work.testing_cycle_work;
+        println!("{:<5} {:<7} {:>6} {:>5} {:>5} {:>5} {:>6} {:>4} {:>7}",
+            "seed", "kind", "cycles", "init", "fixed", "known", "hidden", "rev", "months");
+        let mut sums: HashMap<&'static str, (usize, Row)> = HashMap::new();
+        for seed in 1..=20u64 {
+            for r in probe_seed(seed, cycle_work) {
+                println!("{:<5} {:<7} {:>6.1} {:>5} {:>5} {:>5} {:>6} {:>4} {:>7.1}",
+                    seed, r.kind, r.cycles, r.initial, r.fixed, r.known, r.hidden, r.revisions, r.months_testing);
+                let e = sums.entry(r.kind).or_insert_with(|| (0, Row { kind: r.kind, ..Default::default() }));
+                e.0 += 1;
+                e.1.cycles += r.cycles; e.1.initial += r.initial; e.1.fixed += r.fixed;
+                e.1.known += r.known; e.1.hidden += r.hidden; e.1.revisions += r.revisions;
+                e.1.months_testing += r.months_testing;
+            }
+        }
+        println!("── averages over 20 seeds");
+        for (kind, (n, s)) in &sums {
+            let n = *n as f64;
+            println!("{:<7} cycles {:.1}  init {:.1}  fixed {:.1}  known {:.1}  hidden {:.1}  rev {:.1}  months {:.1}",
+                kind, s.cycles / n, s.initial as f64 / n, s.fixed as f64 / n, s.known as f64 / n,
+                s.hidden as f64 / n, s.revisions as f64 / n, s.months_testing / n);
         }
     }
 }

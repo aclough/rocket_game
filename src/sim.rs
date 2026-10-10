@@ -1,6 +1,8 @@
 //! Shared headless-run harness used by the `simulate` binary and the
 //! integration tests in `tests/`, so both measure the game identically.
 
+use std::collections::{HashMap, VecDeque};
+
 use crate::balance_config::BalanceConfig;
 use crate::calendar::GameDate;
 use crate::event::GameEvent;
@@ -23,6 +25,16 @@ pub struct Tally {
     pub vehicles_lost: u32,
     /// Sum of all contract payments received.
     pub payment_total: f64,
+    /// Every launch attempt in order, with its outcome once known:
+    /// `Some(true)` arrived fully successfully, `Some(false)` was lost
+    /// at launch or in flight, stranded, or arrived degraded, `None`
+    /// still flying. This is the reliability curve (22_FLAWS.md §3.9):
+    /// the first entry is the first flight.
+    pub launch_outcomes: Vec<Option<bool>>,
+    /// Departed flights not yet resolved, by rocket name, oldest first.
+    /// Events carry names rather than flight ids, so a name's flights
+    /// resolve in departure order.
+    pending: HashMap<String, VecDeque<usize>>,
 }
 
 impl Tally {
@@ -33,16 +45,65 @@ impl Tally {
                 self.payment_total += amount;
             }
             GameEvent::ContractExpired { .. } => self.contracts_expired += 1,
-            GameEvent::FlightDeparted { .. } => self.launch_attempts += 1,
+            GameEvent::FlightDeparted { rocket_name, .. } => {
+                self.launch_attempts += 1;
+                self.pending.entry(rocket_name.clone()).or_default().push_back(self.launch_outcomes.len());
+                self.launch_outcomes.push(None);
+            }
             GameEvent::LaunchFailure { .. } => {
                 self.launch_attempts += 1;
                 self.vehicles_lost += 1;
+                self.launch_outcomes.push(Some(false));
             }
-            GameEvent::LaunchSuccess { .. } => self.launch_successes += 1,
-            GameEvent::SpacecraftLost { .. } => self.vehicles_lost += 1,
+            GameEvent::LaunchSuccess { rocket_name, .. } => {
+                self.launch_successes += 1;
+                self.resolve(rocket_name, true);
+            }
+            GameEvent::LaunchPartialFailure { rocket_name, .. }
+            | GameEvent::SpacecraftStranded { rocket_name, .. } => self.resolve(rocket_name, false),
+            GameEvent::SpacecraftLost { rocket_name, .. } => {
+                self.vehicles_lost += 1;
+                self.resolve(rocket_name, false);
+            }
             _ => {}
         }
     }
+
+    /// Settle the oldest unresolved flight of `rocket_name`. A parked
+    /// spacecraft lost years later has no pending flight and is ignored.
+    fn resolve(&mut self, rocket_name: &str, ok: bool) {
+        if let Some(idx) = self.pending.get_mut(rocket_name).and_then(VecDeque::pop_front) {
+            self.launch_outcomes[idx] = Some(ok);
+        }
+    }
+}
+
+/// Pooled success rate by launch ordinal over many runs: `(label,
+/// successes, resolved launches)` for the 1st, 2nd, 3rd, and 4th-and-
+/// later launches. The 22_FLAWS.md target curve is read off this.
+pub fn curve_by_ordinal(summaries: &[RunSummary]) -> [(&'static str, usize, usize); 4] {
+    let mut out = [("1st", 0, 0), ("2nd", 0, 0), ("3rd", 0, 0), ("4th+", 0, 0)];
+    for s in summaries {
+        for (i, outcome) in s.launch_outcomes.iter().enumerate() {
+            let Some(ok) = outcome else { continue };
+            let slot = &mut out[i.min(3)];
+            slot.2 += 1;
+            if *ok { slot.1 += 1; }
+        }
+    }
+    out
+}
+
+/// The footer line for [`curve_by_ordinal`].
+pub fn curve_line(summaries: &[RunSummary]) -> String {
+    let cells: Vec<String> = curve_by_ordinal(summaries).iter().map(|(label, ok, n)| {
+        if *n == 0 {
+            format!("{label} -")
+        } else {
+            format!("{label} {:.0}% ({ok}/{n})", 100.0 * *ok as f64 / *n as f64)
+        }
+    }).collect();
+    format!("── success by launch: {}", cells.join(", "))
 }
 
 pub const CSV_HEADER: &str = "seed,date,money,reputation,contracts_available,contracts_active,\
@@ -101,6 +162,8 @@ pub struct RunSummary {
     pub mean_rocket_unit_cost: Option<f64>,
     /// Mean payment across completed contracts.
     pub mean_contract_payment: Option<f64>,
+    /// Outcome of each launch attempt in order (see `Tally::launch_outcomes`).
+    pub launch_outcomes: Vec<Option<bool>>,
 }
 
 impl RunSummary {
@@ -125,14 +188,25 @@ impl RunSummary {
             None => "-".into(),
         };
         format!(
-            "seed {:>5}  final ${:>14.0}  min ${:>14.0}  bankrupt {}  launches {:>3} ({} ok)  first-profitable-year {}  first-launch {}  unit-cost {}  payment {}",
+            "seed {:>5}  final ${:>14.0}  min ${:>14.0}  bankrupt {}  launches {:>3} ({} ok) {:<12}  first-profitable-year {}  first-launch {}  unit-cost {}  payment {}",
             self.seed, self.final_money, self.min_money,
             if self.bankrupt { "YES" } else { "no " },
-            self.launches, rate, fpy,
+            self.launches, rate, self.curve_word(), fpy,
             first,
             m(self.mean_rocket_unit_cost),
             m(self.mean_contract_payment),
         )
+    }
+
+    /// The first launches as letters — `S` success, `F` anything less,
+    /// `?` still flying at run end — up to twelve, so a seed's early
+    /// record can be read off its summary line.
+    pub fn curve_word(&self) -> String {
+        self.launch_outcomes.iter().take(12).map(|o| match o {
+            Some(true) => 'S',
+            Some(false) => 'F',
+            None => '?',
+        }).collect()
     }
 }
 
@@ -235,5 +309,64 @@ pub fn run_seed(
         undiscovered_flaws_at_first_launch: first_launch.map(|(_, _, f)| f),
         mean_rocket_unit_cost,
         mean_contract_payment,
+        launch_outcomes: tally.launch_outcomes,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn departed(name: &str) -> GameEvent {
+        GameEvent::FlightDeparted { rocket_name: name.into(), destination: "LEO".into() }
+    }
+
+    #[test]
+    fn launch_outcomes_resolve_in_departure_order_per_rocket_name() {
+        let mut t = Tally::default();
+        t.record_one(&departed("Upgoer"));
+        t.record_one(&departed("Upgoer"));
+        t.record_one(&GameEvent::LaunchFailure { rocket_name: "Upgoer".into(), reason: "boom".into() });
+        t.record_one(&departed("Other"));
+        assert_eq!(t.launch_outcomes, vec![None, None, Some(false), None]);
+        t.record_one(&GameEvent::LaunchSuccess { rocket_name: "Upgoer".into(), destination: "LEO".into() });
+        t.record_one(&GameEvent::SpacecraftLost { rocket_name: "Upgoer".into(), location: "LEO".into(), reason: "x".into() });
+        t.record_one(&GameEvent::LaunchPartialFailure { rocket_name: "Other".into(), reason: "short".into() });
+        assert_eq!(t.launch_outcomes, vec![Some(true), Some(false), Some(false), Some(false)]);
+        assert_eq!(t.launch_attempts, 4);
+        assert_eq!(t.launch_successes, 1);
+    }
+
+    #[test]
+    fn a_parked_spacecraft_lost_later_is_not_a_launch_outcome() {
+        let mut t = Tally::default();
+        t.record_one(&GameEvent::SpacecraftLost { rocket_name: "Station".into(), location: "LEO".into(), reason: "x".into() });
+        assert!(t.launch_outcomes.is_empty());
+        assert_eq!(t.vehicles_lost, 1);
+    }
+
+    fn summary(outcomes: Vec<Option<bool>>) -> RunSummary {
+        RunSummary {
+            seed: 0, start_year: 2000, final_money: 0.0, min_money: 0.0, bankrupt: false,
+            launches: outcomes.len(), successes: 0, first_profitable_year: None,
+            first_launch_date: None, dev_spend_at_first_launch: None,
+            undiscovered_flaws_at_first_launch: None, mean_rocket_unit_cost: None,
+            mean_contract_payment: None, launch_outcomes: outcomes,
+        }
+    }
+
+    #[test]
+    fn curve_pools_by_ordinal_and_skips_unresolved() {
+        let runs = [
+            summary(vec![Some(false), Some(true), Some(true), Some(true), Some(false)]),
+            summary(vec![Some(true), Some(false), None]),
+        ];
+        assert_eq!(
+            curve_by_ordinal(&runs),
+            [("1st", 1, 2), ("2nd", 1, 2), ("3rd", 1, 1), ("4th+", 1, 2)],
+        );
+        assert_eq!(runs[0].curve_word(), "FSSSF");
+        assert_eq!(runs[1].curve_word(), "SF?");
+        assert_eq!(curve_line(&runs), "── success by launch: 1st 50% (1/2), 2nd 50% (1/2), 3rd 100% (1/1), 4th+ 50% (1/2)");
     }
 }
