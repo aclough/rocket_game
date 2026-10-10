@@ -153,12 +153,13 @@ pub fn generate_third_party_flaws(
     complexity: u32,
     seed: &GameSeed,
     engine_name: &str,
+    features: &[flaw::Feature],
     next_flaw_id: &mut crate::id::IdAllocator<crate::flaw::FlawId>,
     flaws_cfg: &crate::balance_config::FlawsConfig,
 ) -> Vec<Flaw> {
     let effective = (complexity / 8).max(1);
     let mut rng = seed.world_query(WorldQuery::ThirdPartyFlaws(engine_name));
-    flaw::generate_flaws(flaw::FlawDomain::Engine(None), effective, 0, &mut rng, next_flaw_id, flaws_cfg)
+    flaw::generate_flaws(flaw::FlawDomain::Engine(None), effective, 0, features, &mut rng, next_flaw_id, flaws_cfg)
 }
 
 #[cfg(test)]
@@ -192,14 +193,14 @@ mod tests {
         let mut total_flaws = 0;
         for i in 0..100 {
             let seed_i = GameSeed::new(i);
-            let flaws = generate_third_party_flaws(8, &seed_i, "test", &mut next_flaw_id, &crate::balance_config::FlawsConfig::default());
+            let flaws = generate_third_party_flaws(8, &seed_i, "test", &[], &mut next_flaw_id, &crate::balance_config::FlawsConfig::default());
             total_flaws += flaws.len();
         }
         let avg = total_flaws as f64 / 100.0;
         assert!(avg < 3.0, "Avg flaw count {} should be low for complexity 8 (effective 1)", avg);
 
         // Complexity 5 -> effective 1 (5/8 = 0, clamped to 1)
-        let flaws = generate_third_party_flaws(5, &seed, "solid", &mut next_flaw_id, &crate::balance_config::FlawsConfig::default());
+        let flaws = generate_third_party_flaws(5, &seed, "solid", &[], &mut next_flaw_id, &crate::balance_config::FlawsConfig::default());
         // Just check they're generated, exact count is random
         for flaw in &flaws {
             assert!(!flaw.discovered);
@@ -211,8 +212,8 @@ mod tests {
         let seed = GameSeed::new(42);
         let mut id1 = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(10000);
         let mut id2 = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(10000);
-        let f1 = generate_third_party_flaws(8, &seed, "RD-33K", &mut id1, &crate::balance_config::FlawsConfig::default());
-        let f2 = generate_third_party_flaws(8, &seed, "RD-33K", &mut id2, &crate::balance_config::FlawsConfig::default());
+        let f1 = generate_third_party_flaws(8, &seed, "RD-33K", &[], &mut id1, &crate::balance_config::FlawsConfig::default());
+        let f2 = generate_third_party_flaws(8, &seed, "RD-33K", &[], &mut id2, &crate::balance_config::FlawsConfig::default());
         assert_eq!(f1.len(), f2.len());
     }
 }

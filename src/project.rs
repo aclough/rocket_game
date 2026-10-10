@@ -237,6 +237,12 @@ pub trait Designable: Clone + fmt::Debug {
         0
     }
 
+    /// What the design has for its flaws to be worded about
+    /// (`flaw::Feature`); entries that need more are never drawn.
+    fn flaw_features(&self) -> Vec<flaw::Feature> {
+        Vec::new()
+    }
+
     /// The complexity the flaw count is drawn from when the design
     /// completes. Engines fold in the propellants' problem factors;
     /// rockets and reactors use the project's stored complexity.
@@ -440,7 +446,7 @@ impl<D: Designable> DesignProject<D> {
                     let complexity = self.design.flaw_complexity(&self.spec, self.complexity);
                     self.flaws = flaw::generate_flaws(
                         self.design.flaw_domain(), complexity, self.design.flaw_stage_groups(),
-                        rng, next_flaw_id, &balance_cfg.flaws,
+                        &self.design.flaw_features(), rng, next_flaw_id, &balance_cfg.flaws,
                     );
                     self.status = DesignStatus::Testing { work_completed: 0.0 };
                     events.push(WorkEvent::DesignComplete);
@@ -541,7 +547,7 @@ impl<D: Designable> DesignProject<D> {
                                 };
                                 self.flaws.push(crate::flaw::generate_single_flaw(
                                     domain, next_flaw_id.mint(), trigger, self.design.flaw_stage_groups(),
-                                    &mut frng, &balance_cfg.flaws,
+                                    &self.design.flaw_features(), &mut frng, &balance_cfg.flaws,
                                 ));
                             }
                         }

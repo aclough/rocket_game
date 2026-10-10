@@ -440,10 +440,12 @@ impl Company {
         let id = self.next_contracted_engine_id.mint();
         let name = entry.design.name.clone();
 
+        let propellants: Vec<_> = entry.design.propellant_mix.iter().map(|f| f.propellant).collect();
         let flaws = third_party::generate_third_party_flaws(
             entry.complexity,
             seed,
             &name,
+            &crate::flaw::engine_features(entry.design.cycle, &propellants),
             &mut self.next_flaw_id,
             &balance_cfg.flaws,
         );

@@ -526,8 +526,10 @@ is step 1 so every later step is measured against the same line.
 
 Per the discussion: steps 3–7 are expected to break the 65 % per-seed
 and 85 % aggregate success floors and probably the 20 % bankruptcy
-ceiling. Each step records the band result; bands are **not** adjusted
-until the final step, which decides between:
+ceiling. Each step records the band result. After steps 2–4 each
+tripped them in turn, the fleet-level bands were suspended
+(`FLEET_BANDS_SUSPENDED`, see the step 4 record) until step 7's sweep;
+the final step then decides between:
 
 - a more prudent `BasicPolicy` (keep testing until a run of quiet
   cycles before the first launch; fly a test mass after a redesign),
@@ -780,3 +782,49 @@ found on the ground and the flight review meant to find them is step
 floor moves 50 → 40 % (89/200; smoke 30 %) and the launch cap 30 → 35
 (one seed re-flying failures reached 31). The class gap is small for
 now; step 7 widens it once flights review.
+
+**Step 4 — hardware-aware descriptions.**
+`FlawEntry.requires: &[Feature]` with `Feature` =
+Turbopump / Preburner / GasGenerator / Igniter / RegenCooling /
+LiquidFeed / Cryogenic / Hypergolic / Solid / MultiEngine / Boosters /
+UpperStage / Fairing; `engine_features(cycle, propellants)` and
+`rocket_features(design)` derive what a design has; `Designable::
+flaw_features`; the picker draws only fitting entries, then the wanted
+exposure among them. Pools are slices and grew: the chemical engine
+pool 6 → 12 per consequence, the rocket pool 6 → 12–14, every
+consequence of every per-flight pool with an entry of each exposure
+that requires nothing (`pool_coverage` walks every preset × cycle and
+all 64 rocket feature sets); the specialised pools (electric, nuclear,
+sail, reactor) retagged so each cell is reachable. New tests:
+`pool_coverage`, `descriptions_fit_the_design` (no turbopump on a
+pressure-fed, no igniter on a hypergolic, no valve on a solid, no
+separation or fairing flaw on a single-stage vehicle without one).
+704 tests, clippy clean.
+
+The curve moved again, for a reason worth writing down: step 3's mix
+was only approximately honoured, because a pool with one or two
+entries of a class per consequence fell back to any entry, so rockets
+drew more bench flaws than 15 %. With the cells filled the mix is
+real, and the bot's rocket flaws are now 55 % integrated / 30 %
+analysis in fact rather than in intent.
+
+| 100 seeds × 6 years | step 3 (2/3/4) | step 4 |
+|---|---|---|
+| 1st / 2nd / 3rd / 4th+ | 33 / 41 / 73 / 90 | 27 / 37 / 68 / 90 |
+| Bankrupt | 25 | 30 |
+| Hidden flaws at first launch | — | 8.1 |
+| Rocket flaws fixed before first launch (of ~5.2) | 1.4 | 1.6 |
+| First launches: pad failure / lost / success | — | 69 / 1 / 30 |
+
+200 seeds × 8 years: 59/200 bankrupt (ceiling 25 %); the smoke run's
+aggregate success is 82.9 % against the 85 % floor.
+
+Decision (user, 2026-10-10): option 1 — the fleet-level bands
+(bankruptcies, $25M floor, profitable seeds, profitable years,
+aggregate success) are suspended behind `FLEET_BANDS_SUSPENDED` in
+`tests/sim_bands.rs` until step 7 re-baselines them; they are measured
+and printed as `[fleet band suspended]` misses but do not fail. The
+step 2 and 3 lifts are undone so the constants are the pre-22 values
+step 7 starts from. Per-seed sanity bands (debt limit, launch count
+3–35, per-seed success ≥ 65 %, first profitable year) stay live.
+

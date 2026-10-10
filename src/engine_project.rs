@@ -705,6 +705,11 @@ impl Designable for EngineDesign {
         FlawDomain::Engine(Some(self.cycle))
     }
 
+    fn flaw_features(&self) -> Vec<crate::flaw::Feature> {
+        let propellants: Vec<_> = self.propellant_mix.iter().map(|f| f.propellant).collect();
+        crate::flaw::engine_features(self.cycle, &propellants)
+    }
+
     /// Effective complexity folds the propellants' problem factors into
     /// the cycle's; the project's stored complexity is the plain
     /// combined figure used for work and NRE.

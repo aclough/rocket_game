@@ -423,6 +423,7 @@ impl GameState {
             * self.balance.work.rocket_modification_work_fraction;
         project.design.stage_groups = new_stage_groups;
         let stage_groups = project.design.stage_groups.len();
+        let features = crate::flaw::rocket_features(&project.design);
         project.status = RocketDesignStatus::InDesign {
             work_completed: 0.0,
             work_required,
@@ -446,7 +447,7 @@ impl GameState {
                 crate::flaw::FlawTrigger::PerFlight
             };
             let flaw = crate::flaw::generate_single_flaw(
-                crate::flaw::FlawDomain::Rocket, id, trigger, stage_groups,
+                crate::flaw::FlawDomain::Rocket, id, trigger, stage_groups, &features,
                 &mut self.seed.contingent_rng, &self.balance.flaws,
             );
             // Re-borrow project (it was released across the rng calls).

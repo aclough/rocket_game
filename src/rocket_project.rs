@@ -44,6 +44,10 @@ impl Designable for RocketDesign {
         self.stage_groups.len()
     }
 
+    fn flaw_features(&self) -> Vec<crate::flaw::Feature> {
+        crate::flaw::rocket_features(self)
+    }
+
     fn flaw_complexity(&self, _spec: &NoSpec, project_complexity: u32) -> u32 {
         project_complexity
     }
