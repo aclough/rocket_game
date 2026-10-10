@@ -751,6 +751,7 @@ pub(super) mod help_tests {
                 revision: 0,
                 rocket_flaws: Vec::new(),
                 grounded_until: None,
+                stage_engine_flaws: Vec::new(),
             },
         );
 
@@ -786,6 +787,8 @@ pub(super) mod help_tests {
             location: crate::location::LocationId::of("leo"),
             rocket_project_id: rpid,
             payloads: Vec::new(),
+            rocket_flaws: Vec::new(),
+            stage_engine_flaws: Vec::new(),
         });
 
         App::new(game)

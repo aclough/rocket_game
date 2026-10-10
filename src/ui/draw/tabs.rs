@@ -576,6 +576,39 @@ pub(super) fn draw_manufacturing_tab(frame: &mut Frame, app: &App, area: Rect, b
     render_gauges(frame, area, &gauges);
 }
 
+/// " · STALE: design rev 3, 2 fixed flaws not applied" for a shelved
+/// rocket built before its designs' latest revisions, or nothing. The
+/// count is the flaws the vehicle carries that its projects have since
+/// revised away; hidden ones that are still hidden stay unsaid.
+fn stale_note(game: &crate::game_state::GameState, r: &crate::manufacturing::InventoryRocket) -> String {
+    let company = &game.player_company;
+    let Some(rp) = company.rocket_projects.iter().find(|rp| rp.project_id == r.rocket_project_id) else {
+        return String::new();
+    };
+    let mut stale = r.revision < rp.revision;
+    let mut fixed = r.rocket_flaws.iter()
+        .filter(|f| f.discovered && !rp.flaws.iter().any(|live| live.id == f.id))
+        .count();
+    for snap in &r.stage_engine_flaws {
+        if let crate::engine_project::EngineSource::PlayerDesign(pid) = snap.source {
+            if let Some(ep) = company.engine_projects.iter().find(|ep| ep.project_id == pid) {
+                stale |= snap.revision < ep.revision;
+                fixed += snap.flaws.iter()
+                    .filter(|f| f.discovered && !ep.flaws.iter().any(|live| live.id == f.id))
+                    .count();
+            }
+        }
+    }
+    if !stale {
+        return String::new();
+    }
+    match fixed {
+        0 => " · STALE: built before the latest revision".to_string(),
+        1 => " · STALE: 1 fixed flaw not applied".to_string(),
+        n => format!(" · STALE: {n} fixed flaws not applied"),
+    }
+}
+
 pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border_style: Style) {
     let game = &app.game;
     let rockets = game.player_company.ready_rockets_in_display_order();
@@ -609,7 +642,7 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
                 .unwrap_or_default();
 
             lines.push(Line::from(Span::styled(
-                format!("{}{} (Rev {}){}", marker, r.rocket_name, r.revision, payload_info),
+                format!("{}{} (Rev {}){}{}", marker, r.rocket_name, r.revision, payload_info, stale_note(game, r)),
                 style,
             )));
         }

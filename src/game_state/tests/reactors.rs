@@ -276,6 +276,8 @@ fn test_reactor_flaw_activates_mid_flight() {
         location: crate::location::LocationId::of("leo"),
         rocket_project_id: RocketProjectId(0),
         payloads: Vec::new(),
+        rocket_flaws: Vec::new(),
+        stage_engine_flaws: Vec::new(),
     });
 
     gs.fly_spacecraft(0, "geo");
@@ -365,6 +367,8 @@ fn test_reactor_perflight_flaw_fires_at_flight_start() {
         rocket, design, location: crate::location::LocationId::of("leo"),
         rocket_project_id: RocketProjectId(0),
         payloads: Vec::new(),
+        rocket_flaws: Vec::new(),
+        stage_engine_flaws: Vec::new(),
     });
 
     gs.fly_spacecraft(0, "geo");

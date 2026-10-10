@@ -387,10 +387,31 @@ impl Company {
                             order.waiting_for_prerequisites = false;
                             // Consume engines from inventory, rolling
                             // their full build_cost (material + labor)
-                            // into this stage order's material_cost.
+                            // into this stage order's material_cost, and
+                            // keeping the flaws they were built with on
+                            // the stage (the first engine's; a stage's
+                            // engines are one design and, in practice,
+                            // one batch).
+                            let mut snapshot: Option<crate::manufacturing::StageEngineFlaws> = None;
                             for _ in 0..needed {
                                 if let Some(eng) = self.manufacturing.inventory.take_engine(source) {
                                     order.material_cost += eng.build_cost;
+                                    if snapshot.is_none() {
+                                        snapshot = Some(crate::manufacturing::StageEngineFlaws {
+                                            group_index: 0, stage_index: 0,
+                                            source: eng.source, engine_id: eng.engine_id,
+                                            revision: eng.revision, flaws: eng.flaws.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                            if let crate::manufacturing::ManufacturingOrderType::Stage {
+                                group_index, stage_index, engine_snapshot, ..
+                            } = &mut order.order_type {
+                                if let Some(mut snap) = snapshot {
+                                    snap.group_index = *group_index;
+                                    snap.stage_index = *stage_index;
+                                    *engine_snapshot = Some(snap);
                                 }
                             }
                         }
@@ -410,13 +431,24 @@ impl Company {
                         });
                         if all_stages_ready {
                             order.waiting_for_prerequisites = false;
-                            // Consume stages from inventory, accumulating their build cost
+                            // Consume stages from inventory, accumulating
+                            // their build cost and carrying their engines'
+                            // flaws onto the rocket.
+                            let mut snapshots = Vec::new();
                             for (gi, group) in rp.design.stage_groups.iter().enumerate() {
                                 for (si, _stage) in group.iter().enumerate() {
                                     if let Some(stg) = self.manufacturing.inventory.take_stage(*rocket_project_id, gi, si) {
                                         order.material_cost += stg.build_cost;
+                                        if let Some(snap) = stg.engine_snapshot {
+                                            snapshots.push(snap);
+                                        }
                                     }
                                 }
+                            }
+                            if let crate::manufacturing::ManufacturingOrderType::RocketIntegration {
+                                stage_engine_flaws, ..
+                            } = &mut order.order_type {
+                                *stage_engine_flaws = snapshots;
                             }
                         }
                     }

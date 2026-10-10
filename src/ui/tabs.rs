@@ -1187,6 +1187,7 @@ mod ready_rocket_order_tests {
             revision,
             rocket_flaws: Vec::new(),
             grounded_until: None,
+            stage_engine_flaws: Vec::new(),
         });
     }
 

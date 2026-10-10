@@ -42,7 +42,7 @@ fn tiny_payload_spacecraft(
         rocket,
         nested_payloads: nested,
         rocket_project_id: RocketProjectId(id),
-        name: name.into(),
+        name: name.into(), rocket_flaws: Vec::new(), stage_engine_flaws: Vec::new(),
     }
 }
 
@@ -85,6 +85,7 @@ fn arrive_test_flight(
         flaw_rolled_groups: std::collections::HashSet::new(),
         rocket_flaws: Vec::new(),
         events_reached: Vec::new(),
+        stage_engine_flaws: Vec::new(),
         reactor_flaws_rolled: false,
     };
     gs.resolve_arrived_flight(flight, None)
@@ -138,6 +139,7 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
         flaw_rolled_groups: std::collections::HashSet::new(),
         rocket_flaws: Vec::new(),
         events_reached: Vec::new(),
+        stage_engine_flaws: Vec::new(),
         reactor_flaws_rolled: false,
     }, None);
 
@@ -272,6 +274,8 @@ fn push_test_spacecraft(gs: &mut GameState, id: u64, name: &str, location: &str)
         location: crate::location::LocationId::of(location),
         rocket_project_id: RocketProjectId(id),
         payloads: Vec::new(),
+        rocket_flaws: Vec::new(),
+        stage_engine_flaws: Vec::new(),
     });
     gs.spacecraft.len() - 1
 }
@@ -459,6 +463,8 @@ fn test_mid_flight_stage_loss_destroys_vehicle() {
         rocket, design, location: crate::location::LocationId::of("leo"),
         rocket_project_id: RocketProjectId(0),
         payloads: Vec::new(),
+        rocket_flaws: Vec::new(),
+        stage_engine_flaws: Vec::new(),
     });
 
     let rep_before = gs.player_company.reputation.total();
@@ -519,9 +525,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
     );
     use rand::SeedableRng;
     let mut rng = rand::rngs::StdRng::seed_from_u64(99);
-    let sim = crate::launch::simulate_launch(
-        &design, "leo", 0.0,
-        &gs.player_company.engine_projects, &rp.flaws, &[], &mut rng,
+    let sim = crate::launch::simulate_launch(&design, "leo", 0.0, &crate::launch::engine_snapshots_for(&design, &gs.player_company.engine_projects, &[]), &rp.flaws, &mut rng,
         &crate::balance_config::FlightConfig::default(),
             &crate::balance_config::NozzleConfig::default(),
     );
@@ -559,6 +563,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
         flaw_rolled_groups: sim.flaw_rolled_groups,
         rocket_flaws: Vec::new(),
         events_reached: Vec::new(),
+        stage_engine_flaws: Vec::new(),
         reactor_flaws_rolled: false,
     });
 

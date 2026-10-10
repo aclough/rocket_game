@@ -73,6 +73,7 @@ fn test_build_launch_payloads_validates_before_consuming() {
             revision: 0,
             rocket_flaws: Vec::new(),
             grounded_until: None,
+            stage_engine_flaws: Vec::new(),
         });
 
     let real = crate::manufacturing::InventoryItemId(10);
@@ -117,7 +118,7 @@ fn shelve_rocket(gs: &mut GameState, flaws: Vec<crate::flaw::Flaw>) -> crate::ma
     let item_id = crate::manufacturing::InventoryItemId(10);
     gs.player_company.manufacturing.inventory.rockets.push(crate::manufacturing::InventoryRocket {
         item_id, rocket_project_id: RocketProjectId(1), design_id, rocket_name: "Shelf".into(),
-        build_cost: 0.0, revision: 0, rocket_flaws: flaws, grounded_until: None,
+        build_cost: 0.0, revision: 0, rocket_flaws: flaws, grounded_until: None, stage_engine_flaws: Vec::new(),
     });
     item_id
 }
@@ -188,4 +189,44 @@ fn a_payload_loss_at_deploy_forfeits_the_contract() {
     let last = gs.player_company.launch_history.last().expect("a record");
     assert!(matches!(&last.outcome, crate::launch::LaunchOutcome::PartialFailure { reason } if reason.contains("Payload lost")), "{:?}", last.outcome);
     assert!(gs.player_company.rocket_projects[0].flaws[0].discovered);
+}
+
+/// A built vehicle flies with the engine flaws it was built with: a fix
+/// on the engine project does not reach the shelf, and a flaw the
+/// project still has is found there by id when the vehicle fires it.
+#[test]
+fn a_shelved_rocket_flies_its_engine_snapshot_not_the_project() {
+    use crate::flaw::{FlawConsequence, FlawPhase};
+    let mut gs = GameState::new("Test".into(), 1);
+    let item = shelve_rocket(&mut gs, Vec::new());
+    // The Lifter (stage 1) project carries one certain engine-loss flaw;
+    // the vehicle was built with it.
+    let mut certain = certain_flaw(77, FlawPhase::Burn, 0, FlawConsequence::EngineLoss);
+    certain.stage_group = None;
+    gs.player_company.engine_projects[0].flaws = vec![certain.clone()];
+    let design = gs.player_company.rocket_projects[0].design.clone();
+    let snapshots = crate::launch::engine_snapshots_for(&design, &gs.player_company.engine_projects, &[]);
+    gs.player_company.manufacturing.inventory.rockets[0].stage_engine_flaws = snapshots;
+
+    // Then the project fixes it (a revision would) — the shelf keeps it.
+    gs.player_company.engine_projects[0].flaws.clear();
+    gs.player_company.engine_projects[0].revision += 1;
+
+    let (_, record) = gs.launch_rocket(item, "leo", vec![Payload::TestMass { mass_kg: 10.0 }], false).expect("launched");
+    let fired: Vec<String> = match record {
+        Some(r) => r.flaws_activated.iter().map(|a| a.flaw_description.clone()).collect(),
+        None => gs.active_flights[0].flaws_activated.iter().map(|a| a.flaw_description.clone()).collect(),
+    };
+    assert!(fired.iter().any(|d| d == "certain flaw 77"), "the built-in flaw fires: {fired:?}");
+    assert!(gs.player_company.engine_projects[0].flaws.is_empty(), "nothing to mark on a project that fixed it");
+
+    // With the flaw still on the project, the vehicle's copy finds it there.
+    let mut gs = GameState::new("Test".into(), 1);
+    let item = shelve_rocket(&mut gs, Vec::new());
+    gs.player_company.engine_projects[0].flaws = vec![certain];
+    let design = gs.player_company.rocket_projects[0].design.clone();
+    gs.player_company.manufacturing.inventory.rockets[0].stage_engine_flaws =
+        crate::launch::engine_snapshots_for(&design, &gs.player_company.engine_projects, &[]);
+    gs.launch_rocket(item, "leo", vec![Payload::TestMass { mass_kg: 10.0 }], false).expect("launched");
+    assert!(gs.player_company.engine_projects[0].flaws[0].discovered, "found on the project by id");
 }

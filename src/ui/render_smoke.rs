@@ -53,6 +53,8 @@ fn rich_app() -> App {
             location: LocationId::of("leo"),
             rocket_project_id: rp.project_id,
             payloads: if i == 0 { vec![Payload::TestMass { mass_kg: 50.0 }] } else { Vec::new() },
+            rocket_flaws: Vec::new(),
+            stage_engine_flaws: Vec::new(),
         });
     }
     // A rocket in inventory to launch, and one already on its way to the Moon.
@@ -67,6 +69,7 @@ fn rich_app() -> App {
             revision: rp.revision,
             rocket_flaws: Vec::new(),
             grounded_until: None,
+            stage_engine_flaws: Vec::new(),
         });
     }
     let launched = game.launch_rocket(inventory_id(1), "lunar_orbit", vec![Payload::TestMass { mass_kg: 100.0 }], true);

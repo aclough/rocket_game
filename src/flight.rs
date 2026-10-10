@@ -18,6 +18,7 @@ pub struct FlightId(pub u64);
 /// dropped off as an independent `Spacecraft` in the player's fleet,
 /// keeping any of its own `nested_payloads` with it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)] // a nested spacecraft is a whole vehicle with its flaws; a manifest is short
 pub enum Payload {
     ContractDelivery {
         contract_id: ContractId,
@@ -43,6 +44,12 @@ pub enum Payload {
         /// inventory rocket at launch time; future work may let the player
         /// customise it per-launch.
         name: String,
+        /// The flaws the nested vehicle was built with, carried along so
+        /// they are its own once deployed.
+        #[serde(default)]
+        rocket_flaws: Vec<crate::flaw::Flaw>,
+        #[serde(default)]
+        stage_engine_flaws: Vec<crate::manufacturing::StageEngineFlaws>,
     },
 }
 
@@ -145,6 +152,10 @@ pub struct Flight {
     /// flight review covers when the flight ends.
     #[serde(default)]
     pub events_reached: Vec<crate::launch::FlightEvent>,
+    /// The engine flaws built into each stage, for the events of groups
+    /// that first fire after the ascent.
+    #[serde(default)]
+    pub stage_engine_flaws: Vec<crate::manufacturing::StageEngineFlaws>,
     /// Whether this flight's reactors have had their one-shot `PerFlight`
     /// flaws rolled yet. Reactors run from flight start, so their
     /// per-flight flaws roll once on the first in-transit tick rather
@@ -465,7 +476,7 @@ mod tests {
             rocket: lem_rocket,
             nested_payloads: vec![],
             rocket_project_id: RocketProjectId(1),
-            name: "LEM".into(),
+            name: "LEM".into(), rocket_flaws: Vec::new(), stage_engine_flaws: Vec::new(),
         };
         // 700 plus the default battery: a stage that fits no power sources
         // still carries the kit that keeps its own lights on.
@@ -483,7 +494,7 @@ mod tests {
             rocket: csm_rocket,
             nested_payloads: vec![lem_payload],
             rocket_project_id: RocketProjectId(2),
-            name: "CSM".into(),
+            name: "CSM".into(), rocket_flaws: Vec::new(), stage_engine_flaws: Vec::new(),
         };
         // CSM (1300) + LEM (700) = 2000, plus a default battery on each —
         // the nested one rides along inside the LEM's own mass.
@@ -567,6 +578,7 @@ mod tests {
             flaw_rolled_groups: std::collections::HashSet::new(),
             rocket_flaws: Vec::new(),
             events_reached: Vec::new(),
+            stage_engine_flaws: Vec::new(),
             reactor_flaws_rolled: false,
         };
         // On leg 0 with 1 day remaining + leg 1 has 0+1=1 day
@@ -706,6 +718,7 @@ mod tests {
             flaw_rolled_groups: std::collections::HashSet::new(),
             rocket_flaws: Vec::new(),
             events_reached: Vec::new(),
+            stage_engine_flaws: Vec::new(),
             reactor_flaws_rolled: false,
         }
     }

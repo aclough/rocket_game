@@ -731,6 +731,7 @@ fn a_stage_already_in_inventory_does_not_claim_a_fresh_order() {
         stage_index: 0,
         stage_name: "TestThreeStage S2".into(),
         build_cost: 1_000_000.0,
+        engine_snapshot: None,
     });
     // A second build queues a fresh S2 for a slot that is already covered.
     gs.player_company.order_rocket_build(0, &gs.balance).unwrap();

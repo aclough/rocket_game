@@ -545,6 +545,7 @@ mod tests {
                 rocket_name: "Shelf".into(),
                 build_cost: 1.0e7, revision: 0, rocket_flaws: Vec::new(),
                 grounded_until: None,
+                stage_engine_flaws: Vec::new(),
             },
         );
         assert!(texts(&game).iter().any(|t| t.contains("Bid on a contract")));

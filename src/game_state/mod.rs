@@ -80,6 +80,12 @@ pub struct Spacecraft {
     /// `deploy_at` matches a stop on the new mission.
     #[serde(default)]
     pub payloads: Vec<crate::flight::Payload>,
+    /// The flaws this vehicle was built with, for the groups it fires
+    /// on later flights.
+    #[serde(default)]
+    pub rocket_flaws: Vec<crate::flaw::Flaw>,
+    #[serde(default)]
+    pub stage_engine_flaws: Vec<crate::manufacturing::StageEngineFlaws>,
 }
 
 impl Spacecraft {

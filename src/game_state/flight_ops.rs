@@ -85,6 +85,8 @@ impl GameState {
                 nested_payloads: vec![],
                 rocket_project_id: inv_rocket.rocket_project_id,
                 name: inv_rocket.rocket_name.clone(),
+                rocket_flaws: inv_rocket.rocket_flaws.clone(),
+                stage_engine_flaws: inv_rocket.stage_engine_flaws.clone(),
             });
         }
 
@@ -125,9 +127,11 @@ impl GameState {
         let rp = self.player_company.rocket_projects.iter()
             .find(|rp| rp.project_id == inv_rocket.rocket_project_id)?;
 
-        // Use snapshotted rocket flaws from the inventory item
+        // The vehicle flies with the flaws it was built with — the
+        // inventory item's snapshots, not the projects as they are now.
         let rocket_flaws = &inv_rocket.rocket_flaws;
         let flight_rocket_flaws = inv_rocket.rocket_flaws.clone();
+        let flight_engine_flaws = inv_rocket.stage_engine_flaws.clone();
         let rp_design_for_review = rp.design.clone();
 
         // Simulate flaw activation at launch
@@ -135,9 +139,8 @@ impl GameState {
             &rp.design,
             destination,
             total_payload_kg,
-            &self.player_company.engine_projects,
+            &inv_rocket.stage_engine_flaws,
             rocket_flaws,
-            &self.player_company.contracted_engines,
             &mut self.seed.contingent_rng,
             &self.balance.flight,
             &self.balance.nozzle,
@@ -323,6 +326,7 @@ impl GameState {
             flaw_rolled_groups: sim.flaw_rolled_groups,
             rocket_flaws: flight_rocket_flaws,
             events_reached: sim.events_reached,
+            stage_engine_flaws: flight_engine_flaws,
             reactor_flaws_rolled: false,
         };
 
@@ -376,8 +380,9 @@ impl GameState {
                 let event = launch::FlightEvent::PayloadDeploy;
                 flight.events_reached.push(event);
                 let rockets = launch::rocket_flaw_table(flight.rocket_project_id, &flight.rocket_flaws);
+                let engines = launch::engine_flaw_table_from(&flight.stage_engine_flaws);
                 let roll = launch::roll_event_flaws(
-                    &mut self.seed.contingent_rng, &mut flight.design, event, &tables.engines, &rockets, false,
+                    &mut self.seed.contingent_rng, &mut flight.design, event, &engines, &rockets, false,
                 );
                 flight.rocket.extra_draw_w += roll.extra_draw_w;
                 flight.flaws_activated.extend(roll.activations.iter().cloned());
@@ -440,33 +445,34 @@ impl GameState {
     /// they are someone else's design.
     fn apply_flaw_discoveries(&mut self, discoveries: FlawDiscoveries, events: &mut Vec<GameEvent>) {
         let mut news = Vec::new();
-        for (owner, flaw_index) in &discoveries.engines {
-            match owner {
-                FlawOwner::Engine { source: EngineSource::PlayerDesign(project_id), .. } => {
+        // By id: a vehicle's snapshot may predate a revision; a flaw the
+        // project no longer has was already fixed there.
+        for (source, flaw_id) in &discoveries.engines {
+            match source {
+                EngineSource::PlayerDesign(project_id) => {
                     if let Some(ep) = self.player_company.engine_projects.iter_mut()
                         .find(|ep| ep.project_id == *project_id)
                     {
-                        if *flaw_index < ep.flaws.len() && !ep.flaws[*flaw_index].discovered {
-                            ep.flaws[*flaw_index].discovered = true;
+                        let Some(flaw) = ep.flaws.iter_mut().find(|f| f.id == *flaw_id) else { continue };
+                        if !flaw.discovered {
+                            flaw.discovered = true;
+                            let description = flaw.description.clone();
                             news.push(GameEvent::project(
                                 ProjectKind::Engine, ep.design.name.clone(),
-                                ProjectEvent::FlawDiscovered {
-                                    description: ep.flaws[*flaw_index].description.clone(),
-                                },
+                                ProjectEvent::FlawDiscovered { description },
                             ));
                         }
                     }
                 }
-                FlawOwner::Engine { source: EngineSource::Contracted(ce_id), .. } => {
+                EngineSource::Contracted(ce_id) => {
                     if let Some(ce) = self.player_company.contracted_engines.iter_mut()
                         .find(|ce| ce.id == *ce_id)
                     {
-                        if *flaw_index < ce.flaws.len() {
-                            ce.flaws[*flaw_index].discovered = true;
+                        if let Some(flaw) = ce.flaws.iter_mut().find(|f| f.id == *flaw_id) {
+                            flaw.discovered = true;
                         }
                     }
                 }
-                FlawOwner::Rocket(_) | FlawOwner::Reactor(_) => {}
             }
         }
         for (project_id, flaw_id) in &discoveries.rockets {
@@ -635,6 +641,7 @@ impl GameState {
         let design_clone = flight.design;
         let rocket_name = flight.rocket_name;
         let dest_for_spacecraft = destination.clone();
+        let (flight_rocket_flaws, flight_engine_flaws) = (flight.rocket_flaws, flight.stage_engine_flaws);
 
         let record = LaunchRecord {
             launch_date: flight.launch_date,
@@ -657,13 +664,15 @@ impl GameState {
                 location: crate::location::LocationId::of(&dest_for_spacecraft),
                 rocket_project_id: flight.rocket_project_id,
                 payloads: remaining_payloads,
+                rocket_flaws: flight_rocket_flaws,
+                stage_engine_flaws: flight_engine_flaws,
             });
         }
 
         // Detach Spacecraft payloads at this destination into the fleet.
         for payload in deployed_spacecraft {
             if let Payload::Spacecraft {
-                design, rocket, nested_payloads, rocket_project_id, name, ..
+                design, rocket, nested_payloads, rocket_project_id, name, rocket_flaws, stage_engine_flaws, ..
             } = payload {
                 let sc_id = self.next_spacecraft_id.mint();
                 let evt = GameEvent::SpacecraftDeployed {
@@ -679,6 +688,8 @@ impl GameState {
                     location: crate::location::LocationId::of(&destination),
                     rocket_project_id,
                     payloads: nested_payloads,
+                    rocket_flaws,
+                    stage_engine_flaws,
                 });
             }
         }
@@ -758,10 +769,9 @@ impl GameState {
             persist: true, // spacecraft flights always persist
             launch_partial: None,
             flaw_rolled_groups: std::collections::HashSet::new(),
-            // A parked craft's rocket flaws were the launch's; the
-            // groups it fires from orbit roll their engine flaws only.
-            rocket_flaws: Vec::new(),
+            rocket_flaws: sc.rocket_flaws,
             events_reached: Vec::new(),
+            stage_engine_flaws: sc.stage_engine_flaws,
             reactor_flaws_rolled: false,
         };
 
@@ -801,6 +811,8 @@ impl GameState {
             nested_payloads: small.payloads,
             rocket_project_id: small.rocket_project_id,
             name: small.name,
+            rocket_flaws: small.rocket_flaws,
+            stage_engine_flaws: small.stage_engine_flaws,
         };
         self.spacecraft[adjusted_large].payloads.push(payload);
 
@@ -829,7 +841,7 @@ impl GameState {
         let carrier_name = self.spacecraft[carrier_idx].name.clone();
         let payload = self.spacecraft[carrier_idx].payloads.remove(payload_idx);
         let crate::flight::Payload::Spacecraft {
-            design, rocket, nested_payloads, rocket_project_id, name, ..
+            design, rocket, nested_payloads, rocket_project_id, name, rocket_flaws, stage_engine_flaws, ..
         } = payload else {
             return false; // unreachable given the matches! above
         };
@@ -841,6 +853,7 @@ impl GameState {
             location,
             rocket_project_id,
             payloads: nested_payloads,
+            rocket_flaws, stage_engine_flaws,
         });
 
         let evt = GameEvent::SpacecraftUndocked {
@@ -929,7 +942,7 @@ enum FlightEnd {
 /// the vehicles they were snapshotted for have all been ticked.
 #[derive(Default)]
 struct FlawDiscoveries {
-    engines: Vec<(FlawOwner, usize)>,
+    engines: Vec<(EngineSource, crate::flaw::FlawId)>,
     rockets: Vec<(crate::rocket_project::RocketProjectId, crate::flaw::FlawId)>,
     reactors: Vec<(crate::reactor::ReactorId, usize)>,
 }
@@ -938,7 +951,7 @@ impl FlawDiscoveries {
     fn record(&mut self, roll: &FlawRoll) {
         for &(owner, fi, id) in &roll.discoveries {
             match owner {
-                FlawOwner::Engine { .. } => self.engines.push((owner, fi)),
+                FlawOwner::Engine { source, .. } => self.engines.push((source, id)),
                 FlawOwner::Rocket(pid) => self.rockets.push((pid, id)),
                 FlawOwner::Reactor(rid) => self.reactors.push((rid, fi)),
             }
@@ -1115,9 +1128,10 @@ fn tick_flight(
             if !new_burned.is_empty() {
                 flight.flaw_rolled_groups.extend(new_burned.iter().copied());
                 let rockets = launch::rocket_flaw_table(flight.rocket_project_id, &flight.rocket_flaws);
+                let engines = launch::engine_flaw_table_from(&flight.stage_engine_flaws);
                 for event in launch::ascent_events(&new_burned, false) {
                     flight.events_reached.push(event);
-                    let roll = launch::roll_event_flaws(rng, &mut flight.design, event, &tables.engines, &rockets, false);
+                    let roll = launch::roll_event_flaws(rng, &mut flight.design, event, &engines, &rockets, false);
                     flight.rocket.extra_draw_w += roll.extra_draw_w;
                     flight.flaws_activated.extend(roll.activations.iter().cloned());
                     push_activation_events(events, &flight.rocket_name, &roll);

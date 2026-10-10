@@ -17,6 +17,21 @@ pub struct InventoryItemId(pub u64);
 
 // ── Manufacturing orders ──
 
+/// The engine flaws built into one stage of a vehicle: what the engines
+/// consumed at stage build carried, kept with the stage, the integrated
+/// rocket, the flight and the parked spacecraft (22_FLAWS.md §3.5). A
+/// fix on the design reaches a built unit only through a retrofit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageEngineFlaws {
+    pub group_index: usize,
+    pub stage_index: usize,
+    pub source: EngineSource,
+    pub engine_id: EngineId,
+    /// The engine project's revision the engines were built at.
+    pub revision: u32,
+    pub flaws: Vec<crate::flaw::Flaw>,
+}
+
 /// What type of item is being manufactured.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ManufacturingOrderType {
@@ -49,6 +64,10 @@ pub enum ManufacturingOrderType {
         stage_index: usize,
         stage_name: String,
         structural_mass_kg: f64,
+        /// The flaws of the engines consumed into this stage, set when
+        /// they are taken from inventory.
+        #[serde(default)]
+        engine_snapshot: Option<StageEngineFlaws>,
     },
     /// Final integration of a rocket.
     RocketIntegration {
@@ -60,6 +79,9 @@ pub enum ManufacturingOrderType {
         revision: u32,
         /// Rocket project flaw snapshot at integration time.
         rocket_flaws: Vec<crate::flaw::Flaw>,
+        /// The engine flaws of the stages consumed into this rocket.
+        #[serde(default)]
+        stage_engine_flaws: Vec<StageEngineFlaws>,
     },
 }
 
@@ -209,6 +231,7 @@ impl ManufacturingOrder {
         ManufacturingOrder {
             id,
             order_type: ManufacturingOrderType::Stage {
+                engine_snapshot: None,
                 rocket_project_id,
                 group_index,
                 stage_index,
@@ -251,6 +274,7 @@ impl ManufacturingOrder {
                 total_stages,
                 revision,
                 rocket_flaws,
+                stage_engine_flaws: Vec::new(),
             },
             work_completed: 0.0,
             work_required: base_work * learning,
@@ -336,6 +360,9 @@ pub struct InventoryStage {
     /// Manufacturing cost of this stage (including consumed engine costs).
     #[serde(default)]
     pub build_cost: f64,
+    /// The flaws of the engines built into this stage.
+    #[serde(default)]
+    pub engine_snapshot: Option<StageEngineFlaws>,
 }
 
 /// An integrated rocket ready for launch.
@@ -357,6 +384,9 @@ pub struct InventoryRocket {
     /// After a pad abort: the vehicle cannot launch before this date.
     #[serde(default)]
     pub grounded_until: Option<crate::calendar::GameDate>,
+    /// The engine flaws built into each stage, in design order.
+    #[serde(default)]
+    pub stage_engine_flaws: Vec<StageEngineFlaws>,
 }
 
 /// Inventory of manufactured items.
@@ -528,7 +558,7 @@ impl Manufacturing {
                         build_cost: total_build_cost,
                     });
                 }
-                ManufacturingOrderType::Stage { rocket_project_id, group_index, stage_index, stage_name, .. } => {
+                ManufacturingOrderType::Stage { rocket_project_id, group_index, stage_index, stage_name, engine_snapshot, .. } => {
                     self.inventory.stages.push(InventoryStage {
                         item_id,
                         rocket_project_id: *rocket_project_id,
@@ -536,6 +566,7 @@ impl Manufacturing {
                         stage_index: *stage_index,
                         stage_name: stage_name.clone(),
                         build_cost: total_build_cost,
+                        engine_snapshot: engine_snapshot.clone(),
                     });
                     events.push(ManufacturingEvent::StageBuilt {
                         order_id: order.id,
@@ -543,7 +574,7 @@ impl Manufacturing {
                         stage_name: stage_name.clone(),
                     });
                 }
-                ManufacturingOrderType::RocketIntegration { rocket_project_id, design_id, rocket_name, revision, rocket_flaws, .. } => {
+                ManufacturingOrderType::RocketIntegration { rocket_project_id, design_id, rocket_name, revision, rocket_flaws, stage_engine_flaws, .. } => {
                     self.inventory.rockets.push(InventoryRocket {
                         item_id,
                         rocket_project_id: *rocket_project_id,
@@ -553,6 +584,7 @@ impl Manufacturing {
                         revision: *revision,
                         rocket_flaws: rocket_flaws.clone(),
                         grounded_until: None,
+                        stage_engine_flaws: stage_engine_flaws.clone(),
                     });
                     events.push(ManufacturingEvent::RocketIntegrated {
                         order_id: order.id,

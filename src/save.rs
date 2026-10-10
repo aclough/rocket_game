@@ -58,7 +58,7 @@ pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
 ///
 /// v5: kerosene and hypergolic expanders no longer exist; projects of
 /// those families become gas generators (21_2_ENGINE_CYCLES.md step 4).
-pub const SAVE_VERSION: u32 = 7;
+pub const SAVE_VERSION: u32 = 8;
 
 /// Load game state from a JSON file, running any migrations the file
 /// needs, then stamping it with the current version.
@@ -416,6 +416,9 @@ fn migrate(state: &mut GameState, from: u32) {
         // JSON level.
         for_each_flaw(state, |flaw, is_rocket, _, _| flaw.assign_legacy_exposure(is_rocket));
     }
+    if from < 8 {
+        fill_engine_snapshots_to_v8(state);
+    }
     if from < 5 {
         // v4 -> v5: a kerosene or hypergolic expander project becomes a
         // gas generator of the same propellant and vacuum thrust. Built
@@ -495,6 +498,98 @@ fn for_each_flaw(
     for flight in &mut state.active_flights {
         let groups = flight.design.stage_groups.len();
         for f in &mut flight.rocket_flaws { visit(f, true, groups, seed); }
+    }
+}
+
+/// v7 -> v8: built units carry their engines' flaws (22_FLAWS.md step
+/// 8). Everything built before — stages on the shelf, integrated
+/// rockets, pending integration orders, flights, parked spacecraft and
+/// nested spacecraft payloads — takes a snapshot of its engines'
+/// projects as they are now, which is what it would have carried had
+/// it been built today; a parked spacecraft without rocket flaws takes
+/// its project's. Nothing already carrying snapshots is touched.
+fn fill_engine_snapshots_to_v8(state: &mut GameState) {
+    use crate::flight::Payload;
+    use crate::launch::engine_snapshots_for;
+    use crate::manufacturing::{ManufacturingOrderType, StageEngineFlaws};
+
+    fn fill_payloads(
+        payloads: &mut [Payload],
+        engines: &[crate::engine_project::EngineProject],
+        contracted: &[crate::third_party::ContractedEngine],
+    ) {
+        for p in payloads.iter_mut() {
+            if let Payload::Spacecraft { design, nested_payloads, stage_engine_flaws, .. } = p {
+                if stage_engine_flaws.is_empty() {
+                    *stage_engine_flaws = engine_snapshots_for(design, engines, contracted);
+                }
+                fill_payloads(nested_payloads, engines, contracted);
+            }
+        }
+    }
+
+    let companies = std::iter::once(&mut state.player_company)
+        .chain(state.competitors.iter_mut().map(|c| &mut c.company));
+    for company in companies {
+        let engines = company.engine_projects.clone();
+        let contracted = company.contracted_engines.clone();
+        let design_of = |pid: crate::rocket_project::RocketProjectId| {
+            company.rocket_projects.iter().find(|rp| rp.project_id == pid).map(|rp| rp.design.clone())
+        };
+        let stage_snapshots: Vec<Option<StageEngineFlaws>> = company.manufacturing.inventory.stages.iter()
+            .map(|stg| design_of(stg.rocket_project_id).and_then(|design| {
+                engine_snapshots_for(&design, &engines, &contracted).into_iter()
+                    .find(|s| s.group_index == stg.group_index && s.stage_index == stg.stage_index)
+            }))
+            .collect();
+        for (stg, snap) in company.manufacturing.inventory.stages.iter_mut().zip(stage_snapshots) {
+            if stg.engine_snapshot.is_none() {
+                stg.engine_snapshot = snap;
+            }
+        }
+        let rocket_snapshots: Vec<Vec<StageEngineFlaws>> = company.manufacturing.inventory.rockets.iter()
+            .map(|r| design_of(r.rocket_project_id).map_or_else(Vec::new, |d| engine_snapshots_for(&d, &engines, &contracted)))
+            .collect();
+        for (r, snaps) in company.manufacturing.inventory.rockets.iter_mut().zip(rocket_snapshots) {
+            if r.stage_engine_flaws.is_empty() {
+                r.stage_engine_flaws = snaps;
+            }
+        }
+        let order_snapshots: Vec<Vec<StageEngineFlaws>> = company.manufacturing.orders.iter()
+            .map(|o| match &o.order_type {
+                ManufacturingOrderType::RocketIntegration { rocket_project_id, .. } =>
+                    design_of(*rocket_project_id).map_or_else(Vec::new, |d| engine_snapshots_for(&d, &engines, &contracted)),
+                _ => Vec::new(),
+            })
+            .collect();
+        for (o, snaps) in company.manufacturing.orders.iter_mut().zip(order_snapshots) {
+            if let ManufacturingOrderType::RocketIntegration { stage_engine_flaws, .. } = &mut o.order_type {
+                if stage_engine_flaws.is_empty() {
+                    *stage_engine_flaws = snaps;
+                }
+            }
+        }
+    }
+    let engines = state.player_company.engine_projects.clone();
+    let contracted = state.player_company.contracted_engines.clone();
+    for flight in &mut state.active_flights {
+        if flight.stage_engine_flaws.is_empty() {
+            flight.stage_engine_flaws = engine_snapshots_for(&flight.design, &engines, &contracted);
+        }
+        fill_payloads(&mut flight.payloads, &engines, &contracted);
+    }
+    let project_flaws: Vec<(crate::rocket_project::RocketProjectId, Vec<crate::flaw::Flaw>)> =
+        state.player_company.rocket_projects.iter().map(|rp| (rp.project_id, rp.flaws.clone())).collect();
+    for sc in &mut state.spacecraft {
+        if sc.stage_engine_flaws.is_empty() {
+            sc.stage_engine_flaws = engine_snapshots_for(&sc.design, &engines, &contracted);
+        }
+        if sc.rocket_flaws.is_empty() {
+            if let Some((_, flaws)) = project_flaws.iter().find(|(pid, _)| *pid == sc.rocket_project_id) {
+                sc.rocket_flaws = flaws.clone();
+            }
+        }
+        fill_payloads(&mut sc.payloads, &engines, &contracted);
     }
 }
 
@@ -1027,7 +1122,7 @@ mod tests {
             rocket: lem_rocket,
             nested_payloads: vec![],
             rocket_project_id: RocketProjectId(2),
-            name: "LEM".into(),
+            name: "LEM".into(), rocket_flaws: Vec::new(), stage_engine_flaws: Vec::new(),
         };
         state.spacecraft.push(Spacecraft {
             id: crate::game_state::SpacecraftId(1),
@@ -1037,6 +1132,8 @@ mod tests {
             location: crate::location::LocationId::of("lunar_orbit"),
             rocket_project_id: RocketProjectId(1),
             payloads: vec![lem_payload],
+            rocket_flaws: Vec::new(),
+            stage_engine_flaws: Vec::new(),
         });
 
         save_game(&state, &path).expect("save failed");
@@ -1057,6 +1154,55 @@ mod tests {
 
     /// v5 -> v6: flaws get the event they roll at from their own words,
     /// and a rocket flaw a stage; a built rocket's snapshot too.
+    #[test]
+    fn v7_built_units_take_their_engines_snapshots() {
+        use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawPhase, FlawTrigger};
+        let mut state = GameState::with_money("V7".into(), 1_000_000_000.0, 1);
+        state.player_company.start_engine_project(
+            "Lifter".into(), crate::engine::EngineCycle::GasGenerator,
+            crate::engine_project::PropellantPreset::Kerolox, 0.2, None, &state.balance,
+        );
+        let engine = state.player_company.engine_projects[0].design.clone();
+        state.player_company.engine_projects[0].flaws = vec![Flaw {
+            id: FlawId(5), description: "Turbopump seal leak".into(),
+            consequence: FlawConsequence::EngineLoss, activation_chance: 0.3,
+            discovery_roll: 0.6, discovered: false, trigger: FlawTrigger::PerFlight,
+            phase: FlawPhase::Burn, stage_group: None, exposure: crate::flaw::FlawExposure::Bench,
+        }];
+        let stage = |id: u64| crate::stage::Stage {
+            id: crate::stage::StageId(id), name: format!("S{id}"),
+            engine: engine.clone(), engine_count: 1,
+            propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0, fairing: None,
+            power_sources: Vec::new(),
+        };
+        state.player_company.start_rocket_project("Old".into(), vec![vec![stage(1)], vec![stage(2)]], &state.balance);
+        let rp = &state.player_company.rocket_projects[0];
+        let (project_id, design_id) = (rp.project_id, rp.design.id);
+        state.player_company.manufacturing.inventory.rockets.push(crate::manufacturing::InventoryRocket {
+            item_id: crate::manufacturing::InventoryItemId(9), rocket_project_id: project_id, design_id,
+            rocket_name: "Old".into(), build_cost: 0.0, revision: 0, rocket_flaws: Vec::new(),
+            grounded_until: None, stage_engine_flaws: Vec::new(),
+        });
+        state.player_company.manufacturing.inventory.stages.push(crate::manufacturing::InventoryStage {
+            item_id: crate::manufacturing::InventoryItemId(10), rocket_project_id: project_id,
+            group_index: 1, stage_index: 0, stage_name: "S2".into(), build_cost: 0.0, engine_snapshot: None,
+        });
+        let mut raw = serde_json::to_value(&state).unwrap();
+        raw["save_version"] = serde_json::json!(7);
+        let path = temp_path();
+        fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
+        let loaded = load_game(&path).expect("v7 save should load");
+        let _ = fs::remove_file(&path);
+
+        let rocket = &loaded.player_company.manufacturing.inventory.rockets[0];
+        assert_eq!(rocket.stage_engine_flaws.len(), 2, "one snapshot per stage");
+        assert_eq!(rocket.stage_engine_flaws[1].flaws[0].id, FlawId(5));
+        let stage = &loaded.player_company.manufacturing.inventory.stages[0];
+        let snap = stage.engine_snapshot.as_ref().expect("the shelved stage took its engine's flaws");
+        assert_eq!((snap.group_index, snap.stage_index), (1, 0));
+        assert_eq!(snap.flaws[0].id, FlawId(5));
+    }
+
     #[test]
     fn v5_flaws_get_phases_stages_exposures_and_draws() {
         use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawPhase, FlawTrigger};
@@ -1085,6 +1231,7 @@ mod tests {
             rocket_name: "Legacy".into(), build_cost: 0.0, revision: 0,
             rocket_flaws: vec![legacy(2, "Interstage buckles under max-Q loading")],
             grounded_until: None,
+            stage_engine_flaws: Vec::new(),
         });
         state.player_company.start_engine_project(
             "Igniter".into(), crate::engine::EngineCycle::GasGenerator,

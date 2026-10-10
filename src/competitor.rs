@@ -306,6 +306,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             revision: 0,
             rocket_flaws: vec![flaw.clone()],
             grounded_until: None,
+            stage_engine_flaws: Vec::new(),
         });
     }
 

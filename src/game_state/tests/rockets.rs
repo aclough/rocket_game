@@ -33,9 +33,7 @@ fn test_flaw_scoping_by_stage_usage() {
     let rp = RocketProject::new(RocketProjectId(1), design.clone(), &crate::balance_config::BalanceConfig::default());
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
-    let sim = crate::launch::simulate_launch(
-        &design, "leo", 0.0,
-        &engine_projects, &rp.flaws, &[], &mut rng,
+    let sim = crate::launch::simulate_launch(&design, "leo", 0.0, &crate::launch::engine_snapshots_for(&design, &engine_projects, &[]), &rp.flaws, &mut rng,
         &crate::balance_config::FlightConfig::default(),
             &crate::balance_config::NozzleConfig::default(),
     );
@@ -85,7 +83,10 @@ fn test_flaw_scoping_by_stage_usage() {
             .unwrap_or(false));
     assert_eq!(current_group, Some(2), "Should be on stage 3 (group index 2)");
 
-    // Add as spacecraft
+    // Add as spacecraft, carrying the engine flaws it was built with.
+    let stage_engine_flaws = crate::launch::engine_snapshots_for(
+        &sim.degraded_design, &gs.player_company.engine_projects, &[],
+    );
     let sc = Spacecraft {
         id: SpacecraftId(1),
         name: "TestCraft".into(),
@@ -94,6 +95,8 @@ fn test_flaw_scoping_by_stage_usage() {
         location: crate::location::LocationId::of("leo"),
         rocket_project_id: RocketProjectId(1),
         payloads: Vec::new(),
+        rocket_flaws: Vec::new(),
+        stage_engine_flaws,
     };
     gs.spacecraft.push(sc);
 
@@ -155,9 +158,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
     let rp = RocketProject::new(RocketProjectId(1), design.clone(), &crate::balance_config::BalanceConfig::default());
     use rand::SeedableRng;
     let mut rng = rand::rngs::StdRng::seed_from_u64(99);
-    let sim = crate::launch::simulate_launch(
-        &design, "leo", 0.0,
-        &gs.player_company.engine_projects, &rp.flaws, &[], &mut rng,
+    let sim = crate::launch::simulate_launch(&design, "leo", 0.0, &crate::launch::engine_snapshots_for(&design, &gs.player_company.engine_projects, &[]), &rp.flaws, &mut rng,
         &crate::balance_config::FlightConfig::default(),
             &crate::balance_config::NozzleConfig::default(),
     );
@@ -196,6 +197,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
         flaw_rolled_groups: sim.flaw_rolled_groups,
         rocket_flaws: Vec::new(),
         events_reached: Vec::new(),
+        stage_engine_flaws: Vec::new(),
         reactor_flaws_rolled: false,
     };
 

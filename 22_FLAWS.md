@@ -932,3 +932,37 @@ flight is re-measured after step 9 and the final sweep is step 12's.
 The "ULA path" — how far a well-funded test programme can push the
 first flight — needs a prudent policy to measure and is step 12's too.
 
+**Step 8 — built-unit snapshots.** `StageEngineFlaws { group, stage,
+source, engine_id, revision, flaws }`: set on a stage order when its
+engines are taken from inventory (the engine item's own snapshot,
+taken when the engine was *ordered*), carried onto the integration
+order when the stages are taken, onto `InventoryRocket`, onto the
+`Flight`, onto a parked `Spacecraft`, and through nested
+`Payload::Spacecraft` (which now also carries `rocket_flaws`).
+`simulate_launch` and the flight loop roll engine flaws from the
+vehicle's snapshot (`engine_flaw_table_from`), each stage's copy for
+its own stage; discoveries go back to the projects by flaw id; the live
+engine table is gone from `FlawTables`. Save v8 fills every built
+thing from before with its projects as they are now
+(`fill_engine_snapshots_to_v8`). The launches tab marks a shelved
+rocket "STALE: n fixed flaws not applied" when it was built before its
+designs' latest revisions. 715 tests, clippy clean.
+
+| | step 7 | step 8 |
+|---|---|---|
+| 100 × 6 y: 1st / 2nd / 3rd / 4th+ | 35 / 51 / 72 / 97 | 20 / 20 / 36 / 89 |
+| 100 × 6 y: bankrupt | 12 | 38 |
+| 200 × 8 y: bankrupt | 29 | 75 |
+
+The trough the plan expected, and deeper than the second flight alone:
+an engine's snapshot is taken when the engine is *ordered*, and the
+bot orders its engines the moment the rocket design finishes, eight
+months and a dozen test cycles before the first launch. The first
+vehicle therefore flies the engines' flaws as of month ten, not month
+eighteen, and the second vehicle — ordered the day the first launches
+— flies them as of the first launch, before the review and its
+revisions. Nothing built ever benefits from a fix. That is exactly the
+case §3.5 names and step 9's auto-retrofit answers; this state is
+committed as the honest intermediate (fleet bands suspended, per-seed
+bands pass), and the curve is read again after step 9.
+

@@ -286,6 +286,7 @@ mod tests {
                 rocket_name: "Built".into(),
                 build_cost: 1.0e7, revision: 0, rocket_flaws: Vec::new(),
                 grounded_until: None,
+                stage_engine_flaws: Vec::new(),
             },
         );
         app.handle_key(KeyCode::Char(' '));

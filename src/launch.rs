@@ -13,6 +13,7 @@ use crate::rocket::{DesignPerformance, Rocket, RocketDesign};
 use crate::rocket_project::RocketProjectId;
 use crate::stage::Stage;
 use crate::third_party::ContractedEngine;
+use crate::manufacturing::StageEngineFlaws;
 
 // ── Flaw snapshots and rolls ─────────────────────────────────────────
 //
@@ -38,6 +39,11 @@ pub struct FlawRef {
     pub owner: FlawOwner,
     pub flaw_index: usize,
     pub id: FlawId,
+    /// For a vehicle's engine snapshot: the (group, stage) the engines
+    /// carrying this flaw are built into. Two stages on the same engine
+    /// design each carry their own copy, and each copy rolls for its own
+    /// stage only. `None` for live tables (endurance, reactors).
+    pub stage: Option<(usize, usize)>,
     pub trigger: FlawTrigger,
     pub phase: FlawPhase,
     pub stage_group: Option<usize>,
@@ -53,6 +59,7 @@ impl FlawRef {
             owner,
             flaw_index,
             id: flaw.id,
+            stage: None,
             trigger: flaw.trigger,
             phase: flaw.phase,
             stage_group: flaw.stage_group,
@@ -64,13 +71,12 @@ impl FlawRef {
     }
 }
 
-/// Every flaw the fleet can suffer, by the kind of part it lives on.
+/// Every live-project flaw the fleet can suffer by the day, by the kind
+/// of part it lives on. Per-flight engine and rocket flaws are not here:
+/// a vehicle rolls those from its own snapshots
+/// (`engine_flaw_table_from`, `rocket_flaw_table`).
 pub struct FlawTables {
-    /// Player-designed engines first, then contracted ones; every flaw.
-    pub engines: Vec<FlawRef>,
-    /// Rocket projects' endurance (`PerDay`) flaws only — their
-    /// `PerFlight` flaws roll on the pad from the inventory item's own
-    /// snapshot.
+    /// Rocket projects' endurance (`PerDay`) flaws only.
     pub rockets: Vec<FlawRef>,
     /// Reactor projects; every flaw, both triggers.
     pub reactors: Vec<FlawRef>,
@@ -79,7 +85,6 @@ pub struct FlawTables {
 impl FlawTables {
     pub fn snapshot(company: &Company) -> Self {
         FlawTables {
-            engines: engine_flaw_table(&company.engine_projects, &company.contracted_engines),
             rockets: company.rocket_projects.iter()
                 .flat_map(|rp| rp.flaws.iter().enumerate()
                     .filter(|(_, f)| f.trigger == FlawTrigger::PerDay)
@@ -93,25 +98,46 @@ impl FlawTables {
     }
 }
 
-/// The engine flaw table on its own, for the launch sim's callers that
-/// hold the two lists rather than a company.
-pub fn engine_flaw_table(
-    engine_projects: &[EngineProject], contracted_engines: &[ContractedEngine],
-) -> Vec<FlawRef> {
+/// The engine flaws built into a vehicle, as a table: one owner per
+/// stage's engine, so a discovery finds its way back to the project.
+pub fn engine_flaw_table_from(snapshots: &[StageEngineFlaws]) -> Vec<FlawRef> {
     let mut table = Vec::new();
-    for ep in engine_projects {
-        let owner = FlawOwner::Engine {
-            source: EngineSource::PlayerDesign(ep.project_id), engine_id: ep.design.id,
-        };
-        table.extend(ep.flaws.iter().enumerate().map(|(fi, f)| FlawRef::from(owner, fi, f)));
-    }
-    for ce in contracted_engines {
-        let owner = FlawOwner::Engine {
-            source: EngineSource::Contracted(ce.id), engine_id: ce.design.id,
-        };
-        table.extend(ce.flaws.iter().enumerate().map(|(fi, f)| FlawRef::from(owner, fi, f)));
+    for snap in snapshots {
+        let owner = FlawOwner::Engine { source: snap.source, engine_id: snap.engine_id };
+        table.extend(snap.flaws.iter().enumerate().map(|(fi, f)| {
+            let mut r = FlawRef::from(owner, fi, f);
+            r.stage = Some((snap.group_index, snap.stage_index));
+            r
+        }));
     }
     table
+}
+
+/// Engine snapshots for a design taken from its projects as they are
+/// now: what a vehicle built today would carry. Used to fill in
+/// vehicles from before snapshots existed, and by tests.
+pub fn engine_snapshots_for(
+    design: &RocketDesign, engine_projects: &[EngineProject], contracted_engines: &[ContractedEngine],
+) -> Vec<StageEngineFlaws> {
+    let mut out = Vec::new();
+    for (gi, group) in design.stage_groups.iter().enumerate() {
+        for (si, stage) in group.iter().enumerate() {
+            if let Some(ep) = engine_projects.iter().find(|ep| ep.design.id == stage.engine.id) {
+                out.push(StageEngineFlaws {
+                    group_index: gi, stage_index: si,
+                    source: EngineSource::PlayerDesign(ep.project_id), engine_id: ep.design.id,
+                    revision: ep.revision, flaws: ep.flaws.clone(),
+                });
+            } else if let Some(ce) = contracted_engines.iter().find(|ce| ce.design.id == stage.engine.id) {
+                out.push(StageEngineFlaws {
+                    group_index: gi, stage_index: si,
+                    source: EngineSource::Contracted(ce.id), engine_id: ce.design.id,
+                    revision: 0, flaws: ce.flaws.clone(),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// What one round of flaw rolls did to a vehicle.
@@ -266,9 +292,10 @@ pub fn roll_event_flaws(
             let stage = &design.stage_groups[gi][si];
             (stage.engine.id, stage.engine_count, stage.engine.name.clone())
         };
-        for flaw in engines.iter().filter(|f| f.phase == phase
-            && matches!(f.owner, FlawOwner::Engine { engine_id: id, .. } if id == engine_id))
-        {
+        for flaw in engines.iter().filter(|f| f.phase == phase && match f.stage {
+            Some(stage) => stage == (gi, si),
+            None => matches!(f.owner, FlawOwner::Engine { engine_id: id, .. } if id == engine_id),
+        }) {
             if matches!(flaw.consequence, FlawConsequence::PadAbort { .. }) && !pad_aborts_roll {
                 continue;
             }
@@ -474,8 +501,9 @@ pub struct LaunchSimResult {
     pub flaws_activated: Vec<FlawActivation>,
     /// The design after flaw degradation (what's actually flying).
     pub degraded_design: RocketDesign,
-    /// Engine flaws that fired, to mark discovered on their owners.
-    pub engine_discoveries: Vec<(FlawOwner, usize)>,
+    /// Engine flaws that fired, by owner and id, to mark discovered on
+    /// their projects (the vehicle's snapshot may be older than them).
+    pub engine_discoveries: Vec<(EngineSource, FlawId)>,
     /// Rocket flaws that fired, by id, to mark discovered on the project.
     pub rocket_flaw_discoveries: Vec<FlawId>,
     /// The stage groups the ascent fired — every group the first leg
@@ -501,14 +529,13 @@ pub struct LaunchSimResult {
 /// loss ends the walk. The degraded design is then judged against the
 /// route's delta-v. Groups that first fire on a later leg roll in the
 /// flight loop when they do.
-#[allow(clippy::too_many_arguments)] // the three flaw sources plus the balance cut; a bundle struct would just rename them
+#[allow(clippy::too_many_arguments)] // the two flaw snapshots plus the balance cut; a bundle struct would just rename them
 pub fn simulate_launch(
     design: &RocketDesign,
     destination: &str,
     payload_kg: f64,
-    engine_projects: &[EngineProject],
+    stage_engine_flaws: &[StageEngineFlaws],
     rocket_flaws: &[crate::flaw::Flaw],
-    contracted_engines: &[ContractedEngine],
     rng: &mut StdRng,
     flight_cfg: &crate::balance_config::FlightConfig,
     nozzle_cfg: &crate::balance_config::NozzleConfig,
@@ -524,14 +551,14 @@ pub fn simulate_launch(
         .filter(|p| p.has_atmosphere)
         .map_or(0.0, |p| p.ambient_pressure_pa);
 
-    let engines = engine_flaw_table(engine_projects, contracted_engines);
+    let engines = engine_flaw_table_from(stage_engine_flaws);
     // The snapshot's owner id is a placeholder: discoveries leave here
     // by flaw id and the caller knows whose rocket it is.
     let rockets = rocket_flaw_table(RocketProjectId(0), rocket_flaws);
 
     let mut degraded = design.clone();
     let mut activations: Vec<FlawActivation> = Vec::new();
-    let mut engine_discoveries: Vec<(FlawOwner, usize)> = Vec::new();
+    let mut engine_discoveries: Vec<(EngineSource, FlawId)> = Vec::new();
     let mut rocket_flaw_discoveries: Vec<FlawId> = Vec::new();
     let mut events_reached: Vec<FlightEvent> = Vec::new();
     let mut scrub: Option<(String, u32)> = None;
@@ -542,9 +569,9 @@ pub fn simulate_launch(
         let roll = roll_event_flaws(rng, &mut degraded, event, &engines, &rockets, true);
         activations.extend(roll.activations);
         extra_draw_w += roll.extra_draw_w;
-        for (owner, fi, id) in roll.discoveries {
+        for (owner, _, id) in roll.discoveries {
             match owner {
-                FlawOwner::Engine { .. } => engine_discoveries.push((owner, fi)),
+                FlawOwner::Engine { source, .. } => engine_discoveries.push((source, id)),
                 FlawOwner::Rocket(_) => rocket_flaw_discoveries.push(id),
                 FlawOwner::Reactor(_) => {}
             }
@@ -869,7 +896,7 @@ mod tests {
             ],
         };
         let mut rng = StdRng::seed_from_u64(1);
-        let sim = simulate_launch(&design, "leo", 0.0, &[], &[], &[], &mut rng, &crate::balance_config::FlightConfig::default(), &crate::balance_config::NozzleConfig::default());
+        let sim = simulate_launch(&design, "leo", 0.0, &engine_snapshots_for(&design, &[], &[]), &[], &mut rng, &crate::balance_config::FlightConfig::default(), &crate::balance_config::NozzleConfig::default());
 
         // The vehicle handed to the flight is the design as built.
         assert_eq!(sim.degraded_design.stage_groups[0][0].engine.isp_s, e1.isp_s,
@@ -901,9 +928,7 @@ mod tests {
         let rp = make_rocket_project(design.clone(), vec![]);
         let mut rng = StdRng::seed_from_u64(42);
 
-        let result = simulate_launch(
-            &design, "leo", 0.0,
-            &[ep1, ep2], &rp.flaws, &[], &mut rng,
+        let result = simulate_launch(&design, "leo", 0.0, &engine_snapshots_for(&design, &[ep1, ep2], &[]), &rp.flaws, &mut rng,
             &crate::balance_config::FlightConfig::default(),
             &crate::balance_config::NozzleConfig::default(),
         );
@@ -929,9 +954,7 @@ mod tests {
         let rp = make_rocket_project(design.clone(), vec![]);
         let mut rng = StdRng::seed_from_u64(42);
 
-        let result = simulate_launch(
-            &design, "leo", 0.0,
-            &[ep1, ep2], &rp.flaws, &[], &mut rng,
+        let result = simulate_launch(&design, "leo", 0.0, &engine_snapshots_for(&design, &[ep1, ep2], &[]), &rp.flaws, &mut rng,
             &crate::balance_config::FlightConfig::default(),
             &crate::balance_config::NozzleConfig::default(),
         );
@@ -1006,8 +1029,8 @@ mod tests {
         // actually costs the vehicle orbit rather than eating into margin.
         let result = simulate_launch(
             &design, "leo", PAYLOAD_KG,
-            &[make_engine_project(1, vec![flaw]), make_engine_project(2, vec![])],
-            &rp.flaws, &[], &mut rng,
+            &engine_snapshots_for(&design, &[make_engine_project(1, vec![flaw]), make_engine_project(2, vec![])], &[]),
+            &rp.flaws, &mut rng,
             &crate::balance_config::FlightConfig::default(),
             &crate::balance_config::NozzleConfig::default(),
         );
@@ -1037,9 +1060,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
 
         // With a heavy payload, losing a stage should cause failure
-        let result = simulate_launch(
-            &design, "gto", 5000.0,
-            &[ep1, ep2], &rp.flaws, &[], &mut rng,
+        let result = simulate_launch(&design, "gto", 5000.0, &engine_snapshots_for(&design, &[ep1, ep2], &[]), &rp.flaws, &mut rng,
             &crate::balance_config::FlightConfig::default(),
             &crate::balance_config::NozzleConfig::default(),
         );
@@ -1065,9 +1086,7 @@ mod tests {
         let rp = make_rocket_project(design.clone(), vec![flaw]);
         let mut rng = StdRng::seed_from_u64(42);
 
-        let result = simulate_launch(
-            &design, "leo", 0.0,
-            &[ep1, ep2], &rp.flaws, &[], &mut rng,
+        let result = simulate_launch(&design, "leo", 0.0, &engine_snapshots_for(&design, &[ep1, ep2], &[]), &rp.flaws, &mut rng,
             &crate::balance_config::FlightConfig::default(),
             &crate::balance_config::NozzleConfig::default(),
         );
@@ -1099,9 +1118,7 @@ mod tests {
         let rp = make_rocket_project(design.clone(), vec![flaw]);
         for seed in 0..20 {
             let mut rng = StdRng::seed_from_u64(seed);
-            let result = simulate_launch(
-                &design, "leo", 0.0,
-                &[ep1.clone(), ep2.clone()], &rp.flaws, &[], &mut rng,
+            let result = simulate_launch(&design, "leo", 0.0, &engine_snapshots_for(&design, &[ep1.clone(), ep2.clone()], &[]), &rp.flaws, &mut rng,
                 &crate::balance_config::FlightConfig::default(),
                 &crate::balance_config::NozzleConfig::default(),
             );
@@ -1187,9 +1204,7 @@ mod tests {
         let rp = make_rocket_project(design.clone(), vec![]);
         let mut rng = StdRng::seed_from_u64(42);
 
-        let result = simulate_launch(
-            &design, "leo", 0.0,
-            &[ep1, ep2], &rp.flaws, &[], &mut rng,
+        let result = simulate_launch(&design, "leo", 0.0, &engine_snapshots_for(&design, &[ep1, ep2], &[]), &rp.flaws, &mut rng,
             &crate::balance_config::FlightConfig::default(),
             &crate::balance_config::NozzleConfig::default(),
         );
@@ -1247,7 +1262,7 @@ mod tests {
         let mut igniter = rocket_flaw(5, FlawPhase::Ignition, 0);
         igniter.description = "igniter".into();
         igniter.stage_group = None;
-        let engines = engine_flaw_table(&[make_engine_project(1, vec![igniter])], &[]);
+        let engines = engine_flaw_table_from(&engine_snapshots_for(&design, &[make_engine_project(1, vec![igniter])], &[]));
 
         let fired = |atmosphere: bool| -> Vec<(String, FlightEvent)> {
             let mut rng = StdRng::seed_from_u64(1);
@@ -1333,7 +1348,7 @@ mod tests {
         let mut draw = rocket_flaw(2, FlawPhase::Burn, 0);
         draw.consequence = FlawConsequence::PowerDraw(250.0);
         draw.stage_group = None;
-        let engines = engine_flaw_table(&[make_engine_project(1, vec![draw])], &[]);
+        let engines = engine_flaw_table_from(&engine_snapshots_for(&design, &[make_engine_project(1, vec![draw])], &[]));
         let rockets = rocket_flaw_table(RocketProjectId(1), &[abort]);
 
         let mut rng = StdRng::seed_from_u64(1);
@@ -1349,5 +1364,24 @@ mod tests {
         let burn = roll_event_flaws(&mut rng, &mut degraded, FlightEvent::Burn { group: 0 }, &engines, &rockets, false);
         assert_eq!(burn.extra_draw_w, 250.0);
         assert!((degraded.stage_groups[0][0].engine.thrust_n - design.stage_groups[0][0].engine.thrust_n).abs() < 1e-9);
+    }
+
+    /// Two stages on the same engine design each carry their own copy of
+    /// its flaws, and each copy rolls for its own stage only.
+    #[test]
+    fn engine_snapshots_roll_for_their_own_stage() {
+        use crate::flaw::FlawPhase;
+        let mut design = make_design();
+        design.stage_groups[1][0].engine = make_engine(1); // both stages on engine 1
+        let mut flaw = rocket_flaw(1, FlawPhase::Burn, 0);
+        flaw.stage_group = None;
+        let snapshots = engine_snapshots_for(&design, &[make_engine_project(1, vec![flaw])], &[]);
+        assert_eq!(snapshots.len(), 2);
+        let engines = engine_flaw_table_from(&snapshots);
+        let mut rng = StdRng::seed_from_u64(1);
+        let mut degraded = design.clone();
+        let roll = roll_event_flaws(&mut rng, &mut degraded, FlightEvent::Burn { group: 0 }, &engines, &[], true);
+        assert_eq!(roll.activations.len(), 1, "one copy per stage: {:?}", roll.activations);
+        assert_eq!(roll.discoveries[0].2, FlawId(1));
     }
 }
