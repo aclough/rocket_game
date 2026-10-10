@@ -58,7 +58,7 @@ pub fn save_game(state: &GameState, path: &Path) -> io::Result<()> {
 ///
 /// v5: kerosene and hypergolic expanders no longer exist; projects of
 /// those families become gas generators (21_2_ENGINE_CYCLES.md step 4).
-pub const SAVE_VERSION: u32 = 5;
+pub const SAVE_VERSION: u32 = 6;
 
 /// Load game state from a JSON file, running any migrations the file
 /// needs, then stamping it with the current version.
@@ -373,6 +373,9 @@ fn migrate_project_to_v2(project: &mut serde_json::Value) {
 /// Version-gated migrations that need the typed state; shape changes
 /// belong in `migrate_json`. `from` is the version the file was written at.
 fn migrate(state: &mut GameState, from: u32) {
+    if from < 6 {
+        migrate_flaw_phases_to_v6(state);
+    }
     if from < 5 {
         // v4 -> v5: a kerosene or hypergolic expander project becomes a
         // gas generator of the same propellant and vacuum thrust. Built
@@ -385,6 +388,67 @@ fn migrate(state: &mut GameState, from: u32) {
                 project.migrate_removed_family(&balance);
             }
         }
+    }
+}
+
+/// v5 -> v6: every flaw gets the flight event it rolls at, and a rocket
+/// flaw the stage group it lives on (22_FLAWS.md step 2). The phase
+/// comes from the description's pool entry; the group is drawn from
+/// the world seed keyed by flaw id, so the same save migrates the same
+/// way every time. Vehicles' snapshots — inventory rockets, pending
+/// integration orders, flights in the air — are flaws too.
+fn migrate_flaw_phases_to_v6(state: &mut GameState) {
+    use crate::seed::WorldQuery;
+    let seed = &state.seed;
+    let assign = |flaw: &mut crate::flaw::Flaw, is_rocket: bool, groups: usize| {
+        let mut rng = seed.world_query(WorldQuery::FlawPhase(flaw.id));
+        flaw.assign_legacy_phase(is_rocket, groups, &mut rng);
+    };
+    let companies = std::iter::once(&mut state.player_company)
+        .chain(state.competitors.iter_mut().map(|c| &mut c.company));
+    for company in companies {
+        let groups_of = |company: &crate::company::Company, pid: crate::rocket_project::RocketProjectId| {
+            company.rocket_projects.iter()
+                .find(|rp| rp.project_id == pid)
+                .map_or(1, |rp| rp.design.stage_groups.len())
+        };
+        for p in &mut company.engine_projects {
+            for f in &mut p.flaws { assign(f, false, 0); }
+        }
+        for p in &mut company.reactor_projects {
+            for f in &mut p.flaws { assign(f, false, 0); }
+        }
+        for ce in &mut company.contracted_engines {
+            for f in &mut ce.flaws { assign(f, false, 0); }
+        }
+        for p in &mut company.rocket_projects {
+            let groups = p.design.stage_groups.len();
+            for f in &mut p.flaws { assign(f, true, groups); }
+        }
+        let rocket_groups: Vec<(crate::manufacturing::InventoryItemId, usize)> = company.manufacturing.inventory.rockets.iter()
+            .map(|r| (r.item_id, groups_of(company, r.rocket_project_id)))
+            .collect();
+        for (r, (_, groups)) in company.manufacturing.inventory.rockets.iter_mut().zip(rocket_groups) {
+            for f in &mut r.rocket_flaws { assign(f, true, groups); }
+        }
+        let order_groups: Vec<Option<usize>> = company.manufacturing.orders.iter()
+            .map(|o| match &o.order_type {
+                crate::manufacturing::ManufacturingOrderType::RocketIntegration { rocket_project_id, .. } =>
+                    Some(groups_of(company, *rocket_project_id)),
+                _ => None,
+            })
+            .collect();
+        for (o, groups) in company.manufacturing.orders.iter_mut().zip(order_groups) {
+            if let (crate::manufacturing::ManufacturingOrderType::RocketIntegration { rocket_flaws, .. }, Some(groups)) =
+                (&mut o.order_type, groups)
+            {
+                for f in rocket_flaws.iter_mut() { assign(f, true, groups); }
+            }
+        }
+    }
+    for flight in &mut state.active_flights {
+        let groups = flight.design.stage_groups.len();
+        for f in &mut flight.rocket_flaws { assign(f, true, groups); }
     }
 }
 
@@ -588,6 +652,7 @@ mod tests {
                     discovery_probability: 0.5,
                     discovered,
                     trigger: FlawTrigger::PerFlight,
+                    phase: crate::flaw::FlawPhase::Burn, stage_group: None,
                 });
             }
             for (i, actualized) in [(0u64, true), (1, false)] {
@@ -942,6 +1007,75 @@ mod tests {
         }
 
         let _ = fs::remove_file(&path);
+    }
+
+    /// v5 -> v6: flaws get the event they roll at from their own words,
+    /// and a rocket flaw a stage; a built rocket's snapshot too.
+    #[test]
+    fn v5_flaws_get_phases_and_stages() {
+        use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawPhase, FlawTrigger};
+        let mut state = GameState::with_money("V5".into(), 1_000_000_000.0, 1);
+        let legacy = |id: u64, text: &str| Flaw {
+            id: FlawId(id), description: text.into(),
+            consequence: FlawConsequence::StageLoss, activation_chance: 0.3,
+            discovery_probability: 0.1, discovered: false, trigger: FlawTrigger::PerFlight,
+            phase: FlawPhase::Burn, stage_group: None,
+        };
+        let stage = |id: u64| crate::stage::Stage {
+            id: crate::stage::StageId(id), name: format!("S{id}"),
+            engine: crate::test_util::kerolox_engine(id, 1.0e6, 1000.0, 300.0), engine_count: 1,
+            propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0, fairing: None,
+            power_sources: Vec::new(),
+        };
+        state.player_company.start_rocket_project(
+            "Legacy".into(), vec![vec![stage(1)], vec![stage(2)]], &state.balance,
+        );
+        let rp = &mut state.player_company.rocket_projects[0];
+        rp.flaws = vec![legacy(1, "Separation pyrotechnics fire out of sequence")];
+        let project_id = rp.project_id;
+        let design_id = rp.design.id;
+        state.player_company.manufacturing.inventory.rockets.push(crate::manufacturing::InventoryRocket {
+            item_id: crate::manufacturing::InventoryItemId(9), rocket_project_id: project_id, design_id,
+            rocket_name: "Legacy".into(), build_cost: 0.0, revision: 0,
+            rocket_flaws: vec![legacy(2, "Interstage buckles under max-Q loading")],
+        });
+        state.player_company.start_engine_project(
+            "Igniter".into(), crate::engine::EngineCycle::GasGenerator,
+            crate::engine_project::PropellantPreset::Kerolox, 0.2, None, &state.balance,
+        );
+        state.player_company.engine_projects[0].flaws = vec![legacy(3, "Igniter reliability issue")];
+
+        let mut raw = serde_json::to_value(&state).unwrap();
+        raw["save_version"] = serde_json::json!(5);
+        fn strip(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    if map.contains_key("activation_chance") {
+                        map.remove("phase");
+                        map.remove("stage_group");
+                    }
+                    map.values_mut().for_each(strip);
+                }
+                serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+                _ => {}
+            }
+        }
+        strip(&mut raw);
+
+        let path = temp_path();
+        fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
+        let loaded = load_game(&path).expect("v5 save should load");
+        let _ = fs::remove_file(&path);
+
+        let f = &loaded.player_company.rocket_projects[0].flaws[0];
+        assert_eq!(f.phase, FlawPhase::Separation);
+        assert!(matches!(f.stage_group, Some(g) if g < 2));
+        let built = &loaded.player_company.manufacturing.inventory.rockets[0].rocket_flaws[0];
+        assert_eq!(built.phase, FlawPhase::MaxQ);
+        assert_eq!(built.stage_group, Some(0));
+        let e = &loaded.player_company.engine_projects[0].flaws[0];
+        assert_eq!(e.phase, FlawPhase::Ignition);
+        assert_eq!(e.stage_group, None);
     }
 }
 

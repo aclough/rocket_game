@@ -543,6 +543,7 @@ mod reactor_render_tests {
             discovery_probability: 0.5,
             discovered: true,
             trigger: FlawTrigger::PerFlight,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         });
         project.improvements.push(ReactorImprovement {
             id: crate::project::ImprovementId(0),

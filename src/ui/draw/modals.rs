@@ -642,8 +642,9 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::Red),
                 )));
                 for flaw in &record.flaws_activated {
-                    lines.push(Line::from(format!("    {} ({}): {}",
-                        flaw.source, flaw.consequence, flaw.flaw_description)));
+                    let at = flaw.event.map(|e| format!("{}: ", e.word())).unwrap_or_default();
+                    lines.push(Line::from(format!("    {}{} ({}): {}",
+                        at, flaw.source, flaw.consequence, flaw.flaw_description)));
                 }
                 lines.push(Line::from(""));
             }

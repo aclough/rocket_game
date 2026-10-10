@@ -123,6 +123,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         activation_chance: 1.0,
         discovery_probability: 1.0,
         discovered: false, trigger: FlawTrigger::PerFlight,
+        phase: crate::flaw::FlawPhase::Burn, stage_group: None,
     };
     let flaw2 = Flaw {
         id: FlawId(2),
@@ -131,6 +132,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         activation_chance: 1.0,
         discovery_probability: 1.0,
         discovered: false, trigger: FlawTrigger::PerFlight,
+        phase: crate::flaw::FlawPhase::Burn, stage_group: None,
     };
 
     let ep1 = EngineProject {

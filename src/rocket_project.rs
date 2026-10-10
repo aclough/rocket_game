@@ -40,6 +40,10 @@ impl Designable for RocketDesign {
         FlawDomain::Rocket
     }
 
+    fn flaw_stage_groups(&self) -> usize {
+        self.stage_groups.len()
+    }
+
     fn flaw_complexity(&self, _spec: &NoSpec, project_complexity: u32) -> u32 {
         project_complexity
     }
@@ -196,6 +200,7 @@ mod tests {
             discovery_probability: 0.5,
             discovered: true,
             trigger: crate::flaw::FlawTrigger::PerFlight,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         });
         proj.flaws.push(Flaw {
             id: crate::flaw::FlawId(901),
@@ -205,6 +210,7 @@ mod tests {
             discovery_probability: 0.3,
             discovered: true,
             trigger: crate::flaw::FlawTrigger::PerFlight,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         });
 
         assert_eq!(proj.flaws.len(), 2);

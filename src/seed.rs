@@ -40,6 +40,8 @@ pub enum WorldQuery<'a> {
     DinoBlockBid(CampaignId),
     /// A third-party engine's flaws, by engine name.
     ThirdPartyFlaws(&'a str),
+    /// The stage group a pre-v6 rocket flaw is assigned to on load.
+    FlawPhase(crate::flaw::FlawId),
     /// A market archetype's presence and shape, by its key.
     MarketArchetype(&'a str),
     /// Whether an engine project finds an uprate in one testing cycle,
@@ -70,6 +72,7 @@ impl std::fmt::Display for WorldQuery<'_> {
             WorldQuery::DinoBid(id) => write!(f, "dino_bid_{}", id.0),
             WorldQuery::DinoBlockBid(id) => write!(f, "dino_block_bid_{}", id.0),
             WorldQuery::ThirdPartyFlaws(name) => write!(f, "3p_flaws_{}", name),
+            WorldQuery::FlawPhase(id) => write!(f, "flaw_phase_{}", id.0),
             WorldQuery::MarketArchetype(key) => write!(f, "{}", key),
             WorldQuery::Uprate { project, cycle } => write!(f, "uprate_{}_{}", project, cycle),
             WorldQuery::UprateFlaws { project, improvement } => write!(f, "uprate_flaws_{}_{}", project, improvement),

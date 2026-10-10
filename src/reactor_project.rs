@@ -357,6 +357,7 @@ mod tests {
             discovery_probability: 0.5,
             discovered: true,
             trigger: crate::flaw::FlawTrigger::PerFlight,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         });
         p.teams_assigned = 4;
 

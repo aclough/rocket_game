@@ -274,6 +274,8 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
         discovery_probability: 0.0,
         discovered: false,
         trigger: FlawTrigger::PerFlight,
+        phase: crate::flaw::FlawPhase::Separation,
+        stage_group: Some(0),
     };
 
     let mut project = RocketProject::new(

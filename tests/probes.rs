@@ -844,3 +844,46 @@ mod testing_cadence {
         }
     }
 }
+
+mod first_launch_outcomes {
+    //! How the bot's first launches end, by event: failed on the pad,
+    //! partial (arrived short), lost or stranded in flight, or clean.
+    //! For reading a curve shift off its cause (22_FLAWS.md step 2).
+
+    use rocket_tycoon::event::GameEvent;
+    use rocket_tycoon::game_state::GameState;
+    use rocket_tycoon::policy::{BasicPolicy, CompanyPolicy};
+
+    #[test]
+    #[ignore]
+    fn first_launch_by_outcome() {
+        let mut counts = std::collections::BTreeMap::<&str, u32>::new();
+        for seed in 1..=100u64 {
+            let mut policy = BasicPolicy::new();
+            let mut gs = GameState::new("Bot".into(), seed);
+            let mut outcome: Option<&str> = None;
+            for _ in 0..365 * 6 {
+                let before = gs.event_log.total_pushed();
+                policy.act(&mut gs);
+                gs.advance_day();
+                let n = (gs.event_log.total_pushed() - before) as usize;
+                for (_, e) in gs.event_log.recent(n) {
+                    let label = match e {
+                        GameEvent::LaunchFailure { .. } => "pad failure",
+                        GameEvent::LaunchPartialFailure { .. } => "partial (arrived short)",
+                        GameEvent::SpacecraftLost { .. } => "lost in flight",
+                        GameEvent::SpacecraftStranded { .. } => "stranded",
+                        GameEvent::LaunchSuccess { .. } => "success",
+                        _ => continue,
+                    };
+                    if outcome.is_none() { outcome = Some(label); }
+                }
+                if outcome.is_some() { break; }
+            }
+            *counts.entry(outcome.unwrap_or("never launched")).or_default() += 1;
+        }
+        for (k, v) in &counts {
+            println!("{v:>4}  {k}");
+        }
+    }
+}

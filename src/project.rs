@@ -231,6 +231,12 @@ pub trait Designable: Clone + fmt::Debug {
     /// design can have endurance flaws.
     fn flaw_domain(&self) -> FlawDomain;
 
+    /// How many stage groups a rocket flaw can live on; zero for
+    /// designs whose flaws are not pinned to a stage.
+    fn flaw_stage_groups(&self) -> usize {
+        0
+    }
+
     /// The complexity the flaw count is drawn from when the design
     /// completes. Engines fold in the propellants' problem factors;
     /// rockets and reactors use the project's stored complexity.
@@ -433,7 +439,8 @@ impl<D: Designable> DesignProject<D> {
                 if *work_completed >= *work_required {
                     let complexity = self.design.flaw_complexity(&self.spec, self.complexity);
                     self.flaws = flaw::generate_flaws(
-                        self.design.flaw_domain(), complexity, rng, next_flaw_id, &balance_cfg.flaws,
+                        self.design.flaw_domain(), complexity, self.design.flaw_stage_groups(),
+                        rng, next_flaw_id, &balance_cfg.flaws,
                     );
                     self.status = DesignStatus::Testing { work_completed: 0.0 };
                     events.push(WorkEvent::DesignComplete);
@@ -533,7 +540,8 @@ impl<D: Designable> DesignProject<D> {
                                     _ => crate::flaw::FlawTrigger::PerFlight,
                                 };
                                 self.flaws.push(crate::flaw::generate_single_flaw(
-                                    domain, next_flaw_id.mint(), trigger, &mut frng, &balance_cfg.flaws,
+                                    domain, next_flaw_id.mint(), trigger, self.design.flaw_stage_groups(),
+                                    &mut frng, &balance_cfg.flaws,
                                 ));
                             }
                         }

@@ -129,7 +129,16 @@ fn assert_bands(summaries: &[RunSummary]) {
     // check that cries wolf one run in five. Allowing two (10%) fails
     // about 3% of the time instead, which is what a smoke check should
     // feel like. The 200-seed run keeps the real 6% ceiling.
-    let ceiling = if summaries.len() >= 100 { 0.20 } else { 0.25 };
+    //
+    // 22_FLAWS.md step 2 (2026-10-10) closed two leniencies — upper-stage
+    // flaws rolling after the burn that used them, and an engineless
+    // stage keeping its delta-v — and the bot's single-engine upper
+    // stage now loses the mission to every upper-engine loss: 41/200
+    // bankrupt, 7/20 on the smoke seeds. The ceilings are lifted to 25%
+    // and 40% (eight in twenty is ~2σ at a 20% true rate) to keep the
+    // suite honest while the flaws rework proceeds; step 12 of that plan
+    // re-baselines every band once the bot has learned prudence.
+    let ceiling = if summaries.len() >= 100 { 0.25 } else { 0.40 };
     assert!(
         bankrupt as f64 / n <= ceiling,
         "{bankrupt}/{n} seeds bankrupt (band <= {:.0}%, D7 measured 11.5% \
@@ -143,18 +152,26 @@ fn assert_bands(summaries: &[RunSummary]) {
              the game should stay dangerous)",
         );
     }
+    // 22_FLAWS.md step 2 moved these two floors with the bankruptcy
+    // ceiling above: 107/200 kept $25M (was ~130) and 156/200 had a
+    // profitable year (was ~179). Re-baselined at that plan's step 12.
     assert!(
-        min_above_25m as f64 / n >= 0.62,
-        "only {min_above_25m}/{n} seeds kept min money above $25M (band >= 62%, \
-         D7 73%)",
+        min_above_25m as f64 / n >= 0.50,
+        "only {min_above_25m}/{n} seeds kept min money above $25M (band >= 50%, \
+         D7 73%; 62% before 22_FLAWS step 2)",
     );
     assert!(
         profitable as f64 / n >= 0.21,
         "only {profitable}/{n} seeds profitable after run (band >= 21%, D7 32.5%)",
     );
+    // At a 78% true rate the smoke run sees 14/20 or fewer one run in
+    // five, so it gets the same slack the bankruptcy ceiling has.
+    let fpy_floor = if summaries.len() >= 100 { 0.72 } else { 0.60 };
     assert!(
-        with_fpy as f64 / n >= 0.85,
-        "only {with_fpy}/{n} seeds ever had a profitable year (band >= 85%, D7 89.5%)",
+        with_fpy as f64 / n >= fpy_floor,
+        "only {with_fpy}/{n} seeds ever had a profitable year (band >= {:.0}%, D7 89.5%; \
+         85% before 22_FLAWS step 2)",
+        fpy_floor * 100.0,
     );
 
     let aggregate = successes as f64 / launches as f64;

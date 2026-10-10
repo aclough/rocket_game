@@ -1,9 +1,11 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
-[] Investigate dry masses when we go to do re-entry and start adding other
-options to our rocket bodies.
+[] Booster fuel size seems a bit borked, especially for solid boosters.
 
 [] Hard to find Solid in the UI, maybe make it both a Cycle and a Preset?
+
+[] Investigate dry masses when we go to do re-entry and start adding other
+options to our rocket bodies.
 
 [] Tech deficiencies retire per company: a new design on a technology
 inherits only the deficiencies that company hasn't solved (existing
@@ -24,3 +26,8 @@ or not it pays: AJ10-class TWR 20 (real 23), Kestrel-class 31 (real 60).
 
 [] We should review different strategies adn whether they're viable.  Smallsat,
 LEO, low end GTO.  Maybe have a set of seeds pursuing each.
+
+[] An ascent that falls short strands the vehicle "at LEO": the flight loop
+sets current_location to the leg's destination before the short-burn check,
+so a launch that never made orbit is reported as a spacecraft stranded in
+orbit rather than a failed launch. Found in 22_FLAWS.md step 2.

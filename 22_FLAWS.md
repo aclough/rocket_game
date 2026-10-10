@@ -692,3 +692,57 @@ byte-identical to HEAD. Baseline at 100 seeds × 6 years:
 | 2nd | 58 % (58/100) |
 | 3rd | 86 % (86/100) |
 | 4th+ | 95 % (820/863) |
+
+**Step 2 — flight events (uncommitted, awaiting a decision).**
+`FlawPhase` on every flaw, `stage_group` on rocket flaws, pools as
+`FlawEntry { text, phase }`, `FlightEvent` and `ascent_events` /
+`ascent_groups` / `roll_event_flaws` in `launch.rs`, the launch walking
+every group the first leg burns, the flight loop walking later groups
+(separation of the group below, ignition, burn), `Flight.rocket_flaws`
+for those later events, rocket discoveries by flaw id, save v6 with
+`migrate_flaw_phases_to_v6` (phase from the description's pool entry,
+group from the world seed), flaw lists prefixed "S2 separation ·", the
+popup prefixed with the event. 702 tests, clippy clean.
+
+The curve did **not** stay within noise, and not because the RNG
+sequence moved. Two leniencies in the old flow closed:
+
+1. *Upper-stage flaws rolled after the burn that used the stage.* On a
+   single-leg flight (every LEO delivery) the flight loop burned the
+   whole route first, then rolled the newly burned groups' flaws, so an
+   upper-stage engine loss or degradation never bit; only a `StageLoss`
+   did, as "lost in flight". The timeline rolls them on the pad and the
+   delta-v judgement sees them.
+2. *A stage that lost its only engine kept its delta-v.* The planner's
+   figure is mass-ratio Isp and ignores thrust, so the pad judged the
+   launch sound and the flight loop then stranded it "at LEO" on a burn
+   with no thrust (a thrustless *first* stage got an empty route and
+   "arrived"). An engineless stage is now dead weight
+   (`apply_consequence_to_stage`), and the launch fails on the pad
+   with the flaw named.
+
+First launches by outcome, 100 seeds (`probes::first_launch_outcomes`):
+
+| | pad failure | partial | stranded | lost in flight | success |
+|---|---|---|---|---|---|
+| step 1 | 37 | 0 | 0 | 11 | 52 |
+| timeline only | 39 | 1 | 21 | 0 | 39 |
+| + dead-weight stages | 64 | 1 | 0 | 0 | 35 |
+
+Curve, 100 seeds × 6 years: **33 / 54 / 75 / 92** (was 58 / 58 / 86 /
+95); bankrupt 22/100 (was 10). 200 seeds × 8 years: 41/200 bankrupt
+against the 20 % ceiling; the 20-seed smoke band fails the same way.
+The bot's upper stage has one engine, so every upper-engine
+`EngineLoss` (35 % of its flaws) is now a lost mission.
+
+Decision (user, 2026-10-10): accept — this is the physics the timeline
+exists to make honest, and the first flight already sits at the 35 %
+target before any tuning; step 7 tunes from here and step 12
+re-baselines the bands. To keep every commit passing `cargo test` the
+bankruptcy ceilings are lifted now, 20 → 25 % at 200 seeds and 25 →
+40 % on the 20-seed smoke run, and the two floors the same shift
+moved come down with them: seeds keeping $25M 62 → 50 % (measured
+107/200), seeds with a profitable year 85 → 72 % (156/200; 60 % on the
+smoke run). Every other band holds, including the 85 % aggregate
+success floor. Each carries a comment pointing here. The "stranded at
+LEO" wording for an ascent that fell short is a TODO.

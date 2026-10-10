@@ -122,6 +122,7 @@ impl GameState {
 
         // Use snapshotted rocket flaws from the inventory item
         let rocket_flaws = &inv_rocket.rocket_flaws;
+        let flight_rocket_flaws = inv_rocket.rocket_flaws.clone();
 
         // Simulate flaw activation at launch
         let sim = launch::simulate_launch(
@@ -142,7 +143,7 @@ impl GameState {
         let discoveries = FlawDiscoveries {
             engines: sim.engine_discoveries.clone(),
             rockets: sim.rocket_flaw_discoveries.iter()
-                .map(|&fi| (inv_rocket.rocket_project_id, fi))
+                .map(|&id| (inv_rocket.rocket_project_id, id))
                 .collect(),
             reactors: Vec::new(),
         };
@@ -275,6 +276,7 @@ impl GameState {
                 _ => None,
             },
             flaw_rolled_groups: sim.flaw_rolled_groups,
+            rocket_flaws: flight_rocket_flaws,
             reactor_flaws_rolled: false,
         };
 
@@ -394,16 +396,20 @@ impl GameState {
                 FlawOwner::Rocket(_) | FlawOwner::Reactor(_) => {}
             }
         }
-        for (project_id, flaw_index) in &discoveries.rockets {
+        for (project_id, flaw_id) in &discoveries.rockets {
             if let Some(rp) = self.player_company.rocket_projects.iter_mut()
                 .find(|rp| rp.project_id == *project_id)
             {
-                if *flaw_index < rp.flaws.len() && !rp.flaws[*flaw_index].discovered {
-                    rp.flaws[*flaw_index].discovered = true;
+                // By id: the vehicle's snapshot may predate a revision
+                // that removed flaws before this one.
+                let Some(flaw) = rp.flaws.iter_mut().find(|f| f.id == *flaw_id) else { continue };
+                if !flaw.discovered {
+                    flaw.discovered = true;
+                    let description = flaw.description.clone();
                     news.push(GameEvent::project(
                         ProjectKind::Rocket, rp.design.name.clone(),
                         ProjectEvent::FlawDiscovered {
-                            description: rp.flaws[*flaw_index].description.clone(),
+                            description,
                         },
                     ));
                 }
@@ -653,6 +659,9 @@ impl GameState {
             persist: true, // spacecraft flights always persist
             launch_partial: None,
             flaw_rolled_groups: std::collections::HashSet::new(),
+            // A parked craft's rocket flaws were the launch's; the
+            // groups it fires from orbit roll their engine flaws only.
+            rocket_flaws: Vec::new(),
             reactor_flaws_rolled: false,
         };
 
@@ -820,17 +829,17 @@ enum FlightEnd {
 #[derive(Default)]
 struct FlawDiscoveries {
     engines: Vec<(FlawOwner, usize)>,
-    rockets: Vec<(crate::rocket_project::RocketProjectId, usize)>,
+    rockets: Vec<(crate::rocket_project::RocketProjectId, crate::flaw::FlawId)>,
     reactors: Vec<(crate::reactor::ReactorId, usize)>,
 }
 
 impl FlawDiscoveries {
     fn record(&mut self, roll: &FlawRoll) {
-        for &(owner, fi) in &roll.discoveries {
+        for &(owner, fi, id) in &roll.discoveries {
             match owner {
                 FlawOwner::Engine { .. } => self.engines.push((owner, fi)),
-                FlawOwner::Rocket(id) => self.rockets.push((id, fi)),
-                FlawOwner::Reactor(id) => self.reactors.push((id, fi)),
+                FlawOwner::Rocket(pid) => self.rockets.push((pid, id)),
+                FlawOwner::Reactor(rid) => self.reactors.push((rid, fi)),
             }
         }
     }
@@ -890,8 +899,9 @@ fn roll_reactor_flaws(
                     flaw_description: rf.description.clone(),
                     consequence: rf.consequence.clone(),
                     source: format!("Reactor {reactor_name}"),
+                    event: None,
                 });
-                roll.discoveries.push((rf.owner, rf.flaw_index));
+                roll.discoveries.push((rf.owner, rf.flaw_index, rf.id));
                 if matches!(rf.consequence, FlawConsequence::StageLoss) {
                     roll.lost = Some(rf.description.clone());
                 }
@@ -988,28 +998,27 @@ fn tick_flight(
                 }
             }
 
-            // Engine flaws for the groups that fired for the first time
-            // (before the stranding check — the stage was used even if the
-            // burn fell short).
-            let new_burned: Vec<usize> = burn_result.groups_burned.iter()
+            // The events of groups firing for the first time — the group
+            // below separates, the new group ignites and burns — with
+            // their engine and rocket flaws (before the stranding check:
+            // the stage was used even if the burn fell short).
+            let mut new_burned: Vec<usize> = burn_result.groups_burned.iter()
                 .copied()
                 .filter(|gi| !flight.flaw_rolled_groups.contains(gi))
                 .collect();
+            new_burned.sort_unstable();
             if !new_burned.is_empty() {
                 flight.flaw_rolled_groups.extend(new_burned.iter().copied());
-                let stages: Vec<(usize, usize)> = new_burned.iter()
-                    .flat_map(|&gi| {
-                        let n = flight.design.stage_groups.get(gi).map_or(0, |g| g.len());
-                        (0..n).map(move |si| (gi, si))
-                    })
-                    .collect();
-                let roll = launch::roll_engine_flaws(rng, &mut flight.design, &stages, &tables.engines);
-                flight.flaws_activated.extend(roll.activations.iter().cloned());
-                push_activation_events(events, &flight.rocket_name, &roll);
-                discoveries.record(&roll);
-                if let Some(reason) = roll.lost {
-                    flight.status = FlightStatus::Failed { reason };
-                    return Some(FlightEnd::Lost);
+                let rockets = launch::rocket_flaw_table(flight.rocket_project_id, &flight.rocket_flaws);
+                for event in launch::ascent_events(&new_burned, false) {
+                    let roll = launch::roll_event_flaws(rng, &mut flight.design, event, &tables.engines, &rockets);
+                    flight.flaws_activated.extend(roll.activations.iter().cloned());
+                    push_activation_events(events, &flight.rocket_name, &roll);
+                    discoveries.record(&roll);
+                    if let Some(reason) = roll.lost {
+                        flight.status = FlightStatus::Failed { reason };
+                        return Some(FlightEnd::Lost);
+                    }
                 }
 
                 // After flaw application, recheck remaining dv for stranding.

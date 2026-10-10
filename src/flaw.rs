@@ -25,6 +25,43 @@ impl FlawTrigger {
     const REFERENCE_DAYS: f64 = 365.0;
 }
 
+/// The moment in a flight a flaw gets its roll (22_FLAWS.md §3.12).
+/// `Endurance` is the daily roll of a `PerDay` flaw; the rest are
+/// events of an ascent or of a later burn, walked in order by
+/// `launch::ascent_events`. A rocket flaw also names the stage group
+/// whose hardware it lives on (`Flaw::stage_group`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum FlawPhase {
+    /// Engines start: igniters, start transients, pressurisation.
+    Ignition,
+    /// Peak aerodynamic load on an atmospheric ascent. Never rolled
+    /// leaving an airless body.
+    MaxQ,
+    /// The stage's engines running.
+    #[default]
+    Burn,
+    /// This stage lets go of what is above it — interstage, pyros,
+    /// residual thrust. The lower stage's hardware.
+    Separation,
+    /// The top stage releases the payload.
+    PayloadDeploy,
+    /// Wear: the daily `PerDay` roll.
+    Endurance,
+}
+
+impl FlawPhase {
+    pub fn word(self) -> &'static str {
+        match self {
+            FlawPhase::Ignition => "ignition",
+            FlawPhase::MaxQ => "max-Q",
+            FlawPhase::Burn => "burn",
+            FlawPhase::Separation => "separation",
+            FlawPhase::PayloadDeploy => "payload deploy",
+            FlawPhase::Endurance => "endurance",
+        }
+    }
+}
+
 /// What happens when a flaw activates during flight.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FlawConsequence {
@@ -92,6 +129,15 @@ pub struct Flaw {
     /// When this flaw can trigger.
     #[serde(default)]
     pub trigger: FlawTrigger,
+    /// The flight event this flaw rolls at. Pre-v6 saves get it from
+    /// `assign_legacy_phase`.
+    #[serde(default)]
+    pub phase: FlawPhase,
+    /// Rocket flaws: the stage group whose hardware this is, clamped to
+    /// the design's groups when rolled. `None` for engine, reactor and
+    /// endurance flaws.
+    #[serde(default)]
+    pub stage_group: Option<usize>,
 }
 
 impl Flaw {
@@ -107,7 +153,56 @@ impl Flaw {
             }
         }
     }
+
+    /// Where and when it bites, for lists: "S2 separation" for a rocket
+    /// flaw, the phase word alone for an engine's.
+    pub fn phase_label(&self) -> String {
+        match self.stage_group {
+            Some(g) => format!("S{} {}", g + 1, self.phase.word()),
+            None => self.phase.word().to_string(),
+        }
+    }
+
+    /// Give a flaw from before phases existed its phase and, for a rocket
+    /// flaw, its stage group. The phase comes from the description's pool
+    /// entry when the text is still one of ours (it always was until the
+    /// pools were retagged), else `Burn`; the group is drawn from `rng`
+    /// (the world seed keyed by flaw id, so a save migrates the same way
+    /// every time).
+    pub fn assign_legacy_phase(&mut self, is_rocket: bool, stage_groups: usize, rng: &mut StdRng) {
+        if self.trigger == FlawTrigger::PerDay {
+            self.phase = FlawPhase::Endurance;
+            self.stage_group = None;
+            return;
+        }
+        self.phase = phase_for_description(&self.description).unwrap_or_default();
+        self.stage_group = is_rocket.then(|| stage_group_for(self.phase, stage_groups, rng));
+    }
 }
+
+/// The stage group a rocket flaw of `phase` lives on: max-Q is the
+/// first stage's, payload deploy the last's, the rest anywhere.
+fn stage_group_for(phase: FlawPhase, stage_groups: usize, rng: &mut StdRng) -> usize {
+    let groups = stage_groups.max(1);
+    match phase {
+        FlawPhase::MaxQ => 0,
+        FlawPhase::PayloadDeploy => groups - 1,
+        _ => rng.gen_range(0..groups),
+    }
+}
+
+/// The phase a pool entry with this exact text carries, if any pool has it.
+pub fn phase_for_description(text: &str) -> Option<FlawPhase> {
+    ALL_POOLS.iter()
+        .flat_map(|pool| pool.degradation.iter().chain(pool.part_loss.iter()).chain(pool.stage_loss.iter()))
+        .find(|e| e.text == text)
+        .map(|e| e.phase)
+}
+
+const ALL_POOLS: [&FlawPool; 9] = [
+    &ENGINE_FLAWS, &ENGINE_ENDURANCE_FLAWS, &ELECTRIC_FLAWS, &NUCLEAR_FLAWS, &SOLAR_SAIL_FLAWS,
+    &ROCKET_FLAWS, &ROCKET_ENDURANCE_FLAWS, &REACTOR_FLAWS, &REACTOR_ENDURANCE_FLAWS,
+];
 
 /// Which kind of design a flaw belongs to. Selects the description
 /// pools it is worded from and whether it can be an endurance (`PerDay`)
@@ -144,6 +239,7 @@ impl FlawDomain {
 pub fn generate_flaws(
     domain: FlawDomain,
     effective_complexity: u32,
+    stage_groups: usize,
     rng: &mut StdRng,
     next_flaw_id: &mut crate::id::IdAllocator<FlawId>,
     cfg: &FlawsConfig,
@@ -158,26 +254,34 @@ pub fn generate_flaws(
             Some(fraction) if rng.gen::<f64>() < fraction => FlawTrigger::PerDay,
             _ => FlawTrigger::PerFlight,
         };
-        generate_single_flaw(domain, id, trigger, rng, cfg)
+        generate_single_flaw(domain, id, trigger, stage_groups, rng, cfg)
     }).collect()
 }
 
 /// Build one flaw: shared probability core, domain-worded description.
 /// `PerDay` flaws read as gradual wear, `PerFlight` ones as events, so
 /// what the player is asked to revise sounds like the part it lives on.
+/// The description's pool entry sets the phase; a rocket flaw also
+/// draws the stage group it lives on from the design's `stage_groups`.
 pub fn generate_single_flaw(
-    domain: FlawDomain, id: FlawId, trigger: FlawTrigger, rng: &mut StdRng, cfg: &FlawsConfig,
+    domain: FlawDomain, id: FlawId, trigger: FlawTrigger, stage_groups: usize,
+    rng: &mut StdRng, cfg: &FlawsConfig,
 ) -> Flaw {
     let (consequence, activation_chance, discovery_probability) = roll_flaw_core(rng, cfg);
-    let description = FlawPool::for_flaw(domain, trigger).pick(&consequence, rng);
+    let entry = FlawPool::for_flaw(domain, trigger).pick(&consequence, rng);
+    let phase = if trigger == FlawTrigger::PerDay { FlawPhase::Endurance } else { entry.phase };
+    let stage_group = (domain == FlawDomain::Rocket && trigger == FlawTrigger::PerFlight)
+        .then(|| stage_group_for(phase, stage_groups, rng));
     Flaw {
         id,
-        description,
+        description: entry.text.to_string(),
         consequence,
         activation_chance,
         discovery_probability,
         discovered: false,
         trigger,
+        phase,
+        stage_group,
     }
 }
 
@@ -219,23 +323,36 @@ fn roll_flaw_core(rng: &mut StdRng, cfg: &FlawsConfig) -> (FlawConsequence, f64,
 #[derive(Debug, Clone, Copy)]
 pub struct FlawPool {
     /// `PerformanceDegradation`: the part works worse.
-    pub degradation: [&'static str; 6],
+    pub degradation: [FlawEntry; 6],
     /// `EngineLoss`: the part is lost (an engine shuts down, a reactor
     /// SCRAMs) but the stage survives.
-    pub part_loss: [&'static str; 6],
+    pub part_loss: [FlawEntry; 6],
     /// `StageLoss`: the whole stage is lost.
-    pub stage_loss: [&'static str; 6],
+    pub stage_loss: [FlawEntry; 6],
+}
+
+/// One way a flaw can be worded, and the flight event those words
+/// happen at: "Separation pyrotechnics fire out of sequence" can only
+/// bite at separation.
+#[derive(Debug, Clone, Copy)]
+pub struct FlawEntry {
+    pub text: &'static str,
+    pub phase: FlawPhase,
+}
+
+const fn e(text: &'static str, phase: FlawPhase) -> FlawEntry {
+    FlawEntry { text, phase }
 }
 
 impl FlawPool {
-    /// One description for `consequence`, drawn uniformly.
-    fn pick(&self, consequence: &FlawConsequence, rng: &mut StdRng) -> String {
-        let descriptions = match consequence {
+    /// One entry for `consequence`, drawn uniformly.
+    fn pick(&self, consequence: &FlawConsequence, rng: &mut StdRng) -> &FlawEntry {
+        let entries = match consequence {
             FlawConsequence::PerformanceDegradation(_) => &self.degradation,
             FlawConsequence::EngineLoss => &self.part_loss,
             FlawConsequence::StageLoss => &self.stage_loss,
         };
-        descriptions[rng.gen_range(0..descriptions.len())].to_string()
+        &entries[rng.gen_range(0..entries.len())]
     }
 
     /// The pool a flaw of `domain` with `trigger` is worded from.
@@ -258,140 +375,140 @@ impl FlawPool {
 /// Chemical engines during a burn.
 pub const ENGINE_FLAWS: FlawPool = FlawPool {
     degradation: [
-        "Turbopump seal leak",
-        "Injector pattern inefficiency",
-        "Nozzle cooling channel restriction",
-        "Valve response lag",
-        "Combustion instability at partial throttle",
-        "Propellant feed pressure oscillation",
+        e("Turbopump seal leak", FlawPhase::Burn),
+        e("Injector pattern inefficiency", FlawPhase::Burn),
+        e("Nozzle cooling channel restriction", FlawPhase::Burn),
+        e("Valve response lag", FlawPhase::Ignition),
+        e("Combustion instability at partial throttle", FlawPhase::Burn),
+        e("Propellant feed pressure oscillation", FlawPhase::Burn),
     ],
     part_loss: [
-        "Turbopump bearing fatigue",
-        "Combustion chamber hot spot",
-        "Igniter reliability issue",
-        "Oxidizer-rich preburner instability",
-        "Thermal stress cracking in nozzle",
-        "Main injector face erosion",
+        e("Turbopump bearing fatigue", FlawPhase::Burn),
+        e("Combustion chamber hot spot", FlawPhase::Burn),
+        e("Igniter reliability issue", FlawPhase::Ignition),
+        e("Oxidizer-rich preburner instability", FlawPhase::Ignition),
+        e("Thermal stress cracking in nozzle", FlawPhase::Burn),
+        e("Main injector face erosion", FlawPhase::Burn),
     ],
     stage_loss: [
-        "Propellant feed line vibration failure",
-        "Stage separation bolt stress fracture",
-        "Thrust structure resonance mode",
-        "Ullage gas contamination risk",
-        "Inter-stage electrical harness fault",
-        "Catastrophic combustion instability",
+        e("Propellant feed line vibration failure", FlawPhase::Burn),
+        e("Stage separation bolt stress fracture", FlawPhase::Burn),
+        e("Thrust structure resonance mode", FlawPhase::Burn),
+        e("Ullage gas contamination risk", FlawPhase::Ignition),
+        e("Inter-stage electrical harness fault", FlawPhase::Burn),
+        e("Catastrophic combustion instability", FlawPhase::Burn),
     ],
 };
 
 /// Engines and their plumbing over a long mission.
 pub const ENGINE_ENDURANCE_FLAWS: FlawPool = FlawPool {
     degradation: [
-        "Thermal cycling degradation",
-        "Sensor drift accumulation",
-        "Propellant line seal wear",
-        "Attitude control thruster fouling",
-        "Radiator coating degradation",
-        "Reaction wheel bearing wear",
+        e("Thermal cycling degradation", FlawPhase::Endurance),
+        e("Sensor drift accumulation", FlawPhase::Endurance),
+        e("Propellant line seal wear", FlawPhase::Endurance),
+        e("Attitude control thruster fouling", FlawPhase::Endurance),
+        e("Radiator coating degradation", FlawPhase::Endurance),
+        e("Reaction wheel bearing wear", FlawPhase::Endurance),
     ],
     part_loss: [
-        "Turbopump bearing wear",
-        "Igniter electrode erosion",
-        "Fuel valve seat degradation",
-        "Oxidizer seal embrittlement",
-        "Engine controller memory corruption",
-        "Regenerative cooling tube fatigue",
+        e("Turbopump bearing wear", FlawPhase::Endurance),
+        e("Igniter electrode erosion", FlawPhase::Endurance),
+        e("Fuel valve seat degradation", FlawPhase::Endurance),
+        e("Oxidizer seal embrittlement", FlawPhase::Endurance),
+        e("Engine controller memory corruption", FlawPhase::Endurance),
+        e("Regenerative cooling tube fatigue", FlawPhase::Endurance),
     ],
     stage_loss: [
-        "Avionics thermal failure",
-        "Battery capacity degradation",
-        "Structural fatigue crack propagation",
-        "Guidance computer memory fault",
-        "Wiring harness insulation breakdown",
-        "Pressurization system leak",
+        e("Avionics thermal failure", FlawPhase::Endurance),
+        e("Battery capacity degradation", FlawPhase::Endurance),
+        e("Structural fatigue crack propagation", FlawPhase::Endurance),
+        e("Guidance computer memory fault", FlawPhase::Endurance),
+        e("Wiring harness insulation breakdown", FlawPhase::Endurance),
+        e("Pressurization system leak", FlawPhase::Endurance),
     ],
 };
 
 /// Ion and Hall thrusters: grids, cathodes, xenon feed, the PPU.
 pub const ELECTRIC_FLAWS: FlawPool = FlawPool {
     degradation: [
-        "Ion grid erosion rate higher than expected",
-        "Beam neutralizer current drift",
-        "Discharge chamber magnetic field asymmetry",
-        "Xenon flow controller calibration offset",
-        "Thruster plume divergence angle excessive",
-        "Power processing unit efficiency loss",
+        e("Ion grid erosion rate higher than expected", FlawPhase::Burn),
+        e("Beam neutralizer current drift", FlawPhase::Burn),
+        e("Discharge chamber magnetic field asymmetry", FlawPhase::Burn),
+        e("Xenon flow controller calibration offset", FlawPhase::Burn),
+        e("Thruster plume divergence angle excessive", FlawPhase::Burn),
+        e("Power processing unit efficiency loss", FlawPhase::Burn),
     ],
     part_loss: [
-        "Grid short circuit from sputtered material",
-        "Cathode heater element failure",
-        "Xenon isolator valve seizure",
-        "High-voltage breakdown in PPU",
-        "Discharge chamber wall sputter-through",
-        "Neutralizer keeper electrode erosion",
+        e("Grid short circuit from sputtered material", FlawPhase::Burn),
+        e("Cathode heater element failure", FlawPhase::Burn),
+        e("Xenon isolator valve seizure", FlawPhase::Burn),
+        e("High-voltage breakdown in PPU", FlawPhase::Burn),
+        e("Discharge chamber wall sputter-through", FlawPhase::Burn),
+        e("Neutralizer keeper electrode erosion", FlawPhase::Burn),
     ],
     stage_loss: [
-        "Xenon tank pressure regulator failure",
-        "Solar array connection arc fault",
-        "Thruster gimbal mechanism binding",
-        "Power bus overcurrent shutdown",
-        "Propellant management unit leak",
-        "Electromagnetic interference with avionics",
+        e("Xenon tank pressure regulator failure", FlawPhase::Burn),
+        e("Solar array connection arc fault", FlawPhase::Burn),
+        e("Thruster gimbal mechanism binding", FlawPhase::Burn),
+        e("Power bus overcurrent shutdown", FlawPhase::Burn),
+        e("Propellant management unit leak", FlawPhase::Burn),
+        e("Electromagnetic interference with avionics", FlawPhase::Burn),
     ],
 };
 
 /// Nuclear-thermal engines: fuel elements, drums, hydrogen everywhere.
 pub const NUCLEAR_FLAWS: FlawPool = FlawPool {
     degradation: [
-        "Fuel element hydrogen corrosion",
-        "Reactor power distribution imbalance",
-        "Turbopump hydrogen bearing wear",
-        "Nozzle skirt hydrogen embrittlement",
-        "Moderator element swelling",
-        "Reflector drum actuator lag",
+        e("Fuel element hydrogen corrosion", FlawPhase::Burn),
+        e("Reactor power distribution imbalance", FlawPhase::Burn),
+        e("Turbopump hydrogen bearing wear", FlawPhase::Burn),
+        e("Nozzle skirt hydrogen embrittlement", FlawPhase::Burn),
+        e("Moderator element swelling", FlawPhase::Burn),
+        e("Reflector drum actuator lag", FlawPhase::Burn),
     ],
     part_loss: [
-        "Fuel element mid-section break",
-        "Control drum servo mechanism failure",
-        "Reactor thermal runaway risk",
-        "Hydrogen leak in reactor pressure vessel",
-        "Neutron poison buildup in fuel elements",
-        "Turbopump seal failure from radiation damage",
+        e("Fuel element mid-section break", FlawPhase::Burn),
+        e("Control drum servo mechanism failure", FlawPhase::Burn),
+        e("Reactor thermal runaway risk", FlawPhase::Burn),
+        e("Hydrogen leak in reactor pressure vessel", FlawPhase::Burn),
+        e("Neutron poison buildup in fuel elements", FlawPhase::Burn),
+        e("Turbopump seal failure from radiation damage", FlawPhase::Burn),
     ],
     stage_loss: [
-        "Radiation shielding structural failure",
-        "Reactor SCRAM system false trigger",
-        "Hydrogen tank embrittlement fracture",
-        "Reactor coolant channel blockage",
-        "Uncontrolled criticality excursion risk",
-        "Nozzle detachment from thermal cycling",
+        e("Radiation shielding structural failure", FlawPhase::Burn),
+        e("Reactor SCRAM system false trigger", FlawPhase::Burn),
+        e("Hydrogen tank embrittlement fracture", FlawPhase::Burn),
+        e("Reactor coolant channel blockage", FlawPhase::Burn),
+        e("Uncontrolled criticality excursion risk", FlawPhase::Burn),
+        e("Nozzle detachment from thermal cycling", FlawPhase::Burn),
     ],
 };
 
 /// Solar sails: film, booms, deployment.
 pub const SOLAR_SAIL_FLAWS: FlawPool = FlawPool {
     degradation: [
-        "Sail reflectivity degradation",
-        "Micrometeorite puncture damage",
-        "Sail deployment mechanism binding",
-        "Attitude control vane misalignment",
-        "Sail surface wrinkling",
-        "Solar radiation pressure modeling error",
+        e("Sail reflectivity degradation", FlawPhase::Burn),
+        e("Micrometeorite puncture damage", FlawPhase::Burn),
+        e("Sail deployment mechanism binding", FlawPhase::Ignition),
+        e("Attitude control vane misalignment", FlawPhase::Burn),
+        e("Sail surface wrinkling", FlawPhase::Burn),
+        e("Solar radiation pressure modeling error", FlawPhase::Burn),
     ],
     part_loss: [
-        "Sail boom structural failure",
-        "Complete sail deployment failure",
-        "Sail tearing from thermal stress",
-        "Attitude control system failure",
-        "Sail furling mechanism jam",
-        "Boom hinge seizure",
+        e("Sail boom structural failure", FlawPhase::Burn),
+        e("Complete sail deployment failure", FlawPhase::Ignition),
+        e("Sail tearing from thermal stress", FlawPhase::Burn),
+        e("Attitude control system failure", FlawPhase::Burn),
+        e("Sail furling mechanism jam", FlawPhase::Burn),
+        e("Boom hinge seizure", FlawPhase::Burn),
     ],
     stage_loss: [
-        "Sail catastrophic tear propagation",
-        "Boom collapse from impact",
-        "Sail jettison mechanism malfunction",
-        "Thermal deformation beyond recovery",
-        "Complete attitude loss from sail asymmetry",
-        "Sail connection point failure",
+        e("Sail catastrophic tear propagation", FlawPhase::Burn),
+        e("Boom collapse from impact", FlawPhase::Burn),
+        e("Sail jettison mechanism malfunction", FlawPhase::Burn),
+        e("Thermal deformation beyond recovery", FlawPhase::Burn),
+        e("Complete attitude loss from sail asymmetry", FlawPhase::Burn),
+        e("Sail connection point failure", FlawPhase::Burn),
     ],
 };
 
@@ -401,28 +518,28 @@ pub const SOLAR_SAIL_FLAWS: FlawPool = FlawPool {
 /// you were revising somebody else's work.
 pub const ROCKET_FLAWS: FlawPool = FlawPool {
     degradation: [
-        "Tank baffle slosh damping insufficient",
-        "Aerodynamic fairing drag higher than modelled",
-        "Guidance loop overcorrects in high winds",
-        "Stage mass over budget after assembly",
-        "Thrust vector alignment out of tolerance",
-        "Residual propellant trapped at tank sump",
+        e("Tank baffle slosh damping insufficient", FlawPhase::Burn),
+        e("Aerodynamic fairing drag higher than modelled", FlawPhase::MaxQ),
+        e("Guidance loop overcorrects in high winds", FlawPhase::MaxQ),
+        e("Stage mass over budget after assembly", FlawPhase::Burn),
+        e("Thrust vector alignment out of tolerance", FlawPhase::Burn),
+        e("Residual propellant trapped at tank sump", FlawPhase::Burn),
     ],
     part_loss: [
-        "Propellant feed starves the outboard engine",
-        "Engine bay overheats without purge flow",
-        "Gimbal actuator mount flexes under load",
-        "Pogo suppressor undersized for this stage",
-        "Engine mount bolt preload inconsistent",
-        "Feed line collapses under transient pressure",
+        e("Propellant feed starves the outboard engine", FlawPhase::Burn),
+        e("Engine bay overheats without purge flow", FlawPhase::Burn),
+        e("Gimbal actuator mount flexes under load", FlawPhase::MaxQ),
+        e("Pogo suppressor undersized for this stage", FlawPhase::Burn),
+        e("Engine mount bolt preload inconsistent", FlawPhase::Ignition),
+        e("Feed line collapses under transient pressure", FlawPhase::Ignition),
     ],
     stage_loss: [
-        "Interstage buckles under max-Q loading",
-        "Separation pyrotechnics fire out of sequence",
-        "Common bulkhead weld porosity",
-        "Payload fairing fails to jettison cleanly",
-        "Tank pressurisation regulator runs away",
-        "Flight computer resets during staging transient",
+        e("Interstage buckles under max-Q loading", FlawPhase::MaxQ),
+        e("Separation pyrotechnics fire out of sequence", FlawPhase::Separation),
+        e("Common bulkhead weld porosity", FlawPhase::Burn),
+        e("Payload fairing fails to jettison cleanly", FlawPhase::Separation),
+        e("Tank pressurisation regulator runs away", FlawPhase::Ignition),
+        e("Flight computer resets during staging transient", FlawPhase::Separation),
     ],
 };
 
@@ -430,28 +547,28 @@ pub const ROCKET_FLAWS: FlawPool = FlawPool {
 /// "no micrometeoroid shielding", not "pitting weakened a tank wall".
 pub const ROCKET_ENDURANCE_FLAWS: FlawPool = FlawPool {
     degradation: [
-        "Tank insulation degrades, boiloff climbs",
-        "Star tracker alignment drifts with thermal cycling",
-        "Attitude control propellant leaks past a seat",
-        "Solar array hinge stiffens, pointing lags",
-        "Thermal coating erodes under UV",
-        "Reaction wheel imbalance grows with hours",
+        e("Tank insulation degrades, boiloff climbs", FlawPhase::Endurance),
+        e("Star tracker alignment drifts with thermal cycling", FlawPhase::Endurance),
+        e("Attitude control propellant leaks past a seat", FlawPhase::Endurance),
+        e("Solar array hinge stiffens, pointing lags", FlawPhase::Endurance),
+        e("Thermal coating erodes under UV", FlawPhase::Endurance),
+        e("Reaction wheel imbalance grows with hours", FlawPhase::Endurance),
     ],
     part_loss: [
-        "Restart accumulator loses pressure over days",
-        "Engine bay heater fails, propellant lines chill",
-        "Ullage motor propellant slowly vents",
-        "Gimbal actuator lubricant migrates in vacuum",
-        "Feed line bellows fatigues on each thermal cycle",
-        "Engine controller watchdog trips intermittently",
+        e("Restart accumulator loses pressure over days", FlawPhase::Endurance),
+        e("Engine bay heater fails, propellant lines chill", FlawPhase::Endurance),
+        e("Ullage motor propellant slowly vents", FlawPhase::Endurance),
+        e("Gimbal actuator lubricant migrates in vacuum", FlawPhase::Endurance),
+        e("Feed line bellows fatigues on each thermal cycle", FlawPhase::Endurance),
+        e("Engine controller watchdog trips intermittently", FlawPhase::Endurance),
     ],
     stage_loss: [
-        "No micrometeoroid shielding over the tank wall",
-        "Battery cell imbalance goes uncorrected",
-        "Harness insulation embrittles and shorts",
-        "Pressurant slowly leaks past a check valve",
-        "Structural adhesive creeps under sustained load",
-        "Flight computer accumulates uncorrected bit flips",
+        e("No micrometeoroid shielding over the tank wall", FlawPhase::Endurance),
+        e("Battery cell imbalance goes uncorrected", FlawPhase::Endurance),
+        e("Harness insulation embrittles and shorts", FlawPhase::Endurance),
+        e("Pressurant slowly leaks past a check valve", FlawPhase::Endurance),
+        e("Structural adhesive creeps under sustained load", FlawPhase::Endurance),
+        e("Flight computer accumulates uncorrected bit flips", FlawPhase::Endurance),
     ],
 };
 
@@ -459,56 +576,56 @@ pub const ROCKET_ENDURANCE_FLAWS: FlawPool = FlawPool {
 /// shutdown (the reactor trips, not the stage).
 pub const REACTOR_FLAWS: FlawPool = FlawPool {
     degradation: [
-        "Coolant loop flow restriction",
-        "Radiator fin degradation reduces heat rejection",
-        "Control drum drift derates output",
-        "Fuel element swelling reduces thermal transfer",
-        "Thermoelectric converter efficiency loss",
-        "Partial coolant channel blockage",
+        e("Coolant loop flow restriction", FlawPhase::Burn),
+        e("Radiator fin degradation reduces heat rejection", FlawPhase::Burn),
+        e("Control drum drift derates output", FlawPhase::Burn),
+        e("Fuel element swelling reduces thermal transfer", FlawPhase::Burn),
+        e("Thermoelectric converter efficiency loss", FlawPhase::Burn),
+        e("Partial coolant channel blockage", FlawPhase::Burn),
     ],
     part_loss: [
-        "Control drum actuator seizure triggers SCRAM",
-        "Coolant pump failure forces reactor shutdown",
-        "Fuel element cladding breach",
-        "Reactor overheats and trips offline",
-        "Neutron poison buildup stalls the core",
-        "Primary coolant loop leak",
+        e("Control drum actuator seizure triggers SCRAM", FlawPhase::Burn),
+        e("Coolant pump failure forces reactor shutdown", FlawPhase::Burn),
+        e("Fuel element cladding breach", FlawPhase::Burn),
+        e("Reactor overheats and trips offline", FlawPhase::Burn),
+        e("Neutron poison buildup stalls the core", FlawPhase::Burn),
+        e("Primary coolant loop leak", FlawPhase::Burn),
     ],
     stage_loss: [
-        "Reactor pressure vessel rupture",
-        "Uncontrolled criticality excursion",
-        "Radiation shielding structural failure",
-        "Coolant flash-boil breaches the stage",
-        "Thermal runaway destroys the stage",
-        "Reactor debris severs stage structure",
+        e("Reactor pressure vessel rupture", FlawPhase::Burn),
+        e("Uncontrolled criticality excursion", FlawPhase::Burn),
+        e("Radiation shielding structural failure", FlawPhase::Burn),
+        e("Coolant flash-boil breaches the stage", FlawPhase::Burn),
+        e("Thermal runaway destroys the stage", FlawPhase::Burn),
+        e("Reactor debris severs stage structure", FlawPhase::Burn),
     ],
 };
 
 /// Reactors over a long mission: burnup, fouling, embrittlement, creep.
 pub const REACTOR_ENDURANCE_FLAWS: FlawPool = FlawPool {
     degradation: [
-        "Radiator coating erosion degrades heat rejection",
-        "Fuel burnup lowers reactivity over time",
-        "Neutron embrittlement of core structure",
-        "Coolant loop fouling accumulates",
-        "Thermoelectric junction degradation",
-        "Control drum bearing wear derates output",
+        e("Radiator coating erosion degrades heat rejection", FlawPhase::Endurance),
+        e("Fuel burnup lowers reactivity over time", FlawPhase::Endurance),
+        e("Neutron embrittlement of core structure", FlawPhase::Endurance),
+        e("Coolant loop fouling accumulates", FlawPhase::Endurance),
+        e("Thermoelectric junction degradation", FlawPhase::Endurance),
+        e("Control drum bearing wear derates output", FlawPhase::Endurance),
     ],
     part_loss: [
-        "Fuel cladding creep-ruptures after prolonged heat",
-        "Coolant pump bearing wears out and seizes",
-        "Cumulative xenon poisoning stalls the core",
-        "Control-drum actuator fails from thermal cycling",
-        "Primary loop develops a slow coolant leak",
-        "Reactor trips offline on degraded shielding sensors",
+        e("Fuel cladding creep-ruptures after prolonged heat", FlawPhase::Endurance),
+        e("Coolant pump bearing wears out and seizes", FlawPhase::Endurance),
+        e("Cumulative xenon poisoning stalls the core", FlawPhase::Endurance),
+        e("Control-drum actuator fails from thermal cycling", FlawPhase::Endurance),
+        e("Primary loop develops a slow coolant leak", FlawPhase::Endurance),
+        e("Reactor trips offline on degraded shielding sensors", FlawPhase::Endurance),
     ],
     stage_loss: [
-        "Coolant embrittlement leads to pressure-vessel failure",
-        "Long-term radiation damage collapses the structure",
-        "Cumulative thermal fatigue cracks the reactor mount",
-        "Shielding degradation triggers a runaway excursion",
-        "Radiator manifold fatigue ruptures the coolant loop",
-        "Structural creep severs the stage under load",
+        e("Coolant embrittlement leads to pressure-vessel failure", FlawPhase::Endurance),
+        e("Long-term radiation damage collapses the structure", FlawPhase::Endurance),
+        e("Cumulative thermal fatigue cracks the reactor mount", FlawPhase::Endurance),
+        e("Shielding degradation triggers a runaway excursion", FlawPhase::Endurance),
+        e("Radiator manifold fatigue ruptures the coolant loop", FlawPhase::Endurance),
+        e("Structural creep severs the stage under load", FlawPhase::Endurance),
     ],
 };
 
@@ -555,7 +672,7 @@ mod tests {
         for seed in 0..trials {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-            let flaws = generate_flaws(FlawDomain::Engine(None), 7, &mut rng, &mut next_id, &cfg());
+            let flaws = generate_flaws(FlawDomain::Engine(None), 7, 0, &mut rng, &mut next_id, &cfg());
             total += flaws.len() as u32;
         }
         let avg = total as f64 / trials as f64;
@@ -570,7 +687,7 @@ mod tests {
         for seed in 0..1000 {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-            let flaws = generate_flaws(FlawDomain::Engine(None), 2, &mut rng, &mut next_id, &cfg());
+            let flaws = generate_flaws(FlawDomain::Engine(None), 2, 0, &mut rng, &mut next_id, &cfg());
             if flaws.is_empty() {
                 found_zero = true;
                 break;
@@ -583,7 +700,7 @@ mod tests {
     fn test_flaw_ids_are_sequential() {
         let mut rng = test_rng();
         let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(10);
-        let flaws = generate_flaws(FlawDomain::Engine(None), 6, &mut rng, &mut next_id, &cfg());
+        let flaws = generate_flaws(FlawDomain::Engine(None), 6, 0, &mut rng, &mut next_id, &cfg());
         for (i, flaw) in flaws.iter().enumerate() {
             assert_eq!(flaw.id, FlawId(10 + i as u64));
         }
@@ -594,7 +711,7 @@ mod tests {
     fn test_flaws_start_undiscovered() {
         let mut rng = test_rng();
         let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-        let flaws = generate_flaws(FlawDomain::Engine(None), 8, &mut rng, &mut next_id, &cfg());
+        let flaws = generate_flaws(FlawDomain::Engine(None), 8, 0, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert!(!flaw.discovered);
         }
@@ -604,7 +721,7 @@ mod tests {
     fn test_activation_chance_in_range() {
         let mut rng = test_rng();
         let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-        let flaws = generate_flaws(FlawDomain::Engine(None), 9, &mut rng, &mut next_id, &cfg());
+        let flaws = generate_flaws(FlawDomain::Engine(None), 9, 0, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert!(flaw.activation_chance >= 0.0, "activation_chance should be non-negative");
             assert!(flaw.activation_chance <= 1.0, "activation_chance should be <= 1");
@@ -616,7 +733,7 @@ mod tests {
         // With random^2, most values should be below 0.5
         let mut rng = test_rng();
         let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-        let flaws = generate_flaws(FlawDomain::Engine(None), 100, &mut rng, &mut next_id, &cfg());
+        let flaws = generate_flaws(FlawDomain::Engine(None), 100, 0, &mut rng, &mut next_id, &cfg());
         let below_half = flaws.iter().filter(|f| f.activation_chance < 0.5).count();
         assert!(
             below_half as f64 / flaws.len() as f64 > 0.6,
@@ -629,7 +746,7 @@ mod tests {
     fn test_discovery_probability_bounded_by_sqrt_activation() {
         let mut rng = test_rng();
         let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-        let flaws = generate_flaws(FlawDomain::Engine(None), 9, &mut rng, &mut next_id, &cfg());
+        let flaws = generate_flaws(FlawDomain::Engine(None), 9, 0, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert!(
                 flaw.discovery_probability <= flaw.activation_chance.sqrt() + 0.001,
@@ -645,7 +762,7 @@ mod tests {
     fn test_roll_discoveries() {
         let mut rng = test_rng();
         let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-        let mut flaws = generate_flaws(FlawDomain::Engine(None), 8, &mut rng, &mut next_id, &cfg());
+        let mut flaws = generate_flaws(FlawDomain::Engine(None), 8, 0, &mut rng, &mut next_id, &cfg());
 
         // Force high discovery probability on first flaw for testing
         if !flaws.is_empty() {
@@ -696,6 +813,7 @@ mod tests {
             discovery_probability: 0.3,
             discovered: false,
             trigger: FlawTrigger::PerFlight,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         };
         assert_eq!(flaw.daily_rate(), 0.5);
     }
@@ -709,6 +827,7 @@ mod tests {
             discovery_probability: 0.3,
             discovered: false,
             trigger: FlawTrigger::PerDay,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         };
         let rate = flaw.daily_rate();
         // 1 - (1 - 0.30)^(1/365) ≈ 0.000977
@@ -725,7 +844,7 @@ mod tests {
     fn test_rocket_flaws_have_per_day() {
         let mut rng = test_rng();
         let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-        let flaws = generate_flaws(FlawDomain::Rocket, 10, &mut rng, &mut next_id, &cfg());
+        let flaws = generate_flaws(FlawDomain::Rocket, 10, 3, &mut rng, &mut next_id, &cfg());
         let per_day_count = flaws.iter().filter(|f| f.trigger == FlawTrigger::PerDay).count();
         // With 30% chance and ~10 flaws, expect ~3 PerDay (allow 0-8 for randomness)
         assert!(per_day_count > 0, "Should have some PerDay flaws");
@@ -742,7 +861,7 @@ mod tests {
         for seed in 0..200 {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-            for flaw in generate_flaws(FlawDomain::Reactor, 10, &mut rng, &mut next_id, &cfg()) {
+            for flaw in generate_flaws(FlawDomain::Reactor, 10, 0, &mut rng, &mut next_id, &cfg()) {
                 match flaw.trigger {
                     FlawTrigger::PerDay => per_day += 1,
                     FlawTrigger::PerFlight => per_flight += 1,
@@ -763,7 +882,7 @@ mod tests {
         for seed in 0..trials {
             let mut rng = StdRng::seed_from_u64(seed);
             let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-            let flaws = generate_flaws(FlawDomain::Reactor, 8, &mut rng, &mut next_id, &cfg());
+            let flaws = generate_flaws(FlawDomain::Reactor, 8, 0, &mut rng, &mut next_id, &cfg());
             total += flaws.len() as u32;
         }
         let avg = total as f64 / trials as f64;
@@ -774,7 +893,7 @@ mod tests {
     fn test_reactor_flaws_ids_sequential_and_undiscovered() {
         let mut rng = test_rng();
         let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(5);
-        let flaws = generate_flaws(FlawDomain::Reactor, 9, &mut rng, &mut next_id, &cfg());
+        let flaws = generate_flaws(FlawDomain::Reactor, 9, 0, &mut rng, &mut next_id, &cfg());
         for (i, flaw) in flaws.iter().enumerate() {
             assert_eq!(flaw.id, FlawId(5 + i as u64));
             assert!(!flaw.discovered);
@@ -786,7 +905,7 @@ mod tests {
     fn test_engine_flaws_all_per_flight() {
         let mut rng = test_rng();
         let mut next_id = crate::id::IdAllocator::<crate::flaw::FlawId>::starting_at(0);
-        let flaws = generate_flaws(FlawDomain::Engine(None), 10, &mut rng, &mut next_id, &cfg());
+        let flaws = generate_flaws(FlawDomain::Engine(None), 10, 0, &mut rng, &mut next_id, &cfg());
         for flaw in &flaws {
             assert_eq!(flaw.trigger, FlawTrigger::PerFlight,
                 "Engine flaws should all be PerFlight");
@@ -811,7 +930,7 @@ mod description_pool_tests {
         let mut out = Vec::new();
         for i in 0..2_000u64 {
             let trigger = if i % 2 == 0 { FlawTrigger::PerFlight } else { FlawTrigger::PerDay };
-            out.push(generate_single_flaw(FlawDomain::Rocket, FlawId(i), trigger, &mut rng, &cfg).description);
+            out.push(generate_single_flaw(FlawDomain::Rocket, FlawId(i), trigger, 3, &mut rng, &cfg).description);
         }
         out
     }
@@ -822,7 +941,7 @@ mod description_pool_tests {
         let mut out = Vec::new();
         for i in 0..2_000u64 {
             let trigger = if i % 2 == 0 { FlawTrigger::PerFlight } else { FlawTrigger::PerDay };
-            out.push(generate_single_flaw(FlawDomain::Engine(None), FlawId(i), trigger, &mut rng, &cfg).description);
+            out.push(generate_single_flaw(FlawDomain::Engine(None), FlawId(i), trigger, 0, &mut rng, &cfg).description);
         }
         out
     }
@@ -855,12 +974,10 @@ mod description_pool_tests {
         let mut rng = StdRng::seed_from_u64(11);
         let cfg = cfg();
         let per_flight: Vec<String> = (0..300u64)
-            .map(|i| generate_single_flaw(FlawDomain::Rocket, 
-                FlawId(i), FlawTrigger::PerFlight, &mut rng, &cfg).description)
+            .map(|i| generate_single_flaw(FlawDomain::Rocket, FlawId(i), FlawTrigger::PerFlight, 3, &mut rng, &cfg).description)
             .collect();
         let per_day: Vec<String> = (0..300u64)
-            .map(|i| generate_single_flaw(FlawDomain::Rocket, 
-                FlawId(i), FlawTrigger::PerDay, &mut rng, &cfg).description)
+            .map(|i| generate_single_flaw(FlawDomain::Rocket, FlawId(i), FlawTrigger::PerDay, 3, &mut rng, &cfg).description)
             .collect();
 
         assert!(per_flight.iter().any(|d| d.contains("Interstage")
@@ -880,8 +997,8 @@ mod description_pool_tests {
         let cfg = cfg();
         let mut a = StdRng::seed_from_u64(3);
         let mut b = StdRng::seed_from_u64(3);
-        let rocket = generate_single_flaw(FlawDomain::Rocket, FlawId(1), FlawTrigger::PerFlight, &mut a, &cfg);
-        let engine = generate_single_flaw(FlawDomain::Engine(None), FlawId(1), FlawTrigger::PerFlight, &mut b, &cfg);
+        let rocket = generate_single_flaw(FlawDomain::Rocket, FlawId(1), FlawTrigger::PerFlight, 3, &mut a, &cfg);
+        let engine = generate_single_flaw(FlawDomain::Engine(None), FlawId(1), FlawTrigger::PerFlight, 0, &mut b, &cfg);
 
         // FlawConsequence has no PartialEq; its Display is faithful enough.
         assert_eq!(rocket.consequence.to_string(), engine.consequence.to_string());
@@ -889,5 +1006,67 @@ mod description_pool_tests {
         assert_eq!(rocket.discovery_probability, engine.discovery_probability);
         assert_ne!(rocket.description, engine.description, "but the words differ");
     }
-}
 
+    /// A rocket flaw is pinned to a stage group and a flight event at
+    /// generation; max-Q belongs to the first stage, wear to no stage.
+    #[test]
+    fn rocket_flaws_live_on_a_stage_at_an_event() {
+        let cfg = cfg();
+        let mut saw_max_q = false;
+        for seed in 0..40u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut next_id = crate::id::IdAllocator::<FlawId>::starting_at(0);
+            for f in generate_flaws(FlawDomain::Rocket, 8, 3, &mut rng, &mut next_id, &cfg) {
+                match f.trigger {
+                    FlawTrigger::PerDay => {
+                        assert_eq!(f.phase, FlawPhase::Endurance);
+                        assert_eq!(f.stage_group, None);
+                    }
+                    FlawTrigger::PerFlight => {
+                        assert_ne!(f.phase, FlawPhase::Endurance, "{}", f.description);
+                        let g = f.stage_group.expect("a rocket flaw names its stage");
+                        assert!(g < 3, "group {g} on a three-group design");
+                        if f.phase == FlawPhase::MaxQ {
+                            saw_max_q = true;
+                            assert_eq!(g, 0, "max-Q is the first stage's moment");
+                        }
+                    }
+                }
+            }
+            for f in generate_flaws(FlawDomain::Engine(None), 8, 0, &mut rng, &mut next_id, &cfg) {
+                assert_eq!(f.stage_group, None, "engine flaws are not pinned to a stage");
+            }
+        }
+        assert!(saw_max_q, "the rocket pool has max-Q entries");
+    }
+
+    /// A flaw from before phases existed gets the phase its own words
+    /// carry in the pools, and a rocket flaw draws a stage.
+    #[test]
+    fn legacy_flaws_take_the_phase_of_their_pool_entry() {
+        let mut flaw = Flaw {
+            id: FlawId(7),
+            description: "Separation pyrotechnics fire out of sequence".into(),
+            consequence: FlawConsequence::StageLoss,
+            activation_chance: 0.2, discovery_probability: 0.1, discovered: false,
+            trigger: FlawTrigger::PerFlight,
+            phase: FlawPhase::Burn, stage_group: None,
+        };
+        let mut rng = StdRng::seed_from_u64(1);
+        flaw.assign_legacy_phase(true, 2, &mut rng);
+        assert_eq!(flaw.phase, FlawPhase::Separation);
+        assert!(matches!(flaw.stage_group, Some(g) if g < 2));
+
+        flaw.description = "Something the pools never said".into();
+        flaw.assign_legacy_phase(false, 0, &mut rng);
+        assert_eq!(flaw.phase, FlawPhase::Burn);
+        assert_eq!(flaw.stage_group, None);
+
+        flaw.trigger = FlawTrigger::PerDay;
+        flaw.assign_legacy_phase(true, 2, &mut rng);
+        assert_eq!(flaw.phase, FlawPhase::Endurance);
+        assert_eq!(flaw.stage_group, None);
+
+        assert_eq!(phase_for_description("Igniter reliability issue"), Some(FlawPhase::Ignition));
+    }
+}

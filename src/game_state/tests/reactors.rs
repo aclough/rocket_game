@@ -238,6 +238,7 @@ fn test_reactor_flaw_activates_mid_flight() {
         discovery_probability: 1.0,
         discovered: false,
         trigger: FlawTrigger::PerDay,
+        phase: crate::flaw::FlawPhase::Burn, stage_group: None,
     }];
     gs.player_company.reactor_projects.push(rproj);
 
@@ -331,6 +332,7 @@ fn test_reactor_perflight_flaw_fires_at_flight_start() {
         discovery_probability: 1.0,
         discovered: false,
         trigger: FlawTrigger::PerFlight,
+        phase: crate::flaw::FlawPhase::Burn, stage_group: None,
     }];
     gs.player_company.reactor_projects.push(rproj);
 

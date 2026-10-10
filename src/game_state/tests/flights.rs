@@ -83,6 +83,7 @@ fn arrive_test_flight(
         persist: false,
         launch_partial: None,
         flaw_rolled_groups: std::collections::HashSet::new(),
+        rocket_flaws: Vec::new(),
         reactor_flaws_rolled: false,
     };
     gs.resolve_arrived_flight(flight)
@@ -128,11 +129,13 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
             flaw_description: "Coolant loop chatter".into(),
             consequence: crate::flaw::FlawConsequence::PerformanceDegradation(0.01),
             source: "Engine Upper".into(),
+            event: None,
         }],
         launch_date: gs.date,
         persist: false,
         launch_partial: Some(reason.to_string()),
         flaw_rolled_groups: std::collections::HashSet::new(),
+        rocket_flaws: Vec::new(),
         reactor_flaws_rolled: false,
     });
 
@@ -421,6 +424,7 @@ fn test_mid_flight_stage_loss_destroys_vehicle() {
         discovery_probability: 1.0,
         discovered: false,
         trigger: FlawTrigger::PerDay,
+        phase: crate::flaw::FlawPhase::Burn, stage_group: None,
     }];
     gs.player_company.reactor_projects.push(rproj);
 
@@ -551,6 +555,7 @@ fn a_leo_launch_on_the_first_arrives_delivers_and_checks_power_on_the_first() {
         persist: true,
         launch_partial: None,
         flaw_rolled_groups: sim.flaw_rolled_groups,
+        rocket_flaws: Vec::new(),
         reactor_flaws_rolled: false,
     });
 

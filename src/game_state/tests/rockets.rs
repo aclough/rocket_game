@@ -42,13 +42,17 @@ fn test_flaw_scoping_by_stage_usage() {
 
     assert!(matches!(sim.outcome, crate::launch::LaunchOutcome::Success),
         "Launch to LEO should succeed, got {:?}", sim.outcome);
-    // Only group 0 (stage 1) flaws should fire at launch.
-    // Stage 2 (group 1) and stage 3 (group 2) flaws are deferred to mid-flight.
-    assert_eq!(sim.flaws_activated.len(), 1,
-        "Only group 0 flaw should fire at launch, got {:?}", sim.flaws_activated);
+    // The ascent to LEO fires stages 1 and 2 (both on the Lifter), so
+    // the Lifter flaw rolls on the pad for each, in flight order —
+    // stage 1's burn before stage 2's. Stage 3 (the Upper, group 2)
+    // first fires in orbit and rolls then.
+    assert_eq!(sim.flaws_activated.len(), 2,
+        "Stage 1 and 2 flaws should fire at launch, got {:?}", sim.flaws_activated);
     assert_eq!(sim.flaws_activated[0].flaw_description, "Lifter turbopump vibration");
-    assert_eq!(sim.flaw_rolled_groups.len(), 1);
-    assert!(sim.flaw_rolled_groups.contains(&0));
+    assert_eq!(sim.flaws_activated[0].event, Some(crate::launch::FlightEvent::Burn { group: 0 }));
+    assert_eq!(sim.flaws_activated[1].flaw_description, "Lifter turbopump vibration");
+    assert_eq!(sim.flaws_activated[1].event, Some(crate::launch::FlightEvent::Burn { group: 1 }));
+    assert_eq!(sim.flaw_rolled_groups, [0, 1].into_iter().collect());
 
     // --- Part 2: Create a spacecraft at LEO and fly to GTO ---
     let mut gs = GameState::new("Test".into(), 42);
@@ -184,6 +188,7 @@ fn test_spacecraft_has_remaining_dv_after_leo_launch() {
         persist: true,
         launch_partial: None,
         flaw_rolled_groups: sim.flaw_rolled_groups,
+        rocket_flaws: Vec::new(),
         reactor_flaws_rolled: false,
     };
 

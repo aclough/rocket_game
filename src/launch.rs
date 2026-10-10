@@ -7,7 +7,7 @@ use crate::company::Company;
 use crate::contract::ContractId;
 use crate::engine::EngineId;
 use crate::engine_project::{EngineProject, EngineSource};
-use crate::flaw::{FlawConsequence, FlawTrigger};
+use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawPhase, FlawTrigger};
 use crate::reactor::ReactorId;
 use crate::rocket::{DesignPerformance, Rocket, RocketDesign};
 use crate::rocket_project::RocketProjectId;
@@ -37,7 +37,10 @@ pub enum FlawOwner {
 pub struct FlawRef {
     pub owner: FlawOwner,
     pub flaw_index: usize,
+    pub id: FlawId,
     pub trigger: FlawTrigger,
+    pub phase: FlawPhase,
+    pub stage_group: Option<usize>,
     pub activation_chance: f64,
     pub daily_rate: f64,
     pub consequence: FlawConsequence,
@@ -49,7 +52,10 @@ impl FlawRef {
         FlawRef {
             owner,
             flaw_index,
+            id: flaw.id,
             trigger: flaw.trigger,
+            phase: flaw.phase,
+            stage_group: flaw.stage_group,
             activation_chance: flaw.activation_chance,
             daily_rate: flaw.daily_rate(),
             consequence: flaw.consequence.clone(),
@@ -113,43 +119,185 @@ pub fn engine_flaw_table(
 pub struct FlawRoll {
     /// Every flaw that fired, in order.
     pub activations: Vec<FlawActivation>,
-    /// The same flaws, as (owner, index) for marking them discovered.
-    pub discoveries: Vec<(FlawOwner, usize)>,
+    /// The same flaws, as (owner, index, id) for marking them
+    /// discovered. Live tables are addressed by index; a vehicle's
+    /// snapshot may be older than its project, so rocket flaws are
+    /// found again by id.
+    pub discoveries: Vec<(FlawOwner, usize, FlawId)>,
     /// Set when a `StageLoss` fired: the vehicle is gone and the roll
     /// stopped there, since nothing after the loss can be observed.
     pub lost: Option<String>,
 }
 
-/// Roll the engine flaws of `stages` as they fire. Each flaw's chance
-/// is scaled by the stage's engine count (`1 - (1-p)^n`); a hit is
-/// applied to that stage. Stops at the first `StageLoss`, so a firing
-/// discovers at most one rocket-destroying flaw.
-pub fn roll_engine_flaws(
+/// A moment in a flight at which flaws roll, in the order
+/// `ascent_events` walks them (22_FLAWS.md §3.12). Groups index the
+/// design's `stage_groups`; players read them one-based.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FlightEvent {
+    Ignition { group: usize },
+    MaxQ,
+    Burn { group: usize },
+    Separation { group: usize },
+    PayloadDeploy,
+}
+
+impl FlightEvent {
+    /// The flaw phase that rolls at this event.
+    pub fn phase(self) -> FlawPhase {
+        match self {
+            FlightEvent::Ignition { .. } => FlawPhase::Ignition,
+            FlightEvent::MaxQ => FlawPhase::MaxQ,
+            FlightEvent::Burn { .. } => FlawPhase::Burn,
+            FlightEvent::Separation { .. } => FlawPhase::Separation,
+            FlightEvent::PayloadDeploy => FlawPhase::PayloadDeploy,
+        }
+    }
+
+    /// The stage group whose hardware is on the line: max-Q is the
+    /// first stage's moment, payload deploy the last's.
+    pub fn group(self, design: &RocketDesign) -> usize {
+        match self {
+            FlightEvent::Ignition { group } | FlightEvent::Burn { group } | FlightEvent::Separation { group } => group,
+            FlightEvent::MaxQ => 0,
+            FlightEvent::PayloadDeploy => design.stage_groups.len().saturating_sub(1),
+        }
+    }
+
+    /// As the player reads it: "S1 ignition", "max-Q", "S2 separation".
+    pub fn word(self) -> String {
+        match self {
+            FlightEvent::MaxQ => "max-Q".to_string(),
+            FlightEvent::PayloadDeploy => "payload deploy".to_string(),
+            other => format!("S{} {}", other.group_index() + 1, other.phase().word()),
+        }
+    }
+
+    fn group_index(self) -> usize {
+        match self {
+            FlightEvent::Ignition { group } | FlightEvent::Burn { group } | FlightEvent::Separation { group } => group,
+            FlightEvent::MaxQ | FlightEvent::PayloadDeploy => 0,
+        }
+    }
+}
+
+/// The events of a burn that fires `groups` in order: each group
+/// ignites and burns; before an upper group ignites, the group below
+/// it separates; the first group of an atmospheric ascent passes
+/// max-Q after ignition. `groups` is what the first leg's burn fires
+/// (`ascent_groups`), or the new groups of a later leg.
+pub fn ascent_events(groups: &[usize], atmosphere: bool) -> Vec<FlightEvent> {
+    let mut events = Vec::new();
+    for (k, &group) in groups.iter().enumerate() {
+        if group > 0 {
+            events.push(FlightEvent::Separation { group: group - 1 });
+        }
+        events.push(FlightEvent::Ignition { group });
+        if k == 0 && group == 0 && atmosphere {
+            events.push(FlightEvent::MaxQ);
+        }
+        events.push(FlightEvent::Burn { group });
+    }
+    events
+}
+
+/// The stage groups a launch to `destination` fires before it is in
+/// orbit: the first leg of the planned route, flown on a fresh copy of
+/// the design. Everything here rolls on the pad as one timeline; a
+/// group that first fires on a later leg rolls then.
+pub fn ascent_groups(design: &RocketDesign, destination: &str, payload_kg: f64, from: &str) -> Vec<usize> {
+    let fallback = || if design.stage_groups.is_empty() { Vec::new() } else { vec![0] };
+    let Some((path, _)) = crate::location::DELTA_V_MAP
+        .shortest_path_for_rocket(from, destination, design, payload_kg)
+    else { return fallback() };
+    if path.len() < 2 {
+        return fallback();
+    }
+    let mut probe = design.instantiate(crate::rocket::RocketId(0), payload_kg);
+    let route = crate::flight::build_route_for_rocket(&path, design, &probe, payload_kg);
+    let Some(first) = route.first() else { return fallback() };
+    let burn = probe.burn_sequential(design, first.delta_v_cost, from);
+    let mut groups = burn.groups_burned;
+    groups.sort_unstable();
+    groups.dedup();
+    if groups.is_empty() { fallback() } else { groups }
+}
+
+/// The flaws of one rocket design as a table, for the vehicle's own
+/// snapshot (inventory item or flight) rather than the live project.
+pub fn rocket_flaw_table(project_id: RocketProjectId, flaws: &[Flaw]) -> Vec<FlawRef> {
+    flaws.iter().enumerate()
+        .map(|(fi, f)| FlawRef::from(FlawOwner::Rocket(project_id), fi, f))
+        .collect()
+}
+
+/// Roll everything that can bite at `event`: the engine flaws of that
+/// phase on every stage of the event's group (each scaled by the
+/// stage's engine count, `1 - (1-p)^n`), then the rocket flaws of that
+/// phase whose stage group it is. A hit is applied to the stage; a
+/// `StageLoss` ends the roll, since nothing after the loss can be
+/// observed.
+pub fn roll_event_flaws(
     rng: &mut StdRng,
     design: &mut RocketDesign,
-    stages: &[(usize, usize)],
-    table: &[FlawRef],
+    event: FlightEvent,
+    engines: &[FlawRef],
+    rockets: &[FlawRef],
 ) -> FlawRoll {
     let mut roll = FlawRoll::default();
-    'stages: for &(gi, si) in stages {
-        let Some(stage) = design.stage_groups.get(gi).and_then(|g| g.get(si)) else { continue };
-        let (engine_id, engine_count, engine_name) =
-            (stage.engine.id, stage.engine_count, stage.engine.name.clone());
-        for flaw in table.iter().filter(|f| matches!(f.owner, FlawOwner::Engine { engine_id: id, .. } if id == engine_id)) {
+    let phase = event.phase();
+    let gi = event.group(design);
+    let Some(group) = design.stage_groups.get(gi) else { return roll };
+    let stage_count = group.len();
+    if stage_count == 0 {
+        return roll;
+    }
+    let last_group = design.stage_groups.len() - 1;
+
+    for si in 0..stage_count {
+        let (engine_id, engine_count, engine_name) = {
+            let stage = &design.stage_groups[gi][si];
+            (stage.engine.id, stage.engine_count, stage.engine.name.clone())
+        };
+        for flaw in engines.iter().filter(|f| f.phase == phase
+            && matches!(f.owner, FlawOwner::Engine { engine_id: id, .. } if id == engine_id))
+        {
             let effective_p = 1.0 - (1.0 - flaw.activation_chance).powi(engine_count as i32);
             if rng.gen::<f64>() < effective_p {
                 roll.activations.push(FlawActivation {
                     flaw_description: flaw.description.clone(),
                     consequence: flaw.consequence.clone(),
                     source: engine_source(&engine_name),
+                    event: Some(event),
                 });
-                roll.discoveries.push((flaw.owner, flaw.flaw_index));
+                roll.discoveries.push((flaw.owner, flaw.flaw_index, flaw.id));
                 apply_consequence_to_stage(design, &flaw.consequence, gi, si);
                 if matches!(flaw.consequence, FlawConsequence::StageLoss) {
                     roll.lost = Some(flaw.description.clone());
-                    break 'stages;
+                    return roll;
                 }
             }
+        }
+    }
+
+    for flaw in rockets.iter().filter(|f| f.trigger == FlawTrigger::PerFlight && f.phase == phase
+        && f.stage_group.map_or(gi == 0, |g| g.min(last_group) == gi))
+    {
+        if rng.gen::<f64>() >= flaw.activation_chance {
+            continue;
+        }
+        let si = if stage_count > 1 { rng.gen_range(0..stage_count) } else { 0 };
+        let source = rocket_source(&design.stage_groups[gi][si].name);
+        roll.activations.push(FlawActivation {
+            flaw_description: flaw.description.clone(),
+            consequence: flaw.consequence.clone(),
+            source,
+            event: Some(event),
+        });
+        roll.discoveries.push((flaw.owner, flaw.flaw_index, flaw.id));
+        apply_consequence_to_stage(design, &flaw.consequence, gi, si);
+        if matches!(flaw.consequence, FlawConsequence::StageLoss) {
+            roll.lost = Some(flaw.description.clone());
+            return roll;
         }
     }
     roll
@@ -189,8 +337,9 @@ pub fn roll_endurance_flaws(
             flaw_description: flaw.description.clone(),
             consequence: flaw.consequence.clone(),
             source,
+            event: None,
         });
-        roll.discoveries.push((flaw.owner, flaw.flaw_index));
+        roll.discoveries.push((flaw.owner, flaw.flaw_index, flaw.id));
         if matches!(flaw.consequence, FlawConsequence::StageLoss) {
             roll.lost = Some(flaw.description.clone());
             break;
@@ -243,6 +392,11 @@ pub struct FlawActivation {
     /// the first stage's engine name.)
     #[serde(alias = "engine_name")]
     pub source: String,
+    /// The flight event it fired at, when it fired at one: the launch
+    /// popup lists the ascent in this order. `None` for endurance and
+    /// reactor rolls, and for records from before events existed.
+    #[serde(default)]
+    pub event: Option<FlightEvent>,
 }
 
 /// `FlawActivation::source` for an engine flaw.
@@ -283,20 +437,23 @@ pub struct LaunchSimResult {
     pub degraded_design: RocketDesign,
     /// Engine flaws that fired, to mark discovered on their owners.
     pub engine_discoveries: Vec<(FlawOwner, usize)>,
-    /// Indices of flaws to mark as discovered on rocket projects.
-    pub rocket_flaw_discoveries: Vec<usize>,
-    /// Which stage groups had flaws rolled during the launch sim.
+    /// Rocket flaws that fired, by id, to mark discovered on the project.
+    pub rocket_flaw_discoveries: Vec<FlawId>,
+    /// The stage groups the ascent fired — every group the first leg
+    /// burns — so the flight loop does not roll them again.
     pub flaw_rolled_groups: std::collections::HashSet<usize>,
 }
 
 /// Simulate a launch. This does not modify any state — it returns a result
 /// that the caller applies.
 ///
-/// The simulation:
-/// 1. Rolls activation for each flaw (engine projects + rocket project + contracted engines)
-/// 2. Applies consequences to a cloned design
-/// 3. Computes delta-v with degraded performance
-/// 4. Compares to required delta-v for the destination
+/// The ascent is one timeline: the stage groups the first leg of the
+/// route fires (`ascent_groups`), walked event by event
+/// (`ascent_events`), each rolling its engine and rocket flaws. The
+/// first ignition also faces flow separation at pad pressure. A stage
+/// loss ends the walk. The degraded design is then judged against the
+/// route's delta-v. Groups that first fire on a later leg roll in the
+/// flight loop when they do.
 #[allow(clippy::too_many_arguments)] // the three flaw sources plus the balance cut; a bundle struct would just rename them
 pub fn simulate_launch(
     design: &RocketDesign,
@@ -309,99 +466,64 @@ pub fn simulate_launch(
     flight_cfg: &crate::balance_config::FlightConfig,
     nozzle_cfg: &crate::balance_config::NozzleConfig,
 ) -> LaunchSimResult {
-    let mut rocket_flaw_discoveries: Vec<usize> = Vec::new();
-
-    // Compute required delta-v for the destination using the stage-aware
-    // planner (so e.g. an ion upper stage uses spiral dv on transfers).
+    let from = "earth_surface";
     let required_dv = crate::location::DELTA_V_MAP
-        .shortest_path_for_rocket("earth_surface", destination, design, payload_kg)
+        .shortest_path_for_rocket(from, destination, design, payload_kg)
         .map(|(_, dv)| dv)
         .unwrap_or(f64::INFINITY);
 
-    // Only roll flaws for the first stage group (group 0) at launch.
-    // Upper stage flaws are rolled mid-flight when those stages actually fire.
-    let groups_needed: usize = if design.stage_groups.is_empty() { 0 } else { 1 };
+    let groups = ascent_groups(design, destination, payload_kg, from);
+    let ambient = crate::location::DELTA_V_MAP.surface_properties(from)
+        .filter(|p| p.has_atmosphere)
+        .map_or(0.0, |p| p.ambient_pressure_pa);
 
-    // Clone the design so we can degrade it
+    let engines = engine_flaw_table(engine_projects, contracted_engines);
+    // The snapshot's owner id is a placeholder: discoveries leave here
+    // by flaw id and the caller knows whose rocket it is.
+    let rockets = rocket_flaw_table(RocketProjectId(0), rocket_flaws);
+
     let mut degraded = design.clone();
+    let mut activations: Vec<FlawActivation> = Vec::new();
+    let mut engine_discoveries: Vec<(FlawOwner, usize)> = Vec::new();
+    let mut rocket_flaw_discoveries: Vec<FlawId> = Vec::new();
 
-    // Engine flaws on the firing groups. Reactor flaws are NOT rolled
-    // here: a reactor runs from flight start, so its flaws roll in the
-    // flight loop (once at flight start for PerFlight, daily for PerDay)
-    // rather than at stage ignition.
-    let firing: Vec<(usize, usize)> = (0..groups_needed)
-        .flat_map(|gi| (0..design.stage_groups[gi].len()).map(move |si| (gi, si)))
-        .collect();
-    let table = engine_flaw_table(engine_projects, contracted_engines);
-    let engine_roll = roll_engine_flaws(rng, &mut degraded, &firing, &table);
-    let mut activations = engine_roll.activations;
-    let engine_discoveries = engine_roll.discoveries;
-    // Once a StageLoss activates the vehicle is gone — nothing after the
-    // loss can be observed, so a launch discovers at most one
-    // rocket-destroying flaw and rolls no overexpansion risk.
-    let mut vehicle_lost = engine_roll.lost.is_some();
-
-    // Roll the rocket's per-flight flaws — only target groups that will
-    // fire. Endurance (`PerDay`) flaws are not a launch event: their
-    // chance is over a year of service, and they roll daily in flight
-    // (`roll_endurance_flaws`). Rolling them here once at that yearly
-    // chance made wear a launch failure.
-    if !vehicle_lost {
-        for (fi, flaw) in rocket_flaws.iter().enumerate() {
-            if flaw.trigger != FlawTrigger::PerFlight {
-                continue;
-            }
-            if rng.gen::<f64>() < flaw.activation_chance {
-                // Pick a random stage group among those that will fire
-                if groups_needed > 0 {
-                    let gi = rng.gen_range(0..groups_needed);
-                    // Pick a random stage within the group
-                    let si = if !degraded.stage_groups[gi].is_empty() {
-                        rng.gen_range(0..degraded.stage_groups[gi].len())
-                    } else { 0 };
-                    let source = degraded.stage_groups[gi].get(si)
-                        .map_or_else(|| rocket_source(&design.name), |s| rocket_source(&s.name));
-                    activations.push(FlawActivation {
-                        flaw_description: flaw.description.clone(),
-                        consequence: flaw.consequence.clone(),
-                        source,
-                    });
-                    apply_consequence_to_stage(&mut degraded, &flaw.consequence, gi, si);
-                    if matches!(flaw.consequence, FlawConsequence::StageLoss) {
-                        rocket_flaw_discoveries.push(fi);
-                        vehicle_lost = true;
-                        break;
-                    }
-                }
-                rocket_flaw_discoveries.push(fi);
+    for event in ascent_events(&groups, ambient > 0.0) {
+        let roll = roll_event_flaws(rng, &mut degraded, event, &engines, &rockets);
+        activations.extend(roll.activations);
+        for (owner, fi, id) in roll.discoveries {
+            match owner {
+                FlawOwner::Engine { .. } => engine_discoveries.push((owner, fi)),
+                FlawOwner::Rocket(_) => rocket_flaw_discoveries.push(id),
+                FlawOwner::Reactor(_) => {}
             }
         }
-    }
-
-    // Check overexpansion destruction risk for first stage group
-    // (burning at sea level, 101325 Pa)
-    let ambient = 101_325.0_f64;
-    if groups_needed > 0 && !vehicle_lost {
-        for stage in degraded.stage_groups[0].iter_mut() {
-            let source = engine_source(&stage.engine.name);
-            let Some(loss) = roll_overexpansion(rng, stage, ambient, nozzle_cfg) else { continue };
-            let total = loss.engines_lost >= loss.engines_before;
-            activations.push(FlawActivation {
-                flaw_description: if total {
-                    format!(
-                        "All {} engine(s) destroyed by flow separation (exit {:.0} kPa at {:.0} kPa ambient)",
-                        loss.engines_before, loss.exit_pressure_pa / 1000.0, ambient / 1000.0,
-                    )
-                } else {
-                    format!(
-                        "{} of {} engine(s) destroyed by flow separation (exit {:.0} kPa at {:.0} kPa ambient)",
-                        loss.engines_lost, loss.engines_before,
-                        loss.exit_pressure_pa / 1000.0, ambient / 1000.0,
-                    )
-                },
-                consequence: if total { FlawConsequence::StageLoss } else { FlawConsequence::EngineLoss },
-                source,
-            });
+        if roll.lost.is_some() {
+            break;
+        }
+        // Flow separation: the first group fires into pad pressure.
+        if event == (FlightEvent::Ignition { group: 0 }) && ambient > 0.0 {
+            for stage in degraded.stage_groups[0].iter_mut() {
+                let source = engine_source(&stage.engine.name);
+                let Some(loss) = roll_overexpansion(rng, stage, ambient, nozzle_cfg) else { continue };
+                let total = loss.engines_lost >= loss.engines_before;
+                activations.push(FlawActivation {
+                    flaw_description: if total {
+                        format!(
+                            "All {} engine(s) destroyed by flow separation (exit {:.0} kPa at {:.0} kPa ambient)",
+                            loss.engines_before, loss.exit_pressure_pa / 1000.0, ambient / 1000.0,
+                        )
+                    } else {
+                        format!(
+                            "{} of {} engine(s) destroyed by flow separation (exit {:.0} kPa at {:.0} kPa ambient)",
+                            loss.engines_lost, loss.engines_before,
+                            loss.exit_pressure_pa / 1000.0, ambient / 1000.0,
+                        )
+                    },
+                    consequence: if total { FlawConsequence::StageLoss } else { FlawConsequence::EngineLoss },
+                    source,
+                    event: Some(event),
+                });
+            }
         }
     }
 
@@ -436,7 +558,7 @@ pub fn simulate_launch(
         degraded_design: degraded,
         engine_discoveries,
         rocket_flaw_discoveries,
-        flaw_rolled_groups: (0..groups_needed).collect(),
+        flaw_rolled_groups: groups.into_iter().collect(),
     }
 }
 
@@ -499,9 +621,16 @@ pub fn apply_consequence_to_stage(
             group[stage_index].engine.isp_s *= 1.0 - frac;
         }
         FlawConsequence::EngineLoss => {
-            // Remove one engine from this specific stage
+            // Remove one engine from this specific stage. A stage with no
+            // engine left is dead weight: without this the planner's
+            // mass-ratio delta-v still counted it, the pad judged the
+            // launch sound, and the flight loop stranded it on a burn
+            // that produced no thrust.
             if group[stage_index].engine_count > 0 {
                 group[stage_index].engine_count -= 1;
+            }
+            if group[stage_index].engine_count == 0 {
+                group[stage_index].disable();
             }
         }
         FlawConsequence::StageLoss => group[stage_index].disable(),
@@ -726,6 +855,7 @@ mod tests {
             activation_chance: 1.0, // guaranteed activation
             discovery_probability: 0.5,
             discovered: false, trigger: FlawTrigger::PerFlight,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         };
         let ep1 = make_engine_project(1, vec![flaw]);
         let ep2 = make_engine_project(2, vec![]);
@@ -754,6 +884,7 @@ mod tests {
             flaw_description: desc.into(),
             consequence: FlawConsequence::PerformanceDegradation(frac),
             source: "Engine Lifter".into(),
+            event: None,
         };
 
         // Nothing activated: the vehicle simply never had the delta-v.
@@ -780,6 +911,7 @@ mod tests {
                 flaw_description: "Engine shutdown".into(),
                 consequence: FlawConsequence::EngineLoss,
                 source: "Engine Lifter".into(),
+                event: None,
             },
         ], 3.0);
         assert!(reason.starts_with("Engine shutdown"), "got {reason:?}");
@@ -797,6 +929,7 @@ mod tests {
             activation_chance: 1.0,
             discovery_probability: 0.5,
             discovered: false, trigger: FlawTrigger::PerFlight,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         };
         let rp = make_rocket_project(design.clone(), vec![]);
         let mut rng = StdRng::seed_from_u64(42);
@@ -829,6 +962,7 @@ mod tests {
             activation_chance: 1.0,
             discovery_probability: 0.5,
             discovered: false, trigger: FlawTrigger::PerFlight,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         };
         let ep1 = make_engine_project(1, vec![flaw]);
         let ep2 = make_engine_project(2, vec![]);
@@ -859,6 +993,7 @@ mod tests {
             activation_chance: 1.0,
             discovery_probability: 0.5,
             discovered: false, trigger: FlawTrigger::PerFlight,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         };
         let rp = make_rocket_project(design.clone(), vec![flaw]);
         let mut rng = StdRng::seed_from_u64(42);
@@ -892,6 +1027,7 @@ mod tests {
             activation_chance: 1.0,
             discovery_probability: 0.5,
             discovered: false, trigger: FlawTrigger::PerDay,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         };
         let rp = make_rocket_project(design.clone(), vec![flaw]);
         for seed in 0..20 {
@@ -977,6 +1113,7 @@ mod tests {
             activation_chance: 0.0,
             discovery_probability: 0.5,
             discovered: false, trigger: FlawTrigger::PerFlight,
+            phase: crate::flaw::FlawPhase::Burn, stage_group: None,
         };
         let ep1 = make_engine_project(1, vec![flaw]);
         let ep2 = make_engine_project(2, vec![]);
@@ -992,5 +1129,89 @@ mod tests {
 
         assert!(result.flaws_activated.is_empty());
         assert!(matches!(result.outcome, LaunchOutcome::Success));
+    }
+
+    #[test]
+    fn ascent_events_walk_the_stack_in_order() {
+        use FlightEvent::*;
+        assert_eq!(
+            ascent_events(&[0, 1], true),
+            vec![Ignition { group: 0 }, MaxQ, Burn { group: 0 }, Separation { group: 0 }, Ignition { group: 1 }, Burn { group: 1 }],
+        );
+        // Leaving an airless body there is no max-Q.
+        assert_eq!(
+            ascent_events(&[0], false),
+            vec![Ignition { group: 0 }, Burn { group: 0 }],
+        );
+        // A group that first fires on a later leg: the one below it lets go first.
+        assert_eq!(
+            ascent_events(&[2], false),
+            vec![Separation { group: 1 }, Ignition { group: 2 }, Burn { group: 2 }],
+        );
+        assert_eq!(Separation { group: 1 }.word(), "S2 separation");
+        assert_eq!(MaxQ.word(), "max-Q");
+    }
+
+    fn rocket_flaw(id: u64, phase: crate::flaw::FlawPhase, group: usize) -> Flaw {
+        Flaw {
+            id: FlawId(id),
+            description: format!("rocket flaw {id}"),
+            consequence: FlawConsequence::PerformanceDegradation(0.01),
+            activation_chance: 1.0, discovery_probability: 0.5, discovered: false,
+            trigger: FlawTrigger::PerFlight,
+            phase, stage_group: Some(group),
+        }
+    }
+
+    /// Each rocket flaw rolls at its own event on its own stage, and
+    /// only when the ascent reaches that event: a separation flaw on
+    /// the top stage never fires on the way up, and max-Q flaws need
+    /// an atmosphere. Engine flaws likewise roll at their phase.
+    #[test]
+    fn flaws_roll_only_at_their_event_and_stage() {
+        use crate::flaw::FlawPhase;
+        let design = make_design();
+        let rockets = rocket_flaw_table(RocketProjectId(1), &[
+            rocket_flaw(1, FlawPhase::Separation, 0),
+            rocket_flaw(2, FlawPhase::Separation, 1),
+            rocket_flaw(3, FlawPhase::MaxQ, 0),
+            rocket_flaw(4, FlawPhase::Ignition, 1),
+        ]);
+        let mut igniter = rocket_flaw(5, FlawPhase::Ignition, 0);
+        igniter.description = "igniter".into();
+        igniter.stage_group = None;
+        let engines = engine_flaw_table(&[make_engine_project(1, vec![igniter])], &[]);
+
+        let fired = |atmosphere: bool| -> Vec<(String, FlightEvent)> {
+            let mut rng = StdRng::seed_from_u64(1);
+            let mut degraded = design.clone();
+            let mut out = Vec::new();
+            for event in ascent_events(&[0, 1], atmosphere) {
+                let roll = roll_event_flaws(&mut rng, &mut degraded, event, &engines, &rockets);
+                out.extend(roll.activations.into_iter().map(|a| (a.flaw_description, a.event.unwrap())));
+            }
+            out
+        };
+        assert_eq!(fired(true), vec![
+            ("igniter".to_string(), FlightEvent::Ignition { group: 0 }),
+            ("rocket flaw 3".to_string(), FlightEvent::MaxQ),
+            ("rocket flaw 1".to_string(), FlightEvent::Separation { group: 0 }),
+            ("rocket flaw 4".to_string(), FlightEvent::Ignition { group: 1 }),
+        ]);
+        assert!(!fired(false).iter().any(|(d, _)| d == "rocket flaw 3"), "no max-Q without an atmosphere");
+    }
+
+    /// A stage group beyond the design (the design was modified after
+    /// the flaw was pinned) rolls on the last group rather than never.
+    #[test]
+    fn a_stage_group_past_the_design_clamps_to_the_last() {
+        use crate::flaw::FlawPhase;
+        let design = make_design();
+        let rockets = rocket_flaw_table(RocketProjectId(1), &[rocket_flaw(1, FlawPhase::Burn, 5)]);
+        let mut rng = StdRng::seed_from_u64(1);
+        let mut degraded = design.clone();
+        let roll = roll_event_flaws(&mut rng, &mut degraded, FlightEvent::Burn { group: 1 }, &[], &rockets);
+        assert_eq!(roll.activations.len(), 1);
+        assert_eq!(roll.discoveries[0].2, FlawId(1));
     }
 }

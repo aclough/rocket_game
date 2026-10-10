@@ -70,7 +70,7 @@ pub(super) fn flaw_line(flaw: &Flaw, kind: ProjectKind) -> Line<'static> {
         _ => flaw.consequence.short_label(),
     };
     Line::from(Span::styled(
-        format!("        ▲ {}: {} ({})", flaw.description, consequence, format_flaw_rate(flaw)),
+        format!("        ▲ {} · {}: {} ({})", flaw.phase_label(), flaw.description, consequence, format_flaw_rate(flaw)),
         Style::default().fg(Color::Red),
     ))
 }
