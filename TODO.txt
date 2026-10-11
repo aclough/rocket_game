@@ -1,5 +1,7 @@
 Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
+[] Double check how tested "Thoroughly Tested", etc are.
+
 [] Investigate dry masses when we go to do re-entry and start adding other
 options to our rocket bodies.
 
