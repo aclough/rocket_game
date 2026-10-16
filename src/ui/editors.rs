@@ -53,8 +53,10 @@ pub(super) fn available_cycle_choices(game: &GameState) -> Vec<CycleChoice> {
         CycleChoice::Cycle(EngineCycle::GasGenerator),
         CycleChoice::Cycle(EngineCycle::Expander),
         CycleChoice::Cycle(EngineCycle::StagedCombustion),
-        CycleChoice::Cycle(EngineCycle::FullFlow),
     ];
+    if game.tech_unlocked(crate::technology::TECH_FULL_FLOW) {
+        choices.push(CycleChoice::Cycle(EngineCycle::FullFlow));
+    }
     if game.tech_unlocked(crate::technology::TECH_NUCLEAR_THERMAL) {
         choices.push(CycleChoice::Cycle(EngineCycle::NuclearThermal));
     }

@@ -285,3 +285,19 @@ technology; a revision attempt finds its deficiency among them; the
 something left. Tests: `a_design_on_two_technologies_inherits_both_lists`,
 `a_single_technology_id_loads_as_a_list`. 727 tests, clippy clean.
 
+**Step 5 — staged combustion and full-flow technologies.**
+`TECH_STAGED_COMBUSTION` (unlocked, difficulty 1, 1–3 deficiencies at
+solvability 0–0.9) is carried by every staged-combustion design;
+`TECH_FULL_FLOW` (locked, rolled yearly at 8 %, difficulty 2) by every
+full-flow design, in place of staged combustion's — the harder cycle
+technology subsumes the easier. `technologies_for(cycle, preset)`
+adds the cycle's technology beside the propellant's, so a methalox
+staged-combustion engine is on two. The editor's Cycle row lists
+full-flow only once its technology has unlocked, as nuclear thermal.
+A save from before either existed gains them on load
+(`ensure_technologies`, generated from its seed). Tests:
+`cycle_technologies_exist_and_are_carried_by_their_cycles`,
+`a_save_without_a_technology_gains_it_on_load`. 729 tests, clippy
+clean; the bot and the incumbent are on neither, the curve is
+unchanged.
+

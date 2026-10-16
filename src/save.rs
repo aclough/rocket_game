@@ -77,6 +77,7 @@ pub fn load_game(path: &Path) -> io::Result<GameState> {
 
     sanitize(&mut state);
     migrate(&mut state, from);
+    ensure_technologies(&mut state);
     // Saves from before the ledger, or written mid-month by an older
     // writer, may have no row for the current month yet.
     state.open_ledger_month();
@@ -621,6 +622,19 @@ fn fill_engine_snapshots_to_v8(state: &mut GameState) {
             }
         }
         fill_payloads(&mut sc.payloads, &engines, &contracted);
+    }
+}
+
+/// A save from before a technology existed gets it on load, generated
+/// from the world seed as a new game would (23_DEFICIENCIES.md §4
+/// added staged combustion and full-flow). Technologies the save has
+/// keep their state.
+fn ensure_technologies(state: &mut GameState) {
+    let generated = crate::technology::generate_technologies(&state.seed, &state.balance.technology);
+    for tech in generated {
+        if !state.technologies.iter().any(|t| t.id == tech.id) {
+            state.technologies.push(tech);
+        }
     }
 }
 
@@ -1239,6 +1253,25 @@ mod tests {
         let loaded = load_game(&path).expect("null loads");
         let _ = fs::remove_file(&path);
         assert!(loaded.player_company.engine_projects[0].technology_ids.is_empty());
+    }
+
+    /// A save written before a technology existed gains it on load.
+    #[test]
+    fn a_save_without_a_technology_gains_it_on_load() {
+        use crate::technology::{TECH_FULL_FLOW, TECH_STAGED_COMBUSTION};
+        let mut state = GameState::with_money("Old".into(), 1_000_000_000.0, 1);
+        state.technologies.retain(|t| t.id != TECH_STAGED_COMBUSTION && t.id != TECH_FULL_FLOW);
+        let path = temp_path();
+        save_game(&state, &path).unwrap();
+        let loaded = load_game(&path).expect("loads");
+        let _ = fs::remove_file(&path);
+        let sc = loaded.technologies.iter().find(|t| t.id == TECH_STAGED_COMBUSTION).expect("added on load");
+        assert!(sc.unlocked);
+        assert!(!loaded.technologies.iter().find(|t| t.id == TECH_FULL_FLOW).unwrap().unlocked);
+        // Deterministic from the seed: the same world gets the same list.
+        let fresh = GameState::new("New".into(), 1);
+        let fresh_sc = fresh.technologies.iter().find(|t| t.id == TECH_STAGED_COMBUSTION).unwrap();
+        assert_eq!(sc.deficiencies.len(), fresh_sc.deficiencies.len());
     }
 
     #[test]

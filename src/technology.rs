@@ -105,12 +105,20 @@ impl Technology {
 /// the propellant's, when methane or nuclear hydrogen, and the cycle's
 /// once cycles carry technologies (23_DEFICIENCIES.md §4).
 pub fn technologies_for(
-    _cycle: crate::engine::EngineCycle, preset: crate::engine_project::PropellantPreset,
+    cycle: crate::engine::EngineCycle, preset: crate::engine_project::PropellantPreset,
 ) -> Vec<TechnologyId> {
+    use crate::engine::EngineCycle;
     let mut out = Vec::new();
     match preset {
         crate::engine_project::PropellantPreset::Methalox => out.push(TECH_METHALOX),
         crate::engine_project::PropellantPreset::Hydrogen => out.push(TECH_NUCLEAR_THERMAL),
+        _ => {}
+    }
+    // The harder cycle technology subsumes the easier: a full-flow
+    // engine carries full-flow's deficiencies, not staged combustion's.
+    match cycle {
+        EngineCycle::StagedCombustion => out.push(TECH_STAGED_COMBUSTION),
+        EngineCycle::FullFlow => out.push(TECH_FULL_FLOW),
         _ => {}
     }
     out
@@ -119,6 +127,11 @@ pub fn technologies_for(
 pub const TECH_METHALOX: TechnologyId = TechnologyId(1);
 pub const TECH_NUCLEAR_THERMAL: TechnologyId = TechnologyId(2);
 pub const TECH_FISSION_REACTOR: TechnologyId = TechnologyId(3);
+/// Oxidiser-rich preburners and the pumps that survive them: in 2000
+/// nobody outside Russia had a working one (23_DEFICIENCIES.md §4.1).
+pub const TECH_STAGED_COMBUSTION: TechnologyId = TechnologyId(4);
+/// Full-flow staged combustion: one engine had ever run, on a stand.
+pub const TECH_FULL_FLOW: TechnologyId = TechnologyId(5);
 
 /// Generate technologies for a new game.
 pub fn generate_technologies(seed: &GameSeed, cfg: &TechnologyConfig) -> Vec<Technology> {
@@ -153,6 +166,28 @@ pub fn generate_technologies(seed: &GameSeed, cfg: &TechnologyConfig) -> Vec<Tec
             false, // unlocked by event
             2,     // difficulty 2 (high risk)
             TechDomain::Reactor,
+        ),
+        generate_technology(
+            seed,
+            cfg,
+            TECH_STAGED_COMBUSTION,
+            "Staged Combustion",
+            "Oxidiser-rich preburners driving the pumps — the highest-performance \
+             cycle, and nobody outside Russia has made one work",
+            true,  // unlocked at start
+            1,     // difficulty 1 (moderate risk)
+            TechDomain::Engine,
+        ),
+        generate_technology(
+            seed,
+            cfg,
+            TECH_FULL_FLOW,
+            "Full-Flow Staged Combustion",
+            "Both propellants through their own preburners, gas-gas injection — \
+             one engine has ever run, on a test stand",
+            false, // unlocked by event
+            2,     // difficulty 2 (high risk)
+            TechDomain::Engine,
         ),
     ]
 }
@@ -585,5 +620,26 @@ mod tests {
         assert!(top[1] > 0.75, "worst thrust loss {:.2}", top[1]);
         assert!(top[2] > 1.3, "worst mass gain {:.2}", top[2]);
         assert!(top[3] > 4.5, "worst build time {:.2}", top[3]);
+    }
+
+    /// 23_DEFICIENCIES.md §4.1: staged combustion is a technology from
+    /// the start, full-flow a locked harder one, and a design carries
+    /// the harder cycle's technology rather than both cycle techs.
+    #[test]
+    fn cycle_technologies_exist_and_are_carried_by_their_cycles() {
+        use crate::engine::EngineCycle;
+        use crate::engine_project::PropellantPreset;
+        let techs = generate_technologies(&GameSeed::new(42), &TechnologyConfig::default());
+        let sc = techs.iter().find(|t| t.id == TECH_STAGED_COMBUSTION).unwrap();
+        assert!(sc.unlocked && sc.difficulty == 1 && (1..=3).contains(&sc.deficiencies.len()));
+        let ff = techs.iter().find(|t| t.id == TECH_FULL_FLOW).unwrap();
+        assert!(!ff.unlocked && ff.difficulty == 2 && ff.deficiencies.len() >= 2);
+        for t in [sc, ff] {
+            assert!(t.deficiencies.iter().all(|d| !matches!(d.kind, TechDeficiencyKind::PowerPenalty(_))));
+        }
+        assert_eq!(technologies_for(EngineCycle::GasGenerator, PropellantPreset::Kerolox), vec![]);
+        assert_eq!(technologies_for(EngineCycle::StagedCombustion, PropellantPreset::Kerolox), vec![TECH_STAGED_COMBUSTION]);
+        assert_eq!(technologies_for(EngineCycle::StagedCombustion, PropellantPreset::Methalox), vec![TECH_METHALOX, TECH_STAGED_COMBUSTION]);
+        assert_eq!(technologies_for(EngineCycle::FullFlow, PropellantPreset::Hydrolox), vec![TECH_FULL_FLOW]);
     }
 }
