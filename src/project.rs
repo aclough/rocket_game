@@ -333,6 +333,11 @@ pub struct DesignProject<D: Designable> {
     /// Build orders and the build-cost estimate both read it.
     #[serde(default = "crate::project::unit_multiplier")]
     pub material_cost_multiplier: f64,
+    /// Added to every discovery exponent this project rolls at, flight
+    /// reviews included: 0 unless an unsolved
+    /// `TechDeficiencyKind::HardToTest` says its flaws hide longer.
+    #[serde(default)]
+    pub test_difficulty: u32,
     /// An open flight review: what the last flight exercised, and how
     /// many testing cycles still roll those flaws at the review
     /// exponent (22_FLAWS.md §3.2).
@@ -398,6 +403,7 @@ impl<D: Designable> DesignProject<D> {
             technology_id,
             build_time_multiplier: 1.0,
             material_cost_multiplier: 1.0,
+            test_difficulty: 0,
             flights: 0,
             auto_revise: crate::flaw::auto_revise_default(),
             auto_retrofit: crate::flaw::auto_revise_default(),
@@ -484,8 +490,9 @@ impl<D: Designable> DesignProject<D> {
                     *work_completed -= balance_cfg.work.testing_cycle_work;
                     let review = self.flight_review.clone();
                     let groups = self.design.flaw_stage_groups();
+                    let test_difficulty = self.test_difficulty;
                     let discovered = flaw::roll_discoveries_with_rng(&mut self.flaws, rng, |f| {
-                        Self::discovery_exponent_for(f, review.as_ref(), groups, &balance_cfg.flaws)
+                        Self::discovery_exponent_for(f, review.as_ref(), groups, test_difficulty, &balance_cfg.flaws)
                     });
                     // The review is spent cycle by cycle, whether or not
                     // a cycle finds anything.
@@ -660,14 +667,16 @@ impl<D: Designable> DesignProject<D> {
 
     /// The discovery exponent a testing cycle rolls `flaw` at: the
     /// flight-review exponent while an open review covers it, else its
-    /// exposure class's.
+    /// exposure class's — plus the project's `test_difficulty`, a
+    /// hard-to-test technology's flaws hiding longer either way.
     pub fn discovery_exponent_for(
-        flaw: &Flaw, review: Option<&flaw::FlightReview>, stage_groups: usize, cfg: &FlawsConfig,
+        flaw: &Flaw, review: Option<&flaw::FlightReview>, stage_groups: usize, test_difficulty: u32, cfg: &FlawsConfig,
     ) -> f64 {
-        match review {
+        let base = match review {
             Some(r) if r.covers(flaw, stage_groups) => cfg.discovery_exponent_flight_review,
             _ => cfg.discovery_exponent(flaw.exposure),
-        }
+        };
+        base + test_difficulty as f64
     }
 
     /// A flight just ended: for the next `cfg.flight_review_cycles`

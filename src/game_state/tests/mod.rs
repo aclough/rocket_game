@@ -155,6 +155,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         tech_deficiency_ids: Vec::new(), technology_id: None,
         build_time_multiplier: 1.0,
         material_cost_multiplier: 1.0,
+        test_difficulty: 0,
         flights: 0,
     };
     let ep2 = EngineProject {
@@ -177,6 +178,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         tech_deficiency_ids: Vec::new(), technology_id: None,
         build_time_multiplier: 1.0,
         material_cost_multiplier: 1.0,
+        test_difficulty: 0,
         flights: 0,
     };
 

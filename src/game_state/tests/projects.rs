@@ -296,6 +296,57 @@ fn material_cost_penalty_applies_to_builds_and_reverts_when_solved() {
     assert!(ep.tech_deficiency_ids.is_empty());
 }
 
+/// 23_DEFICIENCIES.md §3.2: a `HardToTest` deficiency raises every
+/// discovery exponent the project rolls at — its flaws hide longer,
+/// in flight review too — and comes off when solved.
+#[test]
+fn hard_to_test_raises_the_discovery_exponents_until_solved() {
+    use crate::engine::EngineCycle;
+    use crate::engine_project::PropellantPreset;
+    use crate::flaw::{FlawExposure, FlawPhase};
+    use crate::project::DesignProject;
+    use crate::technology::{TechDeficiency, TechDeficiencyId, TechDeficiencyKind, TECH_METHALOX};
+
+    let mut gs = GameState::with_money("Htt".into(), 1_000_000_000.0, 3);
+    let tech = gs.technologies.iter_mut().find(|t| t.id == TECH_METHALOX).unwrap();
+    tech.deficiencies = vec![TechDeficiency {
+        id: TechDeficiencyId(992),
+        description: "Instrumentation immature for the combustion regime".into(),
+        kind: TechDeficiencyKind::HardToTest(2),
+        solvability: 1.0,
+        total_attempts: 0,
+    }];
+    let bal = gs.balance.clone();
+    gs.player_company.start_engine_project(
+        "Opaque".into(), EngineCycle::GasGenerator, PropellantPreset::Methalox, 1.0,
+        Some(TECH_METHALOX), &bal,
+    );
+    let pid = gs.player_company.engine_projects[0].project_id;
+    let mut events = Vec::new();
+    gs.apply_new_design_deficiencies::<crate::engine_project::EngineProject>(vec![pid], &mut events);
+    let ep = &gs.player_company.engine_projects[0];
+    assert_eq!(ep.test_difficulty, 2);
+
+    let flaw = crate::flaw::Flaw {
+        id: crate::flaw::FlawId(1), description: String::new(),
+        consequence: crate::flaw::FlawConsequence::EngineLoss, activation_chance: 0.3,
+        discovery_roll: 0.5, discovered: false, trigger: crate::flaw::FlawTrigger::PerFlight,
+        phase: FlawPhase::Burn, stage_group: None, exposure: FlawExposure::Bench,
+    };
+    let exponent = |ep: &crate::engine_project::EngineProject| DesignProject::<crate::engine::EngineDesign>::discovery_exponent_for(
+        &flaw, ep.flight_review.as_ref(), 0, ep.test_difficulty, &bal.flaws,
+    );
+    assert_eq!(exponent(ep), bal.flaws.discovery_exponent_bench + 2.0);
+    let mut reviewed = ep.clone();
+    reviewed.open_flight_review(vec![(FlawPhase::Burn, 0)], false, &bal.flaws);
+    assert_eq!(exponent(&reviewed), bal.flaws.discovery_exponent_flight_review + 2.0, "a review is slower too");
+
+    gs.resolve_tech_attempts::<crate::engine_project::EngineProject>(vec![(pid, TechDeficiencyId(992))], &mut events);
+    let ep = &gs.player_company.engine_projects[0];
+    assert_eq!(ep.test_difficulty, 0);
+    assert_eq!(exponent(ep), bal.flaws.discovery_exponent_bench);
+}
+
 /// 22_FLAWS.md §3.6: solving a deficiency retires it for the company. A
 /// design finished afterwards does not inherit it; one that already
 /// carried it keeps it until its own revision; the cue follows.

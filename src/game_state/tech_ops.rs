@@ -35,6 +35,7 @@ pub(super) trait TechProject {
     fn complexity_mut(&mut self) -> &mut u32;
     fn build_time_multiplier_mut(&mut self) -> &mut f64;
     fn material_cost_multiplier_mut(&mut self) -> &mut f64;
+    fn test_difficulty_mut(&mut self) -> &mut u32;
     fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction);
 }
 
@@ -49,6 +50,7 @@ impl TechProject for EngineProject {
     fn complexity_mut(&mut self) -> &mut u32 { &mut self.complexity }
     fn build_time_multiplier_mut(&mut self) -> &mut f64 { &mut self.build_time_multiplier }
     fn material_cost_multiplier_mut(&mut self) -> &mut f64 { &mut self.material_cost_multiplier }
+    fn test_difficulty_mut(&mut self) -> &mut u32 { &mut self.test_difficulty }
     fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction) {
         self.design.apply_deficiency(kind, dir);
     }
@@ -65,6 +67,7 @@ impl TechProject for ReactorProject {
     fn complexity_mut(&mut self) -> &mut u32 { &mut self.complexity }
     fn build_time_multiplier_mut(&mut self) -> &mut f64 { &mut self.build_time_multiplier }
     fn material_cost_multiplier_mut(&mut self) -> &mut f64 { &mut self.material_cost_multiplier }
+    fn test_difficulty_mut(&mut self) -> &mut u32 { &mut self.test_difficulty }
     fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction) {
         self.design.apply_deficiency(kind, dir);
     }
@@ -105,6 +108,10 @@ impl GameState {
                     }
                     TechDeficiencyKind::BuildTimePenalty(m) => *project.build_time_multiplier_mut() /= m,
                     TechDeficiencyKind::MaterialCostPenalty(m) => *project.material_cost_multiplier_mut() /= m,
+                    TechDeficiencyKind::HardToTest(k) => {
+                        let t = project.test_difficulty_mut();
+                        *t = t.saturating_sub(*k);
+                    }
                     kind => project.apply_deficiency(kind, Direction::Revert),
                 }
                 news.push(GameEvent::project(P::KIND, name, ProjectEvent::RevisionComplete));
@@ -146,6 +153,7 @@ impl GameState {
                     TechDeficiencyKind::ComplexityPenalty(n) => *project.complexity_mut() += n,
                     TechDeficiencyKind::BuildTimePenalty(m) => *project.build_time_multiplier_mut() *= m,
                     TechDeficiencyKind::MaterialCostPenalty(m) => *project.material_cost_multiplier_mut() *= m,
+                    TechDeficiencyKind::HardToTest(k) => *project.test_difficulty_mut() += k,
                     kind => project.apply_deficiency(kind, Direction::Apply),
                 }
             }

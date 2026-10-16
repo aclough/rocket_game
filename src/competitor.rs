@@ -233,6 +233,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             technology_id: None,
             build_time_multiplier: 1.0,
             material_cost_multiplier: 1.0,
+            test_difficulty: 0,
             flights: 0,
         });
         // Mature product line: the learning curve starts well down.

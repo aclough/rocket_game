@@ -262,3 +262,13 @@ materials 12, complexity 10. Display "×1.6 materials". Test:
 `material_cost_penalty_applies_to_builds_and_reverts_when_solved`.
 724 tests, clippy clean.
 
+**Step 3 — `HardToTest(k)`.** New kind for engines and reactors, k =
+1..(1 + d): the project's `test_difficulty` is added to every
+discovery exponent it rolls at (`discovery_exponent_for`), flight
+reviews included, and comes off when solved. Engine kinds now split
+Isp 22 %, mass 18, thrust 18, build time 12, materials 10, hard to
+test 10, complexity 10; reactors power 45, mass 25, hard to test 12,
+complexity 18. Display "+2 test difficulty". Test:
+`hard_to_test_raises_the_discovery_exponents_until_solved`. 725
+tests, clippy clean.
+

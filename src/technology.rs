@@ -33,6 +33,10 @@ pub enum TechDeficiencyKind {
     /// dearer): exotic alloys, a coating only one shop can do, castings
     /// scrapped at high rates (23_DEFICIENCIES.md §3.1). Engine-only.
     MaterialCostPenalty(f64),
+    /// The design's flaws hide longer: every discovery exponent the
+    /// project rolls at is raised by this much, flight reviews
+    /// included (23_DEFICIENCIES.md §3.2). Engines and reactors.
+    HardToTest(u32),
 }
 
 impl std::fmt::Display for TechDeficiencyKind {
@@ -45,6 +49,7 @@ impl std::fmt::Display for TechDeficiencyKind {
             TechDeficiencyKind::ComplexityPenalty(n) => write!(f, "+{} complexity", n),
             TechDeficiencyKind::BuildTimePenalty(m) => write!(f, "×{:.1} build time", m),
             TechDeficiencyKind::MaterialCostPenalty(m) => write!(f, "×{:.1} materials", m),
+            TechDeficiencyKind::HardToTest(k) => write!(f, "+{} test difficulty", k),
         }
     }
 }
@@ -226,35 +231,41 @@ fn engine_deficiency_kind(
     rng: &mut rand::rngs::StdRng,
     cfg: &TechnologyConfig,
 ) -> (TechDeficiencyKind, String) {
-    if roll < 0.25 {
+    if roll < 0.22 {
         (TechDeficiencyKind::IspPenalty(magnitude * cfg.isp_scale), pick_description(rng, &[
             "Incomplete combustion characteristics",
             "Non-optimal mixture ratio range",
             "Nozzle erosion from exhaust products",
         ]))
-    } else if roll < 0.45 {
+    } else if roll < 0.40 {
         (TechDeficiencyKind::MassPenalty(magnitude * cfg.mass_scale), pick_description(rng, &[
             "Heavier propellant handling systems required",
             "Additional thermal management mass",
             "Reinforced injector design needed",
         ]))
-    } else if roll < 0.65 {
+    } else if roll < 0.58 {
         (TechDeficiencyKind::ThrustPenalty(magnitude.min(cfg.thrust_cap)), pick_description(rng, &[
             "Chamber pressure limitations",
             "Propellant feed instabilities",
             "Reduced injector throughput",
         ]))
-    } else if roll < 0.78 {
+    } else if roll < 0.70 {
         (TechDeficiencyKind::BuildTimePenalty(1.0 + cfg.build_time_penalty_scale * magnitude), pick_description(rng, &[
             "Hand-finished combustion chamber",
             "Low-yield manufacturing process",
             "Lengthy per-unit acceptance testing",
         ]))
-    } else if roll < 0.90 {
+    } else if roll < 0.80 {
         (TechDeficiencyKind::MaterialCostPenalty(1.0 + cfg.material_cost_scale * magnitude), pick_description(rng, &[
             "Exotic alloys from a single mill",
             "Coatings only one shop can apply",
             "Precision castings scrapped at high rates",
+        ]))
+    } else if roll < 0.90 {
+        (TechDeficiencyKind::HardToTest(rng.gen_range(1..=1 + difficulty)), pick_description(rng, &[
+            "Instrumentation immature for the combustion regime",
+            "Test stand cannot reproduce flight conditions",
+            "Failure signatures not yet understood",
         ]))
     } else {
         let complexity_add = rng.gen_range(1..=2 + difficulty);
@@ -276,17 +287,23 @@ fn reactor_deficiency_kind(
     rng: &mut rand::rngs::StdRng,
     cfg: &TechnologyConfig,
 ) -> (TechDeficiencyKind, String) {
-    if roll < 0.55 {
+    if roll < 0.45 {
         (TechDeficiencyKind::PowerPenalty(magnitude * cfg.power_scale), pick_description(rng, &[
             "Neutron flux lower than predicted",
             "Fuel element power density shortfall",
             "Control-drum calibration limits output",
         ]))
-    } else if roll < 0.80 {
+    } else if roll < 0.70 {
         (TechDeficiencyKind::MassPenalty(magnitude * cfg.mass_scale), pick_description(rng, &[
             "Heavier radiation shielding required",
             "Oversized radiator for thermal margin",
             "Reinforced pressure vessel needed",
+        ]))
+    } else if roll < 0.82 {
+        (TechDeficiencyKind::HardToTest(rng.gen_range(1..=1 + difficulty)), pick_description(rng, &[
+            "No test facility can run the core at power",
+            "Neutron instrumentation saturates at rated flux",
+            "Transient behaviour only seen at full power",
         ]))
     } else {
         let complexity_add = rng.gen_range(1..=2 + difficulty);
@@ -372,7 +389,8 @@ mod tests {
                 match def.kind {
                     TechDeficiencyKind::PowerPenalty(_) => saw_power = true,
                     TechDeficiencyKind::MassPenalty(_)
-                    | TechDeficiencyKind::ComplexityPenalty(_) => {}
+                    | TechDeficiencyKind::ComplexityPenalty(_)
+                    | TechDeficiencyKind::HardToTest(_) => {}
                     TechDeficiencyKind::IspPenalty(_)
                     | TechDeficiencyKind::ThrustPenalty(_)
                     | TechDeficiencyKind::BuildTimePenalty(_)
@@ -551,6 +569,7 @@ mod tests {
                                 && m <= 1.0 + hi * cfg.material_cost_scale + 1e-9, "materials {m}");
                         }
                         TechDeficiencyKind::ComplexityPenalty(_) => {}
+                        TechDeficiencyKind::HardToTest(k) => assert!((1..=1 + tech.difficulty).contains(&k), "hard to test {k}"),
                     }
                 }
             }

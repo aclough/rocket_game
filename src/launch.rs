@@ -1312,14 +1312,14 @@ mod tests {
         ep.status = DesignStatus::Testing { work_completed: 0.0 };
         ep.teams_assigned = 1;
 
-        let exponent = |ep: &EngineProject| DesignProject::<EngineDesign>::discovery_exponent_for(&flaw, ep.flight_review.as_ref(), 0, &cfg.flaws);
+        let exponent = |ep: &EngineProject| DesignProject::<EngineDesign>::discovery_exponent_for(&flaw, ep.flight_review.as_ref(), 0, ep.test_difficulty, &cfg.flaws);
         assert_eq!(exponent(&ep), cfg.flaws.discovery_exponent_analysis);
         ep.open_flight_review(vec![(FlawPhase::Burn, 0)], false, &cfg.flaws);
         assert_eq!(exponent(&ep), cfg.flaws.discovery_exponent_flight_review);
         // A flaw the flight did not exercise keeps its class exponent.
         let mut other = flaw.clone();
         other.phase = FlawPhase::Separation;
-        assert_eq!(DesignProject::<EngineDesign>::discovery_exponent_for(&other, ep.flight_review.as_ref(), 0, &cfg.flaws),
+        assert_eq!(DesignProject::<EngineDesign>::discovery_exponent_for(&other, ep.flight_review.as_ref(), 0, ep.test_difficulty, &cfg.flaws),
             cfg.flaws.discovery_exponent_analysis);
 
         let mut rng = StdRng::seed_from_u64(1);
