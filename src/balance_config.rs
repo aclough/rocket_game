@@ -1349,11 +1349,30 @@ pub struct TechnologyConfig {
     /// Solvability is drawn from `(−d·p) .. (1 − d·p)` and floored at 0,
     /// for difficulty `d` and this penalty `p`.
     pub solvability_penalty_per_difficulty: f64,
-    /// A deficiency's magnitude is drawn from `base + d·step` up to that
-    /// plus `span`.
+    /// A deficiency's magnitude draw `m` runs from `base + d·step` up to
+    /// `base + span + d·span_step` for difficulty `d`: the low
+    /// end rises gently with difficulty, the high end a lot
+    /// (23_DEFICIENCIES.md §2: at the top of difficulty 2 a technology
+    /// is essentially unusable until the deficiency is revised out).
+    /// Each kind scales the draw by its own factor below.
     pub deficiency_magnitude_base: f64,
     pub deficiency_magnitude_per_difficulty: f64,
     pub deficiency_magnitude_span: f64,
+    #[serde(default = "default_magnitude_span_per_difficulty")]
+    pub deficiency_magnitude_span_per_difficulty: f64,
+    /// Isp lost is `isp_scale × m`: ten per cent off Isp is a different
+    /// engine, so Isp takes less of the draw than mass does.
+    #[serde(default = "default_isp_scale")]
+    pub isp_scale: f64,
+    /// Thrust lost is `m`, but never more than this fraction.
+    #[serde(default = "default_thrust_cap")]
+    pub thrust_cap: f64,
+    /// Mass added is `mass_scale × m`.
+    #[serde(default = "default_mass_scale")]
+    pub mass_scale: f64,
+    /// Reactor power lost is `power_scale × m`.
+    #[serde(default = "default_power_scale")]
+    pub power_scale: f64,
     /// A deficiency another project already solved is this many times
     /// as likely to fall on the next attempt…
     pub solved_elsewhere_multiplier: f64,
@@ -1369,6 +1388,21 @@ pub struct TechnologyConfig {
 
 fn default_build_time_penalty_scale() -> f64 {
     4.0
+}
+fn default_magnitude_span_per_difficulty() -> f64 {
+    0.25
+}
+fn default_isp_scale() -> f64 {
+    0.4
+}
+fn default_thrust_cap() -> f64 {
+    0.8
+}
+fn default_mass_scale() -> f64 {
+    1.5
+}
+fn default_power_scale() -> f64 {
+    0.7
 }
 
 impl TechnologyConfig {
@@ -1393,13 +1427,29 @@ impl Default for TechnologyConfig {
                 DeficiencyCount { min: 2, max: 4 },
             ],
             solvability_penalty_per_difficulty: 0.1,
-            deficiency_magnitude_base: 0.05,
+            deficiency_magnitude_base: 0.10,
             deficiency_magnitude_per_difficulty: 0.05,
-            deficiency_magnitude_span: 0.15,
+            deficiency_magnitude_span: 0.40,
+            deficiency_magnitude_span_per_difficulty: default_magnitude_span_per_difficulty(),
+            isp_scale: default_isp_scale(),
+            thrust_cap: default_thrust_cap(),
+            mass_scale: default_mass_scale(),
+            power_scale: default_power_scale(),
             solved_elsewhere_multiplier: 3.0,
             solve_chance_cap: 0.95,
             build_time_penalty_scale: default_build_time_penalty_scale(),
         }
+    }
+}
+
+impl TechnologyConfig {
+    /// The magnitude draw's range for a difficulty: `(low, high)`.
+    pub fn magnitude_range(&self, difficulty: u32) -> (f64, f64) {
+        let d = difficulty as f64;
+        let low = self.deficiency_magnitude_base + d * self.deficiency_magnitude_per_difficulty;
+        let high = self.deficiency_magnitude_base + self.deficiency_magnitude_span
+            + d * self.deficiency_magnitude_span_per_difficulty;
+        (low, high.max(low + 0.01))
     }
 }
 

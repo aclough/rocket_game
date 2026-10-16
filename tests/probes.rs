@@ -14,6 +14,7 @@
 //! | `falcon9` | Falcon 9 replicas through the game's models: where the payload goes |
 //! | `engines` | each surveyed real engine beside its game analogue: TWR, Isp, cost, build time |
 //! | `testing_cadence` | how long the bot tests each project before its first launch, and what it found |
+//! | `deficiencies` | every deficiency of every technology for a few seeds: kind, magnitude, solvability |
 //!
 //! `seed_fairness::measure_year1_distribution` stays with the floors it
 //! re-derives: it is defined by that suite's own `achievable` filter,
@@ -890,3 +891,30 @@ mod first_launch_outcomes {
         println!("{scrubs:>4}  scrubs before the first launch (not counted as launches)");
     }
 }
+
+mod deficiencies {
+    //! What a world's technologies carry: every deficiency of every
+    //! technology for a handful of seeds, with kind, magnitude and
+    //! solvability (23_DEFICIENCIES.md).
+
+    use rocket_tycoon::balance_config::BalanceConfig;
+    use rocket_tycoon::seed::GameSeed;
+    use rocket_tycoon::technology::generate_technologies;
+
+    #[test]
+    #[ignore]
+    fn a_worlds_deficiencies() {
+        let cfg = BalanceConfig::default().technology;
+        for seed in [1u64, 7, 42, 100] {
+            println!("── seed {seed}");
+            for tech in generate_technologies(&GameSeed::new(seed), &cfg) {
+                println!("  {} (difficulty {}, {} deficienc{})", tech.name, tech.difficulty,
+                    tech.deficiencies.len(), if tech.deficiencies.len() == 1 { "y" } else { "ies" });
+                for d in &tech.deficiencies {
+                    println!("    {:<44} {:<16} solvability {:.2}", d.description, d.kind.to_string(), d.solvability);
+                }
+            }
+        }
+    }
+}
+

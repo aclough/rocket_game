@@ -191,15 +191,16 @@ fn generate_deficiencies(
         let raw_solvability = solvability_offset + rng.gen::<f64>() * solvability_range;
         let solvability = raw_solvability.max(0.0);
 
-        // Pick deficiency kind and magnitude (higher difficulty = bigger penalties)
-        let base_magnitude = cfg.deficiency_magnitude_base
-            + difficulty as f64 * cfg.deficiency_magnitude_per_difficulty;
-        let magnitude = rng.gen_range(base_magnitude..(base_magnitude + cfg.deficiency_magnitude_span));
+        // Pick deficiency kind and magnitude: the draw's floor rises a
+        // little with difficulty and its ceiling a lot, and each kind
+        // scales it (23_DEFICIENCIES.md §2).
+        let (low, high) = cfg.magnitude_range(difficulty);
+        let magnitude = rng.gen_range(low..high);
 
         let roll: f64 = rng.gen();
         let (kind, description) = match domain {
             TechDomain::Engine => engine_deficiency_kind(roll, magnitude, difficulty, rng, cfg),
-            TechDomain::Reactor => reactor_deficiency_kind(roll, magnitude, difficulty, rng),
+            TechDomain::Reactor => reactor_deficiency_kind(roll, magnitude, difficulty, rng, cfg),
         };
 
         TechDeficiency {
@@ -221,19 +222,19 @@ fn engine_deficiency_kind(
     cfg: &TechnologyConfig,
 ) -> (TechDeficiencyKind, String) {
     if roll < 0.25 {
-        (TechDeficiencyKind::IspPenalty(magnitude), pick_description(rng, &[
+        (TechDeficiencyKind::IspPenalty(magnitude * cfg.isp_scale), pick_description(rng, &[
             "Incomplete combustion characteristics",
             "Non-optimal mixture ratio range",
             "Nozzle erosion from exhaust products",
         ]))
     } else if roll < 0.45 {
-        (TechDeficiencyKind::MassPenalty(magnitude), pick_description(rng, &[
+        (TechDeficiencyKind::MassPenalty(magnitude * cfg.mass_scale), pick_description(rng, &[
             "Heavier propellant handling systems required",
             "Additional thermal management mass",
             "Reinforced injector design needed",
         ]))
     } else if roll < 0.65 {
-        (TechDeficiencyKind::ThrustPenalty(magnitude), pick_description(rng, &[
+        (TechDeficiencyKind::ThrustPenalty(magnitude.min(cfg.thrust_cap)), pick_description(rng, &[
             "Chamber pressure limitations",
             "Propellant feed instabilities",
             "Reduced injector throughput",
@@ -262,15 +263,16 @@ fn reactor_deficiency_kind(
     magnitude: f64,
     difficulty: u32,
     rng: &mut rand::rngs::StdRng,
+    cfg: &TechnologyConfig,
 ) -> (TechDeficiencyKind, String) {
     if roll < 0.55 {
-        (TechDeficiencyKind::PowerPenalty(magnitude), pick_description(rng, &[
+        (TechDeficiencyKind::PowerPenalty(magnitude * cfg.power_scale), pick_description(rng, &[
             "Neutron flux lower than predicted",
             "Fuel element power density shortfall",
             "Control-drum calibration limits output",
         ]))
     } else if roll < 0.80 {
-        (TechDeficiencyKind::MassPenalty(magnitude), pick_description(rng, &[
+        (TechDeficiencyKind::MassPenalty(magnitude * cfg.mass_scale), pick_description(rng, &[
             "Heavier radiation shielding required",
             "Oversized radiator for thermal margin",
             "Reinforced pressure vessel needed",
@@ -384,7 +386,8 @@ mod tests {
                 for def in &tech.deficiencies {
                     if let TechDeficiencyKind::BuildTimePenalty(m) = def.kind {
                         seen += 1;
-                        assert!((1.2..=2.4 + 1e-9).contains(&m), "multiplier {m}");
+                        // d0 1.4–3.0, d2 1.8–5.0 (23_DEFICIENCIES.md §2).
+                        assert!((1.4..=5.0 + 1e-9).contains(&m), "multiplier {m}");
                     }
                 }
             }
@@ -498,5 +501,48 @@ mod tests {
         assert!(successes_with > successes_without * 2,
             "Solved elsewhere should greatly boost success: {} vs {}",
             successes_with, successes_without);
+    }
+
+    /// 23_DEFICIENCIES.md §2: each kind lands in its own band, and the
+    /// bands widen with difficulty so the top of difficulty 2 is an
+    /// engine that is essentially unusable until revised.
+    #[test]
+    fn magnitudes_land_in_their_kinds_bands() {
+        let cfg = TechnologyConfig::default();
+        assert_eq!(cfg.magnitude_range(0), (0.10, 0.50));
+        assert_eq!(cfg.magnitude_range(2), (0.20, 1.0));
+        let mut top = [0.0f64; 4]; // isp, thrust, mass, build time
+        for s in 0..400 {
+            let techs = generate_technologies(&GameSeed::new(s), &cfg);
+            for tech in &techs {
+                let (lo, hi) = cfg.magnitude_range(tech.difficulty);
+                for def in &tech.deficiencies {
+                    match def.kind {
+                        TechDeficiencyKind::IspPenalty(f) => {
+                            assert!(f >= lo * cfg.isp_scale - 1e-9 && f <= hi * cfg.isp_scale + 1e-9, "isp {f}");
+                            top[0] = top[0].max(f);
+                        }
+                        TechDeficiencyKind::ThrustPenalty(f) => {
+                            assert!(f >= lo - 1e-9 && f <= cfg.thrust_cap + 1e-9, "thrust {f}");
+                            top[1] = top[1].max(f);
+                        }
+                        TechDeficiencyKind::MassPenalty(f) => {
+                            assert!(f >= lo * cfg.mass_scale - 1e-9 && f <= hi * cfg.mass_scale + 1e-9, "mass {f}");
+                            top[2] = top[2].max(f);
+                        }
+                        TechDeficiencyKind::PowerPenalty(f) => {
+                            assert!(f >= lo * cfg.power_scale - 1e-9 && f <= hi * cfg.power_scale + 1e-9, "power {f}");
+                        }
+                        TechDeficiencyKind::BuildTimePenalty(m) => top[3] = top[3].max(m),
+                        TechDeficiencyKind::ComplexityPenalty(_) => {}
+                    }
+                }
+            }
+        }
+        // The worst of 400 worlds reaches the brutal end of difficulty 2.
+        assert!(top[0] > 0.35, "worst Isp loss {:.2}", top[0]);
+        assert!(top[1] > 0.75, "worst thrust loss {:.2}", top[1]);
+        assert!(top[2] > 1.3, "worst mass gain {:.2}", top[2]);
+        assert!(top[3] > 4.5, "worst build time {:.2}", top[3]);
     }
 }
