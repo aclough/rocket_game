@@ -287,6 +287,24 @@ pub trait Designable: Clone + fmt::Debug {
     fn apply_deficiency(&mut self, kind: &TechDeficiencyKind, dir: Direction);
 }
 
+/// Accept both shapes of a project's technologies: the old single
+/// `technology_id` (an id or null) and the current list.
+fn de_technology_ids<'de, D>(d: D) -> Result<Vec<TechnologyId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        Many(Vec<TechnologyId>),
+        One(Option<TechnologyId>),
+    }
+    Ok(match Either::deserialize(d)? {
+        Either::Many(ids) => ids,
+        Either::One(id) => id.into_iter().collect(),
+    })
+}
+
 /// A design and its workflow state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "D: Designable + Serialize + DeserializeOwned")]
@@ -319,9 +337,12 @@ pub struct DesignProject<D: Designable> {
     /// `Technology.deficiencies`).
     #[serde(default)]
     pub tech_deficiency_ids: Vec<TechDeficiencyId>,
-    /// Which technology this design uses (if experimental).
-    #[serde(default)]
-    pub technology_id: Option<TechnologyId>,
+    /// The experimental technologies this design is on — a methalox
+    /// staged-combustion engine is on two — whose unsolved deficiencies
+    /// it inherits when its design completes (23_DEFICIENCIES.md §4.3).
+    /// Saves before the list held one `technology_id` or none.
+    #[serde(default, alias = "technology_id", deserialize_with = "de_technology_ids")]
+    pub technology_ids: Vec<TechnologyId>,
     /// Multiplier on the work to build one unit of this design: 1 unless
     /// an unsolved `TechDeficiencyKind::BuildTimePenalty` stretches it
     /// (hand-finished parts, a low-yield process). Build orders and the
@@ -382,7 +403,7 @@ impl<D: Designable> DesignProject<D> {
         spec: D::Spec,
         complexity: u32,
         work_required: f64,
-        technology_id: Option<TechnologyId>,
+        technology_ids: Vec<TechnologyId>,
     ) -> Self {
         DesignProject {
             project_id,
@@ -400,7 +421,7 @@ impl<D: Designable> DesignProject<D> {
             next_improvement_id: crate::id::IdAllocator::default(),
             cumulative_testing_work: 0.0,
             tech_deficiency_ids: Vec::new(),
-            technology_id,
+            technology_ids,
             build_time_multiplier: 1.0,
             material_cost_multiplier: 1.0,
             test_difficulty: 0,

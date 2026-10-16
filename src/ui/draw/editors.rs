@@ -60,9 +60,10 @@ pub(super) fn draw_engine_editor_modal(
     let company_unsolved = |tech: &crate::technology::Technology| {
         !tech.unsolved_for(&app.game.player_company.solved_deficiencies).is_empty()
     };
-    if let Some(tech) = ep.technology_id
-        .and_then(|id| app.game.technologies.iter().find(|t| t.id == id))
-        .filter(|tech| company_unsolved(tech) || !ep.tech_deficiency_ids.is_empty())
+    // One line per technology the draft is on with something to solve.
+    for tech in app.game.technologies.iter()
+        .filter(|t| ep.technology_ids.contains(&t.id))
+        .filter(|tech| company_unsolved(tech) || tech.deficiencies.iter().any(|d| ep.tech_deficiency_ids.contains(&d.id)))
     {
         let risk = match tech.difficulty {
             0 => "low risk",
@@ -75,11 +76,13 @@ pub(super) fn draw_engine_editor_modal(
                 | crate::engine_project::EngineDesignStatus::InDesign { .. }
         ) {
             "deficiencies show when designed".to_string()
-        } else if ep.tech_deficiency_ids.is_empty() {
-            "no deficiencies left to solve".to_string()
         } else {
-            format!("{} deficienc{} to revise out", ep.tech_deficiency_ids.len(),
-                if ep.tech_deficiency_ids.len() == 1 { "y" } else { "ies" })
+            let left = tech.deficiencies.iter().filter(|d| ep.tech_deficiency_ids.contains(&d.id)).count();
+            if left == 0 {
+                "no deficiencies left to solve".to_string()
+            } else {
+                format!("{} deficienc{} to revise out", left, if left == 1 { "y" } else { "ies" })
+            }
         };
         lines.push(Line::from(Span::styled(
             format!("   ⚗ Experimental {} ({}): {}", tech.name, risk, detail),

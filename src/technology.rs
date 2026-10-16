@@ -101,13 +101,19 @@ impl Technology {
 
 // ── Well-known technology IDs ──
 
-/// Look up the technology ID for a propellant preset, if it's experimental.
-pub fn technology_for_preset(preset: crate::engine_project::PropellantPreset) -> Option<TechnologyId> {
+/// The experimental technologies a (cycle, propellant) family is on:
+/// the propellant's, when methane or nuclear hydrogen, and the cycle's
+/// once cycles carry technologies (23_DEFICIENCIES.md §4).
+pub fn technologies_for(
+    _cycle: crate::engine::EngineCycle, preset: crate::engine_project::PropellantPreset,
+) -> Vec<TechnologyId> {
+    let mut out = Vec::new();
     match preset {
-        crate::engine_project::PropellantPreset::Methalox => Some(TECH_METHALOX),
-        crate::engine_project::PropellantPreset::Hydrogen => Some(TECH_NUCLEAR_THERMAL),
-        _ => None,
+        crate::engine_project::PropellantPreset::Methalox => out.push(TECH_METHALOX),
+        crate::engine_project::PropellantPreset::Hydrogen => out.push(TECH_NUCLEAR_THERMAL),
+        _ => {}
     }
+    out
 }
 
 pub const TECH_METHALOX: TechnologyId = TechnologyId(1);

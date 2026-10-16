@@ -230,7 +230,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
             next_improvement_id: crate::id::IdAllocator::default(),
             cumulative_testing_work: 0.0,
             tech_deficiency_ids: Vec::new(),
-            technology_id: None,
+            technology_ids: Vec::new(),
             build_time_multiplier: 1.0,
             material_cost_multiplier: 1.0,
             test_difficulty: 0,

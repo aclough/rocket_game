@@ -796,7 +796,8 @@ impl EngineProject {
         let design = baseline.design(engine_id, name, cycle, preset, scale, false, &balance_cfg.nozzle);
         let size = scale * default_size(cycle, preset, &balance_cfg.nozzle)?;
         Some(DesignProject::new_in_design(
-            project_id, design, EngineSpec { preset, size }, complexity, work_required, None,
+            project_id, design, EngineSpec { preset, size }, complexity, work_required,
+            crate::technology::technologies_for(cycle, preset),
         ))
     }
 
@@ -853,7 +854,7 @@ impl EngineProject {
         // methalox is a methalox engine and inherits that technology's
         // deficiencies when its design completes. (Every engine starts as
         // kerolox, so without this no edited engine ever did.)
-        self.technology_id = crate::technology::technology_for_preset(preset);
+        self.technology_ids = crate::technology::technologies_for(cycle, preset);
         self.complexity = complexity;
         self.clamp_work_after_edit(work_required);
         true
@@ -1566,10 +1567,10 @@ mod tests {
     #[test]
     fn editing_the_propellant_sets_the_technology() {
         let mut p = create_test_project();
-        assert_eq!(p.technology_id, None);
+        assert!(p.technology_ids.is_empty());
         assert!(p.apply_edit("E".into(), EngineCycle::GasGenerator, PropellantPreset::Methalox, 1.0, &bal()));
-        assert_eq!(p.technology_id, Some(crate::technology::TECH_METHALOX));
+        assert_eq!(p.technology_ids, vec![crate::technology::TECH_METHALOX]);
         assert!(p.apply_edit("E".into(), EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, &bal()));
-        assert_eq!(p.technology_id, None);
+        assert!(p.technology_ids.is_empty());
     }
 }

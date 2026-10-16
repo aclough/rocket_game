@@ -347,6 +347,44 @@ fn hard_to_test_raises_the_discovery_exponents_until_solved() {
     assert_eq!(exponent(ep), bal.flaws.discovery_exponent_bench);
 }
 
+/// 23_DEFICIENCIES.md §4.3: a design on two technologies inherits the
+/// unsolved deficiencies of both, and solving one technology's leaves
+/// the other's where it is.
+#[test]
+fn a_design_on_two_technologies_inherits_both_lists() {
+    use crate::engine::EngineCycle;
+    use crate::engine_project::PropellantPreset;
+    use crate::technology::{TechDeficiency, TechDeficiencyId, TechDeficiencyKind, TECH_METHALOX, TECH_NUCLEAR_THERMAL};
+
+    let mut gs = GameState::with_money("Two".into(), 1_000_000_000.0, 3);
+    let def = |id: u64, text: &str| TechDeficiency {
+        id: TechDeficiencyId(id), description: text.into(),
+        kind: TechDeficiencyKind::MassPenalty(0.2), solvability: 1.0, total_attempts: 0,
+    };
+    gs.technologies.iter_mut().find(|t| t.id == TECH_METHALOX).unwrap().deficiencies = vec![def(990, "Methane coking")];
+    gs.technologies.iter_mut().find(|t| t.id == TECH_NUCLEAR_THERMAL).unwrap().deficiencies = vec![def(1990, "Fuel element cracking")];
+    let bal = gs.balance.clone();
+    // Methalox by family, nuclear thermal added on top (the way a cycle
+    // technology will be): on both.
+    gs.player_company.start_engine_project(
+        "Both".into(), EngineCycle::GasGenerator, PropellantPreset::Methalox, 1.0, Some(TECH_NUCLEAR_THERMAL), &bal,
+    );
+    let pid = gs.player_company.engine_projects[0].project_id;
+    assert_eq!(gs.player_company.engine_projects[0].technology_ids, vec![TECH_METHALOX, TECH_NUCLEAR_THERMAL]);
+    let mut events = Vec::new();
+    gs.apply_new_design_deficiencies::<crate::engine_project::EngineProject>(vec![pid], &mut events);
+    let ep = &gs.player_company.engine_projects[0];
+    assert_eq!(ep.tech_deficiency_ids, vec![TechDeficiencyId(990), TechDeficiencyId(1990)]);
+    assert!((ep.design.mass_kg / (1.2 * 1.2) - gs.player_company.engine_projects[0].design.mass_kg / 1.44).abs() < 1e-6);
+    let found = events.iter().filter(|e| matches!(e, GameEvent::Project { event: crate::event::ProjectEvent::TechDeficienciesFound { .. }, .. })).count();
+    assert_eq!(found, 2, "one notice per technology");
+
+    gs.resolve_tech_attempts::<crate::engine_project::EngineProject>(vec![(pid, TechDeficiencyId(1990))], &mut events);
+    let ep = &gs.player_company.engine_projects[0];
+    assert_eq!(ep.tech_deficiency_ids, vec![TechDeficiencyId(990)], "methane's is still there");
+    assert!(gs.player_company.solved_deficiencies.contains(&TechDeficiencyId(1990)));
+}
+
 /// 22_FLAWS.md §3.6: solving a deficiency retires it for the company. A
 /// design finished afterwards does not inherit it; one that already
 /// carried it keeps it until its own revision; the cue follows.

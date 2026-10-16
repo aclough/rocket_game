@@ -18,11 +18,15 @@ impl Company {
         let project_id = self.next_project_id.mint();
         let engine_id = self.next_engine_id.mint();
 
+        // The family decides the technologies; `technology_id` adds one
+        // beyond them (a tech the family does not imply, in tests).
         let mut project = EngineProject::new(
             project_id, engine_id, name.clone(),
             cycle, preset, scale, balance_cfg,
         )?;
-        project.technology_id = technology_id;
+        if let Some(id) = technology_id.filter(|id| !project.technology_ids.contains(id)) {
+            project.technology_ids.push(id);
+        }
         self.engine_projects.push(project);
         Some(GameEvent::project(crate::project::ProjectKind::Engine, name, ProjectEvent::DesignStarted))
     }
@@ -48,7 +52,9 @@ impl Company {
             project_id, engine_id, name,
             cycle, preset, scale, balance_cfg,
         )?;
-        project.technology_id = technology_id;
+        if let Some(id) = technology_id.filter(|id| !project.technology_ids.contains(id)) {
+            project.technology_ids.push(id);
+        }
         self.engine_projects.push(project);
         Some(project_id)
     }

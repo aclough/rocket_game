@@ -874,10 +874,9 @@ impl App {
                     let cycle = EngineCycle::GasGenerator;
                     let preset = PropellantPreset::Kerolox;
                     let scale = crate::engine_project::DEFAULT_SCALE;
-                    let tech_id = crate::technology::technology_for_preset(preset);
                     let project_id = match self.game.player_company
                         .start_proposed_engine_project(
-                            default_name, cycle, preset, scale, tech_id,
+                            default_name, cycle, preset, scale, None,
                             &self.game.balance,
                         )
                     {

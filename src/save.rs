@@ -1211,6 +1211,36 @@ mod tests {
         assert_eq!(loaded.player_company.solved_deficiencies.len(), 1);
     }
 
+    /// A project's single `technology_id` (an id or null) loads as its
+    /// list of technologies.
+    #[test]
+    fn a_single_technology_id_loads_as_a_list() {
+        use crate::technology::TECH_METHALOX;
+        let mut state = GameState::with_money("One".into(), 1_000_000_000.0, 1);
+        state.player_company.start_engine_project(
+            "Old".into(), crate::engine::EngineCycle::GasGenerator,
+            crate::engine_project::PropellantPreset::Kerolox, 0.2, None, &state.balance,
+        );
+        let mut raw = serde_json::to_value(&state).unwrap();
+        let ep = &mut raw["player_company"]["engine_projects"][0];
+        ep.as_object_mut().unwrap().remove("technology_ids");
+        ep["technology_id"] = serde_json::json!(TECH_METHALOX.0);
+        let path = temp_path();
+        fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
+        let loaded = load_game(&path).expect("old shape loads");
+        let _ = fs::remove_file(&path);
+        assert_eq!(loaded.player_company.engine_projects[0].technology_ids, vec![TECH_METHALOX]);
+
+        let mut raw = serde_json::to_value(&state).unwrap();
+        let ep = &mut raw["player_company"]["engine_projects"][0];
+        ep.as_object_mut().unwrap().remove("technology_ids");
+        ep["technology_id"] = serde_json::Value::Null;
+        fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
+        let loaded = load_game(&path).expect("null loads");
+        let _ = fs::remove_file(&path);
+        assert!(loaded.player_company.engine_projects[0].technology_ids.is_empty());
+    }
+
     #[test]
     fn v7_built_units_take_their_engines_snapshots() {
         use crate::flaw::{Flaw, FlawConsequence, FlawId, FlawPhase, FlawTrigger};

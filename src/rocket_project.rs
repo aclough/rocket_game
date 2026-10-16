@@ -78,7 +78,7 @@ impl RocketProject {
         let (total_stages, unique_engines, max_parallel) = design_stats(&design);
         let complexity = balance::rocket_complexity(total_stages, unique_engines, max_parallel);
         let work_required = balance_cfg.work.rocket_design_work_required(complexity);
-        DesignProject::new_in_design(project_id, design, NoSpec {}, complexity, work_required, None)
+        DesignProject::new_in_design(project_id, design, NoSpec {}, complexity, work_required, Vec::new())
     }
 
 }

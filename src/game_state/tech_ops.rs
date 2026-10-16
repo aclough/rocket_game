@@ -30,7 +30,7 @@ pub(super) trait TechProject {
 
     fn id(&self) -> Self::Id;
     fn name(&self) -> &str;
-    fn technology_id(&self) -> Option<TechnologyId>;
+    fn technology_ids(&self) -> &[TechnologyId];
     fn tech_deficiency_ids_mut(&mut self) -> &mut Vec<TechDeficiencyId>;
     fn complexity_mut(&mut self) -> &mut u32;
     fn build_time_multiplier_mut(&mut self) -> &mut f64;
@@ -45,7 +45,7 @@ impl TechProject for EngineProject {
     const KIND: ProjectKind = ProjectKind::Engine;
     fn id(&self) -> Self::Id { self.project_id }
     fn name(&self) -> &str { &self.design.name }
-    fn technology_id(&self) -> Option<TechnologyId> { self.technology_id }
+    fn technology_ids(&self) -> &[TechnologyId] { &self.technology_ids }
     fn tech_deficiency_ids_mut(&mut self) -> &mut Vec<TechDeficiencyId> { &mut self.tech_deficiency_ids }
     fn complexity_mut(&mut self) -> &mut u32 { &mut self.complexity }
     fn build_time_multiplier_mut(&mut self) -> &mut f64 { &mut self.build_time_multiplier }
@@ -62,7 +62,7 @@ impl TechProject for ReactorProject {
     const KIND: ProjectKind = ProjectKind::Reactor;
     fn id(&self) -> Self::Id { self.project_id }
     fn name(&self) -> &str { &self.design.name }
-    fn technology_id(&self) -> Option<TechnologyId> { self.technology_id }
+    fn technology_ids(&self) -> &[TechnologyId] { &self.technology_ids }
     fn tech_deficiency_ids_mut(&mut self) -> &mut Vec<TechDeficiencyId> { &mut self.tech_deficiency_ids }
     fn complexity_mut(&mut self) -> &mut u32 { &mut self.complexity }
     fn build_time_multiplier_mut(&mut self) -> &mut f64 { &mut self.build_time_multiplier }
@@ -91,8 +91,11 @@ impl GameState {
             let Some(project) = P::list(&mut self.player_company).iter_mut().find(|p| p.id() == pid) else {
                 continue;
             };
-            let Some(tech_id) = project.technology_id() else { continue };
-            let Some(tech) = self.technologies.iter_mut().find(|t| t.id == tech_id) else { continue };
+            // The deficiency belongs to one of the project's technologies.
+            let tech_ids = project.technology_ids().to_vec();
+            let Some(tech) = self.technologies.iter_mut()
+                .find(|t| tech_ids.contains(&t.id) && t.deficiencies.iter().any(|d| d.id == def_id))
+            else { continue };
             let Some(def) = tech.deficiencies.iter_mut().find(|d| d.id == def_id) else { continue };
             let already_solved = solved_before.contains(&def_id);
             let name = project.name().to_string();
@@ -143,34 +146,38 @@ impl GameState {
             let Some(project) = P::list(&mut self.player_company).iter_mut().find(|p| p.id() == pid) else {
                 continue;
             };
-            let Some(tech_id) = project.technology_id() else { continue };
-            let Some(tech) = self.technologies.iter().find(|t| t.id == tech_id) else { continue };
-            // Only what this company has not solved yet: a solved
-            // deficiency is retired for every design it makes from here.
-            let pending = tech.unsolved_for(&solved);
-            for def in &pending {
-                match &def.kind {
-                    TechDeficiencyKind::ComplexityPenalty(n) => *project.complexity_mut() += n,
-                    TechDeficiencyKind::BuildTimePenalty(m) => *project.build_time_multiplier_mut() *= m,
-                    TechDeficiencyKind::MaterialCostPenalty(m) => *project.material_cost_multiplier_mut() *= m,
-                    TechDeficiencyKind::HardToTest(k) => *project.test_difficulty_mut() += k,
-                    kind => project.apply_deficiency(kind, Direction::Apply),
+            // Every technology the design is on, each contributing what
+            // this company has not solved yet: a solved deficiency is
+            // retired for every design it makes from here.
+            let tech_ids = project.technology_ids().to_vec();
+            let mut all_ids = Vec::new();
+            for tech in self.technologies.iter().filter(|t| tech_ids.contains(&t.id)) {
+                let pending = tech.unsolved_for(&solved);
+                for def in &pending {
+                    match &def.kind {
+                        TechDeficiencyKind::ComplexityPenalty(n) => *project.complexity_mut() += n,
+                        TechDeficiencyKind::BuildTimePenalty(m) => *project.build_time_multiplier_mut() *= m,
+                        TechDeficiencyKind::MaterialCostPenalty(m) => *project.material_cost_multiplier_mut() *= m,
+                        TechDeficiencyKind::HardToTest(k) => *project.test_difficulty_mut() += k,
+                        kind => project.apply_deficiency(kind, Direction::Apply),
+                    }
+                }
+                all_ids.extend(pending.iter().map(|d| d.id));
+                let desc: Vec<String> = pending.iter()
+                    .map(|d| format!("{}: {}", d.description, d.kind))
+                    .collect();
+                if !desc.is_empty() {
+                    news.push(GameEvent::project(
+                        P::KIND,
+                        project.name(),
+                        ProjectEvent::TechDeficienciesFound {
+                            tech_name: tech.name.clone(),
+                            deficiencies: desc.join(", "),
+                        },
+                    ));
                 }
             }
-            *project.tech_deficiency_ids_mut() = pending.iter().map(|d| d.id).collect();
-            let desc: Vec<String> = pending.iter()
-                .map(|d| format!("{}: {}", d.description, d.kind))
-                .collect();
-            if !desc.is_empty() {
-                news.push(GameEvent::project(
-                    P::KIND,
-                    project.name(),
-                    ProjectEvent::TechDeficienciesFound {
-                        tech_name: tech.name.clone(),
-                        deficiencies: desc.join(", "),
-                    },
-                ));
-            }
+            *project.tech_deficiency_ids_mut() = all_ids;
         }
         self.emit_all(events, news);
     }

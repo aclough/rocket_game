@@ -272,3 +272,16 @@ complexity 18. Display "+2 test difficulty". Test:
 `hard_to_test_raises_the_discovery_exponents_until_solved`. 725
 tests, clippy clean.
 
+**Step 4 — `technology_ids`.** `DesignProject::technology_id:
+Option<TechnologyId>` is `technology_ids: Vec<TechnologyId>`; a
+deserializer accepts the old key in either shape (an id or null).
+`technologies_for(cycle, preset)` replaces `technology_for_preset`
+and is what the engine constructors and the family editor set (the
+`Option` on `start_engine_project` now *adds* a technology beyond the
+family's, for tests). A design completing inherits the unsolved
+deficiencies of every technology it is on, with one notice per
+technology; a revision attempt finds its deficiency among them; the
+⚗ cue and the designer's tech lines name every technology with
+something left. Tests: `a_design_on_two_technologies_inherits_both_lists`,
+`a_single_technology_id_loads_as_a_list`. 727 tests, clippy clean.
+

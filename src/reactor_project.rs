@@ -151,7 +151,7 @@ impl ReactorProject {
         let work_required = reactor_design_work_required(complexity, balance_cfg);
         DesignProject::new_in_design(
             project_id, design, NoSpec {}, complexity, work_required,
-            Some(crate::technology::TECH_FISSION_REACTOR),
+            vec![crate::technology::TECH_FISSION_REACTOR],
         )
     }
 
@@ -217,7 +217,7 @@ mod tests {
             _ => panic!("expected InDesign"),
         }
         assert_eq!(p.teams_assigned, 0);
-        assert_eq!(p.technology_id, Some(crate::technology::TECH_FISSION_REACTOR));
+        assert_eq!(p.technology_ids, vec![crate::technology::TECH_FISSION_REACTOR]);
     }
 
     #[test]

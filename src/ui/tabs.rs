@@ -160,9 +160,8 @@ impl App {
                 let n = self.game.player_company.engine_projects.len() + 1;
                 let name = format!("Engine Mk{}", n);
                 let preset = PropellantPreset::Kerolox;
-                let tech_id = crate::technology::technology_for_preset(preset);
                 match self.game.player_company.start_proposed_engine_project(
-                    name, EngineCycle::GasGenerator, preset, DEFAULT_SCALE, tech_id,
+                    name, EngineCycle::GasGenerator, preset, DEFAULT_SCALE, None,
                     &self.game.balance,
                 ) {
                     Some(pid) => {

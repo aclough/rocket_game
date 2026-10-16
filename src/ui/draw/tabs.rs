@@ -125,27 +125,31 @@ pub(super) fn push_tech_deficiency_lines<D: Designable>(
     if project.tech_deficiency_ids.is_empty() {
         return;
     }
-    let Some(tech) = project.technology_id
-        .and_then(|id| technologies.iter().find(|t| t.id == id))
-    else {
-        return;
-    };
-    lines.push(Line::from(format!("      Tech deficiencies ({}):", tech.name)));
-    for def_id in &project.tech_deficiency_ids {
-        let Some(def) = tech.deficiencies.iter().find(|d| d.id == *def_id) else { continue };
-        let status = if solved.contains(&def.id) {
-            "(solved on another design — easy fix)".to_string()
-        } else if def.total_attempts > 0 {
-            format!("({} failed attempt{})",
-                def.total_attempts,
-                if def.total_attempts == 1 { "" } else { "s" })
-        } else {
-            String::new()
-        };
-        lines.push(Line::from(Span::styled(
-            format!("        ◆ {}: {} {}", def.description, def.kind, status),
-            Style::default().fg(Color::Magenta),
-        )));
+    // One block per technology the design is on that still has
+    // something left on it.
+    for tech in technologies.iter().filter(|t| project.technology_ids.contains(&t.id)) {
+        let remaining: Vec<&crate::technology::TechDeficiency> = project.tech_deficiency_ids.iter()
+            .filter_map(|id| tech.deficiencies.iter().find(|d| d.id == *id))
+            .collect();
+        if remaining.is_empty() {
+            continue;
+        }
+        lines.push(Line::from(format!("      Tech deficiencies ({}):", tech.name)));
+        for def in remaining {
+            let status = if solved.contains(&def.id) {
+                "(solved on another design — easy fix)".to_string()
+            } else if def.total_attempts > 0 {
+                format!("({} failed attempt{})",
+                    def.total_attempts,
+                    if def.total_attempts == 1 { "" } else { "s" })
+            } else {
+                String::new()
+            };
+            lines.push(Line::from(Span::styled(
+                format!("        ◆ {}: {} {}", def.description, def.kind, status),
+                Style::default().fg(Color::Magenta),
+            )));
+        }
     }
 }
 
@@ -207,13 +211,16 @@ pub(super) fn draw_engines_tab(frame: &mut Frame, app: &App, area: Rect, border_
             legend,
         )));
         // Experimental while the design still carries a deficiency of
-        // its technology; once they are all revised out the cue goes.
-        if let Some(tech) = project.technology_id
-            .filter(|_| !project.tech_deficiency_ids.is_empty())
-            .and_then(|id| app.game.technologies.iter().find(|t| t.id == id))
-        {
+        // one of its technologies; once they are all revised out the
+        // cue goes. Names the technologies with something left.
+        let experimental: Vec<&str> = app.game.technologies.iter()
+            .filter(|t| project.technology_ids.contains(&t.id)
+                && t.deficiencies.iter().any(|d| project.tech_deficiency_ids.contains(&d.id)))
+            .map(|t| t.name.as_str())
+            .collect();
+        if !experimental.is_empty() {
             lines.push(Line::from(Span::styled(
-                format!("      ⚗ Experimental: {}", tech.name),
+                format!("      ⚗ Experimental: {}", experimental.join(", ")),
                 Style::default().fg(Color::Magenta),
             )));
         }
