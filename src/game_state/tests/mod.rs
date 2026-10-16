@@ -154,6 +154,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         nre_cost: 0.0, improvements: Vec::new(), next_improvement_id: crate::id::IdAllocator::default(), cumulative_testing_work: 0.0,
         tech_deficiency_ids: Vec::new(), technology_id: None,
         build_time_multiplier: 1.0,
+        material_cost_multiplier: 1.0,
         flights: 0,
     };
     let ep2 = EngineProject {
@@ -175,6 +176,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         nre_cost: 0.0, improvements: Vec::new(), next_improvement_id: crate::id::IdAllocator::default(), cumulative_testing_work: 0.0,
         tech_deficiency_ids: Vec::new(), technology_id: None,
         build_time_multiplier: 1.0,
+        material_cost_multiplier: 1.0,
         flights: 0,
     };
 

@@ -185,6 +185,7 @@ impl ManufacturingOrder {
         complexity: u32,
         preset: crate::engine_project::PropellantPreset,
         build_time_multiplier: f64,
+        material_cost_multiplier: f64,
         prior_builds: u32,
         revision: u32,
         flaws: Vec<crate::flaw::Flaw>,
@@ -197,7 +198,7 @@ impl ManufacturingOrder {
         let learning = balance_cfg.work.learning_curve_multiplier(prior_builds);
         let material_cost = resources::engine_material_cost(
             preset, engine_mass_kg, &balance_cfg.costs.resource_prices,
-        ) * learning;
+        ) * learning * material_cost_multiplier;
         ManufacturingOrder {
             id,
             order_type: ManufacturingOrderType::Engine {
@@ -755,7 +756,7 @@ mod tests {
             "Merlin".into(),
             500.0,
             6,
-            crate::engine_project::PropellantPreset::Kerolox, 1.0,
+            crate::engine_project::PropellantPreset::Kerolox, 1.0, 1.0,
             0,
             0, Vec::new(), Vec::new(),
             &bal(),
@@ -803,14 +804,14 @@ mod tests {
         let first = ManufacturingOrder::new_engine(
             ManufacturingOrderId(1), test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
-            crate::engine_project::PropellantPreset::Kerolox, 1.0, 0,
+            crate::engine_project::PropellantPreset::Kerolox, 1.0, 1.0, 0,
             0, Vec::new(), Vec::new(),
             &bal(),
         );
         let tenth = ManufacturingOrder::new_engine(
             ManufacturingOrderId(2), test_source(), EngineId(2),
             "Merlin".into(), 500.0, 6,
-            crate::engine_project::PropellantPreset::Kerolox, 1.0, 10,
+            crate::engine_project::PropellantPreset::Kerolox, 1.0, 1.0, 10,
             0, Vec::new(), Vec::new(),
             &bal(),
         );
@@ -827,7 +828,7 @@ mod tests {
         let mut order = ManufacturingOrder::new_engine(
             id, test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
-            crate::engine_project::PropellantPreset::Kerolox, 1.0, 0,
+            crate::engine_project::PropellantPreset::Kerolox, 1.0, 1.0, 0,
             0, Vec::new(), Vec::new(),
             &bal(),
         );
@@ -916,7 +917,7 @@ mod tests {
         let mut order = ManufacturingOrder::new_engine(
             ManufacturingOrderId(1), test_source(), EngineId(1),
             "Merlin".into(), 500.0, 6,
-            crate::engine_project::PropellantPreset::Kerolox, 1.0, 0,
+            crate::engine_project::PropellantPreset::Kerolox, 1.0, 1.0, 0,
             0, Vec::new(), Vec::new(),
             &bal(),
         );

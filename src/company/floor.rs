@@ -380,7 +380,7 @@ impl Company {
                                 *prior += 1;
                                 crate::resources::engine_material_cost(
                                     ep.spec.preset, stage.engine.mass_kg, prices,
-                                ) * learning
+                                ) * learning * ep.material_cost_multiplier
                             }),
                         Some(EngineSource::Contracted(ce_id)) => self.contracted_engines.iter()
                             .find(|ce| ce.id == ce_id)

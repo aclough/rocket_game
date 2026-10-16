@@ -239,7 +239,7 @@ fn build_time_penalty_applies_to_builds_and_reverts_when_solved() {
     let order = crate::manufacturing::ManufacturingOrder::new_engine(
         crate::manufacturing::ManufacturingOrderId(1),
         crate::engine_project::EngineSource::PlayerDesign(pid), ep.design.id, ep.design.name.clone(),
-        ep.design.mass_kg, ep.complexity, PropellantPreset::Methalox, ep.build_time_multiplier, 0,
+        ep.design.mass_kg, ep.complexity, PropellantPreset::Methalox, ep.build_time_multiplier, ep.material_cost_multiplier, 0,
         0, Vec::new(), Vec::new(), &bal,
     );
     assert!((order.work_required - 2.0 * plain).abs() < 1e-9);
@@ -248,6 +248,51 @@ fn build_time_penalty_applies_to_builds_and_reverts_when_solved() {
     gs.resolve_tech_attempts::<crate::engine_project::EngineProject>(vec![(pid, TechDeficiencyId(990))], &mut events);
     let ep = &gs.player_company.engine_projects[0];
     assert_eq!(ep.build_time_multiplier, 1.0);
+    assert!(ep.tech_deficiency_ids.is_empty());
+}
+
+/// 23_DEFICIENCIES.md §3.1: a `MaterialCostPenalty` multiplies the bill
+/// of materials of every unit of the design it lands on, shows in the
+/// build estimate, and comes off when a revision solves it.
+#[test]
+fn material_cost_penalty_applies_to_builds_and_reverts_when_solved() {
+    use crate::engine::EngineCycle;
+    use crate::engine_project::PropellantPreset;
+    use crate::technology::{TechDeficiency, TechDeficiencyId, TechDeficiencyKind, TECH_METHALOX};
+
+    let mut gs = GameState::with_money("Mcp".into(), 1_000_000_000.0, 3);
+    let tech = gs.technologies.iter_mut().find(|t| t.id == TECH_METHALOX).unwrap();
+    tech.deficiencies = vec![TechDeficiency {
+        id: TechDeficiencyId(991),
+        description: "Exotic alloys from a single mill".into(),
+        kind: TechDeficiencyKind::MaterialCostPenalty(1.6),
+        solvability: 1.0,
+        total_attempts: 0,
+    }];
+    let bal = gs.balance.clone();
+    gs.player_company.start_engine_project(
+        "Alloyed".into(), EngineCycle::GasGenerator, PropellantPreset::Methalox, 1.0,
+        Some(TECH_METHALOX), &bal,
+    );
+    let pid = gs.player_company.engine_projects[0].project_id;
+    let mut events = Vec::new();
+    gs.apply_new_design_deficiencies::<crate::engine_project::EngineProject>(vec![pid], &mut events);
+    let ep = &gs.player_company.engine_projects[0];
+    assert!((ep.material_cost_multiplier - 1.6).abs() < 1e-9);
+    assert_eq!(ep.build_time_multiplier, 1.0, "materials, not labour");
+
+    let plain = crate::resources::engine_material_cost(PropellantPreset::Methalox, ep.design.mass_kg, &bal.costs.resource_prices);
+    let order = crate::manufacturing::ManufacturingOrder::new_engine(
+        crate::manufacturing::ManufacturingOrderId(1),
+        crate::engine_project::EngineSource::PlayerDesign(pid), ep.design.id, ep.design.name.clone(),
+        ep.design.mass_kg, ep.complexity, PropellantPreset::Methalox, ep.build_time_multiplier,
+        ep.material_cost_multiplier, 0, 0, Vec::new(), Vec::new(), &bal,
+    );
+    assert!((order.material_cost - 1.6 * plain).abs() < 1e-6, "{} vs {}", order.material_cost, 1.6 * plain);
+
+    gs.resolve_tech_attempts::<crate::engine_project::EngineProject>(vec![(pid, TechDeficiencyId(991))], &mut events);
+    let ep = &gs.player_company.engine_projects[0];
+    assert!((ep.material_cost_multiplier - 1.0).abs() < 1e-9);
     assert!(ep.tech_deficiency_ids.is_empty());
 }
 

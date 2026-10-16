@@ -328,6 +328,11 @@ pub struct DesignProject<D: Designable> {
     /// build-cost estimate both read it, so labour cost follows.
     #[serde(default = "crate::project::unit_multiplier")]
     pub build_time_multiplier: f64,
+    /// Multiplier on the bill of materials of one unit: 1 unless an
+    /// unsolved `TechDeficiencyKind::MaterialCostPenalty` raises it.
+    /// Build orders and the build-cost estimate both read it.
+    #[serde(default = "crate::project::unit_multiplier")]
+    pub material_cost_multiplier: f64,
     /// An open flight review: what the last flight exercised, and how
     /// many testing cycles still roll those flaws at the review
     /// exponent (22_FLAWS.md §3.2).
@@ -392,6 +397,7 @@ impl<D: Designable> DesignProject<D> {
             tech_deficiency_ids: Vec::new(),
             technology_id,
             build_time_multiplier: 1.0,
+            material_cost_multiplier: 1.0,
             flights: 0,
             auto_revise: crate::flaw::auto_revise_default(),
             auto_retrofit: crate::flaw::auto_revise_default(),

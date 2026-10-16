@@ -250,3 +250,15 @@ end (−35 % Isp, −75 % thrust, +130 % mass, ×4.5 build time); the
 `deficiencies` probe prints a few worlds. 723 tests, clippy clean. The
 bot is on no technology, so the curve and bands are untouched.
 
+**Step 2 — `MaterialCostPenalty`.** New kind, engine-only, ×(1 +
+`material_cost_scale` (2.0) × m): ×1.2–2.0 at difficulty 0, up to ×3
+at the top of difficulty 2. Lives on the project as
+`material_cost_multiplier` beside `build_time_multiplier`; applied and
+reverted in `tech_ops`; priced into every engine build order
+(`ManufacturingOrder::new_engine` takes it) and the designer's and
+Engines pane's build-cost estimate (`estimated_build_cost`). The
+engine kind table is now Isp 25 %, mass 20, thrust 20, build time 13,
+materials 12, complexity 10. Display "×1.6 materials". Test:
+`material_cost_penalty_applies_to_builds_and_reverts_when_solved`.
+724 tests, clippy clean.
+

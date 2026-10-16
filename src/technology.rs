@@ -29,6 +29,10 @@ pub enum TechDeficiencyKind {
     /// hand-finished parts, a low-yield process. Build time is labour, so
     /// it is also unit cost (21_ENGINES.md step 6). Engine-only.
     BuildTimePenalty(f64),
+    /// Multiplies the bill of materials of each unit (e.g. 1.6 = 60 %
+    /// dearer): exotic alloys, a coating only one shop can do, castings
+    /// scrapped at high rates (23_DEFICIENCIES.md §3.1). Engine-only.
+    MaterialCostPenalty(f64),
 }
 
 impl std::fmt::Display for TechDeficiencyKind {
@@ -40,6 +44,7 @@ impl std::fmt::Display for TechDeficiencyKind {
             TechDeficiencyKind::PowerPenalty(frac) => write!(f, "-{:.0}% power", frac * 100.0),
             TechDeficiencyKind::ComplexityPenalty(n) => write!(f, "+{} complexity", n),
             TechDeficiencyKind::BuildTimePenalty(m) => write!(f, "×{:.1} build time", m),
+            TechDeficiencyKind::MaterialCostPenalty(m) => write!(f, "×{:.1} materials", m),
         }
     }
 }
@@ -239,11 +244,17 @@ fn engine_deficiency_kind(
             "Propellant feed instabilities",
             "Reduced injector throughput",
         ]))
-    } else if roll < 0.85 {
+    } else if roll < 0.78 {
         (TechDeficiencyKind::BuildTimePenalty(1.0 + cfg.build_time_penalty_scale * magnitude), pick_description(rng, &[
             "Hand-finished combustion chamber",
             "Low-yield manufacturing process",
             "Lengthy per-unit acceptance testing",
+        ]))
+    } else if roll < 0.90 {
+        (TechDeficiencyKind::MaterialCostPenalty(1.0 + cfg.material_cost_scale * magnitude), pick_description(rng, &[
+            "Exotic alloys from a single mill",
+            "Coatings only one shop can apply",
+            "Precision castings scrapped at high rates",
         ]))
     } else {
         let complexity_add = rng.gen_range(1..=2 + difficulty);
@@ -364,7 +375,8 @@ mod tests {
                     | TechDeficiencyKind::ComplexityPenalty(_) => {}
                     TechDeficiencyKind::IspPenalty(_)
                     | TechDeficiencyKind::ThrustPenalty(_)
-                    | TechDeficiencyKind::BuildTimePenalty(_) => {
+                    | TechDeficiencyKind::BuildTimePenalty(_)
+                    | TechDeficiencyKind::MaterialCostPenalty(_) => {
                         panic!("reactor tech produced an engine-only deficiency kind: {:?}", def.kind);
                     }
                 }
@@ -534,6 +546,10 @@ mod tests {
                             assert!(f >= lo * cfg.power_scale - 1e-9 && f <= hi * cfg.power_scale + 1e-9, "power {f}");
                         }
                         TechDeficiencyKind::BuildTimePenalty(m) => top[3] = top[3].max(m),
+                        TechDeficiencyKind::MaterialCostPenalty(m) => {
+                            assert!(m >= 1.0 + lo * cfg.material_cost_scale - 1e-9
+                                && m <= 1.0 + hi * cfg.material_cost_scale + 1e-9, "materials {m}");
+                        }
                         TechDeficiencyKind::ComplexityPenalty(_) => {}
                     }
                 }

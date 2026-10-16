@@ -202,6 +202,7 @@ impl Company {
                                     ep.complexity,
                                     ep.spec.preset,
                                     ep.build_time_multiplier,
+                                    ep.material_cost_multiplier,
                                     engine_prior,
                                     ep.revision,
                                     ep.flaws.clone(),
@@ -317,6 +318,7 @@ impl Company {
         let complexity = ep.complexity;
         let preset = ep.spec.preset;
         let build_time_multiplier = ep.build_time_multiplier;
+        let material_cost_multiplier = ep.material_cost_multiplier;
         let revision = ep.revision;
         let flaws = ep.flaws.clone();
         let improvements: Vec<_> = ep.improvements.iter().filter(|i| i.actualized).cloned().collect();
@@ -332,6 +334,7 @@ impl Company {
             complexity,
             preset,
             build_time_multiplier,
+            material_cost_multiplier,
             engine_prior,
             revision,
             flaws,
