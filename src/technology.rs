@@ -37,6 +37,11 @@ pub enum TechDeficiencyKind {
     /// project rolls at is raised by this much, flight reviews
     /// included (23_DEFICIENCIES.md §3.2). Engines and reactors.
     HardToTest(u32),
+    /// An electric thruster draws this fraction more power per newton
+    /// (e.g. 0.5 = ×1.5 `power_draw_w`): panels size up with it and a
+    /// stage that was fine is power-starved until it is solved
+    /// (23_DEFICIENCIES.md §3.3). Electric-only.
+    PowerDrawPenalty(f64),
 }
 
 impl std::fmt::Display for TechDeficiencyKind {
@@ -50,6 +55,7 @@ impl std::fmt::Display for TechDeficiencyKind {
             TechDeficiencyKind::BuildTimePenalty(m) => write!(f, "×{:.1} build time", m),
             TechDeficiencyKind::MaterialCostPenalty(m) => write!(f, "×{:.1} materials", m),
             TechDeficiencyKind::HardToTest(k) => write!(f, "+{} test difficulty", k),
+            TechDeficiencyKind::PowerDrawPenalty(frac) => write!(f, "+{:.0}% power draw", frac * 100.0),
         }
     }
 }
@@ -57,11 +63,14 @@ impl std::fmt::Display for TechDeficiencyKind {
 /// Which family of parts a technology's deficiencies apply to. Selects
 /// the pool of deficiency *kinds* generated at game start: engine techs
 /// draw from Isp/Mass/Thrust/Complexity, reactor techs from
-/// Power/Mass/Complexity (Isp/Thrust are meaningless for a power source).
+/// Power/Mass/Complexity (Isp/Thrust are meaningless for a power source),
+/// electric techs from PowerDraw/Thrust/Mass/Materials/HardToTest
+/// (no Isp, no build time: the thruster is simple, the power is not).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TechDomain {
     Engine,
     Reactor,
+    Electric,
 }
 
 /// A deficiency inherent to a technology, determined by the game seed.
@@ -119,6 +128,7 @@ pub fn technologies_for(
     match cycle {
         EngineCycle::StagedCombustion => out.push(TECH_STAGED_COMBUSTION),
         EngineCycle::FullFlow => out.push(TECH_FULL_FLOW),
+        EngineCycle::ElectricPropulsion => out.push(TECH_ELECTRIC),
         _ => {}
     }
     out
@@ -132,6 +142,9 @@ pub const TECH_FISSION_REACTOR: TechnologyId = TechnologyId(3);
 pub const TECH_STAGED_COMBUSTION: TechnologyId = TechnologyId(4);
 /// Full-flow staged combustion: one engine had ever run, on a stand.
 pub const TECH_FULL_FLOW: TechnologyId = TechnologyId(5);
+/// Electric propulsion: ion and Hall thrusters had flown, but as
+/// station-keeping, not as the drive (23_DEFICIENCIES.md §4.2).
+pub const TECH_ELECTRIC: TechnologyId = TechnologyId(6);
 
 /// Generate technologies for a new game.
 pub fn generate_technologies(seed: &GameSeed, cfg: &TechnologyConfig) -> Vec<Technology> {
@@ -188,6 +201,17 @@ pub fn generate_technologies(seed: &GameSeed, cfg: &TechnologyConfig) -> Vec<Tec
             false, // unlocked by event
             2,     // difficulty 2 (high risk)
             TechDomain::Engine,
+        ),
+        generate_technology(
+            seed,
+            cfg,
+            TECH_ELECTRIC,
+            "Electric Propulsion",
+            "Ion and Hall thrusters as the main drive — a few have flown for \
+             station-keeping, none has pushed a spacecraft anywhere",
+            true,  // unlocked at start
+            1,     // difficulty 1 (moderate risk)
+            TechDomain::Electric,
         ),
     ]
 }
@@ -252,6 +276,7 @@ fn generate_deficiencies(
         let (kind, description) = match domain {
             TechDomain::Engine => engine_deficiency_kind(roll, magnitude, difficulty, rng, cfg),
             TechDomain::Reactor => reactor_deficiency_kind(roll, magnitude, difficulty, rng, cfg),
+            TechDomain::Electric => electric_deficiency_kind(roll, magnitude, difficulty, rng, cfg),
         };
 
         TechDeficiency {
@@ -356,6 +381,57 @@ fn reactor_deficiency_kind(
     }
 }
 
+/// Electric-domain deficiency kinds: PowerDraw / Thrust / Mass /
+/// Materials / HardToTest / Complexity. Isp is what the family is for
+/// and the thruster itself is cheap to build, so neither is a kind here;
+/// the primary-stat hit is power per newton (23_DEFICIENCIES.md §4.2).
+fn electric_deficiency_kind(
+    roll: f64,
+    magnitude: f64,
+    difficulty: u32,
+    rng: &mut rand::rngs::StdRng,
+    cfg: &TechnologyConfig,
+) -> (TechDeficiencyKind, String) {
+    if roll < 0.40 {
+        (TechDeficiencyKind::PowerDrawPenalty(magnitude * cfg.power_draw_scale), pick_description(rng, &[
+            "Power processing unit losses far above design",
+            "Beam divergence wastes accelerated propellant",
+            "Cathode heater draws power at all throttle settings",
+        ]))
+    } else if roll < 0.55 {
+        (TechDeficiencyKind::ThrustPenalty(magnitude.min(cfg.thrust_cap)), pick_description(rng, &[
+            "Grid erosion limits beam current",
+            "Discharge instabilities cap the throttle",
+            "Propellant feed cannot hold flow at full power",
+        ]))
+    } else if roll < 0.70 {
+        (TechDeficiencyKind::MassPenalty(magnitude * cfg.mass_scale), pick_description(rng, &[
+            "Power processing unit heavier than planned",
+            "Oversized radiators for the thruster's waste heat",
+            "Magnetic circuit needs more iron than modelled",
+        ]))
+    } else if roll < 0.80 {
+        (TechDeficiencyKind::MaterialCostPenalty(1.0 + cfg.material_cost_scale * magnitude), pick_description(rng, &[
+            "Grids machined from a single supplier's molybdenum",
+            "Hollow cathode inserts from one laboratory",
+            "High-voltage components screened at low yield",
+        ]))
+    } else if roll < 0.90 {
+        (TechDeficiencyKind::HardToTest(rng.gen_range(1..=1 + difficulty)), pick_description(rng, &[
+            "Vacuum chamber backpressure masks true performance",
+            "Thousand-hour wear-out only shows in flight",
+            "Facility effects on the plume not understood",
+        ]))
+    } else {
+        let complexity_add = rng.gen_range(1..=2 + difficulty);
+        (TechDeficiencyKind::ComplexityPenalty(complexity_add), pick_description(rng, &[
+            "High-voltage isolation immature",
+            "Thruster-spacecraft interactions poorly understood",
+            "Propellant management at micro-flow rates",
+        ]))
+    }
+}
+
 fn pick_description(rng: &mut rand::rngs::StdRng, options: &[&str]) -> String {
     options[rng.gen_range(0..options.len())].to_string()
 }
@@ -435,7 +511,8 @@ mod tests {
                     TechDeficiencyKind::IspPenalty(_)
                     | TechDeficiencyKind::ThrustPenalty(_)
                     | TechDeficiencyKind::BuildTimePenalty(_)
-                    | TechDeficiencyKind::MaterialCostPenalty(_) => {
+                    | TechDeficiencyKind::MaterialCostPenalty(_)
+                    | TechDeficiencyKind::PowerDrawPenalty(_) => {
                         panic!("reactor tech produced an engine-only deficiency kind: {:?}", def.kind);
                     }
                 }
@@ -611,6 +688,9 @@ mod tests {
                         }
                         TechDeficiencyKind::ComplexityPenalty(_) => {}
                         TechDeficiencyKind::HardToTest(k) => assert!((1..=1 + tech.difficulty).contains(&k), "hard to test {k}"),
+                        TechDeficiencyKind::PowerDrawPenalty(f) => {
+                            assert!(f >= lo * cfg.power_draw_scale - 1e-9 && f <= hi * cfg.power_draw_scale + 1e-9, "power draw {f}");
+                        }
                     }
                 }
             }
@@ -620,6 +700,38 @@ mod tests {
         assert!(top[1] > 0.75, "worst thrust loss {:.2}", top[1]);
         assert!(top[2] > 1.3, "worst mass gain {:.2}", top[2]);
         assert!(top[3] > 4.5, "worst build time {:.2}", top[3]);
+    }
+
+    /// 23_DEFICIENCIES.md §4.2: electric propulsion is an unlocked
+    /// difficulty-1 technology, the only home of `PowerDrawPenalty`,
+    /// and every electric design is on it.
+    #[test]
+    fn electric_technology_owns_the_power_draw_kind() {
+        use crate::engine::EngineCycle;
+        use crate::engine_project::PropellantPreset;
+        let cfg = TechnologyConfig::default();
+        let mut saw_power_draw = false;
+        for s in 0..300 {
+            let techs = generate_technologies(&GameSeed::new(s), &cfg);
+            let electric = techs.iter().find(|t| t.id == TECH_ELECTRIC).unwrap();
+            assert!(electric.unlocked);
+            assert_eq!(electric.difficulty, 1);
+            for tech in &techs {
+                for def in &tech.deficiencies {
+                    let power_draw = matches!(def.kind, TechDeficiencyKind::PowerDrawPenalty(_));
+                    assert!(!power_draw || tech.id == TECH_ELECTRIC, "{} drew a PowerDrawPenalty", tech.name);
+                    saw_power_draw |= power_draw;
+                    if tech.id == TECH_ELECTRIC {
+                        assert!(!matches!(def.kind,
+                            TechDeficiencyKind::IspPenalty(_) | TechDeficiencyKind::BuildTimePenalty(_)
+                            | TechDeficiencyKind::PowerPenalty(_)), "electric drew {}", def.kind);
+                    }
+                }
+            }
+        }
+        assert!(saw_power_draw, "no PowerDrawPenalty in 300 worlds");
+        assert_eq!(technologies_for(EngineCycle::ElectricPropulsion, PropellantPreset::Xenon), vec![TECH_ELECTRIC]);
+        assert_eq!(technologies_for(EngineCycle::GasGenerator, PropellantPreset::Kerolox), Vec::<TechnologyId>::new());
     }
 
     /// 23_DEFICIENCIES.md §4.1: staged combustion is a technology from

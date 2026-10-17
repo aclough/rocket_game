@@ -1373,6 +1373,11 @@ pub struct TechnologyConfig {
     /// Reactor power lost is `power_scale × m`.
     #[serde(default = "default_power_scale")]
     pub power_scale: f64,
+    /// An electric thruster's `PowerDrawPenalty` multiplies its power
+    /// per newton by `1 + this × m`: +10..50 % at difficulty 0, up to
+    /// double at the top of difficulty 2 (23_DEFICIENCIES.md §3.3).
+    #[serde(default = "default_power_draw_scale")]
+    pub power_draw_scale: f64,
     /// A `MaterialCostPenalty` multiplies the bill of materials by
     /// `1 + this × m`: ×1.2–2.0 at difficulty 0, up to ×3 at the top of
     /// difficulty 2.
@@ -1409,6 +1414,9 @@ fn default_mass_scale() -> f64 {
 fn default_power_scale() -> f64 {
     0.7
 }
+fn default_power_draw_scale() -> f64 {
+    1.0
+}
 fn default_material_cost_scale() -> f64 {
     2.0
 }
@@ -1443,6 +1451,7 @@ impl Default for TechnologyConfig {
             thrust_cap: default_thrust_cap(),
             mass_scale: default_mass_scale(),
             power_scale: default_power_scale(),
+            power_draw_scale: default_power_draw_scale(),
             material_cost_scale: default_material_cost_scale(),
             solved_elsewhere_multiplier: 3.0,
             solve_chance_cap: 0.95,

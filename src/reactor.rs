@@ -165,7 +165,7 @@ impl ReactorDesign {
                 self.reactor_mass_kg /= 1.0 + f;
                 self.mass_kg = self.reactor_mass_kg + self.radiator.mass_kg;
             }
-            (K::ComplexityPenalty(_) | K::IspPenalty(_) | K::ThrustPenalty(_) | K::BuildTimePenalty(_) | K::MaterialCostPenalty(_) | K::HardToTest(_), _) => {}
+            (K::ComplexityPenalty(_) | K::IspPenalty(_) | K::ThrustPenalty(_) | K::BuildTimePenalty(_) | K::MaterialCostPenalty(_) | K::HardToTest(_) | K::PowerDrawPenalty(_), _) => {}
         }
     }
 

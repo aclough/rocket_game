@@ -1258,9 +1258,9 @@ mod tests {
     /// A save written before a technology existed gains it on load.
     #[test]
     fn a_save_without_a_technology_gains_it_on_load() {
-        use crate::technology::{TECH_FULL_FLOW, TECH_STAGED_COMBUSTION};
+        use crate::technology::{TECH_ELECTRIC, TECH_FULL_FLOW, TECH_STAGED_COMBUSTION};
         let mut state = GameState::with_money("Old".into(), 1_000_000_000.0, 1);
-        state.technologies.retain(|t| t.id != TECH_STAGED_COMBUSTION && t.id != TECH_FULL_FLOW);
+        state.technologies.retain(|t| t.id != TECH_STAGED_COMBUSTION && t.id != TECH_FULL_FLOW && t.id != TECH_ELECTRIC);
         let path = temp_path();
         save_game(&state, &path).unwrap();
         let loaded = load_game(&path).expect("loads");
@@ -1268,6 +1268,7 @@ mod tests {
         let sc = loaded.technologies.iter().find(|t| t.id == TECH_STAGED_COMBUSTION).expect("added on load");
         assert!(sc.unlocked);
         assert!(!loaded.technologies.iter().find(|t| t.id == TECH_FULL_FLOW).unwrap().unlocked);
+        assert!(loaded.technologies.iter().find(|t| t.id == TECH_ELECTRIC).unwrap().unlocked);
         // Deterministic from the seed: the same world gets the same list.
         let fresh = GameState::new("New".into(), 1);
         let fresh_sc = fresh.technologies.iter().find(|t| t.id == TECH_STAGED_COMBUSTION).unwrap();

@@ -293,6 +293,16 @@ impl EngineDesign {
             (K::MassPenalty(f), Revert) => self.mass_kg /= 1.0 + f,
             (K::ThrustPenalty(f), Apply) => self.thrust_n *= 1.0 - f,
             (K::ThrustPenalty(f), Revert) => self.thrust_n /= 1.0 - f,
+            // Only an electric thruster has a draw to inflate; the
+            // generator hands this kind to electric technologies alone.
+            (K::PowerDrawPenalty(f), dir) => {
+                if let Propulsion::Electric { power_draw_w } = &mut self.propulsion {
+                    match dir {
+                        Apply => *power_draw_w *= 1.0 + f,
+                        Revert => *power_draw_w /= 1.0 + f,
+                    }
+                }
+            }
             // Complexity and build time land on the project, not the design.
             (K::ComplexityPenalty(_) | K::PowerPenalty(_) | K::BuildTimePenalty(_) | K::MaterialCostPenalty(_) | K::HardToTest(_), _) => {}
         }
@@ -813,4 +823,26 @@ mod tests {
             }
         }
     }
+    /// 23_DEFICIENCIES.md §3.3: a power-draw deficiency inflates an
+    /// electric thruster's draw and reverts cleanly; a nozzle has no
+    /// draw to inflate.
+    #[test]
+    fn power_draw_penalty_scales_only_electric_draw() {
+        use crate::project::Direction;
+        use crate::technology::TechDeficiencyKind;
+        let mut ion = test_kerolox_engine();
+        ion.cycle = EngineCycle::ElectricPropulsion;
+        ion.propulsion = Propulsion::Electric { power_draw_w: 30_000.0 };
+        ion.apply_deficiency(&TechDeficiencyKind::PowerDrawPenalty(0.5), Direction::Apply);
+        assert!((ion.propulsion.power_draw_w() - 45_000.0).abs() < 1e-6);
+        ion.apply_deficiency(&TechDeficiencyKind::PowerDrawPenalty(0.5), Direction::Revert);
+        assert!((ion.propulsion.power_draw_w() - 30_000.0).abs() < 1e-6);
+
+        let mut chem = test_kerolox_engine();
+        let before = chem.clone();
+        chem.apply_deficiency(&TechDeficiencyKind::PowerDrawPenalty(0.5), Direction::Apply);
+        assert_eq!(chem.propulsion.power_draw_w(), before.propulsion.power_draw_w());
+        assert_eq!(chem.thrust_n, before.thrust_n);
+    }
+
 }

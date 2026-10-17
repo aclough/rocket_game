@@ -301,3 +301,22 @@ A save from before either existed gains them on load
 clean; the bot and the incumbent are on neither, the curve is
 unchanged.
 
+
+**Step 6 — electric propulsion technology and `PowerDrawPenalty`.**
+`TECH_ELECTRIC` (unlocked, difficulty 1) is carried by every
+`ElectricPropulsion` design. It draws from its own kind table
+(`TechDomain::Electric`): power draw 40 %, thrust 15 %, mass 15 %,
+materials 10 %, hard-to-test 10 %, complexity 10 % — no Isp penalty
+(Isp is what the family is for) and no build-time penalty (the
+thruster is cheap; the power is not). `PowerDrawPenalty(m)` multiplies
+`Propulsion::Electric { power_draw_w }` by 1 + `power_draw_scale` × m
+(scale 1.0: +10..50 % at difficulty 0, up to double at the top of
+difficulty 2) in `EngineDesign::apply_deficiency`, and reverts by
+division; on a nozzle it is a no-op, and the generator never hands it
+to a non-electric technology. Panels and the stage's power budget read
+the design's draw, so a spacecraft sized around the deficient
+thruster sizes up with it and one sized before is power-starved until
+it is solved. Tests: `electric_technology_owns_the_power_draw_kind`,
+`power_draw_penalty_scales_only_electric_draw`, and the save test now
+also drops and regains the electric technology. 731 tests, clippy
+clean; curve unchanged (35 / 61 / 76 / 98).
