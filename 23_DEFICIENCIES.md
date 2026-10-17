@@ -320,3 +320,18 @@ it is solved. Tests: `electric_technology_owns_the_power_draw_kind`,
 `power_draw_penalty_scales_only_electric_draw`, and the save test now
 also drops and regains the electric technology. 731 tests, clippy
 clean; curve unchanged (35 / 61 / 76 / 98).
+
+**Step 7 — descriptions per kind and family.** `description_pool(tech,
+kind)` holds four lines for every kind each technology can roll,
+written for the family — methane that burns cool and cokes, a core
+run below temperature to save its fuel elements, preburners run cool
+against metal fire, two hot-gas paths for full flow, a reactor's
+shielding and radiators, an ion drive's power processing and grid
+erosion — with a generic engine pool for any technology added later.
+`pick_description` skips the lines a technology has already used, so
+no list repeats itself (the pools are wider than the largest count).
+Kinds and magnitudes are drawn before the description, so every
+world's deficiency *lists* are unchanged; only their wording is. Lines
+stay under 60 characters for the project tab. Test:
+`descriptions_are_per_family_and_never_repeat_on_a_technology`. 732
+tests, clippy clean.
