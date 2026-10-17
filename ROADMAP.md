@@ -63,6 +63,12 @@ A snapshot of what exists, for orientation — not a task list.
   seeded vendor catalogue; a reliability curve of 36 / 63 / 81 / 97 %
   by launch against the real new-entrant record
   (`docs/launch_survey_2026.md`), and a prudent bot for the ULA path.
+- **Deficiencies that bite (23):** per-kind magnitude bands that widen
+  with difficulty (the top of difficulty 2 is a programme, not a
+  product); material-cost and hard-to-test kinds; staged combustion,
+  full-flow and electric propulsion as technologies with a design
+  carrying every technology it is on; power-draw deficiencies on
+  electric drives; descriptions written per kind and family.
 - **Robustness:** month-start and on-quit autosave across three
   rotating slots, versioned saves with a compatibility corpus of real
   saves from past versions, a panic handler that gives the terminal
@@ -102,7 +108,6 @@ not committed to until then.
 Vertical loops, each individually shippable. Order should be revisited
 against player feedback.
 
-- More significant deficiencies
 - Add different strategies to the automatic balance testing with different
   rocket designs.
 - Entry, Descent, and Landing features with as much detail and risk as launch
