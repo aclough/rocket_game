@@ -2,6 +2,10 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 
 [] Double check how tested "Thoroughly Tested", etc are.
 
+[] Doule check solar panel mass
+
+[] For resupply to the ISS campaigns, have one mission expire right before the next is issued.
+
 [] Investigate dry masses when we go to do re-entry and start adding other
 options to our rocket bodies.
 
