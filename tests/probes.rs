@@ -1263,3 +1263,88 @@ mod testing_coverage {
         }
     }
 }
+
+mod vacuum_bells {
+    //! How big a vacuum bell should be (TODO: pressure-fed engines always
+    //! take the 2 m bell). Today: ε = max(3² × sea-level ε, the ε of a
+    //! 2 m exit), capped at 250. Alternative: the ε that maximises the
+    //! delta-v of the engine's own stage — propellant for `burn_s` of
+    //! its mass flow, tanks at `dry_frac` of that, the engine on top —
+    //! so an extension is bought only while its Isp buys more than its
+    //! mass costs. Printed for the survey's upper-stage engines against
+    //! their real bells.
+    use rocket_tycoon::balance_config::BalanceConfig;
+    use rocket_tycoon::engine::{EngineCycle as C, EngineId, G0};
+    use rocket_tycoon::engine_project::{EngineProject, EngineProjectId, PropellantPreset as P};
+    use rocket_tycoon::nozzle;
+
+    fn family(cycle: C, preset: P, scale: f64, bal: &BalanceConfig) -> EngineProject {
+        EngineProject::new(EngineProjectId(1), EngineId(1), format!("{cycle:?}"), cycle, preset, scale, bal).unwrap()
+    }
+
+    /// Delta-v of the engine's native stage with a bell of `eps`.
+    fn stage_dv(sl: &rocket_tycoon::engine::EngineDesign, eps: f64, burn_s: f64, dry_frac: f64, cfg: &rocket_tycoon::balance_config::NozzleConfig) -> (f64, f64, f64) {
+        let (_, eps_sl, gamma) = sl.propulsion.bell().unwrap();
+        let throat = sl.throat_area_m2();
+        let gain = nozzle::thrust_coefficient_vacuum(eps, gamma) / nozzle::thrust_coefficient_vacuum(eps_sl, gamma);
+        let isp = sl.isp_s * gain;
+        let mass = sl.mass_kg + nozzle::bell_extension_mass_kg(throat, eps_sl, eps, cfg.bell_areal_density_kg_m2);
+        let mdot = sl.thrust_n / (sl.isp_s * G0);
+        let prop = mdot * burn_s;
+        let dry = dry_frac * prop + mass;
+        (isp * G0 * ((dry + prop) / dry).ln(), isp, mass)
+    }
+
+    #[test]
+    #[ignore = "prints vacuum bell sizing under the current rule and a delta-v optimum; run with --ignored --nocapture"]
+    fn bell_sizing_heuristics() {
+        let bal = BalanceConfig::default();
+        let cfg = &bal.nozzle;
+        // (label, cycle, preset, scale, real vacuum ε, real TWR)
+        let cases = [
+            ("MVac-class", C::GasGenerator, P::Kerolox, 1.08, 165.0, 180.0),
+            ("RL10-class", C::Expander, P::Hydrolox, 0.99, 84.0, 59.0),
+            ("AJ10-class", C::PressureFed, P::Hypergolic, 0.81, 65.0, 23.0),
+            ("Kestrel-class", C::PressureFed, P::Kerolox, 0.05, 60.0, 60.0),
+            ("small kerolox vac (Rutherford)", C::GasGenerator, P::Kerolox, 25.0 / 900.0, 100.0, 60.0),
+            ("methalox vac", C::GasGenerator, P::Methalox, 100.0 / 700.0, 120.0, 80.0),
+        ];
+        println!("{:<32} {:>6} {:>5} | {:>6} {:>5} {:>5} {:>5} | {:>6} {:>5} {:>5} {:>5} | {:>6} {:>6}",
+            "engine", "SL ε", "exit", "cur ε", "exit", "Isp", "TWR", "opt ε", "exit", "Isp", "TWR", "real ε", "rTWR");
+        for (label, cycle, preset, scale, real_eps, real_twr) in cases {
+            let ep = family(cycle, preset, scale, &bal);
+            let sl = ep.design_variant(false, cfg);
+            let cur = ep.design_variant(true, cfg);
+            let (_, eps_sl, _) = sl.propulsion.bell().unwrap();
+            let (_, eps_cur, _) = cur.propulsion.bell().unwrap();
+            let throat = sl.throat_area_m2();
+            let exit = |eps: f64| nozzle::exit_diameter_m(eps * throat);
+            // Delta-v optimum for a 400 s stage at 8 % tankage.
+            let mut best = (0.0, eps_sl);
+            let mut e = eps_sl;
+            while e <= cfg.max_expansion_ratio {
+                let (dv, _, _) = stage_dv(&sl, e, 400.0, 0.08, cfg);
+                if dv > best.0 { best = (dv, e); }
+                e *= 1.03;
+            }
+            let (_, isp_opt, mass_opt) = stage_dv(&sl, best.1, 400.0, 0.08, cfg);
+            let twr = |t: f64, m: f64| t / (m * G0);
+            println!("{:<32} {:>6.1} {:>5.2} | {:>6.0} {:>5.2} {:>5.0} {:>5.0} | {:>6.0} {:>5.2} {:>5.0} {:>5.0} | {:>6.0} {:>6.0}",
+                label, eps_sl, exit(eps_sl), eps_cur, exit(eps_cur), cur.isp_s, twr(cur.thrust_n, cur.mass_kg),
+                best.1, exit(best.1), isp_opt, twr(sl.thrust_n * isp_opt / sl.isp_s, mass_opt), real_eps, real_twr);
+            // Sensitivity: how the optimum moves with the stage assumed.
+            let mut line = format!("{:<32} optimum ε by (burn s, dry frac):", "");
+            for (b, d) in [(200.0, 0.08), (400.0, 0.05), (400.0, 0.12), (800.0, 0.08)] {
+                let mut best = (0.0, eps_sl);
+                let mut e = eps_sl;
+                while e <= cfg.max_expansion_ratio {
+                    let (dv, _, _) = stage_dv(&sl, e, b, d, cfg);
+                    if dv > best.0 { best = (dv, e); }
+                    e *= 1.03;
+                }
+                line += &format!("  ({b:.0}, {d:.2}) → {:.0}", best.1);
+            }
+            println!("{line}");
+        }
+    }
+}

@@ -1262,12 +1262,31 @@ pub struct NozzleConfig {
     /// Mass of bell extension per square metre of added exit area
     /// (MVac ≈ 16, RL10B-2's carbon extendible ≈ 40).
     pub bell_areal_density_kg_m2: f64,
+    /// A vacuum bell is extended only while it pays: its ε is also
+    /// capped at the delta-v optimum of the engine's own stage —
+    /// propellant for this many seconds of its mass flow, tanks at
+    /// `vacuum_bell_stage_dry_fraction` of that, the engine on top. A
+    /// low-pressure engine's throat is large, so every unit of ε costs
+    /// it real mass: a pressure-fed hypergolic stops near ε 100 instead
+    /// of taking the full 2 m bell at ε 230 and a fifth of its TWR.
+    /// Pump-fed engines never reach this cap; the geometric one binds.
+    #[serde(default = "default_vacuum_bell_stage_burn_s")]
+    pub vacuum_bell_stage_burn_s: f64,
+    #[serde(default = "default_vacuum_bell_stage_dry_fraction")]
+    pub vacuum_bell_stage_dry_fraction: f64,
     /// Ambient-to-exit pressure ratio at which flow separation starts
     /// to destroy engines; the sea-level bell sits at 2.5 on the pad.
     pub separation_risk_start_ratio: f64,
     /// Per-engine destruction probability added per unit of pressure
     /// ratio beyond the start.
     pub separation_risk_slope: f64,
+}
+
+fn default_vacuum_bell_stage_burn_s() -> f64 {
+    400.0
+}
+fn default_vacuum_bell_stage_dry_fraction() -> f64 {
+    0.08
 }
 
 impl Default for NozzleConfig {
@@ -1278,6 +1297,8 @@ impl Default for NozzleConfig {
             min_vacuum_bell_exit_m: 2.0,
             max_expansion_ratio: 250.0,
             bell_areal_density_kg_m2: 20.0,
+            vacuum_bell_stage_burn_s: default_vacuum_bell_stage_burn_s(),
+            vacuum_bell_stage_dry_fraction: default_vacuum_bell_stage_dry_fraction(),
             separation_risk_start_ratio: 3.0,
             separation_risk_slope: 0.2,
         }

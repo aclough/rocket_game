@@ -416,10 +416,48 @@ impl EngineDesign {
         }
     }
 
+    /// The expansion ratio at which this engine's own stage — propellant
+    /// for `cfg.vacuum_bell_stage_burn_s` of its mass flow, tanks at
+    /// `cfg.vacuum_bell_stage_dry_fraction` of that, the engine on top —
+    /// gets the most delta-v: past it the added bell weighs more than
+    /// its Isp is worth. Searched in 3 % steps from the short bell to
+    /// `cfg.max_expansion_ratio`; the cap when there is no bell.
+    pub fn vacuum_bell_optimum_eps(&self, cfg: &NozzleConfig) -> f64 {
+        let Some((_, eps_sl, gamma)) = self.propulsion.bell() else {
+            return cfg.max_expansion_ratio;
+        };
+        let throat = self.throat_area_m2();
+        if throat <= 0.0 || self.isp_s <= 0.0 {
+            return cfg.max_expansion_ratio;
+        }
+        let cf_sl = nozzle::thrust_coefficient_vacuum(eps_sl, gamma);
+        let propellant = self.thrust_n / (self.isp_s * G0) * cfg.vacuum_bell_stage_burn_s;
+        let tanks = cfg.vacuum_bell_stage_dry_fraction * propellant;
+        let dv_at = |eps: f64| {
+            let isp = self.isp_s * nozzle::thrust_coefficient_vacuum(eps, gamma) / cf_sl;
+            let dry = tanks + self.mass_kg
+                + nozzle::bell_extension_mass_kg(throat, eps_sl, eps, cfg.bell_areal_density_kg_m2);
+            isp * G0 * ((dry + propellant) / dry).ln()
+        };
+        let (mut best_eps, mut best_dv) = (eps_sl, dv_at(eps_sl));
+        let mut eps = eps_sl;
+        while eps < cfg.max_expansion_ratio {
+            eps = (eps * 1.03).min(cfg.max_expansion_ratio);
+            let dv = dv_at(eps);
+            if dv > best_dv {
+                best_dv = dv;
+                best_eps = eps;
+            }
+        }
+        best_eps
+    }
+
     /// This design with the long bell: an exit `cfg.vacuum_bell_exit_ratio`
     /// times the short bell's diameter (so ε × the ratio squared) or
     /// `cfg.min_vacuum_bell_exit_m` across, whichever is larger, capped
-    /// at `cfg.max_expansion_ratio`. Isp and thrust rise by the thrust-
+    /// at `cfg.max_expansion_ratio` — and never past the ε at which the
+    /// engine's own stage stops gaining delta-v from more bell
+    /// (`vacuum_bell_optimum_eps`). Isp and thrust rise by the thrust-
     /// coefficient ratio (same chamber, same mass flow); mass grows by
     /// the added bell area at `cfg.bell_areal_density_kg_m2`. A design
     /// without a bell is returned as it is (a bell-less `Nozzle` fixture
@@ -437,7 +475,8 @@ impl EngineDesign {
         let eps_by_exit = nozzle::expansion_ratio_for_exit_diameter(
             throat, cfg.min_vacuum_bell_exit_m, cfg.max_expansion_ratio, eps_sl,
         );
-        let eps_vac = eps_by_ratio.max(eps_by_exit).min(cfg.max_expansion_ratio).max(eps_sl);
+        let eps_geometric = eps_by_ratio.max(eps_by_exit).min(cfg.max_expansion_ratio).max(eps_sl);
+        let eps_vac = eps_geometric.min(self.vacuum_bell_optimum_eps(cfg)).max(eps_sl);
         let gain = nozzle::thrust_coefficient_vacuum(eps_vac, gamma)
             / nozzle::thrust_coefficient_vacuum(eps_sl, gamma);
         vac.isp_s = self.isp_s * gain;

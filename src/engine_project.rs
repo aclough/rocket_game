@@ -1286,6 +1286,39 @@ mod tests {
         assert_eq!(p1.design.isp_s, p2.design.isp_s);
     }
 
+    /// A vacuum bell is bought only while it pays (TODO: pressure-fed
+    /// engines took the full 2 m bell). A pressure-fed hypergolic's
+    /// large throat makes bell dear, so its ε stops at its stage's
+    /// delta-v optimum near 100 (AJ10-190 flies 65 at TWR 23; the game
+    /// now gives TWR ~25, was 20). A pump-fed kerolox engine's optimum
+    /// is past the geometric bound, which still binds it at ε 187.
+    #[test]
+    fn vacuum_bell_stops_where_the_stage_stops_gaining() {
+        let bal = bal();
+        let aj10 = EngineProject::new(
+            EngineProjectId(1), EngineId(1), "AJ10".into(),
+            EngineCycle::PressureFed, PropellantPreset::Hypergolic, 0.81, &bal,
+        ).unwrap();
+        let sl = aj10.design_variant(false, &bal.nozzle);
+        let vac = aj10.design_variant(true, &bal.nozzle);
+        let eps_vac = vac.propulsion.bell().unwrap().1;
+        let optimum = sl.vacuum_bell_optimum_eps(&bal.nozzle);
+        assert!((eps_vac - optimum).abs() < 1e-9, "the optimum binds: ε {eps_vac} vs {optimum}");
+        assert!((80.0..=120.0).contains(&eps_vac), "ε {eps_vac}");
+        let twr = vac.thrust_n / (vac.mass_kg * crate::engine::G0);
+        assert!(twr > 23.0 && twr < 28.0, "TWR {twr}");
+
+        let merlin = EngineProject::new(
+            EngineProjectId(2), EngineId(2), "Merlin".into(),
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, &bal,
+        ).unwrap();
+        let sl = merlin.design_variant(false, &bal.nozzle);
+        let vac = merlin.design_variant(true, &bal.nozzle);
+        let eps_vac = vac.propulsion.bell().unwrap().1;
+        assert!(sl.vacuum_bell_optimum_eps(&bal.nozzle) > eps_vac, "a pump-fed engine's optimum is past the geometric bound");
+        assert!((eps_vac - 187.0).abs() < 2.0, "ε {eps_vac} unchanged");
+    }
+
     #[test]
     fn test_vacuum_vs_sea_level_isp() {
         // M5 Task 1: one project, two nozzles. The vacuum bell trades a
