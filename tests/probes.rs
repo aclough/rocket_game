@@ -1096,3 +1096,41 @@ mod small_launch {
         }
     }
 }
+
+mod smallsat_bids {
+    //! What the small bot can lift and what it bids after four years
+    //! (24_STRATEGIES.md step 4): capability and power survival per
+    //! destination, its cost basis, and every open contract with its
+    //! standing-rule bid against the contract's pay. The first run
+    //! showed a $14.3M bid on a $1.4M contract — cost × 2 on a $6.6M
+    //! vehicle, over every smallsat ceiling.
+    use rocket_tycoon::game_state::GameState;
+    use rocket_tycoon::policy::policy_by_name;
+
+    #[test]
+    #[ignore = "prints the small bot's capability and bids; run with --ignored --nocapture"]
+    fn smallsat_capability_and_bids() {
+        let mut policy = policy_by_name("smallsat").unwrap();
+        let mut gs = GameState::new("Bot".into(), 1);
+        for _ in 0..(365 * 4) {
+            policy.act(&mut gs);
+            gs.advance_day();
+        }
+        let rp = &gs.player_company.rocket_projects[0];
+        println!("status {:?} retired {}", rp.status, rp.retired);
+        for dest in ["leo", "sso", "gto"] {
+            let cap = gs.payload_capability(&rp.design, "earth_surface", dest);
+            println!("{dest}: cap {cap:.0}  survives@100kg {}  survives@cap {}", gs.survives_trip(&rp.design, "earth_surface", dest, 100.0), gs.survives_trip(&rp.design, "earth_surface", dest, cap * 0.9));
+        }
+        for (gi, g) in rp.design.stage_groups.iter().enumerate() {
+            let s = &g[0];
+            println!("S{gi}: dry {:.0} supply {:.0} W housekeeping {:.0} W battery {:.1}", s.dry_mass_kg(), s.supply_w(1.0), s.housekeeping_w(), s.battery_capacity_kwd());
+        }
+        println!("cost history {:?}", gs.player_company.rocket_cost_history.get(&rp.design.id).map(|h| h.len()));
+        println!("bid rules {}", gs.player_company.bid_rules.len());
+        println!("stock {}", gs.player_company.manufacturing.inventory.rockets.len());
+        for c in &gs.available_contracts {
+            println!("contract {} {} {:.0} kg ${:.1}M solicitation {} can_serve {} player_bid {:?}", c.name, c.destination, c.payload_kg, c.payment / 1e6, c.is_solicitation(), gs.project_can_serve(rp, &c.destination, c.payload_kg), c.player_bid);
+        }
+    }
+}

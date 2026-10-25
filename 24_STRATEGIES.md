@@ -351,3 +351,58 @@ year 200/200, aggregate 91.0%`. **The "stay dangerous" floor
 that steps 3/3b's slack is reserved for the flaws retune (Q2). The
 basic bot's economy is now: unit cost 17.3M, payment 34.6M, first
 launch month 19.4. 732 tests, clippy clean.
+
+**Step 4 — the smallsat bot.** `BasicPolicy` now runs a `BotTemplate`
+(engine families, two-stage stack, payroll): `MEDIUM` is the basic
+bot unchanged (100 seeds identical), `SMALLSAT` is nine 25 kN kerolox
+gas generators under 15.3 t and the family's vacuum bell under 2.1 t
+— 19 t, 288 kg to LEO, 197 kg to SSO, one engine programme — on two
+engineering teams and two lines; `ALPHA` (four 190 kN under 53 t,
+~1 t to LEO) for comparison. `--policy smallsat`, `alpha`, and
+`<template>:<eng>,<mfg>[,<S1 kg>,<S2 kg>]` for sweeps. The band test
+gains `smallsat_fleet_200_seeds` (figures only) and
+`tests/probes.rs` a `smallsat_bids` probe.
+
+Measured, 200 × 8: `[fleet smallsat] bankrupt 0/200, kept $25M
+200/200, profitable 0/200, profitable year 2/200, aggregate success
+71.8%, median launches 4`; first launch month 15, dev spend $27M,
+unit cost $6.6M (materials ~$4M, the rest labour). Alpha: profitable
+year 81/200, unit cost $11.7M, payment $22.7M, median ~2 contract
+flights.
+
+**Why it cannot work yet.** After its first success the small bot
+never wins a contract: the standing rule bids cost × (1 + margin) =
+$14.3M on a 100 kg TechDemo paying $1.4M (ceiling ~$1.8M). Every
+contract it can lift (≤ 260 kg LEO, ≤ 180 kg SSO) pays $1–6M; the
+vehicle costs $6.6M to build. Payroll alone (two teams, two lines,
+$10.8M a year) burns $107M over eight years while two rockets sit
+on the shelf. The vehicle is right (real Electron: ~$5–6M to build,
+300 kg to SSO); the *prices* are the gap. The game prices every
+smallsat contract per kilogram as rideshare ($15k/kg LEO, $30k/kg
+SSO), which is what a 100 kg satellite pays to ride along on a big
+rocket (Transporter: $5–6k/kg), not what it pays for its own launch
+to its own orbit (Electron: ~$7.5M whatever the mass). There is no
+customer in the game who pays for the rocket rather than the
+kilograms — which is the whole reason small launchers exist. That is
+the market question of step 5, to be talked over:
+
+- *A. A per-launch floor.* Each destination carries a minimum payment
+  (`min_payment` on `MarketDestination`): rideshare/EO LEO ~$5M, SSO
+  ~$6M; a 100 kg contract pays $5M instead of $1.4M, a 400 kg one is
+  unchanged. Smallest change; keeps one market.
+- *B. A dedicated-smallsat market.* A new archetype, "Dedicated Small
+  Launch", 50–300 kg to LEO/SSO at a per-launch price ($6–10M), rep
+  target low, emerging ~2006 and growing fast through the 2010s;
+  rideshare keeps its cheap $/kg as the big-rocket alternative. Most
+  faithful: it also explains why medium lift leaves this money alone.
+- *C. Raise rideshare $/kg* (LEO $15k → $30k, SSO $30k → $50k).
+  Simplest, but a 500 kg rideshare then pays $15M, which is wrong in
+  the other direction.
+- *D. Bidding that respects the ceiling* (bid = min(cost × (1 + m),
+  ceiling) when cost < ceiling), for the bot and the player's rule
+  engine alike. Needed with any of the above; useless alone.
+
+Recommendation: B with D (A with D if the smaller change is
+preferred). Either way the small bot's thresholds (bankrupt ≤ 25 %,
+profitable year ≥ 50 %, median ≥ 10 launches) get set from the
+measurement after it.

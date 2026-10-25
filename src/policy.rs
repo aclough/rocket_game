@@ -64,6 +64,8 @@ impl CompanyPolicy for NullPolicy {
 /// Deliberately skipped: reactors, electric propulsion, third-party
 /// engines, design iteration, pricing.
 pub struct BasicPolicy {
+    /// What this bot builds and staffs (`MEDIUM` for `basic`).
+    template: BotTemplate,
     booster: Option<EngineProjectId>,
     upper: Option<EngineProjectId>,
     rocket: Option<RocketProjectId>,
@@ -73,14 +75,101 @@ pub struct BasicPolicy {
     bid_rules_set: bool,
     /// Markup the policy's standing rules use: bid = cost × (1 + margin).
     bid_margin: f64,
-    /// Engineering teams to hire (the basic bot: 3).
-    engineering_teams: usize,
     /// Before the first success, launch only once every project the
     /// template flies has had this many testing cycles in a row without
     /// a discovery and nothing known left unrevised — the "ULA path"
     /// of 22_FLAWS.md §3.10. `None` launches the day a rocket exists.
     launch_after_quiet_cycles: Option<u32>,
 }
+
+/// An engine family a bot designs: cycle, propellant and size.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BotEngine {
+    pub name: &'static str,
+    pub cycle: EngineCycle,
+    pub preset: PropellantPreset,
+    pub scale: f64,
+}
+
+/// One stage of a bot's stack: how many engines under how much
+/// propellant. Structure comes from the model (`recompute_structural_masses`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BotStage {
+    pub engine_count: u32,
+    pub propellant_kg: f64,
+}
+
+/// What a bot builds and staffs: its engine families, its two-stage
+/// stack and its payroll. One `BasicPolicy` loop drives every
+/// template; the templates are the strategies the band test exercises
+/// (24_STRATEGIES.md §3).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BotTemplate {
+    /// CLI / reporting name.
+    pub policy_name: &'static str,
+    pub rocket_name: &'static str,
+    pub booster: BotEngine,
+    /// The upper stage's family; `None` flies the booster family's
+    /// vacuum bell, one engine programme for the whole vehicle.
+    pub upper: Option<BotEngine>,
+    /// First stage, upper stage.
+    pub stages: [BotStage; 2],
+    pub engineering_teams: usize,
+    pub manufacturing_teams: usize,
+}
+
+/// The basic bot: two kerolox gas-generator boosters under 90 t, a
+/// hydrolox expander under 15 t — about 2.5 t to LEO — on three
+/// engineering teams and four manufacturing lines. Four lines: with
+/// hydrogen engines' build premium (21_ENGINES.md step 5) three left
+/// the upper-stage engine the bottleneck; a fifth costs more in salary
+/// than it saves in latency.
+pub const MEDIUM: BotTemplate = BotTemplate {
+    policy_name: "basic",
+    rocket_name: "BLV-1",
+    booster: BotEngine { name: "BLV Booster", cycle: EngineCycle::GasGenerator, preset: PropellantPreset::Kerolox, scale: 1.0 },
+    upper: Some(BotEngine { name: "BLV Upper", cycle: EngineCycle::Expander, preset: PropellantPreset::Hydrolox, scale: 1.0 }),
+    stages: [
+        BotStage { engine_count: 2, propellant_kg: 90_000.0 },
+        BotStage { engine_count: 1, propellant_kg: 15_000.0 },
+    ],
+    engineering_teams: 3,
+    manufacturing_teams: 4,
+};
+
+/// The small launcher (24_STRATEGIES.md step 4): nine 25 kN kerolox
+/// gas generators under 15.3 t and one of the same family's vacuum
+/// bells under 2.1 t — an Electron-shaped 19 t vehicle, ~270 kg to
+/// LEO and ~185 kg to SSO — on two engineering teams and two lines.
+/// One engine programme, one small rocket, the smallsat market.
+pub const SMALLSAT: BotTemplate = BotTemplate {
+    policy_name: "smallsat",
+    rocket_name: "SLV-1",
+    booster: BotEngine { name: "SLV Engine", cycle: EngineCycle::GasGenerator, preset: PropellantPreset::Kerolox, scale: 25.0 / 900.0 },
+    upper: None,
+    stages: [
+        BotStage { engine_count: 9, propellant_kg: 15_300.0 },
+        BotStage { engine_count: 1, propellant_kg: 2_100.0 },
+    ],
+    engineering_teams: 2,
+    manufacturing_teams: 2,
+};
+
+/// A Firefly Alpha–shaped vehicle for comparison: four 190 kN kerolox
+/// gas generators under 53 t and one of the family's vacuum bells
+/// under 5.8 t — ~1 t to LEO, ~700 kg to SSO.
+pub const ALPHA: BotTemplate = BotTemplate {
+    policy_name: "alpha",
+    rocket_name: "ALV-1",
+    booster: BotEngine { name: "ALV Engine", cycle: EngineCycle::GasGenerator, preset: PropellantPreset::Kerolox, scale: 190.0 / 900.0 },
+    upper: None,
+    stages: [
+        BotStage { engine_count: 4, propellant_kg: 53_400.0 },
+        BotStage { engine_count: 1, propellant_kg: 5_800.0 },
+    ],
+    engineering_teams: 2,
+    manufacturing_teams: 2,
+};
 
 impl BasicPolicy {
     /// Has any launch ever fully succeeded? The success reputation
@@ -146,15 +235,20 @@ impl BasicPolicy {
     /// the knob the margin sweep exercises (`--policy basic:0.15`).
     pub fn with_margin(bid_margin: f64) -> Self {
         BasicPolicy {
+            template: MEDIUM,
             booster: None,
             upper: None,
             rocket: None,
             auto_build_set: false,
             bid_rules_set: false,
             bid_margin,
-            engineering_teams: 3,
             launch_after_quiet_cycles: None,
         }
+    }
+
+    /// The basic loop on another template (`--policy smallsat`, …).
+    pub fn with_template(template: BotTemplate) -> Self {
+        BasicPolicy { template, ..Self::new() }
     }
 
     /// A prudent programme: more engineers, and no first launch until
@@ -162,7 +256,7 @@ impl BasicPolicy {
     /// finding anything (`--policy prudent`, `prudent:<teams>,<cycles>`).
     pub fn prudent(engineering_teams: usize, quiet_cycles: u32) -> Self {
         BasicPolicy {
-            engineering_teams,
+            template: BotTemplate { engineering_teams, ..MEDIUM },
             launch_after_quiet_cycles: Some(quiet_cycles),
             ..Self::new()
         }
@@ -243,16 +337,13 @@ impl BasicPolicy {
         if game.player_company.money < MONEY_FLOOR {
             return;
         }
-        if game.player_company.teams.len() < self.engineering_teams {
+        if game.player_company.teams.len() < self.template.engineering_teams {
             let name = format!("Team {}", game.player_company.teams.len() + 1);
             if let Some(evt) = game.player_company.hire_team(name, &game.balance) {
                 game.log(evt);
             }
         }
-        // Four lines: with hydrogen engines' build premium (21_ENGINES.md
-        // step 5) three lines left the upper-stage engine the bottleneck;
-        // a fifth costs more in salary than it saves in latency.
-        if game.player_company.manufacturing_teams.len() < 4 {
+        if game.player_company.manufacturing_teams.len() < self.template.manufacturing_teams {
             let name = format!("Mfg Team {}", game.player_company.manufacturing_teams.len() + 1);
             if let Some(evt) = game.player_company.hire_manufacturing_team(name, &game.balance) {
                 game.log(evt);
@@ -265,27 +356,18 @@ impl BasicPolicy {
             return;
         }
         if self.booster.is_none() {
+            let e = self.template.booster;
             if let Some(evt) = game.player_company.start_engine_project(
-                "BLV Booster".into(),
-                EngineCycle::GasGenerator,
-                PropellantPreset::Kerolox,
-                1.0,
-                None,
-                &game.balance,
+                e.name.into(), e.cycle, e.preset, e.scale, None, &game.balance,
             ) {
                 game.log(evt);
                 self.booster = game.player_company.engine_projects.last()
                     .map(|p| p.project_id);
             }
         }
-        if self.upper.is_none() {
+        if let (None, Some(e)) = (self.upper, self.template.upper) {
             if let Some(evt) = game.player_company.start_engine_project(
-                "BLV Upper".into(),
-                EngineCycle::Expander,
-                PropellantPreset::Hydrolox,
-                1.0,
-                None,
-                &game.balance,
+                e.name.into(), e.cycle, e.preset, e.scale, None, &game.balance,
             ) {
                 game.log(evt);
                 self.upper = game.player_company.engine_projects.last()
@@ -342,8 +424,12 @@ impl BasicPolicy {
         let company = &game.player_company;
         let booster = company.engine_projects.iter()
             .find(|p| Some(p.project_id) == self.booster)?;
-        let upper = company.engine_projects.iter()
-            .find(|p| Some(p.project_id) == self.upper)?;
+        // The upper stage's family, or the booster's when the template
+        // flies one programme's two bells.
+        let upper = match self.template.upper {
+            Some(_) => company.engine_projects.iter().find(|p| Some(p.project_id) == self.upper)?,
+            None => booster,
+        };
         // The engine design exists once it's out of the design phase —
         // Testing *or* Revising both qualify (the revision loop keeps
         // engines cycling between the two, so requiring simultaneous
@@ -356,25 +442,26 @@ impl BasicPolicy {
             return None;
         }
 
+        let [first, second] = self.template.stages;
         let s1 = Stage {
             id: StageId(1),
-            name: "BLV S1".into(),
+            name: format!("{} S1", self.template.rocket_name),
             // First stage lights at sea level; upper stage flies the
             // vacuum bell of its own engine family.
             engine: booster.design_variant(false, &game.balance.nozzle),
-            engine_count: 2,
-            propellant_mass_kg: 90_000.0,
-            structural_mass_kg: 6_450.0,
+            engine_count: first.engine_count,
+            propellant_mass_kg: first.propellant_kg,
+            structural_mass_kg: 0.0, // from the model below
             fairing: None,
             power_sources: Vec::new(),
         };
         let s2 = Stage {
             id: StageId(2),
-            name: "BLV S2".into(),
+            name: format!("{} S2", self.template.rocket_name),
             engine: upper.design_variant(true, &game.balance.nozzle),
-            engine_count: 1,
-            propellant_mass_kg: 15_000.0,
-            structural_mass_kg: 1_500.0,
+            engine_count: second.engine_count,
+            propellant_mass_kg: second.propellant_kg,
+            structural_mass_kg: 0.0,
             fairing: None,
             power_sources: Vec::new(),
         };
@@ -389,7 +476,7 @@ impl BasicPolicy {
             let panel = crate::power::solar_panel_for_stage_demand(stage);
             stage.power_sources.push(panel);
         }
-        Some(("BLV-1".into(), groups))
+        Some((self.template.rocket_name.into(), groups))
     }
 
     fn maybe_design_rocket(&mut self, game: &mut GameState) {
@@ -549,7 +636,7 @@ impl CompanyPolicy for BasicPolicy {
     }
 
     fn name(&self) -> &'static str {
-        if self.launch_after_quiet_cycles.is_some() { "prudent" } else { "basic" }
+        if self.launch_after_quiet_cycles.is_some() { "prudent" } else { self.template.policy_name }
     }
 }
 
@@ -568,16 +655,41 @@ pub fn policy_by_name(name: &str) -> Option<Box<dyn CompanyPolicy>> {
         let (teams, cycles) = rest.split_once(',')?;
         return Some(Box::new(BasicPolicy::prudent(teams.parse().ok()?, cycles.parse().ok()?)));
     }
+    // `<template>:<engineering teams>,<manufacturing teams>[,<S1 kg>,<S2 kg>]`
+    // — the payroll and tank sweep for a templated bot.
+    for (prefix, base) in [("smallsat:", SMALLSAT), ("alpha:", ALPHA)] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            let parts: Vec<&str> = rest.split(',').collect();
+            if parts.len() != 2 && parts.len() != 4 {
+                return None;
+            }
+            let mut template = BotTemplate {
+                engineering_teams: parts[0].parse().ok()?,
+                manufacturing_teams: parts[1].parse().ok()?,
+                ..base
+            };
+            if parts.len() == 4 {
+                template.stages[0].propellant_kg = parts[2].parse().ok()?;
+                template.stages[1].propellant_kg = parts[3].parse().ok()?;
+            }
+            return Some(Box::new(BasicPolicy::with_template(template)));
+        }
+    }
     match name {
         "none" => Some(Box::new(NullPolicy)),
         "basic" => Some(Box::new(BasicPolicy::new())),
         "prudent" => Some(Box::new(BasicPolicy::prudent(6, 3))),
+        "smallsat" => Some(Box::new(BasicPolicy::with_template(SMALLSAT))),
+        "alpha" => Some(Box::new(BasicPolicy::with_template(ALPHA))),
         _ => None,
     }
 }
 
 /// Names accepted by `policy_by_name`, for CLI help text.
-pub const POLICY_NAMES: &[&str] = &["none", "basic", "basic:<margin>"];
+pub const POLICY_NAMES: &[&str] = &[
+    "none", "basic", "basic:<margin>", "prudent", "prudent:<teams>,<cycles>",
+    "smallsat", "smallsat:<eng teams>,<mfg teams>",
+];
 
 #[cfg(test)]
 mod tests {

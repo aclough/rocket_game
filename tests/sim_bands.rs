@@ -65,13 +65,51 @@ fn fleet_band(ok: bool, message: String) {
 }
 
 fn run(seed: u64, years: u32) -> (RunSummary, Vec<String>) {
+    run_policy("basic", seed, years)
+}
+
+fn run_policy(policy: &str, seed: u64, years: u32) -> (RunSummary, Vec<String>) {
     let balance = BalanceConfig::default();
-    let mut policy = policy_by_name("basic").expect("basic policy exists");
+    let mut policy = policy_by_name(policy).expect("policy exists");
     let mut rows = Vec::new();
     let summary = run_seed(seed, years, &balance, policy.as_mut(), |row| {
         rows.push(row.to_string())
     });
     (summary, rows)
+}
+
+/// The fleet figures of a strategy bot, as `assert_bands` counts them,
+/// plus its launch count median — printed under its own tag so a
+/// sweep can read every strategy's line.
+fn fleet_line(tag: &str, summaries: &[RunSummary]) -> String {
+    let starting_money = BalanceConfig::default().costs.starting_money;
+    let n = summaries.len();
+    let bankrupt = summaries.iter().filter(|s| s.bankrupt).count();
+    let kept = summaries.iter().filter(|s| s.min_money > 25_000_000.0).count();
+    let profitable = summaries.iter().filter(|s| s.final_money > starting_money).count();
+    let fpy = summaries.iter().filter(|s| s.first_profitable_year.is_some()).count();
+    let launches: usize = summaries.iter().map(|s| s.launches).sum();
+    let successes: usize = summaries.iter().map(|s| s.successes).sum();
+    let mut counts: Vec<usize> = summaries.iter().map(|s| s.launches).collect();
+    counts.sort_unstable();
+    let median = counts.get(n / 2).copied().unwrap_or(0);
+    format!(
+        "[fleet {tag}] bankrupt {bankrupt}/{n}, kept $25M {kept}/{n}, profitable {profitable}/{n}, \
+         profitable year {fpy}/{n}, aggregate success {:.1}%, median launches {median}",
+        if launches == 0 { 0.0 } else { successes as f64 / launches as f64 * 100.0 },
+    )
+}
+
+/// The small launcher (24_STRATEGIES.md step 4): figures only, no
+/// bands yet — its first measurement found it cannot win a contract at
+/// today's smallsat prices (unit cost $6.6M against $1–6M contracts),
+/// which is the market question the plan parks for step 5. Thresholds
+/// go in once that is settled.
+#[test]
+#[ignore = "200-seed smallsat fleet figures; run with `cargo test -- --ignored`"]
+fn smallsat_fleet_200_seeds() {
+    let summaries: Vec<RunSummary> = (1..=200).map(|seed| run_policy("smallsat", seed, 8).0).collect();
+    println!("{}", fleet_line("smallsat", &summaries));
 }
 
 /// Same seed + same policy twice must produce byte-identical monthly
