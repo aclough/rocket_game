@@ -189,6 +189,12 @@ impl RocketDesign {
     }
 
     /// Total wet mass of the entire vehicle (excluding payload).
+    /// Every stage's dry mass, engines and power sources included:
+    /// what integration hardware is sized against.
+    pub fn dry_mass_kg(&self) -> f64 {
+        self.stage_groups.iter().flatten().map(|s| s.dry_mass_kg()).sum()
+    }
+
     pub fn total_mass_kg(&self) -> f64 {
         self.stage_groups.iter()
             .flat_map(|group| group.iter())

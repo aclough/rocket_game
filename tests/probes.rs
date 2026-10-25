@@ -1013,10 +1013,10 @@ mod small_launch {
             println!("   S{} structure: tank {:.0}  thrust structure {:.0}  aero {:.0}  interstage {:.0}  (engines {:.0})",
                 gi + 1, b.tank_mass, b.thrust_structure, b.aero_shell, b.interstage, s.engine.mass_kg * s.engine_count as f64);
         }
-        let prices = &bal.costs.resource_prices;
-        let fixed = rp.design.stage_groups.iter().flatten().count() as f64 * rocket_tycoon::resources::stage_assembly_cost(prices)
-            + rocket_tycoon::resources::rocket_integration_cost(prices);
-        println!("   of which fixed assembly + integration ${:.1}M", fixed / 1e6);
+        let fixed = rp.design.stage_groups.iter().flatten()
+            .map(|s| rocket_tycoon::resources::stage_assembly_cost(s.structural_mass_kg, &bal.costs)).sum::<f64>()
+            + rocket_tycoon::resources::rocket_integration_cost(rp.design.dry_mass_kg(), &bal.costs);
+        println!("   of which assembly + integration ${:.1}M", fixed / 1e6);
         let eng_design = bal.work.design_work_required(bep.complexity, bs) + bal.work.design_work_required(uep.complexity, us);
         println!(
             "   unit cost ${:.1}M (materials, 1st unit)   build {:.0} line-days   design work: engines {:.0} + rocket {:.0} team-days",

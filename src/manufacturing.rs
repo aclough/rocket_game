@@ -260,7 +260,7 @@ impl ManufacturingOrder {
         let base_work = balance_cfg.work.stage_build_work(stage_total_mass);
         let learning = balance_cfg.work.learning_curve_multiplier(prior_builds);
         let material_cost = (resources::tank_material_cost(structural_mass_kg, &balance_cfg.costs.resource_prices)
-            + resources::stage_assembly_cost(&balance_cfg.costs.resource_prices)) * learning;
+            + resources::stage_assembly_cost(structural_mass_kg, &balance_cfg.costs)) * learning;
 
         ManufacturingOrder {
             id,
@@ -290,6 +290,7 @@ impl ManufacturingOrder {
         design_id: RocketDesignId,
         rocket_name: String,
         total_stages: u32,
+        dry_mass_kg: f64,
         prior_builds: u32,
         revision: u32,
         rocket_flaws: Vec<crate::flaw::Flaw>,
@@ -297,7 +298,7 @@ impl ManufacturingOrder {
     ) -> Self {
         let base_work = balance_cfg.work.rocket_integration_work(total_stages);
         let learning = balance_cfg.work.learning_curve_multiplier(prior_builds);
-        let material_cost = resources::rocket_integration_cost(&balance_cfg.costs.resource_prices) * learning;
+        let material_cost = resources::rocket_integration_cost(dry_mass_kg, &balance_cfg.costs) * learning;
 
         ManufacturingOrder {
             id,
@@ -790,6 +791,7 @@ mod tests {
             RocketDesignId(1),
             "Falcon".into(),
             2,
+            10_000.0,
             0,
             0, Vec::new(),
             &bal(),

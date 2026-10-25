@@ -141,6 +141,52 @@ pub struct CostsConfig {
     pub reactor_ref_material_cost: f64,
     /// Price per kilogram for each manufacturing resource.
     pub resource_prices: ResourcePrices,
+    /// Stage assembly hardware (harness, avionics, umbilicals) is
+    /// `assembly_floor_kg + assembly_fraction × structural mass`, priced
+    /// through `stage_assembly_bom`: a small avionics core is the same
+    /// on any stage, the harness and plumbing grow with it
+    /// (24_STRATEGIES.md §2.1). Calibrated so the bot's vehicle pays
+    /// what it did under the old flat 500 kg while an Electron-class
+    /// stage pays a quarter of that.
+    #[serde(default = "default_assembly_floor_kg")]
+    pub assembly_floor_kg: f64,
+    #[serde(default = "default_assembly_fraction")]
+    pub assembly_fraction: f64,
+    /// Structural mass above which a stage's harness and avionics
+    /// suite stops growing: a 26 t-structure core is not wired like
+    /// four 6.5 t boosters. Keeps the incumbent's heavy vehicle near
+    /// what it paid under the old flat masses.
+    #[serde(default = "default_assembly_cap_kg")]
+    pub assembly_cap_kg: f64,
+    /// Rocket integration hardware (adapters, fairing hardware, final
+    /// wiring) is `integration_floor_kg + integration_fraction × the
+    /// vehicle's dry mass`, priced through `rocket_integration_bom`.
+    #[serde(default = "default_integration_floor_kg")]
+    pub integration_floor_kg: f64,
+    #[serde(default = "default_integration_fraction")]
+    pub integration_fraction: f64,
+    /// Dry mass above which integration hardware stops growing.
+    #[serde(default = "default_integration_cap_kg")]
+    pub integration_cap_kg: f64,
+}
+
+fn default_assembly_floor_kg() -> f64 {
+    60.0
+}
+fn default_assembly_fraction() -> f64 {
+    0.12
+}
+fn default_assembly_cap_kg() -> f64 {
+    7_000.0
+}
+fn default_integration_floor_kg() -> f64 {
+    100.0
+}
+fn default_integration_cap_kg() -> f64 {
+    12_000.0
+}
+fn default_integration_fraction() -> f64 {
+    0.06
 }
 
 impl CostsConfig {
@@ -171,6 +217,12 @@ impl Default for CostsConfig {
             manufacturing_hiring_cost: 900_000.0,
             reactor_ref_material_cost: 30_000_000.0,
             resource_prices: ResourcePrices::default(),
+            assembly_floor_kg: default_assembly_floor_kg(),
+            assembly_fraction: default_assembly_fraction(),
+            assembly_cap_kg: default_assembly_cap_kg(),
+            integration_floor_kg: default_integration_floor_kg(),
+            integration_fraction: default_integration_fraction(),
+            integration_cap_kg: default_integration_cap_kg(),
         }
     }
 }

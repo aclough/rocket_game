@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 
-use crate::balance_config::ResourcePrices;
+use crate::balance_config::{CostsConfig, ResourcePrices};
 use crate::engine_project::PropellantPreset;
 
 /// Resource types used in manufacturing.
@@ -180,8 +180,9 @@ pub fn tank_bom() -> BillOfMaterials {
     }
 }
 
-/// BOM for stage assembly (fixed cost, not mass-dependent).
-/// Covers integration hardware, wiring harnesses, avionics.
+/// BOM for stage assembly hardware: wiring harnesses, avionics,
+/// umbilicals. Its mass is `CostsConfig::assembly_floor_kg` plus a
+/// share of the stage's structure (24_STRATEGIES.md §2.1).
 pub fn stage_assembly_bom() -> BillOfMaterials {
     BillOfMaterials {
         fractions: vec![
@@ -195,11 +196,9 @@ pub fn stage_assembly_bom() -> BillOfMaterials {
     }
 }
 
-/// Fixed mass for stage assembly hardware (kg).
-pub const STAGE_ASSEMBLY_MASS_KG: f64 = 500.0;
-
-/// BOM for final rocket integration.
-/// Covers interstage adapters, payload fairings, final wiring.
+/// BOM for final rocket integration: interstage adapters, fairing
+/// hardware, final wiring. Its mass is `CostsConfig::integration_floor_kg`
+/// plus a share of the vehicle's dry mass.
 pub fn rocket_integration_bom() -> BillOfMaterials {
     BillOfMaterials {
         fractions: vec![
@@ -213,9 +212,6 @@ pub fn rocket_integration_bom() -> BillOfMaterials {
         ],
     }
 }
-
-/// Fixed mass for rocket integration hardware (kg).
-pub const ROCKET_INTEGRATION_MASS_KG: f64 = 800.0;
 
 /// The materials floor of an engine's cost: its mass priced through its
 /// bill of materials. What a complex or hydrogen engine costs beyond
@@ -234,14 +230,28 @@ pub fn tank_material_cost(structural_mass_kg: f64, prices: &ResourcePrices) -> f
     tank_bom().material_cost(structural_mass_kg, prices)
 }
 
-/// Fixed cost for stage assembly (wiring, avionics, etc.).
-pub fn stage_assembly_cost(prices: &ResourcePrices) -> f64 {
-    stage_assembly_bom().material_cost(STAGE_ASSEMBLY_MASS_KG, prices)
+/// Mass of a stage's assembly hardware: a floor plus a share of its
+/// structure up to a cap, so a 150 kg upper stage is not wired like a
+/// 6 t booster and a 26 t core is wired like one.
+pub fn stage_assembly_mass_kg(structural_mass_kg: f64, costs: &CostsConfig) -> f64 {
+    costs.assembly_floor_kg + costs.assembly_fraction * structural_mass_kg.min(costs.assembly_cap_kg)
 }
 
-/// Fixed cost for final rocket integration.
-pub fn rocket_integration_cost(prices: &ResourcePrices) -> f64 {
-    rocket_integration_bom().material_cost(ROCKET_INTEGRATION_MASS_KG, prices)
+/// Material cost of a stage's assembly hardware (wiring, avionics, etc.).
+pub fn stage_assembly_cost(structural_mass_kg: f64, costs: &CostsConfig) -> f64 {
+    stage_assembly_bom().material_cost(stage_assembly_mass_kg(structural_mass_kg, costs), &costs.resource_prices)
+}
+
+/// Mass of a vehicle's integration hardware: a floor plus a share of
+/// its dry mass up to a cap.
+pub fn rocket_integration_mass_kg(dry_mass_kg: f64, costs: &CostsConfig) -> f64 {
+    costs.integration_floor_kg + costs.integration_fraction * dry_mass_kg.min(costs.integration_cap_kg)
+}
+
+/// Material cost of final rocket integration for a vehicle of
+/// `dry_mass_kg` (every stage's dry mass, engines included).
+pub fn rocket_integration_cost(dry_mass_kg: f64, costs: &CostsConfig) -> f64 {
+    rocket_integration_bom().material_cost(rocket_integration_mass_kg(dry_mass_kg, costs), &costs.resource_prices)
 }
 
 /// Format a dollar amount for display (e.g. "$1.5M", "$300K").
@@ -348,20 +358,34 @@ mod tests {
             "Tank cost {} out of range for 2000kg structure", cost);
     }
 
+    /// 24_STRATEGIES.md §2.1: assembly and integration hardware scale
+    /// with the vehicle. The bot's 6 450 kg booster stage pays about
+    /// what the old flat 500 kg did (834 kg of hardware, ~$7.3M); an
+    /// Electron-class 150 kg upper stage pays a tenth of that.
     #[test]
-    fn test_stage_assembly_cost() {
-        let cost = stage_assembly_cost(&ResourcePrices::default());
-        // 500kg: electronics(50kg*$80K=$4M) + wiring(150kg*$600) + plumbing(50kg*$6K) + ...
-        assert!(cost > 400_000.0 && cost < 8_000_000.0,
-            "Stage assembly cost {} out of range", cost);
+    fn test_stage_assembly_cost_scales_with_the_stage() {
+        let costs = CostsConfig::default();
+        let booster = stage_assembly_cost(6_450.0, &costs);
+        let small = stage_assembly_cost(150.0, &costs);
+        assert!((stage_assembly_mass_kg(6_450.0, &costs) - 834.0).abs() < 1e-9);
+        assert!(booster > 6_000_000.0 && booster < 8_500_000.0, "booster assembly {booster}");
+        assert!(small < booster / 9.0, "small stage assembly {small} vs booster {booster}");
+        assert!(small > 400_000.0, "the avionics floor is never free: {small}");
+        // The incumbent's 26 t core is wired like a 7 t stage.
+        let core = stage_assembly_cost(26_000.0, &costs);
+        assert!((core - stage_assembly_cost(7_000.0, &costs)).abs() < 1e-6, "core {core}");
+        assert!(core < booster * 1.1, "core {core} vs booster {booster}");
     }
 
     #[test]
-    fn test_rocket_integration_cost() {
-        let cost = rocket_integration_cost(&ResourcePrices::default());
-        // 800kg: electronics(40kg*$80K=$3.2M) + wiring(120kg*$600) + ...
-        assert!(cost > 400_000.0 && cost < 8_000_000.0,
-            "Integration cost {} out of range", cost);
+    fn test_rocket_integration_cost_scales_with_dry_mass() {
+        let costs = CostsConfig::default();
+        // The bot's vehicle: ~10 t dry.
+        let medium = rocket_integration_cost(10_044.0, &costs);
+        let small = rocket_integration_cost(2_372.0, &costs);
+        assert!((rocket_integration_mass_kg(10_044.0, &costs) - 702.64).abs() < 1e-6);
+        assert!(medium > 2_500_000.0 && medium < 4_000_000.0, "medium integration {medium}");
+        assert!(small < medium / 2.5, "small integration {small} vs medium {medium}");
     }
 
     #[test]

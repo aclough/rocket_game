@@ -272,6 +272,7 @@ impl Company {
             design_id,
             rocket_name.clone(),
             total_stages,
+            rp.design.dry_mass_kg(),
             rocket_prior,
             rp.revision,
             rp.flaws.clone(),

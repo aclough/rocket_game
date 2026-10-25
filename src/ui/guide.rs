@@ -272,7 +272,7 @@ mod tests {
             crate::manufacturing::ManufacturingOrder::new_integration(
                 crate::manufacturing::ManufacturingOrderId(1),
                 crate::rocket_project::RocketProjectId(1), crate::rocket::RocketDesignId(1),
-                "Ordered".into(), 2, 0, 0, Vec::new(), &app.game.balance,
+                "Ordered".into(), 2, 10_000.0, 0, 0, Vec::new(), &app.game.balance,
             ),
         );
         app.handle_key(KeyCode::Char(' '));

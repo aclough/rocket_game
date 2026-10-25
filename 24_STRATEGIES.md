@@ -288,3 +288,25 @@ $25M-kept band.
 Approval: steps 1–4 may be committed without asking (2026-10-25,
 "do your own commits for the first stages"); the market tune (step 5)
 is to be talked over first.
+
+**Step 2 — fixed material cost scales with the vehicle.** Stage
+assembly hardware is `60 kg + 12 % of structural mass (capped at
+7 t)` and rocket integration `100 kg + 6 % of dry mass (capped at
+12 t)`, through the same two functions the pipeline and the bid
+estimate share (`stage_assembly_cost`, `rocket_integration_cost`,
+now taking the masses); `new_integration` takes the vehicle's dry
+mass (`RocketDesign::dry_mass_kg`). Config: `assembly_floor_kg`,
+`assembly_fraction`, `assembly_cap_kg`, `integration_floor_kg`,
+`integration_fraction`, `integration_cap_kg`. Calibrated on the bot's
+own template (6 450 + 1 500 kg structure, ~10 t dry): its fixed share
+is $12.6M against $12.4M before. The caps exist for DinoSoar's 26 t
+core: linear scaling had raised its material cost by half (and broke
+`dino_success_pays_and_boosts_rep`'s same-day headroom); capped, the
+Brontosaur pays ~$3.4M more per unit before learning, ~4 % of its
+cost. Probe: Electron-class $14.0M → $5.4M, Alpha-class $16.4M →
+$12.3M, mono small $5.0M; the autosized BLV-class $19.9M → $20.5M
+(its 8.7 t structure is heavier than the bot's template). 100 seeds:
+bot unit cost 19.8M → 20.1M, curve 35 / 61 / 76 / 98 unchanged.
+200 seeds: `[fleet] bankrupt 3/200, kept $25M 178/200, profitable
+148/200, profitable year 199/200, aggregate success 90.3%`, bands
+green. 732 tests, clippy clean.

@@ -389,10 +389,10 @@ impl Company {
                     };
                 }
                 total += (crate::resources::tank_material_cost(stage.structural_mass_kg, prices)
-                    + crate::resources::stage_assembly_cost(prices)) * rocket_learning;
+                    + crate::resources::stage_assembly_cost(stage.structural_mass_kg, &balance.costs)) * rocket_learning;
             }
         }
-        total + crate::resources::rocket_integration_cost(prices) * rocket_learning
+        total + crate::resources::rocket_integration_cost(project.design.dry_mass_kg(), &balance.costs) * rocket_learning
     }
 
     /// Drop rush jobs with nothing left to rush.
