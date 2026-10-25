@@ -447,3 +447,33 @@ The basic bot is unaffected (100 seeds identical; 200 × 8 curve
 36 / 64 / 79 / 97, `[fleet] bankrupt 1/200, kept $25M 191/200,
 profitable 160/200, profitable year 200/200, aggregate 91.0%`). 733
 tests, clippy clean.
+
+**Step 6 — methalox and solid bots.** `METHALOX`: two methalox gas
+generators (~750 kN) under 90 t and a methalox vacuum bell (~100 kN)
+under 12 t on the basic bot's payroll — the one bot whose critical
+path runs through technology deficiencies. `SOLID`: one 1.5 MN solid
+motor under 58 t of grain and the basic bot's hydrolox expander under
+8 t (PSLV / Ceres-1 shape) — the one bot that builds and flies solids.
+`--policy methalox|solid`, sweeps as for the others. The band test
+shares `assert_strategy_bands` across the three strategy bots.
+
+Measured, 200 × 8:
+- `[fleet methalox] bankrupt 10/200, kept $25M 167/200, profitable
+  34/200, profitable year 186/200, aggregate success 83.4%, median
+  launches 14`; curve 27 / 44 / 77 / 92, unit cost $15.9M, payment
+  $30.9M, first launch month 14.5. Viable and visibly harder than
+  kerolox: the deficiencies cost it first-flight reliability (27 %
+  against 36 %) and a tenth of worlds go under. Bands: bankrupt
+  ≤ 15 %, profitable year ≥ 80 %, median ≥ 6, aggregate ≥ 80 %.
+- `[fleet solid] bankrupt 2/200, kept $25M 177/200, profitable 1/200,
+  profitable year 156/200, aggregate success 76.6%, median launches
+  9`; curve 28 / 35 / 76 / 91, unit cost $13.9M, payment $27.4M,
+  first launch month 19.6. Viable but thin, and its **second flight
+  succeeds 35 % of the time** against the medium bot's 64 %: the
+  solid's flaws are not being found between flights the way a liquid
+  engine's are — a flaw-model question about solids (bench exposure,
+  flight review) worth its own look, recorded here rather than tuned
+  away. Bands: bankrupt ≤ 15 %, profitable year ≥ 65 %, median ≥ 4,
+  aggregate ≥ 70 %.
+
+The basic bot is untouched. 733 tests, clippy clean.

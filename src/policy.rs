@@ -177,6 +177,43 @@ pub const ALPHA: BotTemplate = BotTemplate {
     bid_margin: 0.5,
 };
 
+/// The medium vehicle on methane (24_STRATEGIES.md step 6): two
+/// methalox gas generators (~750 kN) under 90 t and a methalox vacuum
+/// bell (~100 kN) under 12 t, the basic bot's payroll. Methalox is a
+/// technology with deficiencies, so this is the one bot whose critical
+/// path runs through tech revisions.
+pub const METHALOX: BotTemplate = BotTemplate {
+    policy_name: "methalox",
+    rocket_name: "MLV-1",
+    booster: BotEngine { name: "MLV Booster", cycle: EngineCycle::GasGenerator, preset: PropellantPreset::Methalox, scale: 750.0 / 700.0 },
+    upper: Some(BotEngine { name: "MLV Upper", cycle: EngineCycle::GasGenerator, preset: PropellantPreset::Methalox, scale: 100.0 / 700.0 }),
+    stages: [
+        BotStage { engine_count: 2, propellant_kg: 90_000.0 },
+        BotStage { engine_count: 1, propellant_kg: 12_000.0 },
+    ],
+    engineering_teams: 3,
+    manufacturing_teams: 4,
+    bid_margin: DEFAULT_BID_MARGIN,
+};
+
+/// A solid-boosted vehicle (PSLV / Ceres-1 shape, 24_STRATEGIES.md
+/// step 6): one 1.5 MN solid motor under 58 t of grain and the basic
+/// bot's hydrolox expander under 8 t — ~1.3 t to LEO. The one bot that
+/// builds and flies solids.
+pub const SOLID: BotTemplate = BotTemplate {
+    policy_name: "solid",
+    rocket_name: "SBV-1",
+    booster: BotEngine { name: "SBV Motor", cycle: EngineCycle::PressureFed, preset: PropellantPreset::Solid, scale: 1_500.0 / 300.0 },
+    upper: Some(BotEngine { name: "SBV Upper", cycle: EngineCycle::Expander, preset: PropellantPreset::Hydrolox, scale: 1.0 }),
+    stages: [
+        BotStage { engine_count: 1, propellant_kg: 58_400.0 },
+        BotStage { engine_count: 1, propellant_kg: 8_000.0 },
+    ],
+    engineering_teams: 3,
+    manufacturing_teams: 4,
+    bid_margin: DEFAULT_BID_MARGIN,
+};
+
 impl BasicPolicy {
     /// Has any launch ever fully succeeded? The success reputation
     /// factor only becomes positive via `on_launch_success`.
@@ -663,7 +700,7 @@ pub fn policy_by_name(name: &str) -> Option<Box<dyn CompanyPolicy>> {
     }
     // `<template>:<engineering teams>,<manufacturing teams>[,<S1 kg>,<S2 kg>]`
     // — the payroll and tank sweep for a templated bot.
-    for (prefix, base) in [("smallsat:", SMALLSAT), ("alpha:", ALPHA)] {
+    for (prefix, base) in [("smallsat:", SMALLSAT), ("alpha:", ALPHA), ("methalox:", METHALOX), ("solid:", SOLID)] {
         if let Some(rest) = name.strip_prefix(prefix) {
             let parts: Vec<&str> = rest.split(',').collect();
             if parts.len() != 2 && parts.len() != 4 {
@@ -687,6 +724,8 @@ pub fn policy_by_name(name: &str) -> Option<Box<dyn CompanyPolicy>> {
         "prudent" => Some(Box::new(BasicPolicy::prudent(6, 3))),
         "smallsat" => Some(Box::new(BasicPolicy::with_template(SMALLSAT))),
         "alpha" => Some(Box::new(BasicPolicy::with_template(ALPHA))),
+        "methalox" => Some(Box::new(BasicPolicy::with_template(METHALOX))),
+        "solid" => Some(Box::new(BasicPolicy::with_template(SOLID))),
         _ => None,
     }
 }
@@ -694,7 +733,7 @@ pub fn policy_by_name(name: &str) -> Option<Box<dyn CompanyPolicy>> {
 /// Names accepted by `policy_by_name`, for CLI help text.
 pub const POLICY_NAMES: &[&str] = &[
     "none", "basic", "basic:<margin>", "prudent", "prudent:<teams>,<cycles>",
-    "smallsat", "smallsat:<eng teams>,<mfg teams>",
+    "smallsat", "alpha", "methalox", "solid", "<template>:<eng teams>,<mfg teams>[,<S1 kg>,<S2 kg>]",
 ];
 
 #[cfg(test)]

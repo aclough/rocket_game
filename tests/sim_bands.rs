@@ -100,18 +100,22 @@ fn fleet_line(tag: &str, summaries: &[RunSummary]) -> String {
     )
 }
 
-/// The small launcher (24_STRATEGIES.md steps 4–5). Measured after the
-/// smallsat market took per-launch floors (200 × 8): bankrupt 0/200,
-/// kept $25M 200/200, profitable 0/200, profitable year 131/200,
-/// aggregate success 89.5 %, median 13 launches, unit cost $5.6M
-/// against $6.7M a flight. A thin business that works — Electron's —
-/// not a money machine: the bands say it must stay possible, not that
-/// it must pay like medium lift.
-#[test]
-#[ignore = "200-seed smallsat bands; run with `cargo test -- --ignored`"]
-fn smallsat_bands_200_seeds() {
-    let summaries: Vec<RunSummary> = (1..=200).map(|seed| run_policy("smallsat", seed, 8).0).collect();
-    println!("{}", fleet_line("smallsat", &summaries));
+/// The bands a strategy bot must hold (24_STRATEGIES.md §3): it must
+/// stay *possible* — few bankruptcies, a profitable year in most
+/// worlds, a real launch cadence, a sane success rate — not pay like
+/// the medium bot. Thresholds sit under each strategy's first
+/// measurement with seed-noise room.
+struct StrategyBands {
+    policy: &'static str,
+    bankrupt_max: f64,
+    profitable_year_min: f64,
+    median_launches_min: usize,
+    aggregate_min: f64,
+}
+
+fn assert_strategy_bands(b: &StrategyBands) {
+    let summaries: Vec<RunSummary> = (1..=200).map(|seed| run_policy(b.policy, seed, 8).0).collect();
+    println!("{}", fleet_line(b.policy, &summaries));
     let n = summaries.len() as f64;
     let bankrupt = summaries.iter().filter(|s| s.bankrupt).count();
     let fpy = summaries.iter().filter(|s| s.first_profitable_year.is_some()).count();
@@ -120,11 +124,55 @@ fn smallsat_bands_200_seeds() {
     let mut counts: Vec<usize> = summaries.iter().map(|s| s.launches).collect();
     counts.sort_unstable();
     let median = counts[counts.len() / 2];
-    fleet_band(bankrupt as f64 / n <= 0.25, format!("{bankrupt}/200 small launchers bankrupt (band <= 25%, measured 0)"));
-    fleet_band(fpy as f64 / n >= 0.50, format!("only {fpy}/200 small launchers had a profitable year (band >= 50%, measured 65.5%)"));
-    fleet_band(median >= 10, format!("median small launcher flew {median} times in 8 years (band >= 10, measured 13)"));
-    fleet_band(successes as f64 / launches as f64 >= 0.80,
-        format!("small launcher aggregate success {:.1}% (band >= 80%, measured 89.5%)", successes as f64 / launches as f64 * 100.0));
+    let p = b.policy;
+    fleet_band(bankrupt as f64 / n <= b.bankrupt_max,
+        format!("{p}: {bankrupt}/200 bankrupt (band <= {:.0}%)", b.bankrupt_max * 100.0));
+    fleet_band(fpy as f64 / n >= b.profitable_year_min,
+        format!("{p}: only {fpy}/200 had a profitable year (band >= {:.0}%)", b.profitable_year_min * 100.0));
+    fleet_band(median >= b.median_launches_min,
+        format!("{p}: median {median} launches in 8 years (band >= {})", b.median_launches_min));
+    fleet_band(successes as f64 / launches as f64 >= b.aggregate_min,
+        format!("{p}: aggregate success {:.1}% (band >= {:.0}%)", successes as f64 / launches as f64 * 100.0, b.aggregate_min * 100.0));
+}
+
+/// The small launcher (24_STRATEGIES.md steps 4–5). Measured after the
+/// smallsat market took per-launch floors (200 × 8): bankrupt 0/200,
+/// kept $25M 200/200, profitable 0/200, profitable year 132/200,
+/// aggregate success 89.5 %, median 13 launches, unit cost $5.6M
+/// against $6.7M a flight. A thin business that works — Electron's.
+#[test]
+#[ignore = "200-seed smallsat bands; run with `cargo test -- --ignored`"]
+fn smallsat_bands_200_seeds() {
+    assert_strategy_bands(&StrategyBands {
+        policy: "smallsat", bankrupt_max: 0.25, profitable_year_min: 0.50, median_launches_min: 10, aggregate_min: 0.80,
+    });
+}
+
+/// The medium vehicle on methane (step 6): the one bot whose critical
+/// path runs through technology deficiencies. Measured 200 × 8:
+/// bankrupt 10/200, profitable year 186/200, first flight 27 %,
+/// aggregate 92 %, unit cost $15.9M against $30.9M a flight.
+#[test]
+#[ignore = "200-seed methalox bands; run with `cargo test -- --ignored`"]
+fn methalox_bands_200_seeds() {
+    assert_strategy_bands(&StrategyBands {
+        policy: "methalox", bankrupt_max: 0.15, profitable_year_min: 0.80, median_launches_min: 6, aggregate_min: 0.80,
+    });
+}
+
+/// The solid-boosted vehicle (step 6): the one bot that builds and
+/// flies solids. Measured 200 × 8: bankrupt 2/200, profitable year
+/// 156/200, median 9 launches, aggregate 76.6 % — its first two
+/// flights succeed 28 % and 35 % of the time against the medium bot's
+/// 36 % and 64 %, which is a flaw-model question about solids worth
+/// its own look, not a band to hide; unit cost $13.9M against $27.4M
+/// a flight.
+#[test]
+#[ignore = "200-seed solid bands; run with `cargo test -- --ignored`"]
+fn solid_bands_200_seeds() {
+    assert_strategy_bands(&StrategyBands {
+        policy: "solid", bankrupt_max: 0.15, profitable_year_min: 0.65, median_launches_min: 4, aggregate_min: 0.70,
+    });
 }
 
 /// Same seed + same policy twice must produce byte-identical monthly
