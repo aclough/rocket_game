@@ -231,7 +231,8 @@ mod bell_tests {
         assert!(bells.is_pair());
         assert_eq!(bells.isp(), "271 / 337 s");
         assert_eq!(bells.thrust(), "900 kN / 976 kN");
-        assert_eq!(bells.mass(), "1,082 kg / 1,266 kg");
+        // The 900 kN baseline carries 40 × 0.9^0.3 ≈ 39 kg of pumps, one kg under the 1 MN anchor.
+        assert_eq!(bells.mass(), "1,081 kg / 1,265 kg");
     }
 
     #[test]

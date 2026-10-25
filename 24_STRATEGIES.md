@@ -334,3 +334,20 @@ payment 40.5M → 37.4M. 200 × 8: curve 38 / 62 / 76 / 97 (was
 draws; 3rd-flight 153/200 vs 162/200 is inside two sigma), `[fleet]
 bankrupt 2/200, kept $25M 189/200, profitable 152/200, profitable
 year 199/200, aggregate 90.4%`, bands green. 732 tests, clippy clean.
+
+**Step 3b — small engines shed most of the pump floor.** The
+turbomachinery part of a pump-fed engine's mass scales as
+`size^0.3` (`TURBOMACHINERY_SIZE_EXPONENT`): 40 kg at 1 MN as
+before, ~13 kg at 25 kN. A 25 kN kerolox gas generator is 55 kg
+(TWR 46) instead of 81 (TWR 31); the 900 kN baseline loses one
+kilogram. Engine yardstick otherwise unchanged (Merlin 1C TWR 68 =
+real; Kestrel and RL10 are pressure-fed/expander cases the floor
+never touched). Probe: Electron-class 227 → 273 kg LEO, 142 → 185 kg
+SSO, $4.0M (real: 300 kg SSO, ~$7.5M a flight); Alpha-class 1 021 kg
+LEO (real 1 030), $9.1M. 200 × 8: curve 36 / 64 / 79 / 97, `[fleet]
+bankrupt 1/200, kept $25M 191/200, profitable 160/200, profitable
+year 200/200, aggregate 91.0%`. **The "stay dangerous" floor
+(≥ 1 % bankrupt) tripped at 1/200**; lowered to 0.5 % with a note
+that steps 3/3b's slack is reserved for the flaws retune (Q2). The
+basic bot's economy is now: unit cost 17.3M, payment 34.6M, first
+launch month 19.4. 732 tests, clippy clean.

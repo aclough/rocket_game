@@ -209,7 +209,7 @@ impl EngineBaseline {
             cycle,
             thrust_n: nominal_thrust * pressure_factor,
             mass_kg: (self.mass_kg - self.fixed_mass_kg) * scale.powf(self.mass_size_exponent)
-                + self.fixed_mass_kg,
+                + self.fixed_mass_kg * scale.powf(TURBOMACHINERY_SIZE_EXPONENT),
             isp_s,
             propellant_mix: preset.propellant_mix(),
             propulsion,
@@ -290,6 +290,10 @@ pub const TWR_REFERENCE_THRUST_N: f64 = 1_000_000.0;
 /// ~1.21×. Small pump-fed engines are heavier per kN (RL10, HM7B,
 /// LE-5 at 33–59; F-1 82 at 6.8 MN), 21_ENGINES.md §3.3.3.
 pub const TWR_SIZE_EXPONENT: f64 = 0.10;
+/// How the turbomachinery part of an engine's mass scales with its
+/// size: `turbomachinery_mass_kg × size^this`. 0.3 puts ~13 kg of pumps
+/// on a 25 kN gas generator and 40 kg on a 1 MN one.
+pub const TURBOMACHINERY_SIZE_EXPONENT: f64 = 0.3;
 
 /// Thrust-to-weight of a family's *first production* engine at 1 MN of
 /// rated (vacuum, short-bell) thrust (21_ENGINES.md §3.3.2 and question
@@ -536,16 +540,20 @@ pub fn engine_baseline(cycle: EngineCycle, preset: PropellantPreset) -> Option<E
 
     let thrust = base_thrust * thrust_mult;
     // A solid motor's case is its tank; its mass stays in proportion.
-    // A pump-fed engine's 1 MN mass is split into a fixed turbomachinery
-    // part and the rest, which scales as size^0.9; the 1 MN anchor
-    // stays where the TWR table puts it.
+    // A pump-fed engine's 1 MN mass is split into a turbomachinery part,
+    // which scales slowly (size^0.3: a 25 kN engine's pumps are a third
+    // of a 1 MN engine's, not the same — 24_STRATEGIES.md §2.3), and
+    // the rest, which scales as size^0.9; the 1 MN anchor stays where
+    // the TWR table puts it.
     let (mass, fixed_mass_kg, mass_size_exponent) = if preset == PropellantPreset::Solid {
         (thrust / (40.0 * G0), 0.0, 1.0)
     } else {
-        let fixed = turbomachinery_mass_kg(cycle);
+        let size = thrust / TWR_REFERENCE_THRUST_N;
+        let fixed_1mn = turbomachinery_mass_kg(cycle);
+        let fixed = fixed_1mn * size.powf(TURBOMACHINERY_SIZE_EXPONENT);
         let mass_1mn = TWR_REFERENCE_THRUST_N / (first_production_twr_1mn(cycle, preset) * G0);
         let exponent = 1.0 - TWR_SIZE_EXPONENT;
-        let mass = (mass_1mn - fixed) * (thrust / TWR_REFERENCE_THRUST_N).powf(exponent) + fixed;
+        let mass = (mass_1mn - fixed_1mn) * size.powf(exponent) + fixed;
         (mass, fixed, exponent)
     };
 
@@ -1260,11 +1268,20 @@ mod tests {
         ).unwrap();
         // Thrust scales linearly; mass a little slower, so the bigger
         // engine has the better thrust-to-weight (TWR_SIZE_EXPONENT),
-        // with the fixed turbomachinery mass not scaling at all.
+        // with the turbomachinery part scaling slower still.
         assert!((p2.design.thrust_n / p1.design.thrust_n - 4.0).abs() < 0.01);
-        let fixed = turbomachinery_mass_kg(EngineCycle::GasGenerator);
-        let mass_ratio = 4.0_f64.powf(1.0 - TWR_SIZE_EXPONENT);
-        assert!(((p2.design.mass_kg - fixed) / (p1.design.mass_kg - fixed) - mass_ratio).abs() < 1e-9);
+        let ratio = p2.design.mass_kg / p1.design.mass_kg;
+        assert!(ratio < 4.0_f64.powf(1.0 - TWR_SIZE_EXPONENT) && ratio > 4.0_f64.powf(TURBOMACHINERY_SIZE_EXPONENT),
+            "mass ratio {ratio}");
+        // A 25 kN kerolox gas generator carries a third of the 1 MN
+        // engine's pumps and lands near TWR 45 (24_STRATEGIES.md §2.3).
+        let small = EngineProject::new(
+            EngineProjectId(3), EngineId(3), "Tiny".into(),
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 0.0333, &bal(),
+        ).unwrap();
+        let twr = small.design.thrust_n / (small.design.mass_kg * crate::engine::G0);
+        assert!(small.design.thrust_n < 30_000.0, "thrust {}", small.design.thrust_n);
+        assert!(twr > 40.0 && twr < 55.0, "small engine TWR {twr}");
         // Isp doesn't change
         assert_eq!(p1.design.isp_s, p2.design.isp_s);
     }
