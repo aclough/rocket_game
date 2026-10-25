@@ -685,6 +685,69 @@ mod market_discovery_render_tests {
         }
     }
 
+    /// The launch manifest reads red where a pick would put the
+    /// manifest over what the carrier can lift to that orbit, and on the
+    /// mass line once it is over.
+    #[test]
+    fn launch_manifest_reads_red_over_capacity() {
+        use crate::contract::{Contract, ContractId, ContractStatus, MARKET_SMALLSAT};
+        use crate::policy::{BasicPolicy, CompanyPolicy};
+        use ratatui::style::Color;
+        let mut game = crate::game_state::GameState::new("Manifest Test".into(), 11);
+        let mut policy = BasicPolicy::new();
+        for _ in 0..900 {
+            policy.act(&mut game);
+            game.advance_day();
+        }
+        let rp = game.player_company.rocket_projects[0].clone();
+        let cap = game.payload_capability(&rp.design, "earth_surface", "leo");
+        assert!(cap > 500.0, "fixture premise: the bot's rocket lifts a smallsat, cap {cap}");
+        let item_id = crate::manufacturing::InventoryItemId(9_900);
+        game.player_company.manufacturing.inventory.rockets.push(crate::manufacturing::InventoryRocket {
+            item_id, rocket_project_id: rp.project_id, design_id: rp.design.id,
+            rocket_name: rp.design.name.clone(), build_cost: 15_000_000.0, revision: rp.revision,
+            rocket_flaws: Vec::new(), grounded_until: None, stage_engine_flaws: Vec::new(),
+        });
+        game.player_company.active_contracts.clear();
+        let contract = |id: u64, name: &str, kg: f64| Contract {
+            id: ContractId(id), name: name.into(), destination: "leo".into(), payload_kg: kg,
+            payment: 5_000_000.0, deadline: game.date.add_days(90), status: ContractStatus::Accepted,
+            market_id: MARKET_SMALLSAT, campaign_id: None, bid_deadline: None, budget_ceiling: 0.0, player_bid: None,
+        };
+        game.player_company.active_contracts.push(contract(1, "Featherweight to LEO", 100.0));
+        game.player_company.active_contracts.push(contract(2, "Anvil to LEO", cap * 3.0));
+
+        let mut app = App::new(game);
+        let mut render = |picks: Vec<bool>| {
+            app.input_mode = InputMode::LaunchManifest {
+                rocket_item_id: item_id, persist: false, contract_picks: picks,
+                spacecraft_picks: Vec::new(), spacecraft_item_ids: Vec::new(), cursor: 0,
+            };
+            let backend = TestBackend::new(120, 50);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|frame| draw::draw(frame, &app)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            let width = buf.area.width as usize;
+            let colour_of = |needle: &str| -> Option<Color> {
+                for y in 0..buf.area.height as usize {
+                    let line: String = (0..width).map(|x| buf.content()[y * width + x].symbol().to_string()).collect();
+                    if let Some(pos) = line.find(needle) {
+                        let x = line[..pos].chars().count();
+                        return Some(buf.content()[y * width + x].fg);
+                    }
+                }
+                None
+            };
+            (colour_of("Featherweight"), colour_of("Anvil"), colour_of("Payload mass"))
+        };
+        let (light, heavy, mass) = render(vec![false, false]);
+        assert_ne!(light, Some(Color::Red), "a liftable contract is not red");
+        assert_eq!(heavy, Some(Color::Red), "a contract the carrier cannot lift is red");
+        assert_ne!(mass, Some(Color::Red), "nothing picked: the mass line is calm");
+        let (_, _, mass) = render(vec![false, true]);
+        assert_eq!(mass, Some(Color::Red), "the anvil aboard: the mass line is red");
+    }
+
     /// 'r' on the Contracts pane opens the standing bid-rules editor;
     /// Space toggles the selected market's rule, and the modal renders
     /// market names with their enable state and margin.

@@ -510,10 +510,24 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
             let contracts = &app.game.player_company.active_contracts;
             let inventory = &app.game.player_company.manufacturing.inventory;
 
-            let carrier_name = inventory.rockets.iter()
-                .find(|r| r.item_id == *rocket_item_id)
+            let carrier = inventory.rockets.iter().find(|r| r.item_id == *rocket_item_id);
+            let carrier_name = carrier
                 .map(|r| r.rocket_name.clone())
                 .unwrap_or_else(|| "(unknown)".into());
+            // What the carrier can lift to a destination, by the same
+            // physics the contract list and the bid engine use. A row
+            // whose pick would put the manifest over it reads red: the
+            // rocket definitely won't make that orbit with it aboard.
+            let carrier_design = carrier.and_then(|r| {
+                app.game.player_company.rocket_projects.iter()
+                    .find(|rp| rp.project_id == r.rocket_project_id)
+                    .map(|rp| &rp.design)
+            });
+            let capacity_to = |dest: &str| -> Option<f64> {
+                carrier_design.map(|d| app.game.payload_capability(d, "earth_surface", dest))
+            };
+            let over = |mass: f64, dest: &str| capacity_to(dest).is_some_and(|cap| mass > cap);
+            let red = Style::default().fg(Color::Red);
 
             // Compute manifest summary: destination + total payload mass.
             let mut destination: Option<String> = None;
@@ -546,6 +560,17 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
 
+            let capacity_line = match capacity_to(&destination_for_summary) {
+                Some(cap) => Line::from(Span::styled(
+                    format!(
+                        "  Payload mass: {} of ~{} the carrier can lift there{}",
+                        format_mass(payload_mass), format_mass(cap),
+                        if payload_mass > cap { "  ✗ too heavy for orbit" } else { "" },
+                    ),
+                    if payload_mass > cap { red.add_modifier(Modifier::BOLD) } else { Style::default() },
+                )),
+                None => Line::from(format!("  Payload mass: {}", format_mass(payload_mass))),
+            };
             let mut lines = vec![
                 Line::from(""),
                 Line::from(format!("  Carrier: {}", carrier_name)),
@@ -554,7 +579,7 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                     contract::destination_display_name(&destination_for_summary),
                     if destination_conflict { "  ▲ contracts disagree" } else { "" },
                 )),
-                Line::from(format!("  Payload mass: {}", format_mass(payload_mass))),
+                capacity_line,
                 Line::from(""),
             ];
 
@@ -565,7 +590,13 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 for (i, c) in contracts.iter().enumerate() {
                     let mark = if *cursor == row { " ▶ " } else { "   " };
                     let check = if contract_picks[i] { "[✓]" } else { "[ ]" };
-                    let style = selected_style(*cursor == row);
+                    // The manifest with this contract aboard, to its orbit.
+                    let with_it = if contract_picks[i] { payload_mass } else { payload_mass + c.payload_kg };
+                    let style = if over(with_it, &c.destination) {
+                        if *cursor == row { red.add_modifier(Modifier::BOLD) } else { red }
+                    } else {
+                        selected_style(*cursor == row)
+                    };
                     // No destination here: every contract name is built as
                     // "<something> to <destination>", so spelling it out
                     // again just reads as "… to LEO → Low Earth Orbit". The
@@ -586,7 +617,6 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                 for (i, item_id) in spacecraft_item_ids.iter().enumerate() {
                     let mark = if *cursor == row { " ▶ " } else { "   " };
                     let check = if spacecraft_picks[i] { "[✓]" } else { "[ ]" };
-                    let style = selected_style(*cursor == row);
                     let (name, mass) = inventory.rockets.iter()
                         .find(|r| r.item_id == *item_id)
                         .and_then(|r| {
@@ -595,6 +625,12 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
                                 .map(|rp| (r.rocket_name.clone(), rp.design.total_mass_kg()))
                         })
                         .unwrap_or_else(|| ("(unknown)".into(), 0.0));
+                    let with_it = if spacecraft_picks[i] { payload_mass } else { payload_mass + mass };
+                    let style = if over(with_it, &destination_for_summary) {
+                        if *cursor == row { red.add_modifier(Modifier::BOLD) } else { red }
+                    } else {
+                        selected_style(*cursor == row)
+                    };
                     lines.push(Line::from(Span::styled(
                         format!("{}{} {} ({})", mark, check, name, format_mass(mass)),
                         style,
