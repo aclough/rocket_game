@@ -477,3 +477,14 @@ Measured, 200 × 8:
   aggregate ≥ 70 %.
 
 The basic bot is untouched. 733 tests, clippy clean.
+
+**Step 7 — close.** Filed 2026-10-25. What the plan found and left:
+a small launcher is now a thin business that works (Electron's), a
+methane medium is viable and visibly harder, a solid-boosted vehicle is
+viable but its flaws hide between flights (TODO). The structural model
+matches Falcon 9's real dry masses within 3 %; the remaining gap in
+the Falcon 9 yardstick is the engines. Slack from the lighter
+structure (basic bot bankruptcies 2 → 1 in 200) is reserved for the
+flaws retune; the band floor is 0.5 % until then. Rideshare proper —
+cheap per-kilogram rides on a big rocket to wherever it is going —
+remains a later distinction from these dedicated small launches.

@@ -17,5 +17,7 @@ Fold into the dry-mass / rocket-body work above (21_2_ENGINE_CYCLES.md §3).
 throat makes 3x the sea-level exit stubby), trading TWR for Isp whether
 or not it pays: AJ10-class TWR 20 (real 23), Kestrel-class 31 (real 60).
 
-[] We should review different strategies adn whether they're viable.  Smallsat,
-LEO, low end GTO.  Maybe have a set of seeds pursuing each.
+[] The solid bot's second flight succeeds 35% of the time against the
+medium bot's 64% (24_STRATEGIES.md step 6): a solid motor's flaws are not
+being found between flights the way a liquid engine's are. Look at the
+solid pool's exposure mix and what a flight review exercises on a solid.

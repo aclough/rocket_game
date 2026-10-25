@@ -69,6 +69,13 @@ A snapshot of what exists, for orientation — not a task list.
   full-flow and electric propulsion as technologies with a design
   carrying every technology it is on; power-draw deficiencies on
   electric drives; descriptions written per kind and family.
+- **Viable strategies (24):** assembly and integration material that
+  scales with the vehicle, a 150 g thrust structure and proportional
+  interstage, small engines that shed their pump floor; the "Smallsat
+  Launch" market with per-launch payment floors; templated bots —
+  `basic`, `smallsat`, `alpha`, `methalox`, `solid` — each with its
+  own 200-seed bands, so a small launcher, a methane medium and a
+  solid-boosted vehicle all stay possible.
 - **Robustness:** month-start and on-quit autosave across three
   rotating slots, versioned saves with a compatibility corpus of real
   saves from past versions, a panic handler that gives the terminal
@@ -108,8 +115,6 @@ not committed to until then.
 Vertical loops, each individually shippable. Order should be revisited
 against player feedback.
 
-- Add different strategies to the automatic balance testing with different
-  rocket designs.
 - Entry, Descent, and Landing features with as much detail and risk as launch
   has right now.  Heat shields, parachuets, and retropropulsion.  Reusable
   rocket stages.  Different rocket structure materials maybe.
