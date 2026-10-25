@@ -918,3 +918,180 @@ mod deficiencies {
     }
 }
 
+
+mod small_launch {
+    //! Strategy viability (ROADMAP "different strategies"): what an
+    //! Electron-class small launcher costs and lifts under the game's
+    //! own rules, next to the bot's medium vehicle. Prints liftoff mass,
+    //! payload to LEO/SSO, estimated unit cost, nominal build days and
+    //! design work, so the smallsat economics can be argued from numbers.
+    use rocket_tycoon::engine::EngineCycle;
+    use rocket_tycoon::engine_project::PropellantPreset;
+    use rocket_tycoon::game_state::GameState;
+    use rocket_tycoon::rocket_perf::max_payload_to;
+    use rocket_tycoon::stage::{autosize_propellant, recompute_structural_masses, Stage, StageId};
+
+    /// Scale of a family whose sea-level (or vacuum) thrust is `target_n`.
+    fn scale_for_thrust(state: &mut GameState, cycle: EngineCycle, preset: PropellantPreset, target_n: f64, vacuum: bool) -> f64 {
+        let mut scale = 1.0;
+        for _ in 0..4 {
+            let mut probe = state.player_company.clone();
+            probe.start_engine_project("probe".into(), cycle, preset, scale, None, &state.balance);
+            let ep = probe.engine_projects.last().unwrap();
+            let thrust = ep.design_variant(vacuum, &state.balance.nozzle).thrust_n;
+            scale *= target_n / thrust;
+        }
+        scale
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn vehicle(
+        label: &str, seed: u64,
+        boost: (EngineCycle, PropellantPreset, f64, u32),
+        upper: (EngineCycle, PropellantPreset, f64, u32),
+        payload_kg: f64,
+    ) {
+        let mut state = GameState::with_money("Probe".into(), 1e9, seed);
+        let bs = scale_for_thrust(&mut state, boost.0, boost.1, boost.2, false);
+        let us = scale_for_thrust(&mut state, upper.0, upper.1, upper.2, true);
+        state.player_company.start_engine_project("Booster".into(), boost.0, boost.1, bs, None, &state.balance);
+        state.player_company.start_engine_project("Upper".into(), upper.0, upper.1, us, None, &state.balance);
+        let bal = state.balance.clone();
+        let bep = state.player_company.engine_projects[0].clone();
+        let uep = state.player_company.engine_projects[1].clone();
+        let mut s1 = Stage {
+            id: StageId(1), name: "S1".into(), engine: bep.design_variant(false, &bal.nozzle),
+            engine_count: boost.3, propellant_mass_kg: 10_000.0, structural_mass_kg: 1_000.0,
+            fairing: None, power_sources: Vec::new(),
+        };
+        let mut s2 = Stage {
+            id: StageId(2), name: "S2".into(), engine: uep.design_variant(true, &bal.nozzle),
+            engine_count: upper.3, propellant_mass_kg: 2_000.0, structural_mass_kg: 200.0,
+            fairing: None, power_sources: Vec::new(),
+        };
+        s1.power_sources.push(rocket_tycoon::power::solar_panel_for_stage_demand(&s1));
+        s2.power_sources.push(rocket_tycoon::power::solar_panel_for_stage_demand(&s2));
+        let mut groups = vec![vec![s1], vec![s2]];
+        for _ in 0..4 {
+            let p2 = autosize_propellant(&groups, 1, 0, payload_kg, "earth_surface");
+            groups[1][0].propellant_mass_kg = p2;
+            recompute_structural_masses(&mut groups);
+            let p1 = autosize_propellant(&groups, 0, 0, payload_kg, "earth_surface");
+            groups[0][0].propellant_mass_kg = p1;
+            recompute_structural_masses(&mut groups);
+        }
+        state.player_company.start_rocket_project(label.into(), groups, &bal);
+        let rp = state.player_company.rocket_projects.last().unwrap().clone();
+        let company = &state.player_company;
+        let liftoff: f64 = rp.design.stage_groups.iter().flatten().map(|s| s.wet_mass_kg()).sum::<f64>() + payload_kg;
+        println!("\n== {label}");
+        for (gi, g) in rp.design.stage_groups.iter().enumerate() {
+            let s = &g[0];
+            println!(
+                "   S{}: {} ×{}  {:.0} kN each  {:.0} kg each  Isp {:.0}  prop {:.0} kg  structure {:.0} kg",
+                gi + 1, s.engine.name, s.engine_count, s.engine.thrust_n / 1e3, s.engine.mass_kg,
+                s.engine.isp_s, s.propellant_mass_kg, s.structural_mass_kg,
+            );
+        }
+        println!(
+            "   liftoff {:.1} t   payload LEO {:.0} kg  SSO {:.0} kg  GTO {:.0} kg",
+            liftoff / 1e3,
+            max_payload_to(&rp.design, "earth_surface", "leo"),
+            max_payload_to(&rp.design, "earth_surface", "sso"),
+            max_payload_to(&rp.design, "earth_surface", "gto"),
+        );
+        let perf = rocket_tycoon::rocket::DesignPerformance::compute(&rp.design, payload_kg, "earth_surface");
+        let losses: Vec<String> = perf.groups.iter().enumerate()
+            .map(|(gi, g)| format!("g{gi} vac {:.0} grav −{:.0} nozzle −{:.0}", g.delta_v_vacuum, g.gravity_loss, g.overexpansion_loss))
+            .collect();
+        println!("   at {payload_kg:.0} kg: {}  drag −{:.0}  → planner {:.0}", losses.join("; "), perf.ascent.drag, perf.total_planner_dv());
+        for (gi, g) in rp.design.stage_groups.iter().enumerate() {
+            let s = &g[0];
+            let mix: Vec<_> = s.engine.propellant_mix.iter().map(|f| (f.propellant, f.mass_fraction)).collect();
+            let b = rocket_tycoon::structure::compute_structural_mass(
+                s.propellant_mass_kg, &mix, &s.engine, s.engine_count, gi == 0, gi + 1 < rp.design.stage_groups.len());
+            println!("   S{} structure: tank {:.0}  thrust structure {:.0}  aero {:.0}  interstage {:.0}  (engines {:.0})",
+                gi + 1, b.tank_mass, b.thrust_structure, b.aero_shell, b.interstage, s.engine.mass_kg * s.engine_count as f64);
+        }
+        let prices = &bal.costs.resource_prices;
+        let fixed = rp.design.stage_groups.iter().flatten().count() as f64 * rocket_tycoon::resources::stage_assembly_cost(prices)
+            + rocket_tycoon::resources::rocket_integration_cost(prices);
+        println!("   of which fixed assembly + integration ${:.1}M", fixed / 1e6);
+        let eng_design = bal.work.design_work_required(bep.complexity, bs) + bal.work.design_work_required(uep.complexity, us);
+        println!(
+            "   unit cost ${:.1}M (materials, 1st unit)   build {:.0} line-days   design work: engines {:.0} + rocket {:.0} team-days",
+            company.estimated_build_cost(&rp, &bal) / 1e6,
+            company.nominal_build_days(&rp, &bal),
+            eng_design, bal.work.rocket_design_work_required(rp.complexity),
+        );
+    }
+
+    #[test]
+    #[ignore = "prints small-launcher economics; run with --ignored --nocapture"]
+    fn small_launcher_economics() {
+        use EngineCycle as C;
+        use PropellantPreset as P;
+        // The bot's medium vehicle, for scale.
+        vehicle("BLV-class (2× kerolox GG + hydrolox GG)", 1,
+            (C::GasGenerator, P::Kerolox, 750e3, 2), (C::GasGenerator, P::Hydrolox, 100e3, 1), 3_000.0);
+        // Electron: nine 25 kN kerolox engines, one vacuum engine, ~300 kg to SSO.
+        vehicle("Electron-class (9× 25 kN kerolox GG)", 1,
+            (C::GasGenerator, P::Kerolox, 25e3, 9), (C::GasGenerator, P::Kerolox, 25e3, 1), 300.0);
+        // Firefly Alpha: four 190 kN kerolox engines, one vacuum, ~1 t to LEO.
+        vehicle("Alpha-class (4× 190 kN kerolox GG)", 1,
+            (C::GasGenerator, P::Kerolox, 190e3, 4), (C::GasGenerator, P::Kerolox, 70e3, 1), 1_000.0);
+        // One bigger engine instead of nine: what the cost model rewards.
+        vehicle("Mono small (1× 225 kN kerolox GG)", 1,
+            (C::GasGenerator, P::Kerolox, 225e3, 1), (C::GasGenerator, P::Kerolox, 25e3, 1), 300.0);
+        vehicle("Pressure-fed small (1× 225 kN kerolox PF)", 1,
+            (C::PressureFed, P::Kerolox, 225e3, 1), (C::PressureFed, P::Kerolox, 25e3, 1), 300.0);
+        // Medium-lift alternatives to the kerolox/hydrolox pair.
+        vehicle("Medium methalox (2× 750 kN GG + 100 kN GG)", 1,
+            (C::GasGenerator, P::Methalox, 750e3, 2), (C::GasGenerator, P::Methalox, 100e3, 1), 3_000.0);
+        vehicle("Medium kerolox + hypergolic upper", 1,
+            (C::GasGenerator, P::Kerolox, 750e3, 2), (C::PressureFed, P::Hypergolic, 100e3, 1), 3_000.0);
+        vehicle("Medium kerolox SC (2× 750 kN) + kerolox GG upper", 1,
+            (C::StagedCombustion, P::Kerolox, 750e3, 2), (C::GasGenerator, P::Kerolox, 100e3, 1), 3_000.0);
+        vehicle("Medium solid S1 (1× 1.5 MN) + hydrolox upper", 1,
+            (C::PressureFed, P::Solid, 1_500e3, 1), (C::GasGenerator, P::Hydrolox, 100e3, 1), 3_000.0);
+        vehicle("Medium hydrolox SSTO-ish (2× 750 kN GG + 100 kN GG)", 1,
+            (C::GasGenerator, P::Hydrolox, 750e3, 2), (C::GasGenerator, P::Hydrolox, 100e3, 1), 3_000.0);
+    }
+
+    /// How many small contracts a world offers: contracts by payload
+    /// bucket per year over the first four years, with their pay, for a
+    /// few seeds and no player activity.
+    #[test]
+    #[ignore = "prints the smallsat contract supply; run with --ignored --nocapture"]
+    fn small_contract_supply() {
+        use std::collections::HashMap;
+        let buckets = [(300.0, "≤300 kg"), (1_000.0, "≤1 t"), (3_000.0, "≤3 t"), (f64::MAX, ">3 t")];
+        for seed in [1u64, 2, 3, 4] {
+            let mut state = GameState::with_money("Probe".into(), 1e9, seed);
+            let mut seen: HashMap<u64, (u32, f64, f64, String)> = HashMap::new();
+            let start_year = state.date.year;
+            for _ in 0..(365 * 4) {
+                state.advance_day();
+                for c in &state.available_contracts {
+                    seen.entry(c.id.0).or_insert((state.date.year - start_year, c.payload_kg, c.payment, c.destination.clone()));
+                }
+            }
+            println!("\n── seed {seed}: contracts offered per year by payload (count, mean pay, mean $/kg)");
+            for year in 0..4 {
+                let mut line = format!("   year {}:", year + 1);
+                for (cap, label) in buckets {
+                    let rows: Vec<_> = seen.values().filter(|(y, kg, _, _)| *y == year && *kg <= cap
+                        && buckets.iter().take_while(|(c2, _)| *c2 < cap).all(|(c2, _)| *kg > *c2)).collect();
+                    let n = rows.len();
+                    let pay = rows.iter().map(|r| r.2).sum::<f64>() / n.max(1) as f64;
+                    let per_kg = rows.iter().map(|r| r.2 / r.1).sum::<f64>() / n.max(1) as f64;
+                    line += &format!("  {label}: {n:>2} ${:>4.1}M ${:>3.0}k/kg", pay / 1e6, per_kg / 1e3);
+                }
+                println!("{line}");
+            }
+            let small: Vec<_> = seen.values().filter(|(_, kg, _, _)| *kg <= 500.0).collect();
+            let sso = small.iter().filter(|r| r.3 == "sso").count();
+            println!("   ≤500 kg over 4 years: {} ({} to SSO), total pay ${:.0}M", small.len(), sso, small.iter().map(|r| r.2).sum::<f64>() / 1e6);
+        }
+    }
+}
