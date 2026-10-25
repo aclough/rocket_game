@@ -28,7 +28,7 @@ use std::collections::HashSet;
 use rocket_tycoon::calendar::GameDate;
 use rocket_tycoon::contract::{
     Campaign, CampaignId, CampaignStatus, ContractId, ContractStatus,
-    MARKET_GEO_COMSATS, MARKET_RIDESHARE,
+    MARKET_GEO_COMSATS, MARKET_SMALLSAT,
 };
 use rocket_tycoon::event::GameEvent;
 use rocket_tycoon::game_state::GameSpeed;
@@ -300,7 +300,7 @@ fn dino_ignores_small_payload_blocks() {
     let campaign = Campaign {
         id: cid,
         name: "Cubesat Rideshare Co-op".into(),
-        market_id: MARKET_RIDESHARE,
+        market_id: MARKET_SMALLSAT,
         destination: "leo".into(),
         destination_display: "LEO".into(),
         payload_kg: 300.0,

@@ -629,7 +629,7 @@ mod market_discovery_render_tests {
         let campaign = crate::contract::Campaign {
             id: crate::contract::CampaignId(1),
             name: "Pathfinder Series".into(),
-            market_id: crate::contract::MARKET_RIDESHARE,
+            market_id: crate::contract::MARKET_SMALLSAT,
             destination: "leo".into(),
             destination_display: "LEO".into(),
             payload_kg: 300.0,
@@ -664,7 +664,7 @@ mod market_discovery_render_tests {
         let text: String = buf.content().iter().map(|c| c.symbol()).collect();
 
         // Realized content renders.
-        assert!(text.contains("Rideshare"), "market group header should render");
+        assert!(text.contains("Smallsat"), "market group header should render");
         assert!(
             text.contains("Pathfinder Series Flight 1"),
             "campaign mission should render as an ordinary offered contract",
@@ -1034,7 +1034,7 @@ mod contract_table_render_tests {
             payment: 0.0,
             deadline: game.date.add_days(300),
             status: crate::contract::ContractStatus::Available,
-            market_id: crate::contract::MARKET_RIDESHARE,
+            market_id: crate::contract::MARKET_SMALLSAT,
             campaign_id: None,
             bid_deadline: Some(game.date.add_days(5)),
             budget_ceiling: 50_000_000.0,
@@ -1081,7 +1081,7 @@ mod contract_table_render_tests {
             payment: 12_500_000.0 + i as f64 * 3_000_000.0,
             deadline: crate::calendar::GameDate::new(2001, 9, 1),
             status: crate::contract::ContractStatus::Available,
-            market_id: crate::contract::MARKET_RIDESHARE,
+            market_id: crate::contract::MARKET_SMALLSAT,
             campaign_id: None,
             bid_deadline: None,
             budget_ceiling: 0.0,

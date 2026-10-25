@@ -92,6 +92,7 @@ pub fn realize_archetype(seed: &GameSeed, arch: &MarketArchetype) -> RealizedMar
     market.base_volume *= volume_mult;
     for dest in &mut market.destinations {
         dest.rate_per_kg *= rate_mult;
+        dest.min_payment *= rate_mult;
         if arch.weight_tilt_strength > 0.0 {
             let tilt = rng.gen_range(-arch.weight_tilt_strength..=arch.weight_tilt_strength);
             dest.weight *= 1.0 + tilt;
@@ -217,7 +218,7 @@ pub fn default_archetypes() -> Vec<MarketArchetype> {
             "market_rideshare",
             (0.02, 0.08),
             None,
-            by_id(MARKET_RIDESHARE, &base),
+            by_id(MARKET_SMALLSAT, &base),
         ),
         MarketArchetype {
             key: "market_cots".into(),

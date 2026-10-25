@@ -131,6 +131,31 @@ fn sanitize(state: &mut GameState) {
     // past every spacecraft the save holds (idempotent on a current save).
     let highest = state.spacecraft.iter().map(|s| s.id.0).max().unwrap_or(0);
     state.next_spacecraft_id.ensure_past(highest);
+
+    refresh_market_pricing(state);
+}
+
+/// A market's name and its destinations' pricing (rate per kilogram,
+/// per-launch floor) are the game's current price list, not the world:
+/// a saved world takes what a new game on its seed would have — the
+/// default archetypes realized for the seed, so the seed's rate
+/// multiplier is kept — matched by market id and destination. Volumes,
+/// growth, modifiers, activation and everything else stay as saved.
+/// Added when "Rideshare / Smallsat" became "Smallsat Launch" with
+/// per-launch floors (24_STRATEGIES.md step 5).
+fn refresh_market_pricing(state: &mut GameState) {
+    let current = crate::contract::realize_markets(&state.seed, &crate::contract::default_archetypes());
+    for market in &mut state.markets {
+        let Some(fresh) = current.iter().map(|r| &r.market).find(|m| m.id == market.id) else { continue };
+        market.name = fresh.name.clone();
+        market.description = fresh.description.clone();
+        for dest in &mut market.destinations {
+            if let Some(f) = fresh.destinations.iter().find(|d| d.location_id == dest.location_id) {
+                dest.rate_per_kg = f.rate_per_kg;
+                dest.min_payment = f.min_payment;
+            }
+        }
+    }
 }
 
 /// Version-gated shape migrations on the untyped JSON, applied in
@@ -1273,6 +1298,29 @@ mod tests {
         let fresh = GameState::new("New".into(), 1);
         let fresh_sc = fresh.technologies.iter().find(|t| t.id == TECH_STAGED_COMBUSTION).unwrap();
         assert_eq!(sc.deficiencies.len(), fresh_sc.deficiencies.len());
+    }
+
+    /// 24_STRATEGIES.md step 5: a saved world's market names and
+    /// pricing come from the current templates on load.
+    #[test]
+    fn a_saved_market_takes_the_current_name_and_pricing() {
+        use crate::contract::MARKET_SMALLSAT;
+        let mut state = GameState::with_money("Old".into(), 1_000_000_000.0, 1);
+        let m = state.markets.iter_mut().find(|m| m.id == MARKET_SMALLSAT).unwrap();
+        m.name = "Rideshare / Smallsat".into();
+        for d in &mut m.destinations {
+            d.min_payment = 0.0;
+            d.rate_per_kg = 15_000.0;
+        }
+        let path = temp_path();
+        save_game(&state, &path).unwrap();
+        let loaded = load_game(&path).expect("loads");
+        let _ = fs::remove_file(&path);
+        let m = loaded.markets.iter().find(|m| m.id == MARKET_SMALLSAT).unwrap();
+        assert_eq!(m.name, "Smallsat Launch");
+        let leo = m.destinations.iter().find(|d| d.location_id == "leo").unwrap();
+        assert_eq!(leo.min_payment, 6_000_000.0);
+        assert_eq!(leo.rate_per_kg, 25_000.0);
     }
 
     #[test]

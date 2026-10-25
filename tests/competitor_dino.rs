@@ -20,7 +20,7 @@
 
 use rocket_tycoon::balance_config::BalanceConfig;
 use rocket_tycoon::competitor::ScheduledLaunch;
-use rocket_tycoon::contract::{Contract, ContractId, ContractStatus, MARKET_GEO_COMSATS, MARKET_RIDESHARE};
+use rocket_tycoon::contract::{Contract, ContractId, ContractStatus, MARKET_GEO_COMSATS, MARKET_SMALLSAT};
 use rocket_tycoon::event::GameEvent;
 use rocket_tycoon::game_state::GameState;
 
@@ -437,7 +437,7 @@ fn dino_success_pays_and_boosts_rep() {
 
 fn assert_no_rideshare_award(gs: &GameState, seed: u64, day: u32) {
     assert!(
-        gs.competitors[0].company.active_contracts.iter().all(|c| c.market_id != MARKET_RIDESHARE),
+        gs.competitors[0].company.active_contracts.iter().all(|c| c.market_id != MARKET_SMALLSAT),
         "seed {seed}, day {day}: DinoSoar should never hold a rideshare-market contract \
          (bid floor should keep it priced out of the small-payload market in year 1)",
     );

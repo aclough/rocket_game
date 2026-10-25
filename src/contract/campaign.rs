@@ -117,7 +117,7 @@ pub fn spawn_campaign(
     let discount = rng.gen_range(spec.discount_range.0..=spec.discount_range.1);
     let rate_mult = market.rate_multiplier(economy_modifier);
     let payment_per_mission =
-        round_price(payload_kg * dest.rate_per_kg * rate_mult * (1.0 - discount));
+        round_price((payload_kg * dest.rate_per_kg).max(dest.min_payment) * rate_mult * (1.0 - discount));
     let missions_total =
         rng.gen_range(spec.mission_count_range.0..=spec.mission_count_range.1);
     let interval_days =

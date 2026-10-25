@@ -3,7 +3,7 @@
 //! comes from, the standing margin, and the suggested price — the same
 //! price the rule engine would bid.
 
-use rocket_tycoon::contract::{round_price, MARKET_RIDESHARE};
+use rocket_tycoon::contract::{round_price, MARKET_SMALLSAT};
 use rocket_tycoon::game_state::{BidRule, CostBasis, GameState};
 
 mod common;
@@ -12,7 +12,7 @@ use common::{game_with_capable_player, inject_contract};
 #[test]
 fn nothing_capable_means_no_rocket_no_cost_no_suggestion() {
     let mut gs = GameState::new("Basis".into(), 1);
-    let idx = inject_contract(&mut gs, 900, "Basis-0", MARKET_RIDESHARE);
+    let idx = inject_contract(&mut gs, 900, "Basis-0", MARKET_SMALLSAT);
     let basis = gs.bid_basis(idx);
     assert_eq!(basis.rocket, None);
     assert_eq!(basis.cost, None);
@@ -23,7 +23,7 @@ fn nothing_capable_means_no_rocket_no_cost_no_suggestion() {
 #[test]
 fn an_unbuilt_design_is_priced_from_its_material_estimate() {
     let mut gs = game_with_capable_player(2);
-    let idx = inject_contract(&mut gs, 901, "Basis-1", MARKET_RIDESHARE);
+    let idx = inject_contract(&mut gs, 901, "Basis-1", MARKET_SMALLSAT);
     let rp = gs.player_company.rocket_projects[0].clone();
     let estimate = gs.player_company.estimated_build_cost(&rp, &gs.balance);
 
@@ -36,12 +36,12 @@ fn an_unbuilt_design_is_priced_from_its_material_estimate() {
 #[test]
 fn a_built_design_is_priced_from_its_last_five_builds_at_the_rule_margin() {
     let mut gs = game_with_capable_player(3);
-    let idx = inject_contract(&mut gs, 902, "Basis-2", MARKET_RIDESHARE);
+    let idx = inject_contract(&mut gs, 902, "Basis-2", MARKET_SMALLSAT);
     let design_id = gs.player_company.rocket_projects[0].design.id;
     gs.player_company.rocket_cost_history.insert(
         design_id, vec![99.0e6, 10.0e6, 11.0e6, 12.0e6, 13.0e6, 14.0e6],
     );
-    gs.player_company.bid_rules.insert(MARKET_RIDESHARE, BidRule { enabled: false, margin: 0.4 });
+    gs.player_company.bid_rules.insert(MARKET_SMALLSAT, BidRule { enabled: false, margin: 0.4 });
 
     let basis = gs.bid_basis(idx);
     let mean = 12.0e6;

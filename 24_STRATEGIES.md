@@ -406,3 +406,44 @@ Recommendation: B with D (A with D if the smaller change is
 preferred). Either way the small bot's thresholds (bankrupt ≤ 25 %,
 profitable year ≥ 50 %, median ≥ 10 launches) get set from the
 measurement after it.
+
+**Step 5 — the smallsat market.** Decided with the user (2026-10-25):
+rename, a per-launch floor, higher rates; precise-orbit versus
+rideshare missions are a later distinction. "Rideshare / Smallsat" is
+**"Smallsat Launch"** ("…buying a dedicated ride … to their own
+orbit"); `MARKET_RIDESHARE` is `MARKET_SMALLSAT`; the archetype key
+stays `market_rideshare` because it seeds the world's growth draw and
+is in saves. `MarketDestination.min_payment` (serde default 0) floors
+a contract's list price before variance, the economy rate multiplier
+and campaign discounts, and is realized with the seed's rate
+multiplier like `rate_per_kg`. Smallsat LEO $15k → $25k/kg with a
+$6M floor, SSO $30k → $40k/kg with $7.5M; Earth observation keeps its
+rates and takes the same floors (a 100 kg imaging satellite buys its
+own launch too). Every other destination is unchanged at floor 0.
+Bots carry their own markup (`BotTemplate.bid_margin`: medium 1.0 as
+before, smallsat 0.25 — Electron sells at about a quarter over cost —
+alpha 0.5). On load, a saved world's market names and pricing are
+refreshed from the default archetypes realized for its seed
+(`refresh_market_pricing`), keeping the seed's multipliers and every
+realized volume, growth and modifier; the `m1`–`m5` corpus and a
+test with the old name cover it.
+
+Supply: the ≤ 500 kg pot over four years went from $124–277M to
+$200–375M per world; a ≤ 300 kg contract now averages $7–9M.
+
+Measured, 200 × 8, `--policy smallsat`: `[fleet smallsat] bankrupt
+0/200, kept $25M 200/200, profitable 0/200, profitable year 132/200,
+aggregate success 89.5%, median launches 13`; unit cost $5.6M (with
+learning), payment $6.7M, first launch month 15, curve 44 / 65 / 84 /
+97. Payroll variants: 2 teams + 1 line 78/200 profitable years (first
+launch month 34 — engines queue on one line); 2 + 3 124/200; 3 + 2
+105/200. Alpha-class 104/200 profitable years, unit cost $11.4M,
+payment $16.7M. Nobody ends above the $250M they started with: a thin
+business that works, which is the brief ("it should be possible at
+all"). Bands set in `smallsat_bands_200_seeds`: bankrupt ≤ 25 %,
+profitable year ≥ 50 %, median ≥ 10 launches, aggregate ≥ 80 %.
+
+The basic bot is unaffected (100 seeds identical; 200 × 8 curve
+36 / 64 / 79 / 97, `[fleet] bankrupt 1/200, kept $25M 191/200,
+profitable 160/200, profitable year 200/200, aggregate 91.0%`). 733
+tests, clippy clean.

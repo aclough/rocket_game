@@ -12,7 +12,7 @@
 use rocket_tycoon::balance_config::BalanceConfig;
 use rocket_tycoon::calendar::GameDate;
 use rocket_tycoon::contract::{
-    initial_markets, Contract, ContractId, ContractStatus, Market, MARKET_RIDESHARE,
+    initial_markets, Contract, ContractId, ContractStatus, Market, MARKET_SMALLSAT,
 };
 use rocket_tycoon::event::GameEvent;
 use rocket_tycoon::game_state::GameState;
@@ -256,7 +256,7 @@ fn accept_refuses_solicitations_and_bid_refuses_prepriced() {
         payment: 2_000_000.0,
         deadline: gs.date.add_days(90),
         status: ContractStatus::Available,
-        market_id: MARKET_RIDESHARE,
+        market_id: MARKET_SMALLSAT,
         campaign_id: None,
         bid_deadline: None,
         budget_ceiling: 0.0,

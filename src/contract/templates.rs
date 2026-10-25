@@ -5,7 +5,11 @@ use super::*;
 
 pub const MARKET_GEO_COMSATS: MarketId = MarketId(1);
 pub const MARKET_GOV_SCIENCE: MarketId = MarketId(2);
-pub const MARKET_RIDESHARE: MarketId = MarketId(3);
+/// Small satellites buying their own launch. The archetype key stays
+/// `market_rideshare` (it seeds the world's growth draw and is in
+/// saves); the market was renamed when it stopped pricing by the
+/// kilogram alone (24_STRATEGIES.md step 5).
+pub const MARKET_SMALLSAT: MarketId = MarketId(3);
 pub const MARKET_COTS: MarketId = MarketId(4);
 pub const MARKET_LEO_CONSTELLATION: MarketId = MarketId(5);
 pub const MARKET_MEO_CONSTELLATION: MarketId = MarketId(6);
@@ -25,12 +29,12 @@ pub fn initial_markets() -> Vec<Market> {
                 MarketDestination {
                     location_id: "gto".into(), display_name: "GTO".into(),
                     min_payload_kg: 2_000.0, max_payload_kg: 7_000.0,
-                    rate_per_kg: 40_000.0, weight: 0.6,
+                    rate_per_kg: 40_000.0, weight: 0.6, min_payment: 0.0,
                 },
                 MarketDestination {
                     location_id: "geo".into(), display_name: "GEO".into(),
                     min_payload_kg: 2_000.0, max_payload_kg: 5_000.0,
-                    rate_per_kg: 80_000.0, weight: 0.4,
+                    rate_per_kg: 80_000.0, weight: 0.4, min_payment: 0.0,
                 },
             ],
             rep_target: 50.0,
@@ -57,27 +61,27 @@ pub fn initial_markets() -> Vec<Market> {
                 MarketDestination {
                     location_id: "leo".into(), display_name: "LEO".into(),
                     min_payload_kg: 500.0, max_payload_kg: 5_000.0,
-                    rate_per_kg: 50_000.0, weight: 0.3,
+                    rate_per_kg: 50_000.0, weight: 0.3, min_payment: 0.0,
                 },
                 MarketDestination {
                     location_id: "sso".into(), display_name: "SSO".into(),
                     min_payload_kg: 500.0, max_payload_kg: 3_000.0,
-                    rate_per_kg: 60_000.0, weight: 0.3,
+                    rate_per_kg: 60_000.0, weight: 0.3, min_payment: 0.0,
                 },
                 MarketDestination {
                     location_id: "l1".into(), display_name: "L1".into(),
                     min_payload_kg: 200.0, max_payload_kg: 3_000.0,
-                    rate_per_kg: 80_000.0, weight: 0.15,
+                    rate_per_kg: 80_000.0, weight: 0.15, min_payment: 0.0,
                 },
                 MarketDestination {
                     location_id: "l2".into(), display_name: "L2".into(),
                     min_payload_kg: 200.0, max_payload_kg: 3_000.0,
-                    rate_per_kg: 80_000.0, weight: 0.15,
+                    rate_per_kg: 80_000.0, weight: 0.15, min_payment: 0.0,
                 },
                 MarketDestination {
                     location_id: "lunar_orbit".into(), display_name: "Lunar Orbit".into(),
                     min_payload_kg: 200.0, max_payload_kg: 2_000.0,
-                    rate_per_kg: 120_000.0, weight: 0.1,
+                    rate_per_kg: 120_000.0, weight: 0.1, min_payment: 0.0,
                 },
             ],
             rep_target: 40.0,
@@ -95,21 +99,24 @@ pub fn initial_markets() -> Vec<Market> {
             volume_accumulator: 0.0,
         },
         Market {
-            id: MARKET_RIDESHARE,
-            name: "Rideshare / Smallsat".into(),
-            description: "Universities, startups, and small agencies launching CubeSats and microsats".into(),
+            id: MARKET_SMALLSAT,
+            name: "Smallsat Launch".into(),
+            description: "Universities, startups, and small agencies buying a dedicated ride for CubeSats and microsats to their own orbit".into(),
             active: true,
             base_volume: 0.5,
+            // Priced per kilogram above a per-launch floor: below ~250 kg
+            // the customer is buying the rocket (Electron: ~$7.5M a
+            // flight whatever the mass), above it the kilograms.
             destinations: vec![
                 MarketDestination {
                     location_id: "leo".into(), display_name: "LEO".into(),
                     min_payload_kg: 50.0, max_payload_kg: 500.0,
-                    rate_per_kg: 15_000.0, weight: 0.6,
+                    rate_per_kg: 25_000.0, weight: 0.6, min_payment: 6_000_000.0,
                 },
                 MarketDestination {
                     location_id: "sso".into(), display_name: "SSO".into(),
                     min_payload_kg: 50.0, max_payload_kg: 300.0,
-                    rate_per_kg: 30_000.0, weight: 0.4,
+                    rate_per_kg: 40_000.0, weight: 0.4, min_payment: 7_500_000.0,
                 },
             ],
             rep_target: -10.0,
@@ -143,7 +150,7 @@ pub fn event_market_templates() -> Vec<Market> {
                 MarketDestination {
                     location_id: "leo".into(), display_name: "LEO".into(),
                     min_payload_kg: 2_000.0, max_payload_kg: 6_000.0,
-                    rate_per_kg: 40_000.0, weight: 1.0,
+                    rate_per_kg: 40_000.0, weight: 1.0, min_payment: 0.0,
                 },
             ],
             rep_target: 60.0,
@@ -170,12 +177,12 @@ pub fn event_market_templates() -> Vec<Market> {
                 MarketDestination {
                     location_id: "leo".into(), display_name: "LEO".into(),
                     min_payload_kg: 500.0, max_payload_kg: 5_000.0,
-                    rate_per_kg: 15_000.0, weight: 0.6,
+                    rate_per_kg: 15_000.0, weight: 0.6, min_payment: 0.0,
                 },
                 MarketDestination {
                     location_id: "sso".into(), display_name: "SSO".into(),
                     min_payload_kg: 500.0, max_payload_kg: 3_000.0,
-                    rate_per_kg: 20_000.0, weight: 0.4,
+                    rate_per_kg: 20_000.0, weight: 0.4, min_payment: 0.0,
                 },
             ],
             rep_target: 20.0,
@@ -202,7 +209,7 @@ pub fn event_market_templates() -> Vec<Market> {
                 MarketDestination {
                     location_id: "meo".into(), display_name: "MEO".into(),
                     min_payload_kg: 500.0, max_payload_kg: 3_000.0,
-                    rate_per_kg: 25_000.0, weight: 1.0,
+                    rate_per_kg: 25_000.0, weight: 1.0, min_payment: 0.0,
                 },
             ],
             rep_target: 30.0,
@@ -234,22 +241,22 @@ pub fn event_market_templates() -> Vec<Market> {
                 MarketDestination {
                     location_id: "leo".into(), display_name: "LEO".into(),
                     min_payload_kg: 1_000.0, max_payload_kg: 10_000.0,
-                    rate_per_kg: 60_000.0, weight: 0.4,
+                    rate_per_kg: 60_000.0, weight: 0.4, min_payment: 0.0,
                 },
                 MarketDestination {
                     location_id: "sso".into(), display_name: "SSO".into(),
                     min_payload_kg: 1_000.0, max_payload_kg: 5_000.0,
-                    rate_per_kg: 70_000.0, weight: 0.35,
+                    rate_per_kg: 70_000.0, weight: 0.35, min_payment: 0.0,
                 },
                 MarketDestination {
                     location_id: "gto".into(), display_name: "GTO".into(),
                     min_payload_kg: 2_000.0, max_payload_kg: 7_000.0,
-                    rate_per_kg: 80_000.0, weight: 0.15,
+                    rate_per_kg: 80_000.0, weight: 0.15, min_payment: 0.0,
                 },
                 MarketDestination {
                     location_id: "geo".into(), display_name: "GEO".into(),
                     min_payload_kg: 2_000.0, max_payload_kg: 5_000.0,
-                    rate_per_kg: 150_000.0, weight: 0.1,
+                    rate_per_kg: 150_000.0, weight: 0.1, min_payment: 0.0,
                 },
             ],
             rep_target: 80.0,
@@ -273,15 +280,17 @@ pub fn event_market_templates() -> Vec<Market> {
             active: false,
             base_volume: 0.5,
             destinations: vec![
+                // Small imaging satellites buy their own launch too: the
+                // same per-launch floors as the smallsat market.
                 MarketDestination {
                     location_id: "leo".into(), display_name: "LEO".into(),
                     min_payload_kg: 100.0, max_payload_kg: 1_000.0,
-                    rate_per_kg: 25_000.0, weight: 0.4,
+                    rate_per_kg: 25_000.0, weight: 0.4, min_payment: 6_000_000.0,
                 },
                 MarketDestination {
                     location_id: "sso".into(), display_name: "SSO".into(),
                     min_payload_kg: 100.0, max_payload_kg: 800.0,
-                    rate_per_kg: 35_000.0, weight: 0.6,
+                    rate_per_kg: 35_000.0, weight: 0.6, min_payment: 7_500_000.0,
                 },
             ],
             rep_target: 10.0,

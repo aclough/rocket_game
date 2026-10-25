@@ -25,7 +25,7 @@
 //! for the sibling patterns this borrows from.
 
 use rocket_tycoon::contract::{
-    Contract, ContractId, ContractStatus, MARKET_GEO_COMSATS, MARKET_RIDESHARE,
+    Contract, ContractId, ContractStatus, MARKET_GEO_COMSATS, MARKET_SMALLSAT,
 };
 use rocket_tycoon::event::GameEvent;
 use rocket_tycoon::game_state::{BidRule, GameState};
@@ -86,10 +86,10 @@ fn rule_places_bid_at_cost_plus_margin() {
     let (design_id, _) = borrowed_design_ids(&gs);
     gs.player_company.rocket_cost_history.insert(design_id, vec![10_000_000.0]);
     gs.player_company.bid_rules.insert(
-        MARKET_RIDESHARE,
+        MARKET_SMALLSAT,
         BidRule { enabled: true, margin: 0.5 },
     );
-    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_SMALLSAT);
 
     let events = gs.advance_day();
     let bid_placed = events.iter().find_map(|e| match e {
@@ -125,10 +125,10 @@ fn mean_of_last_five_costs() {
         vec![20_000_000.0, 10_000_000.0, 10_000_000.0, 10_000_000.0, 10_000_000.0, 10_000_000.0],
     );
     gs.player_company.bid_rules.insert(
-        MARKET_RIDESHARE,
+        MARKET_SMALLSAT,
         BidRule { enabled: true, margin: 0.5 },
     );
-    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_SMALLSAT);
 
     let events = gs.advance_day();
     let bid_placed = events.iter().find_map(|e| match e {
@@ -152,13 +152,13 @@ fn disabled_rule_and_missing_rule_stay_silent() {
     let mut gs = game_with_capable_player(4);
     let (design_id, _) = borrowed_design_ids(&gs);
     gs.player_company.rocket_cost_history.insert(design_id, vec![10_000_000.0]);
-    // MARKET_RIDESHARE: explicitly disabled.
+    // MARKET_SMALLSAT: explicitly disabled.
     gs.player_company.bid_rules.insert(
-        MARKET_RIDESHARE,
+        MARKET_SMALLSAT,
         BidRule { enabled: false, margin: 0.5 },
     );
     // MARKET_GEO_COMSATS: no rule entry at all.
-    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_SMALLSAT);
     inject_contract(&mut gs, 2, "Comsat A", MARKET_GEO_COMSATS);
 
     let mut all_events = Vec::new();
@@ -189,10 +189,10 @@ fn no_cost_history_no_bid() {
     let mut gs = game_with_capable_player(5);
     // Deliberately do NOT populate rocket_cost_history.
     gs.player_company.bid_rules.insert(
-        MARKET_RIDESHARE,
+        MARKET_SMALLSAT,
         BidRule { enabled: true, margin: 0.5 },
     );
-    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_SMALLSAT);
 
     let events = gs.advance_day();
     assert!(
@@ -215,15 +215,15 @@ fn gate_blocks_overcommitment() {
     let (design_id, _) = borrowed_design_ids(&gs);
     gs.player_company.rocket_cost_history.insert(design_id, vec![10_000_000.0]);
     gs.player_company.bid_rules.insert(
-        MARKET_RIDESHARE,
+        MARKET_SMALLSAT,
         BidRule { enabled: true, margin: 0.5 },
     );
     // Truncate the borrowed 3-rocket shelf down to exactly 1.
     gs.player_company.manufacturing.inventory.rockets.truncate(1);
     assert_eq!(gs.player_company.manufacturing.inventory.rockets.len(), 1);
 
-    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
-    inject_contract(&mut gs, 2, "Rideshare B", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_SMALLSAT);
+    inject_contract(&mut gs, 2, "Rideshare B", MARKET_SMALLSAT);
 
     let events = gs.advance_day();
     let bids: Vec<_> = events.iter().filter_map(|e| match e {
@@ -272,7 +272,7 @@ fn accepted_unflown_contract_reserves_stock() {
     let (design_id, _project_id) = borrowed_design_ids(&gs);
     gs.player_company.rocket_cost_history.insert(design_id, vec![10_000_000.0]);
     gs.player_company.bid_rules.insert(
-        MARKET_RIDESHARE,
+        MARKET_SMALLSAT,
         BidRule { enabled: true, margin: 0.5 },
     );
     gs.player_company.manufacturing.inventory.rockets.truncate(1);
@@ -288,13 +288,13 @@ fn accepted_unflown_contract_reserves_stock() {
         payment: 12_000_000.0,
         deadline: gs.date.add_days(300),
         status: ContractStatus::Accepted,
-        market_id: MARKET_RIDESHARE,
+        market_id: MARKET_SMALLSAT,
         campaign_id: None,
         bid_deadline: None,
         budget_ceiling: 0.0,
         player_bid: None,
     });
-    inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    inject_contract(&mut gs, 1, "Rideshare A", MARKET_SMALLSAT);
 
     let events = gs.advance_day();
     assert!(
@@ -318,10 +318,10 @@ fn manual_bid_not_overridden() {
     let (design_id, _) = borrowed_design_ids(&gs);
     gs.player_company.rocket_cost_history.insert(design_id, vec![10_000_000.0]);
     gs.player_company.bid_rules.insert(
-        MARKET_RIDESHARE,
+        MARKET_SMALLSAT,
         BidRule { enabled: true, margin: 0.5 },
     );
-    let idx = inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    let idx = inject_contract(&mut gs, 1, "Rideshare A", MARKET_SMALLSAT);
 
     let manual = gs.place_bid(idx, 42_000_000.0);
     assert!(
@@ -363,10 +363,10 @@ fn rule_bid_wins_award_end_to_end() {
     let (design_id, _) = borrowed_design_ids(&gs);
     gs.player_company.rocket_cost_history.insert(design_id, vec![10_000_000.0]);
     gs.player_company.bid_rules.insert(
-        MARKET_RIDESHARE,
+        MARKET_SMALLSAT,
         BidRule { enabled: true, margin: 0.5 },
     );
-    let idx = inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+    let idx = inject_contract(&mut gs, 1, "Rideshare A", MARKET_SMALLSAT);
     let deadline = gs.available_contracts[idx].bid_deadline.unwrap();
 
     let events = advance_through(&mut gs, deadline, 30);
@@ -399,7 +399,7 @@ fn rule_bid_wins_award_end_to_end() {
 fn rules_survive_save_load() {
     let mut gs = game_with_capable_player(10);
     gs.player_company.bid_rules.insert(
-        MARKET_RIDESHARE,
+        MARKET_SMALLSAT,
         BidRule { enabled: true, margin: 0.5 },
     );
     gs.player_company.bid_rules.insert(
@@ -416,9 +416,9 @@ fn rules_survive_save_load() {
         "bid_rules should round-trip exactly through save/load",
     );
     assert_eq!(
-        loaded.player_company.bid_rules.get(&MARKET_RIDESHARE),
+        loaded.player_company.bid_rules.get(&MARKET_SMALLSAT),
         Some(&BidRule { enabled: true, margin: 0.5 }),
-        "MARKET_RIDESHARE rule should round-trip exactly",
+        "MARKET_SMALLSAT rule should round-trip exactly",
     );
     assert_eq!(
         loaded.player_company.bid_rules.get(&MARKET_GEO_COMSATS),
@@ -502,11 +502,11 @@ fn a_revising_design_still_bids_with_the_stock_it_already_built() {
         let (design_id, _) = borrowed_design_ids(&gs);
         gs.player_company.rocket_cost_history.insert(design_id, vec![10_000_000.0]);
         gs.player_company.bid_rules.insert(
-            MARKET_RIDESHARE,
+            MARKET_SMALLSAT,
             BidRule { enabled: true, margin: 0.5 },
         );
         gs.player_company.rocket_projects[0].status = status;
-        inject_contract(&mut gs, 1, "Rideshare A", MARKET_RIDESHARE);
+        inject_contract(&mut gs, 1, "Rideshare A", MARKET_SMALLSAT);
         let events = gs.advance_day();
         events.iter().any(|e| matches!(
             e, GameEvent::BidPlaced { contract_name, .. } if contract_name == "Rideshare A",

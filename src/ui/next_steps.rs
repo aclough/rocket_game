@@ -559,7 +559,7 @@ mod tests {
             payload_kg: 500.0, payment: 0.0,
             deadline: game.date.add_days(300),
             status: crate::contract::ContractStatus::Available,
-            market_id: crate::contract::MARKET_RIDESHARE,
+            market_id: crate::contract::MARKET_SMALLSAT,
             campaign_id: None,
             bid_deadline: Some(game.date.add_days(5)),
             budget_ceiling: 5.0e7,
@@ -572,7 +572,7 @@ mod tests {
 
         game.available_contracts.clear();
         game.award_history.push(crate::contract::AwardRecord {
-            date: game.date, market_id: crate::contract::MARKET_RIDESHARE,
+            date: game.date, market_id: crate::contract::MARKET_SMALLSAT,
             contract_name: "Pending-1".into(), destination: "leo".into(),
             payload_kg: 500.0, missions: None,
             outcome: AwardOutcome::CompetitorWon {

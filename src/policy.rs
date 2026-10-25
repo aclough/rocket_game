@@ -116,6 +116,8 @@ pub struct BotTemplate {
     pub stages: [BotStage; 2],
     pub engineering_teams: usize,
     pub manufacturing_teams: usize,
+    /// Markup of the standing bid rules: bid = cost × (1 + this).
+    pub bid_margin: f64,
 }
 
 /// The basic bot: two kerolox gas-generator boosters under 90 t, a
@@ -135,6 +137,7 @@ pub const MEDIUM: BotTemplate = BotTemplate {
     ],
     engineering_teams: 3,
     manufacturing_teams: 4,
+    bid_margin: DEFAULT_BID_MARGIN,
 };
 
 /// The small launcher (24_STRATEGIES.md step 4): nine 25 kN kerolox
@@ -153,6 +156,8 @@ pub const SMALLSAT: BotTemplate = BotTemplate {
     ],
     engineering_teams: 2,
     manufacturing_teams: 2,
+    // A thin business: Electron sells at ~25 % over cost.
+    bid_margin: 0.25,
 };
 
 /// A Firefly Alpha–shaped vehicle for comparison: four 190 kN kerolox
@@ -169,6 +174,7 @@ pub const ALPHA: BotTemplate = BotTemplate {
     ],
     engineering_teams: 2,
     manufacturing_teams: 2,
+    bid_margin: 0.5,
 };
 
 impl BasicPolicy {
@@ -234,21 +240,21 @@ impl BasicPolicy {
     /// A BasicPolicy whose standing rules use the given markup —
     /// the knob the margin sweep exercises (`--policy basic:0.15`).
     pub fn with_margin(bid_margin: f64) -> Self {
+        Self::with_template(BotTemplate { bid_margin, ..MEDIUM })
+    }
+
+    /// The basic loop on a template (`--policy smallsat`, …).
+    pub fn with_template(template: BotTemplate) -> Self {
         BasicPolicy {
-            template: MEDIUM,
+            template,
             booster: None,
             upper: None,
             rocket: None,
             auto_build_set: false,
             bid_rules_set: false,
-            bid_margin,
+            bid_margin: template.bid_margin,
             launch_after_quiet_cycles: None,
         }
-    }
-
-    /// The basic loop on another template (`--policy smallsat`, …).
-    pub fn with_template(template: BotTemplate) -> Self {
-        BasicPolicy { template, ..Self::new() }
     }
 
     /// A prudent programme: more engineers, and no first launch until

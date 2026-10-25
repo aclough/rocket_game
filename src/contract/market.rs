@@ -38,6 +38,12 @@ pub struct MarketDestination {
     pub rate_per_kg: f64,
     /// Relative weight for random selection among destinations in this market.
     pub weight: f64,
+    /// The least a contract here pays before variance and rate
+    /// multipliers: a small satellite buying its own ride to its own
+    /// orbit pays for the rocket, not the kilograms (24_STRATEGIES.md
+    /// step 5). Zero means pure per-kilogram pricing.
+    #[serde(default)]
+    pub min_payment: f64,
 }
 
 /// An active modifier on a market (from events, competition, etc.).
@@ -394,7 +400,7 @@ fn generate_single_contract(
     let payload_kg = (payload_kg / 100.0).round() * 100.0;
     let payload_kg = payload_kg.max(dest.min_payload_kg);
 
-    let base_payment = payload_kg * dest.rate_per_kg;
+    let base_payment = (payload_kg * dest.rate_per_kg).max(dest.min_payment);
     let variance = rng.gen_range(markets_cfg.payment_variance_min..=markets_cfg.payment_variance_max);
     let payment = round_price(base_payment * variance * rate_mult);
 
@@ -585,7 +591,7 @@ mod tests {
     /// Generate `months` of contracts for a synthetic market with the
     /// given cadence and return the per-month counts.
     fn monthly_counts(cadence: Cadence, months: u32) -> Vec<usize> {
-        let mut market = initial_markets().remove(2); // Rideshare, rep 0
+        let mut market = initial_markets().remove(2); // Smallsat, rep 0
         market.base_volume = 1.0;
         market.cadence = cadence;
         let mut rng = make_rng();
@@ -713,12 +719,12 @@ mod tests {
 
     #[test]
     fn test_contract_has_market_id() {
-        let mut market = initial_markets()[2].clone(); // Rideshare
+        let mut market = initial_markets()[2].clone(); // Smallsat
         let mut rng = make_rng();
         let mut next_id = crate::id::IdAllocator::<ContractId>::starting_at(1);
         let cs = generate_market_contracts(&mut market, &mut rng, &mut next_id, GameDate::new(2001, 1, 1), 1.0, &mcfg());
         for c in &cs {
-            assert_eq!(c.market_id, MARKET_RIDESHARE);
+            assert_eq!(c.market_id, MARKET_SMALLSAT);
         }
     }
 

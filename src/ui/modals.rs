@@ -770,7 +770,7 @@ pub(super) mod help_tests {
             payment: 12_000_000.0,
             deadline: crate::calendar::GameDate::new(2001, 12, 1),
             status: crate::contract::ContractStatus::Available,
-            market_id: crate::contract::MARKET_RIDESHARE,
+            market_id: crate::contract::MARKET_SMALLSAT,
             campaign_id: None,
             bid_deadline: Some(crate::calendar::GameDate::new(2001, 6, 1)),
             budget_ceiling: 20_000_000.0,

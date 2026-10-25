@@ -16,14 +16,14 @@ use rocket_tycoon::balance_config::{BalanceConfig, MarketsConfig};
 use rocket_tycoon::calendar::GameDate;
 use rocket_tycoon::contract::{
     campaign_contract, initial_markets, spawn_campaign, CampaignSpec,
-    CampaignStatus, ContractStatus, Market, MARKET_RIDESHARE,
+    CampaignStatus, ContractStatus, Market, MARKET_SMALLSAT,
 };
 use rocket_tycoon::game_state::{GameSpeed, GameState};
 
 fn rideshare_market() -> Market {
     initial_markets()
         .into_iter()
-        .find(|m| m.id == MARKET_RIDESHARE)
+        .find(|m| m.id == MARKET_SMALLSAT)
         .expect("rideshare template exists")
 }
 
@@ -150,7 +150,9 @@ fn block_buy_price_is_discounted() {
         )
         .unwrap_or_else(|| panic!("seed {seed_value}: spawn_chance 1.0 must always spawn"));
 
-        let expected = (campaign.payload_kg * dest.rate_per_kg * 0.75 / 10_000.0).round() * 10_000.0;
+        // The per-launch floor applies before the block discount.
+        let list = (campaign.payload_kg * dest.rate_per_kg).max(dest.min_payment);
+        let expected = (list * 0.75 / 10_000.0).round() * 10_000.0;
         assert_eq!(
             campaign.payment_per_mission, expected,
             "seed {seed_value}: block-buy price not discounted as expected",
@@ -558,7 +560,7 @@ fn won_campaign_fixture(gs: &GameState, id: u64, missions: u32) -> rocket_tycoon
     rocket_tycoon::contract::Campaign {
         id: rocket_tycoon::contract::CampaignId(id),
         name: "Clause Probe".into(),
-        market_id: MARKET_RIDESHARE,
+        market_id: MARKET_SMALLSAT,
         destination: "leo".into(),
         destination_display: "LEO".into(),
         payload_kg: 300.0,
@@ -593,7 +595,7 @@ fn missed_mission_takes_extra_rep_hit_and_strikes() {
         .expect("mission 1 should have issued pre-accepted");
     mission.deadline = issued_on;
     let severity = gs.markets.iter()
-        .find(|m| m.id == MARKET_RIDESHARE).unwrap().failure_severity;
+        .find(|m| m.id == MARKET_SMALLSAT).unwrap().failure_severity;
     let expiry_before = gs.player_company.reputation.expiry_factor;
 
     let events = gs.advance_day();
@@ -637,7 +639,7 @@ fn program_cancelled_after_max_misses() {
     gs.active_campaigns.push(won_campaign_fixture(&gs, 8002, 5));
 
     let severity = gs.markets.iter()
-        .find(|m| m.id == MARKET_RIDESHARE).unwrap().failure_severity;
+        .find(|m| m.id == MARKET_SMALLSAT).unwrap().failure_severity;
     let expiry_before = gs.player_company.reputation.expiry_factor;
 
     // A tick works under the date the clock reads now and only rolls over at

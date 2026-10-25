@@ -100,16 +100,31 @@ fn fleet_line(tag: &str, summaries: &[RunSummary]) -> String {
     )
 }
 
-/// The small launcher (24_STRATEGIES.md step 4): figures only, no
-/// bands yet — its first measurement found it cannot win a contract at
-/// today's smallsat prices (unit cost $6.6M against $1–6M contracts),
-/// which is the market question the plan parks for step 5. Thresholds
-/// go in once that is settled.
+/// The small launcher (24_STRATEGIES.md steps 4–5). Measured after the
+/// smallsat market took per-launch floors (200 × 8): bankrupt 0/200,
+/// kept $25M 200/200, profitable 0/200, profitable year 131/200,
+/// aggregate success 89.5 %, median 13 launches, unit cost $5.6M
+/// against $6.7M a flight. A thin business that works — Electron's —
+/// not a money machine: the bands say it must stay possible, not that
+/// it must pay like medium lift.
 #[test]
-#[ignore = "200-seed smallsat fleet figures; run with `cargo test -- --ignored`"]
-fn smallsat_fleet_200_seeds() {
+#[ignore = "200-seed smallsat bands; run with `cargo test -- --ignored`"]
+fn smallsat_bands_200_seeds() {
     let summaries: Vec<RunSummary> = (1..=200).map(|seed| run_policy("smallsat", seed, 8).0).collect();
     println!("{}", fleet_line("smallsat", &summaries));
+    let n = summaries.len() as f64;
+    let bankrupt = summaries.iter().filter(|s| s.bankrupt).count();
+    let fpy = summaries.iter().filter(|s| s.first_profitable_year.is_some()).count();
+    let launches: usize = summaries.iter().map(|s| s.launches).sum();
+    let successes: usize = summaries.iter().map(|s| s.successes).sum();
+    let mut counts: Vec<usize> = summaries.iter().map(|s| s.launches).collect();
+    counts.sort_unstable();
+    let median = counts[counts.len() / 2];
+    fleet_band(bankrupt as f64 / n <= 0.25, format!("{bankrupt}/200 small launchers bankrupt (band <= 25%, measured 0)"));
+    fleet_band(fpy as f64 / n >= 0.50, format!("only {fpy}/200 small launchers had a profitable year (band >= 50%, measured 65.5%)"));
+    fleet_band(median >= 10, format!("median small launcher flew {median} times in 8 years (band >= 10, measured 13)"));
+    fleet_band(successes as f64 / launches as f64 >= 0.80,
+        format!("small launcher aggregate success {:.1}% (band >= 80%, measured 89.5%)", successes as f64 / launches as f64 * 100.0));
 }
 
 /// Same seed + same policy twice must produce byte-identical monthly
