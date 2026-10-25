@@ -309,7 +309,13 @@ impl BasicPolicy {
     /// flies is in Testing, has nothing discovered and unrevised, and
     /// has been quiet for the required cycles.
     fn ready_to_launch(&self, game: &GameState) -> bool {
-        let Some(quiet) = self.launch_after_quiet_cycles else { return true };
+        // Even the basic bot does not fly a known, unfixed flaw: a
+        // project mid-revision or with something discovered holds the
+        // launch. Without this, a bot with two rockets on the shelf
+        // flew the second the day after the first failed, identical
+        // flaw and all — the solid bot's second flight succeeded 35 %
+        // of the time for exactly that reason (24_STRATEGIES.md step 6).
+        let quiet = self.launch_after_quiet_cycles.unwrap_or(0);
         let company = &game.player_company;
         let engines_ready = [self.booster, self.upper].iter().flatten().all(|id| {
             company.engine_projects.iter().find(|ep| ep.project_id == *id).is_some_and(|ep| {

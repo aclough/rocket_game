@@ -746,7 +746,6 @@ mod testing_cadence {
     use std::collections::HashMap;
 
     use rocket_tycoon::game_state::GameState;
-    use rocket_tycoon::policy::{BasicPolicy, CompanyPolicy};
     use rocket_tycoon::project::DesignStatus;
 
     #[derive(Default, Clone)]
@@ -768,7 +767,9 @@ mod testing_cadence {
     }
 
     fn probe_seed(seed: u64, cycle_work: f64) -> Vec<Row> {
-        let mut policy = BasicPolicy::new();
+        // `PROBE_POLICY=solid cargo test …` reads another bot.
+        let name = std::env::var("PROBE_POLICY").unwrap_or_else(|_| "basic".into());
+        let mut policy = rocket_tycoon::policy::policy_by_name(&name).expect("policy exists");
         let mut gs = GameState::new("Bot".into(), seed);
         let mut snaps: HashMap<String, Snap> = HashMap::new();
         let mut day = 0u32;
@@ -853,17 +854,19 @@ mod first_launch_outcomes {
 
     use rocket_tycoon::event::GameEvent;
     use rocket_tycoon::game_state::GameState;
-    use rocket_tycoon::policy::{BasicPolicy, CompanyPolicy};
 
     #[test]
     #[ignore]
     fn first_launch_by_outcome() {
-        let mut counts = std::collections::BTreeMap::<&str, u32>::new();
+        // `PROBE_POLICY=solid cargo test …` reads another bot; the first
+        // and second launches are tallied apart.
+        let name = std::env::var("PROBE_POLICY").unwrap_or_else(|_| "basic".into());
+        let mut counts = std::collections::BTreeMap::<(u8, &str), u32>::new();
         let mut scrubs = 0u32;
         for seed in 1..=100u64 {
-            let mut policy = BasicPolicy::new();
+            let mut policy = rocket_tycoon::policy::policy_by_name(&name).expect("policy exists");
             let mut gs = GameState::new("Bot".into(), seed);
-            let mut outcome: Option<&str> = None;
+            let mut outcomes: Vec<&str> = Vec::new();
             for _ in 0..365 * 6 {
                 let before = gs.event_log.total_pushed();
                 policy.act(&mut gs);
@@ -879,14 +882,16 @@ mod first_launch_outcomes {
                         GameEvent::LaunchScrubbed { .. } => { scrubs += 1; continue; }
                         _ => continue,
                     };
-                    if outcome.is_none() { outcome = Some(label); }
+                    outcomes.push(label);
                 }
-                if outcome.is_some() { break; }
+                if outcomes.len() >= 2 { break; }
             }
-            *counts.entry(outcome.unwrap_or("never launched")).or_default() += 1;
+            for i in 0..2 {
+                *counts.entry((i as u8 + 1, outcomes.get(i).copied().unwrap_or("never launched"))).or_default() += 1;
+            }
         }
-        for (k, v) in &counts {
-            println!("{v:>4}  {k}");
+        for ((flight, k), v) in &counts {
+            println!("flight {flight}: {v:>4}  {k}");
         }
         println!("{scrubs:>4}  scrubs before the first launch (not counted as launches)");
     }
@@ -1131,6 +1136,69 @@ mod smallsat_bids {
         println!("stock {}", gs.player_company.manufacturing.inventory.rockets.len());
         for c in &gs.available_contracts {
             println!("contract {} {} {:.0} kg ${:.1}M solicitation {} can_serve {} player_bid {:?}", c.name, c.destination, c.payload_kg, c.payment / 1e6, c.is_solicitation(), gs.project_can_serve(rp, &c.destination, c.payload_kg), c.player_bid);
+        }
+    }
+}
+
+mod flight_trace {
+    //! The event log of a bot's first launches: what failed, what was
+    //! found, what was revised and retrofitted between them. Written for
+    //! the solid bot, whose second flight learned nothing from its
+    //! first (TODO, 24_STRATEGIES.md step 6). `PROBE_POLICY=solid`.
+    use rocket_tycoon::game_state::GameState;
+
+    #[test]
+    #[ignore = "prints a bot's event log around its first launches; run with --ignored --nocapture"]
+    fn first_launches_event_log() {
+        let name = std::env::var("PROBE_POLICY").unwrap_or_else(|_| "basic".into());
+        for seed in 1..=3u64 {
+            let mut policy = rocket_tycoon::policy::policy_by_name(&name).expect("policy exists");
+            let mut gs = GameState::new("Bot".into(), seed);
+            let mut launches = 0;
+            println!("── {name} seed {seed}");
+            for _ in 0..365 * 6 {
+                let before = gs.event_log.total_pushed();
+                policy.act(&mut gs);
+                gs.advance_day();
+                let n = (gs.event_log.total_pushed() - before) as usize;
+                for (_, e) in gs.event_log.recent(n) {
+                    let text = format!("{e}");
+                    let interesting = text.contains("flaw") || text.contains("Flaw") || text.contains("review")
+                        || text.contains("evision") || text.contains("etrofit") || text.contains("aunch")
+                        || text.contains("lost") || text.contains("Lost") || text.contains("crub");
+                    if interesting {
+                        println!("   {} {}", gs.date, text);
+                    }
+                    if text.contains("Launch") && !text.contains("crub") && (text.contains("fail") || text.contains("success") || text.contains("Fail") || text.contains("Success")) {
+                        launches += 1;
+                    }
+                }
+                if launches >= 1 && std::env::var("PROBE_DUMP").is_ok() {
+                    let rp = &gs.player_company.rocket_projects[0];
+                    for f in &rp.flaws { println!("      project rocket flaw {:?} {} disc {}", f.id, f.description, f.discovered); }
+                    for ep in &gs.player_company.engine_projects {
+                        for f in &ep.flaws { println!("      project {} flaw {:?} {} disc {}", ep.design.name, f.id, f.description, f.discovered); }
+                    }
+                    for r in &gs.player_company.manufacturing.inventory.rockets {
+                        for f in &r.rocket_flaws { println!("      stock rocket {:?} flaw {:?} {}", r.item_id, f.id, f.description); }
+                        for s in &r.stage_engine_flaws { for f in &s.flaws { println!("      stock rocket {:?} g{} {:?} flaw {:?} {}", r.item_id, s.group_index, s.source, f.id, f.description); } }
+                    }
+                    for rec in gs.player_company.launch_history.iter().rev().take(1) {
+                        for a in &rec.flaws_activated { println!("      activated: {}", a.flaw_description); }
+                    }
+                    break;
+                }
+                if launches >= 2 { break; }
+            }
+            let total = gs.event_log.total_pushed() as usize;
+            let reviews = gs.event_log.recent(total).iter().filter(|(_, e)| format!("{e}").contains("Flight review")).count();
+            let launch_events = gs.event_log.recent(total).iter().filter(|(_, e)| { let t = format!("{e}"); t.starts_with("Launch") && !t.contains("crub") }).count();
+            println!("   event log: {launch_events} launch events, {reviews} flight reviews");
+            let rp = &gs.player_company.rocket_projects[0];
+            println!("   rocket flaws: {} ({} discovered)", rp.flaws.len(), rp.discovered_flaw_count());
+            for ep in &gs.player_company.engine_projects {
+                println!("   engine {}: {} flaws ({} discovered), status {:?}", ep.design.name, ep.flaws.len(), ep.discovered_flaw_count(), ep.status);
+            }
         }
     }
 }
