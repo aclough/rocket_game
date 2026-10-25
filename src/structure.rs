@@ -1,15 +1,27 @@
 use crate::engine::{EngineDesign, G0};
 use crate::propellant::Propellant;
 
-/// G-load limit for thrust structure sizing.
-/// Higher values = lighter structure but less safety margin.
-const STRUCTURAL_G_LIMIT: f64 = 40.0;
+/// G-load the thrust structure is sized to carry: thrust / (g × this)
+/// is its mass. 150 is 0.68 kg per kN — the Saturn V S-IC's thrust
+/// structure (~21 t for 33 MN) — and still heavy against a modern
+/// octaweb. Was 40 (2.55 kg/kN), which put a 3.8 t structure under the
+/// bot's 1.5 MN and 574 kg under an Electron-class first stage, as
+/// much as its tanks (24_STRATEGIES.md §2.2).
+const STRUCTURAL_G_LIMIT: f64 = 150.0;
 
 /// Aerodynamic shell mass fraction for stages exposed to airflow.
 const AERO_SHELL_FRACTION: f64 = 0.05;
 
-/// Interstage adapter mass in kg per stage boundary.
-const INTERSTAGE_MASS_KG: f64 = 200.0;
+/// Interstage adapter: this share of the wet mass it carries (the
+/// stages above it), never less than the floor. A flat 200 kg was 1 %
+/// of an Electron-class vehicle and 0.16 % of the bot's.
+const INTERSTAGE_FRACTION: f64 = 0.02;
+const INTERSTAGE_MIN_KG: f64 = 50.0;
+
+/// Mass of the adapter carrying `carried_kg` of upper stack.
+pub fn interstage_mass_kg(carried_kg: f64) -> f64 {
+    (carried_kg * INTERSTAGE_FRACTION).max(INTERSTAGE_MIN_KG)
+}
 
 /// Tank mass fraction: ratio of tank structural mass to propellant mass.
 /// Driven primarily by propellant volume (low-density propellants need bigger tanks).
@@ -66,21 +78,22 @@ pub fn is_exposed_to_airflow(group_index: usize) -> bool {
 /// - Tank mass (from propellant volume/density)
 /// - Thrust structure (from engine thrust)
 /// - Aerodynamic shell (for exposed stages)
-/// - Interstage adapter
+/// - Interstage adapter, when the stage carries an upper stack of
+///   `interstage_carried_kg` (wet, payload excluded)
 pub fn compute_structural_mass(
     propellant_mass_kg: f64,
     propellant_mix: &[(Propellant, f64)],
     engine: &EngineDesign,
     engine_count: u32,
     exposed_to_airflow: bool,
-    has_interstage: bool,
+    interstage_carried_kg: Option<f64>,
 ) -> StructuralMassBreakdown {
     let tank_fraction = tank_mass_fraction(propellant_mix);
     let tank_mass = propellant_mass_kg * tank_fraction;
     let thrust_struct = thrust_structure_mass_kg(engine, engine_count);
     let base_structure = tank_mass + thrust_struct;
     let aero_shell = aero_shell_mass_kg(base_structure, exposed_to_airflow);
-    let interstage = if has_interstage { INTERSTAGE_MASS_KG } else { 0.0 };
+    let interstage = interstage_carried_kg.map_or(0.0, interstage_mass_kg);
 
     StructuralMassBreakdown {
         tank_mass,
@@ -164,8 +177,8 @@ mod tests {
     fn test_thrust_structure_reasonable() {
         let engine = test_engine(1_000_000.0, 500.0);
         let mass = thrust_structure_mass_kg(&engine, 1);
-        // 1MN / (9.8 * 40) ≈ 2551 kg
-        assert!((mass - 2551.0).abs() < 10.0, "thrust struct: {}", mass);
+        // 1 MN at 150 g: 680 kg, 0.68 kg per kN.
+        assert!((mass - 679.6).abs() < 2.0, "thrust struct: {}", mass);
     }
 
     #[test]
@@ -183,13 +196,14 @@ mod tests {
             &engine,
             1,
             true,  // first stage
-            true,  // has interstage
+            Some(20_000.0), // carries a 20 t upper stack
         );
         assert!(breakdown.total > 0.0);
         assert!(breakdown.tank_mass > 0.0);
         assert!(breakdown.thrust_structure > 0.0);
         assert!(breakdown.aero_shell > 0.0);
-        assert_eq!(breakdown.interstage, INTERSTAGE_MASS_KG);
+        assert!((breakdown.interstage - 400.0).abs() < 1e-9, "2 % of 20 t");
+        assert_eq!(interstage_mass_kg(1_000.0), 50.0, "the floor");
         assert!((breakdown.total - (breakdown.tank_mass + breakdown.thrust_structure + breakdown.aero_shell + breakdown.interstage)).abs() < 0.01);
     }
 
@@ -202,7 +216,7 @@ mod tests {
             &engine,
             1,
             false, // upper stage
-            false, // top stage, no interstage above
+            None,  // top stage, no interstage above
         );
         assert_eq!(breakdown.aero_shell, 0.0);
         assert_eq!(breakdown.interstage, 0.0);
@@ -215,7 +229,7 @@ mod tests {
         // roughly 5-10% of propellant mass
         let engine = test_engine(1_000_000.0, 500.0);
         let breakdown = compute_structural_mass(
-            100_000.0, &kerolox_mix(), &engine, 1, true, true,
+            100_000.0, &kerolox_mix(), &engine, 1, true, Some(20_000.0),
         );
         let fraction = breakdown.total / 100_000.0;
         assert!(fraction > 0.04 && fraction < 0.15,

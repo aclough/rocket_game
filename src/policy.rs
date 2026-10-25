@@ -356,7 +356,7 @@ impl BasicPolicy {
             return None;
         }
 
-        let mut s1 = Stage {
+        let s1 = Stage {
             id: StageId(1),
             name: "BLV S1".into(),
             // First stage lights at sea level; upper stage flies the
@@ -368,7 +368,7 @@ impl BasicPolicy {
             fairing: None,
             power_sources: Vec::new(),
         };
-        let mut s2 = Stage {
+        let s2 = Stage {
             id: StageId(2),
             name: "BLV S2".into(),
             engine: upper.design_variant(true, &game.balance.nozzle),
@@ -378,11 +378,18 @@ impl BasicPolicy {
             fairing: None,
             power_sources: Vec::new(),
         };
-        // Cover housekeeping power like the designer's default panels.
-        s1.power_sources.push(crate::power::solar_panel_for_stage_demand(&s1));
-        s2.power_sources.push(crate::power::solar_panel_for_stage_demand(&s2));
-
-        Some(("BLV-1".into(), vec![vec![s1], vec![s2]]))
+        // Structure from the model the designer uses, so the bot's
+        // vehicle tracks it (24_STRATEGIES.md step 3) instead of the
+        // 6 450 / 1 500 kg it carried when the model was heavier.
+        let mut groups = vec![vec![s1], vec![s2]];
+        crate::stage::recompute_structural_masses(&mut groups);
+        // Cover housekeeping power like the designer's default panels —
+        // sized after the structure, which sets the demand.
+        for stage in groups.iter_mut().flatten() {
+            let panel = crate::power::solar_panel_for_stage_demand(stage);
+            stage.power_sources.push(panel);
+        }
+        Some(("BLV-1".into(), groups))
     }
 
     fn maybe_design_rocket(&mut self, game: &mut GameState) {

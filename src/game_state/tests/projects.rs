@@ -483,7 +483,11 @@ fn rocket_designs_follow_their_engines_improvements() {
         // The bot's panels were auto-sized to demand; they follow it, so
         // the heavier stage stays powered.
         assert!(new.supply_w(1.0) >= new.housekeeping_w() - 1e-9, "stage {gi} stays powered");
-        assert!(new.supply_w(1.0) > old.supply_w(1.0));
+        // The auto panel is re-sized to the new demand (which may round
+        // to the same panel when the thrust structure barely moves).
+        assert!(new.supply_w(1.0) >= old.supply_w(1.0));
+        let auto = crate::power::solar_panel_for_stage_demand(new);
+        assert!((new.supply_w(1.0) - new.source_supply_w(&auto, 1.0)).abs() < 1e-6, "stage {gi}'s panel follows its demand");
     }
 }
 

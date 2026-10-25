@@ -216,13 +216,13 @@ pub const PROPELLANT_STEP_BURN_SECONDS: f64 = 10.0;
 /// will price the answer — engines, fairing and power sources included,
 /// not just the tank.
 pub fn dry_mass_for(
-    stage: &Stage, propellant_kg: f64, is_first: bool, has_interstage: bool,
+    stage: &Stage, propellant_kg: f64, is_first: bool, interstage_carried_kg: Option<f64>,
 ) -> f64 {
     let mix: Vec<(crate::propellant::Propellant, f64)> = stage.engine.propellant_mix.iter()
         .map(|f| (f.propellant, f.mass_fraction))
         .collect();
     let structural = crate::structure::compute_structural_mass(
-        propellant_kg, &mix, &stage.engine, stage.engine_count, is_first, has_interstage,
+        propellant_kg, &mix, &stage.engine, stage.engine_count, is_first, interstage_carried_kg,
     ).total;
     let mut probe = stage.clone();
     probe.structural_mass_kg = structural;
@@ -262,14 +262,16 @@ pub fn autosize_propellant(
 
     // Mass of every stage above this group, plus the payload. Fixed while
     // this tank is solved for.
-    let mass_above: f64 = stage_groups[group_index + 1..].iter()
+    let stack_above: f64 = stage_groups[group_index + 1..].iter()
         .flat_map(|g| g.iter())
         .map(|s| s.wet_mass_kg())
-        .sum::<f64>()
-        + payload_kg;
+        .sum::<f64>();
+    let mass_above = stack_above + payload_kg;
+    // The core of a group carries the interstage; side boosters don't.
+    let carried = if has_interstage && inner_index == 0 { Some(stack_above) } else { None };
 
     // Wet mass of this stage at a candidate propellant load.
-    let wet_at = |p: f64| p + dry_mass_for(stage, p, is_first, has_interstage);
+    let wet_at = |p: f64| p + dry_mass_for(stage, p, is_first, carried);
 
     // A solid motor, or a side booster, is sized by burn time: the
     // group's thrust-to-weight is the core's equation, solved with the
@@ -313,7 +315,7 @@ pub fn autosize_propellant(
         SizingTarget::DeltaV(_) => {
             // This stage's own delta-v carrying everything above it —
             // the same expression `Stage::delta_v` evaluates.
-            let dry = mass_above + dry_mass_for(stage, p, is_first, has_interstage);
+            let dry = mass_above + dry_mass_for(stage, p, is_first, carried);
             let wet = dry + p;
             if dry <= 0.0 || wet <= dry {
                 0.0
@@ -372,25 +374,31 @@ pub fn propellant_step(engine: &EngineDesign, engine_count: u32) -> f64 {
 /// position: the aero shell depends on being group 0 (exposed to
 /// airflow), the interstage on whether the group is the last.
 pub fn recompute_structural_masses(stage_groups: &mut [Vec<Stage>]) {
+    // Top down: a stage's interstage is sized by the wet mass of the
+    // stack above it, which needs that stack's structure settled first.
     let n = stage_groups.len();
-    for (gi, group) in stage_groups.iter_mut().enumerate() {
+    let mut stack_above = 0.0;
+    for gi in (0..n).rev() {
         let is_first = gi == 0;
         let has_interstage = gi + 1 < n;
-        for stage in group.iter_mut() {
+        for (si, stage) in stage_groups[gi].iter_mut().enumerate() {
             let propellant_mix: Vec<(crate::propellant::Propellant, f64)> =
                 stage.engine.propellant_mix.iter()
                     .map(|f| (f.propellant, f.mass_fraction))
                     .collect();
+            // The core of a group carries the interstage; side boosters don't.
+            let carried = if has_interstage && si == 0 { Some(stack_above) } else { None };
             let breakdown = crate::structure::compute_structural_mass(
                 stage.propellant_mass_kg,
                 &propellant_mix,
                 &stage.engine,
                 stage.engine_count,
                 is_first,
-                has_interstage,
+                carried,
             );
             stage.structural_mass_kg = breakdown.total;
         }
+        stack_above += stage_groups[gi].iter().map(|s| s.wet_mass_kg()).sum::<f64>();
     }
 }
 

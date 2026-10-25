@@ -1008,8 +1008,9 @@ mod small_launch {
         for (gi, g) in rp.design.stage_groups.iter().enumerate() {
             let s = &g[0];
             let mix: Vec<_> = s.engine.propellant_mix.iter().map(|f| (f.propellant, f.mass_fraction)).collect();
+            let carried = (gi + 1 < rp.design.stage_groups.len()).then(|| rp.design.stage_groups[gi + 1..].iter().flatten().map(|s| s.wet_mass_kg()).sum::<f64>());
             let b = rocket_tycoon::structure::compute_structural_mass(
-                s.propellant_mass_kg, &mix, &s.engine, s.engine_count, gi == 0, gi + 1 < rp.design.stage_groups.len());
+                s.propellant_mass_kg, &mix, &s.engine, s.engine_count, gi == 0, carried);
             println!("   S{} structure: tank {:.0}  thrust structure {:.0}  aero {:.0}  interstage {:.0}  (engines {:.0})",
                 gi + 1, b.tank_mass, b.thrust_structure, b.aero_shell, b.interstage, s.engine.mass_kg * s.engine_count as f64);
         }

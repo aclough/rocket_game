@@ -310,3 +310,27 @@ bot unit cost 19.8M → 20.1M, curve 35 / 61 / 76 / 98 unchanged.
 200 seeds: `[fleet] bankrupt 3/200, kept $25M 178/200, profitable
 148/200, profitable year 199/200, aggregate success 90.3%`, bands
 green. 732 tests, clippy clean.
+
+**Step 3 — structure that scales.** `STRUCTURAL_G_LIMIT` 40 → 150
+(2.55 → 0.68 kg per kN); the interstage is 2 % of the wet stack it
+carries with a 50 kg floor instead of a flat 200 kg, carried by the
+core of a group only (`compute_structural_mass` takes
+`interstage_carried_kg: Option<f64>`, `recompute_structural_masses`
+runs top-down so the stack above is settled first, `autosize` passes
+the stack it already knows). The bot's template now takes its
+structure from the model (`recompute_structural_masses`) instead of
+the hardcoded 6 450 / 1 500 kg, with its panels sized afterwards —
+sizing them first left the upper stage 68 kg short and
+`survives_trip` false, which is what tripped the policy and guide
+tests. Falcon 9 yardstick: the game structural model on Merlin now
+lifts 17 174 kg to LEO against 17 747 kg with the real dry masses
+(was 14 089) — the structure is no longer the gap, the engines are.
+Probe: Electron-class 140 → 227 kg LEO, 62 → 142 kg SSO, $4.3M;
+Alpha-class 703 → 992 kg LEO (real 1 030), $9.3M; the solid first
+stage 920 → 1 320 kg; the bot's autosized class 1 849 → 2 453 kg.
+100 seeds: unit cost 20.1M → 18.5M (lighter tanks and harness),
+payment 40.5M → 37.4M. 200 × 8: curve 38 / 62 / 76 / 97 (was
+36 / 63 / 81 / 97 — the bot flies a different vehicle, so different
+draws; 3rd-flight 153/200 vs 162/200 is inside two sigma), `[fleet]
+bankrupt 2/200, kept $25M 189/200, profitable 152/200, profitable
+year 199/200, aggregate 90.4%`, bands green. 732 tests, clippy clean.
