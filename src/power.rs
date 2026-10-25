@@ -51,6 +51,13 @@ pub struct Radiator {
     pub mass_kg: f64,
 }
 
+/// Specific power of a solar array at 1 AU, structure and deployment
+/// included, at the 1 kW reference size. 80 W/kg is a good 2000s rigid
+/// wing (a GEO comsat's; ISS-style wings are nearer 30, roll-out arrays
+/// like ROSA reach ~150). Was 200, a deliberate thumb on the scale that
+/// the TODO asked to check.
+pub const SOLAR_PANEL_W_PER_KG: f64 = 80.0;
+
 /// What kind of power source this is. Each variant carries its
 /// kind-specific physics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,15 +176,9 @@ impl PowerSource {
     /// scale): mass ∝ peak^0.9, cost ∝ peak^0.85. No upper bound.
     pub fn new_solar_panel(peak_w_at_1au: f64) -> Self {
         let p = peak_w_at_1au.max(1.0);
-        // Reference: a 1 kW panel ≈ 5 kg, $100K — i.e. 200 W/kg. That is
-        // optimistic, not conservative as this comment used to claim:
-        // roll-out arrays like ROSA reach ~150 W/kg, and a rigid ISS-style
-        // wing counting structure is nearer 30. Left as it is because the
-        // generosity is deliberate — panels are the answer the power system
-        // wants players to reach for — but it is a thumb on the scale, not
-        // a datasheet figure. (Tunable in a balance pass.)
+        // Reference: a 1 kW panel at `SOLAR_PANEL_W_PER_KG`, $100K.
         let ref_w = 1000.0;
-        let ref_mass = 5.0;
+        let ref_mass = ref_w / SOLAR_PANEL_W_PER_KG;
         let ref_cost = 100_000.0;
         let mass_kg = ref_mass * (p / ref_w).powf(0.9);
         let material_cost = ref_cost * (p / ref_w).powf(0.85);
@@ -493,6 +494,13 @@ mod tests {
             "{kg_per_kwd} kg/kWd is below the Gibbs limit of \
              {GIBBS_LIMIT_KG_PER_KWD} — that is a cell producing free energy",
         );
+    }
+
+    #[test]
+    fn a_kilowatt_panel_weighs_its_specific_power() {
+        let p = PowerSource::new_solar_panel(1000.0);
+        assert!((p.mass_kg - 1000.0 / SOLAR_PANEL_W_PER_KG).abs() < 1e-9);
+        assert!((p.mass_kg - 12.5).abs() < 1e-9, "80 W/kg: {}", p.mass_kg);
     }
 
     #[test]
