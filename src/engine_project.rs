@@ -1465,16 +1465,20 @@ mod tests {
         proj.cumulative_testing_work = 0.0;
         assert_eq!(proj.testing_level(&bal()), "Untested");
 
+        // Cut on expected coverage (FlawsConfig::expected_coverage): an
+        // engine's stand finds ~32 % of its flight risk in 2 cycles,
+        // ~48 % in 5, ~58 % in 10, ~66 % in 20.
         proj.cumulative_testing_work = 60.0;
         assert_eq!(proj.testing_level(&bal()), "Lightly Tested");
 
         proj.cumulative_testing_work = 150.0;
         assert_eq!(proj.testing_level(&bal()), "Moderately Tested");
 
-        proj.cumulative_testing_work = 250.0;
+        proj.cumulative_testing_work = 300.0;
         assert_eq!(proj.testing_level(&bal()), "Well Tested");
+        assert!(proj.testing_summary(&bal()).starts_with("Well Tested (stand finds ~5"), "{}", proj.testing_summary(&bal()));
 
-        proj.cumulative_testing_work = 400.0;
+        proj.cumulative_testing_work = 600.0;
         assert_eq!(proj.testing_level(&bal()), "Thoroughly Tested");
     }
 

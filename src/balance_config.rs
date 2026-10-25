@@ -900,6 +900,45 @@ impl FlawsConfig {
             FlawDomain::Reactor => self.reactor_exposure_mix,
         }
     }
+
+    /// What `cycles` of bench testing are expected to find of a fresh
+    /// design in this domain, weighted by activation chance (the share
+    /// of the flight risk removed): the mean over the domain's exposure
+    /// mix of 1 − (1 − r^N · √a)^k, with the discovery roll r uniform
+    /// and the activation a = u^activation_exponent as `generate_flaws`
+    /// draws them. No flight review, no hard-to-test penalty: the
+    /// stand's reach on its own. The testing label is cut on this.
+    pub fn expected_coverage(&self, domain: crate::flaw::FlawDomain, cycles: u32) -> f64 {
+        if cycles == 0 {
+            return 0.0;
+        }
+        let mix = self.exposure_mix(domain);
+        let total: f64 = mix.iter().sum();
+        if total <= 0.0 {
+            return 0.0;
+        }
+        const GRID: usize = 64;
+        let mut found = 0.0;
+        let mut weight = 0.0;
+        for (share, exposure) in mix.iter().zip(crate::flaw::FlawExposure::ALL) {
+            if *share <= 0.0 {
+                continue;
+            }
+            let n = self.discovery_exponent(exposure);
+            for i in 0..GRID {
+                let u = (i as f64 + 0.5) / GRID as f64;
+                let a = u.powf(self.activation_exponent);
+                for j in 0..GRID {
+                    let r = (j as f64 + 0.5) / GRID as f64;
+                    let p = (r.powf(n) * a.sqrt()).min(1.0);
+                    let hit = 1.0 - (1.0 - p).powi(cycles as i32);
+                    found += share * a * hit;
+                    weight += share * a;
+                }
+            }
+        }
+        found / weight
+    }
 }
 
 impl Default for FlawsConfig {
@@ -1567,7 +1606,8 @@ impl Default for ThirdPartyConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UpratesConfig {
-    /// Testing cycles an engine must have run ("Thoroughly Tested").
+    /// Testing cycles an engine must have run (ten: "Well Tested" now
+    /// that labels are cut on expected coverage).
     pub min_testing_cycles: u32,
     /// Flights an engine must have flown on the company's rockets.
     pub min_flights: u32,
@@ -1653,6 +1693,25 @@ impl Default for ImprovementsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The testing label's yardstick (TODO "how tested is Thoroughly
+    /// Tested"): the stand finds about half an engine's flight risk in
+    /// ten cycles and a third of a rocket's, and flattens from there —
+    /// flight finds the rest.
+    #[test]
+    fn expected_coverage_matches_the_probe() {
+        use crate::flaw::FlawDomain;
+        let cfg = FlawsConfig::default();
+        let engine = |k| cfg.expected_coverage(FlawDomain::Engine(None), k);
+        let rocket = |k| cfg.expected_coverage(FlawDomain::Rocket, k);
+        assert_eq!(engine(0), 0.0);
+        assert!((engine(10) - 0.58).abs() < 0.04, "engine 10 cycles {}", engine(10));
+        assert!((rocket(10) - 0.37).abs() < 0.04, "rocket 10 cycles {}", rocket(10));
+        assert!(engine(30) < 0.75 && rocket(30) < 0.52, "the stand saturates: {} {}", engine(30), rocket(30));
+        for k in 1..30 {
+            assert!(engine(k + 1) > engine(k) && rocket(k + 1) > rocket(k));
+        }
+    }
 
     #[test]
     fn test_default_round_trips_through_toml() {

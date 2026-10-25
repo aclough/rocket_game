@@ -25,8 +25,8 @@ pub(super) fn push_project_row<D: Designable>(
         DesignStatus::Proposed { .. } => unreachable!("panes hide Proposed drafts"),
         DesignStatus::InDesign { .. } => "In Design".to_string(),
         DesignStatus::Testing { .. } => match &project.flight_review {
-            Some(r) => format!("Testing  {}  ✈ review {}", project.testing_level(balance), r.cycles_left),
-            None => format!("Testing  {}", project.testing_level(balance)),
+            Some(r) => format!("Testing  {}  ✈ review {}", project.testing_summary(balance), r.cycles_left),
+            None => format!("Testing  {}", project.testing_summary(balance)),
         },
         DesignStatus::Revising { .. } => project.revision_plan()
             .map(|plan| plan.describe())
@@ -329,7 +329,7 @@ pub(super) fn draw_reactors_tab(frame: &mut Frame, app: &App, area: Rect, border
         lines.push(Line::from(format!("      NRE: {}", format_money(project.nre_cost))));
         // Testing progress (once past design).
         if matches!(project.status, DesignStatus::Testing { .. } | DesignStatus::Revising { .. }) {
-            lines.push(Line::from(format!("      Testing: {}", project.testing_level(&app.game.balance))));
+            lines.push(Line::from(format!("      Testing: {}", project.testing_summary(&app.game.balance))));
         }
 
         push_flaw_lines(&mut lines, &project.flaws, ProjectKind::Reactor);

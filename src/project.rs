@@ -744,16 +744,46 @@ impl<D: Designable> DesignProject<D> {
         n
     }
 
-    /// Testing level description based on cumulative work in testing.
+    /// Testing cycles run so far.
+    pub fn testing_cycles(&self, balance_cfg: &BalanceConfig) -> u32 {
+        (self.cumulative_testing_work / balance_cfg.work.testing_cycle_work) as u32
+    }
+
+    /// What the stand is expected to have found of a design like this
+    /// after the cycles run, as a share of flight risk
+    /// (`FlawsConfig::expected_coverage`).
+    pub fn testing_coverage(&self, balance_cfg: &BalanceConfig) -> f64 {
+        balance_cfg.flaws.expected_coverage(self.design.flaw_domain(), self.testing_cycles(balance_cfg))
+    }
+
+    /// Testing level, cut on expected coverage rather than cycles, so
+    /// the words mean the same for every design: ten cycles find half
+    /// an engine's flight risk ("Well Tested") but a third of a
+    /// rocket's ("Moderately") — a rocket's problems are integration,
+    /// and the stand never reaches "Thoroughly" on one; flight does.
     pub fn testing_level(&self, balance_cfg: &BalanceConfig) -> &'static str {
-        let cycles = (self.cumulative_testing_work / balance_cfg.work.testing_cycle_work) as u32;
-        match cycles {
-            0 => "Untested",
-            1..=2 => "Lightly Tested",
-            3..=5 => "Moderately Tested",
-            6..=9 => "Well Tested",
-            _ => "Thoroughly Tested",
+        if self.testing_cycles(balance_cfg) == 0 {
+            return "Untested";
         }
+        let coverage = self.testing_coverage(balance_cfg);
+        if coverage < 0.35 {
+            "Lightly Tested"
+        } else if coverage < 0.50 {
+            "Moderately Tested"
+        } else if coverage < 0.62 {
+            "Well Tested"
+        } else {
+            "Thoroughly Tested"
+        }
+    }
+
+    /// The label with its number: "Well Tested (stand finds ~58%)".
+    pub fn testing_summary(&self, balance_cfg: &BalanceConfig) -> String {
+        let level = self.testing_level(balance_cfg);
+        if self.testing_cycles(balance_cfg) == 0 {
+            return level.to_string();
+        }
+        format!("{level} (stand finds ~{:.0}%)", self.testing_coverage(balance_cfg) * 100.0)
     }
 }
 

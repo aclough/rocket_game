@@ -1202,3 +1202,64 @@ mod flight_trace {
         }
     }
 }
+
+mod testing_coverage {
+    //! What a testing label buys: the share of a fresh design's flaws
+    //! found after k testing cycles on the bench alone (no flight
+    //! review), by exposure class and weighted by activation chance,
+    //! over many generated flaw sets (TODO: how tested is "Thoroughly
+    //! Tested").
+    use rand::SeedableRng;
+    use rocket_tycoon::balance_config::BalanceConfig;
+    use rocket_tycoon::engine::EngineCycle;
+    use rocket_tycoon::flaw::{self, FlawDomain, FlawExposure, FlawId};
+    use rocket_tycoon::propellant::Propellant;
+
+    #[test]
+    #[ignore = "prints flaw coverage per testing cycle; run with --ignored --nocapture"]
+    fn coverage_by_cycle() {
+        let bal = BalanceConfig::default();
+        let checkpoints = [1usize, 2, 3, 5, 6, 9, 10, 15, 20, 30];
+        let cases: [(&str, FlawDomain, u32, usize, Vec<flaw::Feature>); 2] = [
+            ("engine (kerolox GG, cx 6)", FlawDomain::Engine(Some(EngineCycle::GasGenerator)), 6, 1,
+                flaw::engine_features(EngineCycle::GasGenerator, &[Propellant::LOX, Propellant::RP1])),
+            ("rocket (2 stages, cx 5)", FlawDomain::Rocket, 5, 2, Vec::new()),
+        ];
+        for (label, domain, cx, groups, features) in cases {
+            println!("\n── {label}: share of flaws found after k bench cycles (n = 2000 designs)");
+            println!("{:>6} {:>8} {:>8} {:>8} {:>8} {:>10} {:>8}", "cycles", "bench", "integr", "analys", "all", "act-wtd", "left/dsgn");
+            let mut rows = Vec::new();
+            for _ in checkpoints { rows.push([0.0f64; 7]); }
+            let mut totals = [0.0f64; 5]; // bench, integrated, analysis, all, act-weighted
+            for seed in 0..2000u64 {
+                let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+                let mut ids = rocket_tycoon::id::IdAllocator::<FlawId>::starting_at(1);
+                let mut flaws = flaw::generate_flaws(domain, cx, groups, &features, &mut rng, &mut ids, &bal.flaws);
+                for f in &flaws {
+                    let i = match f.exposure { FlawExposure::Bench => 0, FlawExposure::Integrated => 1, FlawExposure::Analysis => 2 };
+                    totals[i] += 1.0; totals[3] += 1.0; totals[4] += f.activation_chance;
+                }
+                let mut cycle = 0usize;
+                for (ci, &k) in checkpoints.iter().enumerate() {
+                    while cycle < k {
+                        flaw::roll_discoveries_with_rng(&mut flaws, &mut rng, |f| bal.flaws.discovery_exponent(f.exposure));
+                        cycle += 1;
+                    }
+                    for f in flaws.iter().filter(|f| f.discovered) {
+                        let i = match f.exposure { FlawExposure::Bench => 0, FlawExposure::Integrated => 1, FlawExposure::Analysis => 2 };
+                        rows[ci][i] += 1.0; rows[ci][3] += 1.0; rows[ci][4] += f.activation_chance;
+                    }
+                    rows[ci][5] += flaws.iter().filter(|f| !f.discovered).count() as f64;
+                    rows[ci][6] += flaws.iter().filter(|f| !f.discovered).map(|f| f.activation_chance).sum::<f64>();
+                }
+            }
+            println!("   flaws per design {:.1} (bench {:.1}, integrated {:.1}, analysis {:.1})", totals[3] / 2000.0, totals[0] / 2000.0, totals[1] / 2000.0, totals[2] / 2000.0);
+            for (ci, k) in checkpoints.iter().enumerate() {
+                let r = &rows[ci];
+                println!("{:>6} {:>7.0}% {:>7.0}% {:>7.0}% {:>7.0}% {:>9.0}% {:>8.2}",
+                    k, 100.0 * r[0] / totals[0].max(1.0), 100.0 * r[1] / totals[1].max(1.0), 100.0 * r[2] / totals[2].max(1.0),
+                    100.0 * r[3] / totals[3], 100.0 * r[4] / totals[4], r[5] / 2000.0);
+            }
+        }
+    }
+}
