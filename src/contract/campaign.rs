@@ -160,15 +160,16 @@ pub fn spawn_campaign(
 }
 
 /// Issue the campaign's next mission as an ordinary offered contract.
-/// The caller advances `missions_issued`/`next_issue_date`.
+/// The caller advances `missions_issued`/`next_issue_date`. A mission
+/// expires the day before the next one is issued: a block buy is a
+/// cadence, and a resupply flight not flown by the time the next is
+/// due is missed, not late.
 pub fn campaign_contract(
     campaign: &Campaign,
-    deadline_window: (u32, u32),
-    rng: &mut StdRng,
     next_contract_id: &mut crate::id::IdAllocator<ContractId>,
     current_date: GameDate,
 ) -> Contract {
-    let deadline_days = rng.gen_range(deadline_window.0..=deadline_window.1);
+    let deadline_days = campaign.interval_days.saturating_sub(1).max(1);
     let id = next_contract_id.mint();
 
     Contract {

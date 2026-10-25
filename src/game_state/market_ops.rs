@@ -55,10 +55,6 @@ impl GameState {
     /// bid resolution. The winner's missions arrive **pre-accepted** at
     /// the won block price: the block bid was the acceptance.
     pub(super) fn issue_campaign_contracts(&mut self, events: &mut Vec<GameEvent>) {
-        let global_window = (
-            self.balance.markets.deadline_min_days,
-            self.balance.markets.deadline_max_days,
-        );
         for i in 0..self.active_campaigns.len() {
             // by_player, or the winning competitor's index for a
             // competitor-won program.
@@ -81,17 +77,8 @@ impl GameState {
                 && self.date >= self.active_campaigns[i].next_issue_date
             {
                 let campaign = &self.active_campaigns[i];
-                let window = self.markets.iter()
-                    .find(|m| m.id == campaign.market_id)
-                    .and_then(|m| m.deadline_days)
-                    .unwrap_or(global_window);
-                // Per-mission query: order-independent and stable
-                // across save/load.
-                let mut rng = self.seed.world_query(
-                    WorldQuery::CampaignIssue(campaign.id, campaign.missions_issued + 1),
-                );
                 let mut c = contract::campaign_contract(
-                    campaign, window, &mut rng, &mut self.next_contract_id, self.date,
+                    campaign, &mut self.next_contract_id, self.date,
                 );
                 c.status = contract::ContractStatus::Accepted;
                 match winner_ci {

@@ -644,11 +644,8 @@ mod market_discovery_render_tests {
                 company: "Render Test".into(),
             },
         };
-        let mut rng = game.seed.world_query(crate::seed::WorldQuery::Test("render_test_campaign"));
         let mut next_id = crate::id::IdAllocator::<crate::contract::ContractId>::starting_at(900_000);
-        let contract = crate::contract::campaign_contract(
-            &campaign, (60, 150), &mut rng, &mut next_id, game.date,
-        );
+        let contract = crate::contract::campaign_contract(&campaign, &mut next_id, game.date);
         game.available_contracts.push(contract);
         game.active_campaigns.push(campaign);
 

@@ -172,14 +172,13 @@ fn missions_are_correlated_and_numbered() {
     )
     .expect("spawn_chance 1.0 must spawn");
 
-    let deadline_window = (60u32, 150u32);
     let mut next_contract_id = rocket_tycoon::id::IdAllocator::<rocket_tycoon::contract::ContractId>::starting_at(1);
     let mut working = campaign.clone();
     let mut contracts = Vec::new();
     let mut issue_dates = Vec::new();
     for i in 0..3 {
-        let issue_date = current_date.add_days(i * 30);
-        let c = campaign_contract(&working, deadline_window, &mut rng, &mut next_contract_id, issue_date);
+        let issue_date = current_date.add_days(i * campaign.interval_days);
+        let c = campaign_contract(&working, &mut next_contract_id, issue_date);
         contracts.push(c);
         issue_dates.push(issue_date);
         working.missions_issued += 1;
@@ -208,14 +207,13 @@ fn missions_are_correlated_and_numbered() {
         format!("{} Flight 3 to {}", campaign.name, campaign.destination_display),
     );
 
-    // Deadlines within the window of their own issue date.
+    // A mission expires the day before the next one is issued: a block
+    // buy is a cadence, and a flight not flown by then is missed.
     for (c, issue_date) in contracts.iter().zip(issue_dates.iter()) {
         let span = issue_date.days_until(&c.deadline);
-        assert!(
-            span >= deadline_window.0 && span <= deadline_window.1,
-            "deadline {span} days from issue outside {:?}", deadline_window,
-        );
+        assert_eq!(span, campaign.interval_days - 1, "deadline {span} days from issue");
     }
+    assert_eq!(contracts[0].deadline.add_days(1), issue_dates[1]);
 }
 
 /// A GameState with monthly rideshare campaign announcements rigged on
