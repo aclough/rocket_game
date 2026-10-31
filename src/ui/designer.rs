@@ -355,7 +355,8 @@ fn resize_all_tanks(state: &mut RocketDesignerState, company: &crate::game_state
 /// propellant, engines or stages: its structure, and the long bell its
 /// own diameter allows (25_1_BODIES.md step 1).
 fn refresh_derived(state: &mut RocketDesignerState, company: &crate::game_state::Company, bal: &BalanceConfig) {
-    recompute_structural_masses(&mut state.stage_groups);
+    // Bells first: a bell's mass is part of the stack an interstage
+    // below it carries, so the structure is computed from fitted engines.
     for gi in 0..state.stage_groups.len() {
         for si in 0..state.stage_groups[gi].len() {
             let Some(EngineSource::PlayerDesign(pid)) = state.engine_sources.get(gi).and_then(|g| g.get(si)).copied() else {
@@ -365,6 +366,7 @@ fn refresh_derived(state: &mut RocketDesignerState, company: &crate::game_state:
             state.stage_groups[gi][si].fit_vacuum_bell(&ep.design, &bal.nozzle, bal.bodies.tank_fineness);
         }
     }
+    recompute_structural_masses(&mut state.stage_groups);
 }
 
 /// Re-solve the tanks of group `top` and every group beneath it.
@@ -437,6 +439,7 @@ fn apply_picked_engine_to_designer(
         propellant_mass_kg,
         structural_mass_kg: 0.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
     };
     state.next_stage_id += 1;
@@ -747,6 +750,18 @@ impl App {
                 self.input_mode = InputMode::designer_with(state, DesignerSubMode::LocationPicker {
                     target: LocationPickerTarget::LaunchSite, locations, selected,
                 });
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                // Cycle the stage's structural material (25_1_BODIES.md step 2).
+                if !state.on_add_slot() && !state.stage_groups.is_empty() {
+                    let (gi, si) = (state.selected_group, state.selected_inner);
+                    let stage = &mut state.stage_groups[gi][si];
+                    stage.material = stage.material.next();
+                    let name = stage.material.name();
+                    refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
+                    self.status_message = Some(format!("Stage structure: {name}"));
+                }
+                self.input_mode = InputMode::designer(state);
             }
             KeyCode::Char('m') | KeyCode::Char('M') => {
                 // Pick mission destination
@@ -1110,6 +1125,7 @@ mod sync_tests {
             propellant_mass_kg: 40_000.0,
             structural_mass_kg: 100.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let mut state = RocketDesignerState {
@@ -1201,7 +1217,7 @@ mod autosize_tests {
                 id: StageId(i as u64 + 1), name: format!("S{}", i + 1),
                 engine: e, engine_count: 1,
                 propellant_mass_kg: 100.0, structural_mass_kg: 0.0,
-                fairing: None, power_sources: Vec::new(),
+                fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
             }]);
             st.engine_sources.push(vec![EngineSource::PlayerDesign(
                 crate::engine_project::EngineProjectId(i as u64 + 1))]);
@@ -1506,7 +1522,7 @@ mod nozzle_variant_tests {
                     id: StageId(gi as u64 + 1), name: format!("S{}", gi + 1),
                     engine: ep.design_variant(gi > 0, &app.game.balance.nozzle), engine_count: 1,
                     propellant_mass_kg: 10_000.0, structural_mass_kg: 1_000.0,
-                    fairing: None, power_sources: Vec::new(),
+                    fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
                 };
                 state.push_new_group(stage, EngineSource::PlayerDesign(pid));
             }
@@ -1559,6 +1575,7 @@ mod nozzle_variant_tests {
                 propellant_mass_kg: 10_000.0,
                 structural_mass_kg: 1_000.0,
                 fairing: None,
+                material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
             };
             state.push_new_group(stage, EngineSource::PlayerDesign(pid));
@@ -1588,6 +1605,50 @@ mod nozzle_variant_tests {
             "[V] should toggle back");
     }
 
+    /// [T] cycles the selected stage's material, and only that stage's;
+    /// the structure follows (25_1_BODIES.md step 2).
+    #[test]
+    fn t_cycles_only_the_selected_stage_material() {
+        use crate::structure::StructuralMaterial as M;
+        let (mut app, pid) = app_with_engine();
+        let ep = app.game.player_company.find_engine_project(pid).unwrap();
+        let mut state = Box::new(RocketDesignerState::new("Two Stage".into()));
+        for gi in 0..2 {
+            let stage = Stage {
+                id: StageId(gi as u64 + 1), name: format!("S{}", gi + 1),
+                engine: ep.design_variant(gi > 0, &app.game.balance.nozzle), engine_count: 1,
+                propellant_mass_kg: 10_000.0, structural_mass_kg: 0.0, fairing: None,
+                material: M::Aluminium, power_sources: Vec::new(),
+            };
+            state.push_new_group(stage, EngineSource::PlayerDesign(pid));
+        }
+        // The baseline is what the designer derives (structure and the
+        // upper bell fitted to its stage), not a bare recompute.
+        refresh_derived(&mut state, &app.game.player_company, &app.game.balance);
+        let aluminium = state.stage_groups[0][0].structural_mass_kg;
+        state.selected_group = 0;
+        state.selected_inner = 0;
+        app.input_mode = InputMode::designer(state);
+
+        app.handle_key(KeyCode::Char('t'));
+        let state = match &app.input_mode {
+            InputMode::RocketDesigner { state, .. } => state,
+            other => panic!("should stay in the designer, got {other:?}"),
+        };
+        assert_eq!(state.stage_groups[0][0].material, M::Steel);
+        assert_eq!(state.stage_groups[1][0].material, M::Aluminium, "only the selected stage changes");
+        assert!(state.stage_groups[0][0].structural_mass_kg > aluminium, "steel is heavier and the structure followed");
+
+        app.handle_key(KeyCode::Char('t'));
+        app.handle_key(KeyCode::Char('t'));
+        let state = match &app.input_mode {
+            InputMode::RocketDesigner { state, .. } => state,
+            other => panic!("should stay in the designer, got {other:?}"),
+        };
+        assert_eq!(state.stage_groups[0][0].material, M::Aluminium, "and round again");
+        assert!((state.stage_groups[0][0].structural_mass_kg - aluminium).abs() < 1e-6);
+    }
+
     /// Editing the engine family (here: rescaling it) must not silently
     /// revert an upper stage to the sea-level bell.
     #[test]
@@ -1604,6 +1665,7 @@ mod nozzle_variant_tests {
                 propellant_mass_kg: 10_000.0,
                 structural_mass_kg: 1_000.0,
                 fairing: None,
+                material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
             };
             state.push_new_group(stage, EngineSource::PlayerDesign(pid));
@@ -1651,6 +1713,7 @@ mod nozzle_variant_tests {
                 id: StageId(1), name: "S1".into(), engine,
                 engine_count: 1, propellant_mass_kg: 10_000.0,
                 structural_mass_kg: 1_000.0, fairing: None,
+                material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
             },
             EngineSource::Contracted(crate::third_party::ContractedEngineId(1)),

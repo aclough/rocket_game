@@ -821,6 +821,7 @@ mod tests {
             propellant_mass_kg: 50_000.0,
             structural_mass_kg: 2_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         }
     }
@@ -881,6 +882,7 @@ mod tests {
         let stage = |id: u64, e: EngineDesign, prop: f64, dry: f64| Stage {
             id: StageId(id), name: format!("S{id}"), engine: e, engine_count: 1,
             propellant_mass_kg: prop, structural_mass_kg: dry, fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         // A first stage whose nozzle is built for altitude: 40 kPa exit at

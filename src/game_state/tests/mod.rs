@@ -79,6 +79,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         propellant_mass_kg: 200_000.0,
         structural_mass_kg: 5000.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
     };
     let stage2 = Stage {
@@ -89,6 +90,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         propellant_mass_kg: 30_000.0,
         structural_mass_kg: 1000.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
     };
     // Stage 3 sized so that LEO→GTO (2440 m/s) + GTO→GEO (1500 m/s) = 3940 m/s
@@ -102,6 +104,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         propellant_mass_kg: 1000.0,
         structural_mass_kg: 300.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
     };
 

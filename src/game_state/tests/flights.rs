@@ -28,6 +28,7 @@ fn tiny_payload_spacecraft(
         engine, engine_count: 1,
         propellant_mass_kg: 500.0, structural_mass_kg: 100.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
     };
     let design = RocketDesign {
@@ -260,6 +261,7 @@ fn push_test_spacecraft(gs: &mut GameState, id: u64, name: &str, location: &str)
         engine, engine_count: 1,
         propellant_mass_kg: 100.0, structural_mass_kg: 10.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
     };
     let design = RocketDesign {
@@ -451,6 +453,7 @@ fn test_mid_flight_stage_loss_destroys_vehicle() {
         engine, engine_count: 1,
         propellant_mass_kg: 40_000.0, structural_mass_kg: 1_000.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: vec![PowerSource::from_reactor_design(reactor_design)],
     };
     let design = RocketDesign {

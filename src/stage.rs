@@ -28,6 +28,10 @@ pub struct Stage {
     pub propellant_mass_kg: f64,
     pub structural_mass_kg: f64,
     pub fairing: Option<Fairing>,
+    /// What the tanks and skin are made of (25_1_BODIES.md step 2);
+    /// aluminium for every design from before the choice existed.
+    #[serde(default)]
+    pub material: crate::structure::StructuralMaterial,
     /// Power sources (batteries, solar panels, RTGs…) the player fitted to
     /// this stage. Empty is normal — and empty does not mean unpowered.
     /// Read it through [`Stage::effective_power_sources`] for anything
@@ -265,7 +269,7 @@ pub fn dry_mass_for(
         .map(|f| (f.propellant, f.mass_fraction))
         .collect();
     let structural = crate::structure::compute_structural_mass(
-        propellant_kg, &mix, &stage.engine, stage.engine_count, is_first, interstage_carried_kg,
+        propellant_kg, &mix, &stage.engine, stage.engine_count, is_first, interstage_carried_kg, stage.material,
     ).total;
     let mut probe = stage.clone();
     probe.structural_mass_kg = structural;
@@ -438,6 +442,7 @@ pub fn recompute_structural_masses(stage_groups: &mut [Vec<Stage>]) {
                 stage.engine_count,
                 is_first,
                 carried,
+                stage.material,
             );
             stage.structural_mass_kg = breakdown.total;
         }
@@ -450,6 +455,21 @@ mod tests {
     use super::*;
     use crate::engine::*;
 
+    /// 25_1_BODIES.md step 2: a stage from before materials existed is
+    /// aluminium, which is exactly what it was.
+    #[test]
+    fn a_stage_without_a_material_is_aluminium() {
+        let s = Stage {
+            id: StageId(1), name: "S1".into(), engine: test_engine(), engine_count: 1,
+            propellant_mass_kg: 1_000.0, structural_mass_kg: 100.0, fairing: None,
+            material: crate::structure::StructuralMaterial::Composite, power_sources: Vec::new(),
+        };
+        let mut json: serde_json::Value = serde_json::to_value(&s).unwrap();
+        json.as_object_mut().unwrap().remove("material");
+        let back: Stage = serde_json::from_value(json).unwrap();
+        assert_eq!(back.material, crate::structure::StructuralMaterial::Aluminium);
+    }
+
     /// 25_1_BODIES.md step 1: a stage is as wide as its tanks need at
     /// the configured fineness. Falcon 9's first stage (411 t kerolox)
     /// comes out 3.7 m (real 3.66); Electron's (9.25 t) 1.05 m (real 1.2).
@@ -457,7 +477,7 @@ mod tests {
     fn diameter_follows_the_tanks() {
         let mut s = Stage {
             id: StageId(1), name: "S1".into(), engine: test_engine(), engine_count: 9,
-            propellant_mass_kg: 411_000.0, structural_mass_kg: 0.0, fairing: None, power_sources: Vec::new(),
+            propellant_mass_kg: 411_000.0, structural_mass_kg: 0.0, fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
         };
         let d = s.diameter_m(10.0);
         assert!((d - 3.7).abs() < 0.15, "F9 S1 {d}");
@@ -496,6 +516,7 @@ mod tests {
             propellant_mass_kg: 20_000.0,
             structural_mass_kg: 1_500.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         }
     }

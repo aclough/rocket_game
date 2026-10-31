@@ -392,6 +392,7 @@ mod tests {
             engine: engine1.clone(), engine_count: 1,
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let s2 = Stage {
@@ -399,6 +400,7 @@ mod tests {
             engine: engine2.clone(), engine_count: 1,
             propellant_mass_kg: 10_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -438,6 +440,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 20_000.0, structural_mass_kg: 1_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -475,6 +478,7 @@ mod tests {
             engine: core_engine.clone(), engine_count: 1,
             propellant_mass_kg: 100_000.0, structural_mass_kg: 5_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let srb = Stage {
@@ -482,6 +486,7 @@ mod tests {
             engine: srb_engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -517,13 +522,13 @@ mod tests {
             id: StageId(1), name: "Core".into(),
             engine: core_engine, engine_count: 1,
             propellant_mass_kg: 100_000.0, structural_mass_kg: 5_000.0,
-            fairing: None, power_sources: Vec::new(),
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
         };
         let srb = Stage {
             id: StageId(2), name: "SRB".into(),
             engine: srb_engine, engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
-            fairing: None, power_sources: Vec::new(),
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
         };
         let design = RocketDesign {
             id: RocketDesignId(1), name: "CorePlusSRBs".into(),
@@ -563,13 +568,13 @@ mod tests {
             id: StageId(1), name: "Core".into(),
             engine: core_engine, engine_count: 1,
             propellant_mass_kg: 100_000.0, structural_mass_kg: 5_000.0,
-            fairing: None, power_sources: Vec::new(),
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
         };
         let srb = Stage {
             id: StageId(2), name: "SRB".into(),
             engine: srb_engine, engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
-            fairing: None, power_sources: Vec::new(),
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
         };
         let design = RocketDesign {
             id: RocketDesignId(1), name: "CorePlusSRBs".into(),
@@ -603,6 +608,7 @@ mod tests {
             engine: core_engine.clone(), engine_count: 1,
             propellant_mass_kg: 80_000.0, structural_mass_kg: 4_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let srb = Stage {
@@ -610,6 +616,7 @@ mod tests {
             engine: srb_engine.clone(), engine_count: 1,
             propellant_mass_kg: 20_000.0, structural_mass_kg: 1_500.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -646,6 +653,7 @@ mod tests {
             engine: core_engine, engine_count: 1,
             propellant_mass_kg: 100_000.0, structural_mass_kg: 5_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let srb = Stage {
@@ -653,6 +661,7 @@ mod tests {
             engine: srb_engine, engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let upper = Stage {
@@ -660,6 +669,7 @@ mod tests {
             engine: upper_engine, engine_count: 1,
             propellant_mass_kg: 15_000.0, structural_mass_kg: 800.0,
             fairing: Some(Fairing { mass_kg: 200.0, diameter_m: 4.0 }),
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -690,6 +700,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let s2 = Stage {
@@ -697,6 +708,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 8_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -726,6 +738,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let s2 = Stage {
@@ -733,6 +746,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 8_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -775,6 +789,7 @@ mod tests {
             engine: ion_engine, engine_count: 1,
             propellant_mass_kg: 200.0, structural_mass_kg: 100.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let lander_stage = Stage {
@@ -782,6 +797,7 @@ mod tests {
             engine: lander_engine, engine_count: 1,
             propellant_mass_kg: 5_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -808,6 +824,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -839,6 +856,7 @@ mod tests {
             engine: engine1, engine_count: 1,
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let s2 = Stage {
@@ -846,6 +864,7 @@ mod tests {
             engine: engine2, engine_count: 1,
             propellant_mass_kg: 10_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -886,6 +905,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 10_000.0, structural_mass_kg: 1_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 

@@ -164,14 +164,22 @@ pub fn engine_bom(preset: PropellantPreset) -> BillOfMaterials {
     }
 }
 
-/// BOM for tank/stage structure manufacturing.
-/// Tanks are mostly aluminium with some composites and plumbing.
-pub fn tank_bom() -> BillOfMaterials {
+/// BOM for tank/stage structure manufacturing, by the stage's
+/// structural material (25_1_BODIES.md step 2): the skin's 65 % is
+/// whatever the stage is made of; plumbing, wiring, electronics and
+/// the steel thrust structure's superalloys are the same in every one.
+pub fn tank_bom(material: crate::structure::StructuralMaterial) -> BillOfMaterials {
+    use crate::structure::StructuralMaterial as M;
+    let (al, steel, composites) = match material {
+        M::Aluminium => (0.65, 0.10, 0.15),
+        M::Steel => (0.10, 0.65, 0.15),
+        M::Composite => (0.15, 0.10, 0.65),
+    };
     BillOfMaterials {
         fractions: vec![
-            (Resource::Aluminium, 0.65),
-            (Resource::Composites, 0.15),
-            (Resource::Steel, 0.10),
+            (Resource::Aluminium, al),
+            (Resource::Composites, composites),
+            (Resource::Steel, steel),
             (Resource::Plumbing, 0.05),
             (Resource::Wiring, 0.03),
             (Resource::Electronics, 0.002),
@@ -225,9 +233,30 @@ pub fn engine_material_cost(
     engine_bom(preset).material_cost(engine_mass_kg, prices)
 }
 
-/// Cost for tank/structure manufacturing of a stage.
-pub fn tank_material_cost(structural_mass_kg: f64, prices: &ResourcePrices) -> f64 {
-    tank_bom().material_cost(structural_mass_kg, prices)
+/// Whether a resource is the stage's skin — what the structural
+/// material is made of — rather than a fitting that comes with every
+/// metre of stage whatever the skin.
+fn is_skin(resource: Resource) -> bool {
+    matches!(resource, Resource::Aluminium | Resource::Steel | Resource::Composites)
+}
+
+/// Cost for tank/structure manufacturing of a stage in its material.
+/// The skin (aluminium, steel or composite) is priced on the mass the
+/// material actually has, at its finished-structure cost factor; the
+/// fittings (plumbing, wiring, electronics, the thrust structure's
+/// superalloys) on the geometry — the aluminium-equivalent mass — since
+/// the same distance is plumbed however heavy the walls are.
+pub fn tank_material_cost(
+    structural_mass_kg: f64, material: crate::structure::StructuralMaterial, prices: &ResourcePrices,
+) -> f64 {
+    let geometry = material.geometry_mass_kg(structural_mass_kg);
+    tank_bom(material).fractions.iter().map(|(resource, fraction)| {
+        if is_skin(*resource) {
+            structural_mass_kg * fraction * prices.price_per_kg(*resource) * material.material_cost_factor()
+        } else {
+            geometry * fraction * prices.price_per_kg(*resource)
+        }
+    }).sum()
 }
 
 /// Mass of a stage's assembly hardware: a floor plus a share of its
@@ -311,7 +340,7 @@ mod tests {
             engine_bom(PropellantPreset::Hydrolox),
             engine_bom(PropellantPreset::Hypergolic),
             engine_bom(PropellantPreset::Solid),
-            tank_bom(),
+            tank_bom(crate::structure::StructuralMaterial::Aluminium),
             stage_assembly_bom(),
             rocket_integration_bom(),
         ];
@@ -352,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_tank_material_cost() {
-        let cost = tank_material_cost(2000.0, &ResourcePrices::default());
+        let cost = tank_material_cost(2000.0, crate::structure::StructuralMaterial::Aluminium, &ResourcePrices::default());
         // Includes electronics at $80K/kg: 2000 * 0.002 * 80000 = $320K, plus plumbing, etc.
         assert!(cost > 200_000.0 && cost < 2_000_000.0,
             "Tank cost {} out of range for 2000kg structure", cost);
@@ -375,6 +404,28 @@ mod tests {
         let core = stage_assembly_cost(26_000.0, &costs);
         assert!((core - stage_assembly_cost(7_000.0, &costs)).abs() < 1e-6, "core {core}");
         assert!(core < booster * 1.1, "core {core} vs booster {booster}");
+    }
+
+    /// 25_1_BODIES.md step 2: the same distance is plumbed whatever the
+    /// walls weigh — a steel stage of the same geometry pays the same
+    /// fittings as an aluminium one and only its skin differs.
+    #[test]
+    fn fittings_follow_the_geometry_not_the_skin() {
+        use crate::structure::StructuralMaterial as M;
+        let prices = ResourcePrices::default();
+        let geometry = 7_000.0;
+        let al = tank_material_cost(geometry, M::Aluminium, &prices);
+        let steel = tank_material_cost(geometry * M::Steel.tank_mass_factor(), M::Steel, &prices);
+        let composite = tank_material_cost(geometry * M::Composite.tank_mass_factor(), M::Composite, &prices);
+        let fittings: f64 = tank_bom(M::Aluminium).fractions.iter()
+            .filter(|(r, _)| !is_skin(*r))
+            .map(|(r, f)| geometry * f * prices.price_per_kg(*r))
+            .sum();
+        // Fittings dominate the bill and are identical across materials.
+        assert!(fittings > 0.9 * al, "fittings {fittings} of aluminium {al}");
+        assert!(steel - fittings < al - fittings, "steel's skin is cheaper than aluminium's");
+        assert!(composite - fittings > 3.0 * (al - fittings), "composite's skin is far dearer");
+        assert!(steel < al && composite > al, "steel {steel} < aluminium {al} < composite {composite}");
     }
 
     #[test]

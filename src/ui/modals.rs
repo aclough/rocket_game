@@ -736,6 +736,7 @@ pub(super) mod help_tests {
                 propellant_mass_kg: 40_000.0,
                 structural_mass_kg: 3_000.0,
                 fairing: None,
+                material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
             }]],
         };

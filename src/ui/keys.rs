@@ -178,6 +178,7 @@ pub const ROCKET_DESIGNER: &[KeyBinding] = &[
     always("I", None, "Insert a stage below the selected one"),
     always("B", Some("[B] Boost"), "Add a booster alongside the selected stage"),
     always("W", Some("[W] Power"), "Power sources for this stage"),
+    always("T", None, "Cycle the stage's material: aluminium, steel, composite"),
     always("X", Some("[X] Rem"), "Remove this stage"),
     always("P", None, "Set the payload mass"),
     always("L", None, "Choose the launch site"),

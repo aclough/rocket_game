@@ -283,6 +283,7 @@ mod tests {
             engine: engine1, engine_count: 1,
             propellant_mass_kg: 80_000.0, structural_mass_kg: 3_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let s2 = Stage {
@@ -290,6 +291,7 @@ mod tests {
             engine: engine2, engine_count: 1,
             propellant_mass_kg: 15_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 
@@ -327,6 +329,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let design_single = RocketDesign {
@@ -341,6 +344,7 @@ mod tests {
             engine: engine.clone(), engine_count: 3,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let design_triple = RocketDesign {
@@ -367,6 +371,7 @@ mod tests {
             engine, engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let design = RocketDesign {

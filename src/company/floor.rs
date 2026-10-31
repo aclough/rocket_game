@@ -333,7 +333,7 @@ impl Company {
                     // Contracted engines are delivered when ordered.
                     Some(EngineSource::Contracted(_)) | None => 0.0,
                 };
-                let stage_days = balance.work.stage_build_work(stage.structural_mass_kg)
+                let stage_days = balance.work.stage_build_work(stage.structural_mass_kg, stage.material)
                     * rocket_learning;
                 critical_path = critical_path.max(engine_days + stage_days);
             }
@@ -388,8 +388,8 @@ impl Company {
                         None => 0.0,
                     };
                 }
-                total += (crate::resources::tank_material_cost(stage.structural_mass_kg, prices)
-                    + crate::resources::stage_assembly_cost(stage.structural_mass_kg, &balance.costs)) * rocket_learning;
+                total += (crate::resources::tank_material_cost(stage.structural_mass_kg, stage.material, prices)
+                    + crate::resources::stage_assembly_cost(stage.material.geometry_mass_kg(stage.structural_mass_kg), &balance.costs)) * rocket_learning;
             }
         }
         total + crate::resources::rocket_integration_cost(project.design.dry_mass_kg(), &balance.costs) * rocket_learning

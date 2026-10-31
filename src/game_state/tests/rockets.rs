@@ -249,6 +249,7 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         engine: booster_engine.clone(), engine_count: 3,
         propellant_mass_kg: 200_000.0, structural_mass_kg: 5000.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
     };
     let stage2 = Stage {
@@ -256,6 +257,7 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         engine: booster_engine.clone(), engine_count: 1,
         propellant_mass_kg: 30_000.0, structural_mass_kg: 1000.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
     };
 
@@ -277,6 +279,7 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         engine: ion_engine.clone(), engine_count: 1,
         propellant_mass_kg: 500.0, structural_mass_kg: 50.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
     };
 
@@ -299,6 +302,7 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         engine: hyp_engine.clone(), engine_count: 1,
         propellant_mass_kg: 100.0, structural_mass_kg: 20.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
     };
 

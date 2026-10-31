@@ -239,13 +239,14 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
 
             lines.push(Line::from(Span::styled(
                 format!(
-                    " {} {} {:<14} x{}  {:>7} ⌀{:.1}m  {}",
+                    " {} {} {:<14} x{}  {:>7} ⌀{:.1}m {}  {}",
                     marker,
                     label_col,
                     engine_label,
                     stage.engine_count,
                     format_mass(stage.propellant_mass_kg),
                     stage.diameter_m(app.game.balance.bodies.tank_fineness),
+                    stage.material.tag(),
                     stat_str,
                 ),
                 style,

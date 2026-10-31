@@ -499,6 +499,7 @@ mod falcon9 {
             id: StageId(id), name: format!("S{id}"), engine: e, engine_count: n,
             propellant_mass_kg: prop, structural_mass_kg: structural,
             fairing: fairing.map(|m| Fairing { mass_kg: m, diameter_m: 5.2 }),
+            material: rocket_tycoon::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         }
     }
@@ -967,12 +968,12 @@ mod small_launch {
         let mut s1 = Stage {
             id: StageId(1), name: "S1".into(), engine: bep.design_variant(false, &bal.nozzle),
             engine_count: boost.3, propellant_mass_kg: 10_000.0, structural_mass_kg: 1_000.0,
-            fairing: None, power_sources: Vec::new(),
+            fairing: None, material: rocket_tycoon::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
         };
         let mut s2 = Stage {
             id: StageId(2), name: "S2".into(), engine: uep.design_variant(true, &bal.nozzle),
             engine_count: upper.3, propellant_mass_kg: 2_000.0, structural_mass_kg: 200.0,
-            fairing: None, power_sources: Vec::new(),
+            fairing: None, material: rocket_tycoon::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
         };
         s1.power_sources.push(rocket_tycoon::power::solar_panel_for_stage_demand(&s1));
         s2.power_sources.push(rocket_tycoon::power::solar_panel_for_stage_demand(&s2));
@@ -1015,12 +1016,12 @@ mod small_launch {
             let mix: Vec<_> = s.engine.propellant_mix.iter().map(|f| (f.propellant, f.mass_fraction)).collect();
             let carried = (gi + 1 < rp.design.stage_groups.len()).then(|| rp.design.stage_groups[gi + 1..].iter().flatten().map(|s| s.wet_mass_kg()).sum::<f64>());
             let b = rocket_tycoon::structure::compute_structural_mass(
-                s.propellant_mass_kg, &mix, &s.engine, s.engine_count, gi == 0, carried);
+                s.propellant_mass_kg, &mix, &s.engine, s.engine_count, gi == 0, carried, s.material);
             println!("   S{} structure: tank {:.0}  thrust structure {:.0}  aero {:.0}  interstage {:.0}  (engines {:.0})",
                 gi + 1, b.tank_mass, b.thrust_structure, b.aero_shell, b.interstage, s.engine.mass_kg * s.engine_count as f64);
         }
         let fixed = rp.design.stage_groups.iter().flatten()
-            .map(|s| rocket_tycoon::resources::stage_assembly_cost(s.structural_mass_kg, &bal.costs)).sum::<f64>()
+            .map(|s| rocket_tycoon::resources::stage_assembly_cost(s.material.geometry_mass_kg(s.structural_mass_kg), &bal.costs)).sum::<f64>()
             + rocket_tycoon::resources::rocket_integration_cost(rp.design.dry_mass_kg(), &bal.costs);
         println!("   of which assembly + integration ${:.1}M", fixed / 1e6);
         let eng_design = bal.work.design_work_required(bep.complexity, bs) + bal.work.design_work_required(uep.complexity, us);
@@ -1345,6 +1346,71 @@ mod vacuum_bells {
                 line += &format!("  ({b:.0}, {d:.2}) → {:.0}", best.1);
             }
             println!("{line}");
+        }
+    }
+}
+
+mod materials {
+    //! 25_1_BODIES.md step 2: the bot's medium vehicle and the
+    //! Electron-class small launcher in each structural material — dry
+    //! mass, payload, unit cost and build days — so the three options
+    //! can be compared on numbers.
+    use rocket_tycoon::engine::EngineCycle as C;
+    use rocket_tycoon::engine_project::PropellantPreset as P;
+    use rocket_tycoon::game_state::GameState;
+    use rocket_tycoon::rocket_perf::max_payload_to;
+    use rocket_tycoon::stage::{recompute_structural_masses, Stage, StageId};
+    use rocket_tycoon::structure::StructuralMaterial;
+
+    #[test]
+    #[ignore = "prints vehicles in each material; run with --ignored --nocapture"]
+    fn vehicles_by_material() {
+        type Family = (C, P, f64, u32, f64);
+        let cases: [(&str, Family, Family); 2] = [
+            ("BLV-class (bot template)", (C::GasGenerator, P::Kerolox, 1.0, 2, 90_000.0), (C::Expander, P::Hydrolox, 1.0, 1, 15_000.0)),
+            ("Electron-class", (C::GasGenerator, P::Kerolox, 25.0 / 900.0, 9, 15_300.0), (C::GasGenerator, P::Kerolox, 25.0 / 900.0, 1, 2_100.0)),
+        ];
+        println!("{:<28} {:<10} {:>8} {:>8} {:>8} {:>10} {:>9} {:>8}", "vehicle", "material", "S1 dry", "S2 dry", "LEO kg", "mat $M", "labour $M", "build d");
+        for (label, b, u) in cases {
+            for material in StructuralMaterial::ALL {
+                let mut state = GameState::with_money("Probe".into(), 1e9, 1);
+                state.player_company.start_engine_project("B".into(), b.0, b.1, b.2, None, &state.balance);
+                state.player_company.start_engine_project("U".into(), u.0, u.1, u.2, None, &state.balance);
+                let bal = state.balance.clone();
+                let bep = state.player_company.engine_projects[0].clone();
+                let uep = state.player_company.engine_projects[1].clone();
+                let mk = |id, engine, count, prop| Stage {
+                    id: StageId(id), name: format!("S{id}"), engine, engine_count: count, propellant_mass_kg: prop,
+                    structural_mass_kg: 0.0, fairing: None, material, power_sources: Vec::new(),
+                };
+                let mut groups = vec![
+                    vec![mk(1, bep.design_variant(false, &bal.nozzle), b.3, b.4)],
+                    vec![mk(2, uep.design_variant(true, &bal.nozzle), u.3, u.4)],
+                ];
+                groups[1][0].fit_vacuum_bell(&uep.design, &bal.nozzle, bal.bodies.tank_fineness);
+                recompute_structural_masses(&mut groups);
+                for s in groups.iter_mut().flatten() {
+                    let panel = rocket_tycoon::power::solar_panel_for_stage_demand(s);
+                    s.power_sources.push(panel);
+                }
+                state.player_company.start_rocket_project(label.into(), groups, &bal);
+                let rp = state.player_company.rocket_projects.last().unwrap().clone();
+                // Labour: every line-day the first unit takes, at the
+                // line's daily salary (engines, stages, integration).
+                let mut line_days = bal.work.rocket_integration_work(2);
+                for (s, ep) in [(&rp.design.stage_groups[0][0], &bep), (&rp.design.stage_groups[1][0], &uep)] {
+                    line_days += bal.work.engine_build_work(ep.complexity, s.engine.mass_kg, bal.propellant_handling.multiplier(ep.spec.preset))
+                        * ep.build_time_multiplier * s.engine_count as f64;
+                    line_days += bal.work.stage_build_work(s.structural_mass_kg, s.material);
+                }
+                println!("{:<28} {:<10} {:>8.0} {:>8.0} {:>8.0} {:>10.1} {:>9.2} {:>8.0}",
+                    label, material.name(),
+                    rp.design.stage_groups[0][0].dry_mass_kg(), rp.design.stage_groups[1][0].dry_mass_kg(),
+                    max_payload_to(&rp.design, "earth_surface", "leo"),
+                    state.player_company.estimated_build_cost(&rp, &bal) / 1e6,
+                    line_days * bal.costs.daily_manufacturing_salary() / 1e6,
+                    state.player_company.nominal_build_days(&rp, &bal));
+            }
         }
     }
 }

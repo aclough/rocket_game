@@ -64,6 +64,9 @@ pub enum ManufacturingOrderType {
         stage_index: usize,
         stage_name: String,
         structural_mass_kg: f64,
+        /// What the stage is made of (25_1_BODIES.md step 2).
+        #[serde(default)]
+        material: crate::structure::StructuralMaterial,
         /// The flaws of the engines consumed into this stage, set when
         /// they are taken from inventory.
         #[serde(default)]
@@ -253,14 +256,16 @@ impl ManufacturingOrder {
         stage_index: usize,
         stage_name: String,
         structural_mass_kg: f64,
+        material: crate::structure::StructuralMaterial,
         prior_builds: u32,
         balance_cfg: &crate::balance_config::BalanceConfig,
     ) -> Self {
         let stage_total_mass = structural_mass_kg; // structural mass drives build work
-        let base_work = balance_cfg.work.stage_build_work(stage_total_mass);
+        let base_work = balance_cfg.work.stage_build_work(stage_total_mass, material);
         let learning = balance_cfg.work.learning_curve_multiplier(prior_builds);
-        let material_cost = (resources::tank_material_cost(structural_mass_kg, &balance_cfg.costs.resource_prices)
-            + resources::stage_assembly_cost(structural_mass_kg, &balance_cfg.costs)) * learning;
+        // Assembly hardware follows the geometry, like the fittings.
+        let material_cost = (resources::tank_material_cost(structural_mass_kg, material, &balance_cfg.costs.resource_prices)
+            + resources::stage_assembly_cost(material.geometry_mass_kg(structural_mass_kg), &balance_cfg.costs)) * learning;
 
         ManufacturingOrder {
             id,
@@ -271,6 +276,7 @@ impl ManufacturingOrder {
                 stage_index,
                 stage_name,
                 structural_mass_kg,
+                material,
             },
             work_completed: 0.0,
             work_required: base_work * learning,
@@ -775,6 +781,7 @@ mod tests {
             0, 0,
             "S1".into(),
             3000.0,
+            crate::structure::StructuralMaterial::Aluminium,
             0,
             &bal(),
         );
@@ -882,7 +889,7 @@ mod tests {
         let mut mfg = Manufacturing::new();
         let id = mfg.next_order_id.mint();
         let mut order = ManufacturingOrder::new_stage(
-            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0, &bal(),
+            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, crate::structure::StructuralMaterial::Aluminium, 0, &bal(),
         );
         order.teams_assigned = 2;
         mfg.orders.push(order);
@@ -901,7 +908,7 @@ mod tests {
         let mut mfg = Manufacturing::new();
         let id = mfg.next_order_id.mint();
         let mut order = ManufacturingOrder::new_stage(
-            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, 0, &bal(),
+            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, crate::structure::StructuralMaterial::Aluminium, 0, &bal(),
         );
         order.teams_assigned = 2;
         order.waiting_for_prerequisites = false; // manually unblock

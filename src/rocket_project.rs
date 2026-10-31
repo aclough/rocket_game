@@ -124,6 +124,7 @@ mod tests {
             engine: e1, engine_count: 1,
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let s2 = Stage {
@@ -131,6 +132,7 @@ mod tests {
             engine: e2, engine_count: 1,
             propellant_mass_kg: 10_000.0, structural_mass_kg: 500.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         RocketDesign {

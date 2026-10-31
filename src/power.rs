@@ -590,6 +590,7 @@ mod tests {
             engine, engine_count,
             propellant_mass_kg: 1000.0, structural_mass_kg: 200.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         }
     }

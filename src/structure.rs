@@ -1,5 +1,110 @@
+use serde::{Deserialize, Serialize};
+
 use crate::engine::{EngineDesign, G0};
 use crate::propellant::Propellant;
+
+/// What a stage's tanks and skin are made of (25_1_BODIES.md step 2).
+/// The material does not change the structural model, only its
+/// coefficients and its bill of materials: steel is heavier, cheap and
+/// tough; composite lighter, dear and slow to build; aluminium is what
+/// every design was before the choice existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum StructuralMaterial {
+    #[default]
+    Aluminium,
+    Steel,
+    Composite,
+}
+
+impl StructuralMaterial {
+    pub const ALL: [StructuralMaterial; 3] = [Self::Aluminium, Self::Steel, Self::Composite];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Aluminium => "aluminium",
+            Self::Steel => "steel",
+            Self::Composite => "composite",
+        }
+    }
+
+    /// Two letters for a stage line.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Aluminium => "Al",
+            Self::Steel => "St",
+            Self::Composite => "CF",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Aluminium => Self::Steel,
+            Self::Steel => Self::Composite,
+            Self::Composite => Self::Aluminium,
+        }
+    }
+
+    /// Multiplier on the tank mass fraction. Specific strength puts a
+    /// cold-worked stainless tank within ~15 % of 2219 aluminium and a
+    /// flight composite tank ~30 % under it after knockdowns.
+    pub fn tank_mass_factor(self) -> f64 {
+        match self {
+            Self::Aluminium => 1.0,
+            Self::Steel => 1.15,
+            Self::Composite => 0.70,
+        }
+    }
+
+    /// Multiplier on the aero shell and interstage (skin); the thrust
+    /// structure is steel in every case.
+    pub fn skin_factor(self) -> f64 {
+        self.tank_mass_factor()
+    }
+
+    /// The structural mass this stage would have in aluminium: its
+    /// geometry. The same distance is plumbed and wired whatever the
+    /// skin weighs, so fittings and assembly hardware are priced on
+    /// this, and only the skin on the mass the material actually has.
+    pub fn geometry_mass_kg(self, structural_mass_kg: f64) -> f64 {
+        structural_mass_kg / self.tank_mass_factor()
+    }
+
+    /// Multiplier on the tank's material cost per kilogram of structure:
+    /// a finished composite skin costs several times an aluminium one
+    /// per kilogram (tooling, autoclave, scrap), stainless less. Applies
+    /// to the skin's share of the bill only; fittings are priced on the
+    /// geometry (`geometry_mass_kg`).
+    pub fn material_cost_factor(self) -> f64 {
+        match self {
+            Self::Aluminium => 1.0,
+            Self::Steel => 0.6,
+            Self::Composite => 2.5,
+        }
+    }
+
+    /// Multiplier on stage build work: composite is laid up slowly,
+    /// steel welds fast.
+    pub fn build_work_factor(self) -> f64 {
+        match self {
+            Self::Aluminium => 1.0,
+            Self::Steel => 0.9,
+            Self::Composite => 1.4,
+        }
+    }
+
+    /// The skin temperature a stage may reach, during entry, without a
+    /// shield and still hold itself up: 2219 aluminium has lost a third
+    /// of its strength at 150 °C, austenitic stainless keeps ~60 % at
+    /// 500 and creeps past 550, epoxy composite softens at its glass
+    /// transition. Read by the entry check (25_2).
+    pub fn temperature_limit_c(self) -> f64 {
+        match self {
+            Self::Aluminium => 150.0,
+            Self::Steel => 550.0,
+            Self::Composite => 120.0,
+        }
+    }
+}
 
 /// G-load the thrust structure is sized to carry: thrust / (g × this)
 /// is its mass. 150 is 0.68 kg per kN — the Saturn V S-IC's thrust
@@ -87,13 +192,14 @@ pub fn compute_structural_mass(
     engine_count: u32,
     exposed_to_airflow: bool,
     interstage_carried_kg: Option<f64>,
+    material: StructuralMaterial,
 ) -> StructuralMassBreakdown {
-    let tank_fraction = tank_mass_fraction(propellant_mix);
+    let tank_fraction = tank_mass_fraction(propellant_mix) * material.tank_mass_factor();
     let tank_mass = propellant_mass_kg * tank_fraction;
     let thrust_struct = thrust_structure_mass_kg(engine, engine_count);
     let base_structure = tank_mass + thrust_struct;
-    let aero_shell = aero_shell_mass_kg(base_structure, exposed_to_airflow);
-    let interstage = interstage_carried_kg.map_or(0.0, interstage_mass_kg);
+    let aero_shell = aero_shell_mass_kg(base_structure, exposed_to_airflow) * material.skin_factor();
+    let interstage = interstage_carried_kg.map_or(0.0, interstage_mass_kg) * material.skin_factor();
 
     StructuralMassBreakdown {
         tank_mass,
@@ -197,6 +303,7 @@ mod tests {
             1,
             true,  // first stage
             Some(20_000.0), // carries a 20 t upper stack
+            StructuralMaterial::Aluminium,
         );
         assert!(breakdown.total > 0.0);
         assert!(breakdown.tank_mass > 0.0);
@@ -217,6 +324,7 @@ mod tests {
             1,
             false, // upper stage
             None,  // top stage, no interstage above
+            StructuralMaterial::Aluminium,
         );
         assert_eq!(breakdown.aero_shell, 0.0);
         assert_eq!(breakdown.interstage, 0.0);
@@ -229,8 +337,20 @@ mod tests {
         // roughly 5-10% of propellant mass
         let engine = test_engine(1_000_000.0, 500.0);
         let breakdown = compute_structural_mass(
-            100_000.0, &kerolox_mix(), &engine, 1, true, Some(20_000.0),
+            100_000.0, &kerolox_mix(), &engine, 1, true, Some(20_000.0), StructuralMaterial::Aluminium,
         );
+        // 25_1_BODIES.md step 2: steel is heavier, composite lighter, the
+        // thrust structure the same in every material.
+        let steel = compute_structural_mass(
+            100_000.0, &kerolox_mix(), &engine, 1, true, Some(20_000.0), StructuralMaterial::Steel,
+        );
+        let composite = compute_structural_mass(
+            100_000.0, &kerolox_mix(), &engine, 1, true, Some(20_000.0), StructuralMaterial::Composite,
+        );
+        assert!((steel.tank_mass / breakdown.tank_mass - 1.15).abs() < 1e-9);
+        assert!((composite.tank_mass / breakdown.tank_mass - 0.70).abs() < 1e-9);
+        assert_eq!(steel.thrust_structure, breakdown.thrust_structure);
+        assert!(steel.total > breakdown.total && composite.total < breakdown.total);
         let fraction = breakdown.total / 100_000.0;
         assert!(fraction > 0.04 && fraction < 0.15,
             "Structural fraction {} should be 4-15% for first stage", fraction);

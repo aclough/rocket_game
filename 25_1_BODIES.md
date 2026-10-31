@@ -68,6 +68,7 @@ factor is config (`MaterialsConfig`, one row per material):
 | aero shell and interstage factor | 1.00 | 1.15 | 0.70 |
 | thrust structure | unchanged (steel in every case) | | |
 | tank bill of materials | 65 % Al, 15 % composites… (today) | 65 % steel, 10 % Al, rest as today | 65 % composites, 15 % Al, rest as today |
+| tank bill cost factor (finished structure per kg) | 1.0 | 0.6 | 2.5 |
 | stage build work factor | 1.0 | 0.9 | 1.4 |
 | temperature limit (25_2 entry check) | 150 °C | 550 °C | 120 °C |
 | cryogenic tank flaw weight (later) | — | — | a hook, not now |
@@ -199,3 +200,51 @@ their figures move a little: `[fleet smallsat] profitable year
 126/200 (was 132), median 13`, `[fleet methalox] 192/200, median 13
 (was 14)`, `[fleet solid] 161/200`, basic `bankrupt 4/200, profitable
 year 200/200`; all four band tests green. 739 tests, clippy clean.
+
+**Step 2 — structural material.** `StructuralMaterial {Aluminium,
+Steel, Composite}` on `Stage` (serde default aluminium) with the
+table's factors as methods on the enum — constants rather than config
+for now, since `compute_structural_mass` and `autosize_propellant`
+have no balance handle and threading one through the designer, the
+probes and every test for three numbers was not worth it; the enum is
+the one place to change them. The tank bill is priced per material
+(`tank_bom(material)` with a per-kilogram cost factor, added when the
+first probe run priced composite *cheaper* than aluminium. The skin
+metal is a sliver of the tank bill: per kilogram of structure the
+aluminium BOM is ~$528, of which $13 is aluminium and $515 plumbing,
+electronics, wiring and superalloys that come with every kilogram
+whatever the skin; composite's is ~$618 ($130 of composite). So a
+composite stage costs 17 % more per kilogram and has 17 % fewer
+kilograms, nets about even, and the assembly hardware that scales with
+structural mass tips it cheaper. Two fixes: the fittings and the
+assembly hardware are priced on the stage's *geometry* — its
+aluminium-equivalent mass, `geometry_mass_kg` — since the same
+distance is plumbed and wired however heavy the walls are, and only
+the skin's share of the bill follows the material's actual mass, at a
+finished-structure cost factor of 2.5 for composite and 0.6 for
+steel.) Build work takes the material's factor;
+the manufacturing stage order carries the material. Designer: `[T]`
+cycles the selected stage's material, the stage line shows `Al` /
+`St` / `CF`. Probe (`vehicles_by_material`):
+
+| vehicle | material | S1 dry | LEO | materials $M | labour $M | build days |
+|---|---|---|---|---|---|---|
+| BLV-class | aluminium | 7 568 kg | 4 331 kg | 17.9 | 5.24 | 258 |
+| | steel | 8 231 | 4 026 | 17.8 | 5.23 | 258 |
+| | composite | 6 271 | 4 940 | 19.6 | 5.31 | 260 |
+| Electron-class | aluminium | 1 346 | 265 | 4.0 | 2.83 | 108 |
+| | steel | 1 457 | 243 | 4.0 | 2.82 | 108 |
+| | composite | 1 130 | 310 | 4.2 | 2.84 | 110 |
+
+Composite buys 14 % of payload for 10 % of materials; steel saves a
+sliver and costs 7 % of payload — its temperature limit (550 °C
+against 150) is what it is for, and 25_2's entry check is where it
+pays. The
+build-work factor is real but invisible: stage labour is ~1 % of the
+vehicle (52 line-days for an 8 t structure against ~$4.5M of engine
+labour), so steel's 10 % off it is $50k. **Tabled (2026-10-31):**
+rebalancing stage against engine labour (`stage_build_base_days` 60
+per 10 t looks light) is its own balance step with the bands re-run.
+Aluminium is today's numbers: the medium bot's 100 seeds are
+byte-identical, so the bands were not re-run. Tests: structure factors,
+the serde default, `[T]` in the designer.

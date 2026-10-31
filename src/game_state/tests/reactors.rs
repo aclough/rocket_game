@@ -261,6 +261,7 @@ fn test_reactor_flaw_activates_mid_flight() {
         engine, engine_count: 1,
         propellant_mass_kg: 40_000.0, structural_mass_kg: 1_000.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: vec![PowerSource::from_reactor_design(reactor_design)],
     };
     let design = RocketDesign {
@@ -355,6 +356,7 @@ fn test_reactor_perflight_flaw_fires_at_flight_start() {
         engine, engine_count: 1,
         propellant_mass_kg: 40_000.0, structural_mass_kg: 1_000.0,
         fairing: None,
+        material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: vec![PowerSource::from_reactor_design(reactor_design)],
     };
     let design = RocketDesign {

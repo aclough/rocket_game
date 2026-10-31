@@ -314,7 +314,7 @@ mod tests {
             engine: kerolox_engine(1, 1_000_000.0, 500.0, 280.0),
             engine_count: 1,
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0,
-            fairing: None, power_sources: Vec::new(),
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
         };
         if panel_w > 0.0 {
             s1.power_sources.push(PowerSource::new_solar_panel(panel_w));
@@ -430,6 +430,7 @@ mod tests {
             propellant_mass_kg: 50_000.0,
             structural_mass_kg: 100.0, // tiny bus, low housekeeping
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: vec![PowerSource::new_rtg(RtgClass::Cassini)],
         };
         // small battery for bookkeeping
@@ -465,7 +466,7 @@ mod tests {
             engine: ion_engine_design(thrust_n, power_draw_w),
             engine_count: 1,
             propellant_mass_kg: 1_000.0, structural_mass_kg: 100.0,
-            fairing: None, power_sources: Vec::new(),
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
         };
         if panel_w > 0.0 {
             stage.power_sources.push(PowerSource::new_solar_panel(panel_w));
@@ -543,6 +544,7 @@ mod tests {
             propellant_mass_kg: prop_kg,
             structural_mass_kg: 500.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: vec![PowerSource::new_fuel_cell(fuel_cell_w)],
         };
         RocketDesign {
@@ -580,6 +582,7 @@ mod tests {
             propellant_mass_kg: 1_000.0,
             structural_mass_kg: 200.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: vec![PowerSource::new_fuel_cell(1_000.0)],
         };
         let design = RocketDesign {

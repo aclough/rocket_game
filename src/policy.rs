@@ -502,6 +502,7 @@ impl BasicPolicy {
             propellant_mass_kg: first.propellant_kg,
             structural_mass_kg: 0.0, // from the model below
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let s2 = Stage {
@@ -512,6 +513,7 @@ impl BasicPolicy {
             propellant_mass_kg: second.propellant_kg,
             structural_mass_kg: 0.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         // Structure from the model the designer uses, so the bot's

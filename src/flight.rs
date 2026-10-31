@@ -453,6 +453,7 @@ mod tests {
             engine, engine_count: 1,
             propellant_mass_kg: prop, structural_mass_kg: dry,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let design = RocketDesign {
@@ -673,6 +674,7 @@ mod tests {
             engine: booster_engine, engine_count: 1,
             propellant_mass_kg: 350_000.0, structural_mass_kg: 25_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let s2 = Stage {
@@ -680,6 +682,7 @@ mod tests {
             engine: upper_engine, engine_count: 1,
             propellant_mass_kg: 90_000.0, structural_mass_kg: 5_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         let design = RocketDesign {
@@ -815,6 +818,7 @@ mod tests {
             engine: ion, engine_count: 1,
             propellant_mass_kg: 1_000.0, structural_mass_kg: 200.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: vec![PowerSource::new_solar_panel(panel_w)],
         };
         RocketDesign {

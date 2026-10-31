@@ -253,6 +253,7 @@ impl Company {
                     gi, si,
                     stage_name,
                     stage.structural_mass_kg,
+                    stage.material,
                     rocket_prior,
                     balance_cfg,
                 );

@@ -428,9 +428,10 @@ impl WorkConfig {
     }
 
     /// Work required in days for stage manufacturing, based on mass.
-    pub fn stage_build_work(&self, stage_mass_kg: f64) -> f64 {
+    pub fn stage_build_work(&self, stage_mass_kg: f64, material: crate::structure::StructuralMaterial) -> f64 {
         self.stage_build_base_days
             * (stage_mass_kg / 10_000.0_f64).powf(self.stage_build_mass_exponent)
+            * material.build_work_factor()
     }
 
     /// Work required for rocket integration: base + per-stage.
@@ -1832,7 +1833,7 @@ mod tests {
         assert!((work.engine_build_work(6, 1150.0, 2.5) - cx6 * 2.5).abs() < 1e-9);
         // Mass term: a 2x-mass engine is 2^0.6 ≈ 1.52x the line-days.
         assert!((work.engine_build_work(6, 2300.0, 1.0) - cx6 * 2.0_f64.powf(0.6)).abs() < 1e-9);
-        assert!((work.stage_build_work(10_000.0) - 60.0).abs() < 0.01);
+        assert!((work.stage_build_work(10_000.0, crate::structure::StructuralMaterial::Aluminium) - 60.0).abs() < 0.01);
         assert!((work.rocket_integration_work(2) - 80.0).abs() < 0.01);
         assert!((work.learning_curve_multiplier(1) - 1.0).abs() < 0.01);
         assert!(work.learning_curve_multiplier(20) < work.learning_curve_multiplier(10));

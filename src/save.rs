@@ -1174,6 +1174,7 @@ mod tests {
                 engine, engine_count: 1,
                 propellant_mass_kg: 100.0, structural_mass_kg: 10.0,
                 fairing: None,
+                material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
             };
             RocketDesign {
@@ -1342,6 +1343,7 @@ mod tests {
             id: crate::stage::StageId(id), name: format!("S{id}"),
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0, fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         state.player_company.start_rocket_project("Old".into(), vec![vec![stage(1)], vec![stage(2)]], &state.balance);
@@ -1386,6 +1388,7 @@ mod tests {
             id: crate::stage::StageId(id), name: format!("S{id}"),
             engine: crate::test_util::kerolox_engine(id, 1.0e6, 1000.0, 300.0), engine_count: 1,
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0, fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
         state.player_company.start_rocket_project(

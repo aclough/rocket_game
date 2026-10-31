@@ -325,6 +325,7 @@ mod tests {
             engine: engine.clone(), engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
             fairing: None,
+            material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
         };
 

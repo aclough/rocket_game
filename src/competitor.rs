@@ -253,6 +253,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
                 propellant_mass_kg: 200_000.0,
                 structural_mass_kg: 26_000.0,
                 fairing: None,
+                material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
             }],
             vec![Stage {
@@ -263,6 +264,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
                 propellant_mass_kg: 27_000.0,
                 structural_mass_kg: 3_500.0,
                 fairing: Some(Fairing { mass_kg: 2_500.0, diameter_m: 5.1 }),
+                material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
             }],
         ],
