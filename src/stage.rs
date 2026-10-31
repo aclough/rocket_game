@@ -106,6 +106,49 @@ impl Stage {
         bus_mass * 0.1 // 1 W per 10 kg
     }
 
+    /// Volume of the propellant the stage holds, from the engine's mix
+    /// and each propellant's density.
+    pub fn tank_volume_m3(&self) -> f64 {
+        self.engine.propellant_mix.iter()
+            .map(|f| self.propellant_mass_kg * f.mass_fraction / f.propellant.density_kg_per_l())
+            .sum::<f64>() / 1000.0
+    }
+
+    /// The stage's diameter: what its tank volume needs at the
+    /// configured fineness (length over diameter), never chosen
+    /// (25_1_BODIES.md step 1). Zero for a stage with no propellant.
+    pub fn diameter_m(&self, tank_fineness: f64) -> f64 {
+        let v = self.tank_volume_m3();
+        if v <= 0.0 || tank_fineness <= 0.0 {
+            return 0.0;
+        }
+        (4.0 * v / (std::f64::consts::PI * tank_fineness)).cbrt()
+    }
+
+    /// The bell exit each of this stage's engines may have: the stage's
+    /// diameter shared among its engines, `d / √N`. `None` when the
+    /// stage has no size to speak of.
+    pub fn bell_exit_budget_m(&self, tank_fineness: f64) -> Option<f64> {
+        let d = self.diameter_m(tank_fineness);
+        (d > 0.0).then(|| d / (self.engine_count.max(1) as f64).sqrt())
+    }
+
+    /// Refit the stage's vacuum bell to its own diameter from the
+    /// family's base design: the long bell is the largest of the
+    /// engine's own rules that still fits under the stage. A sea-level
+    /// bell, or a family with no nozzle choice, is left as it is.
+    pub fn fit_vacuum_bell(
+        &mut self, base: &EngineDesign, nozzle: &crate::balance_config::NozzleConfig, tank_fineness: f64,
+    ) {
+        if !self.engine.is_vacuum_variant() || base.is_vacuum_variant() {
+            return;
+        }
+        if !crate::engine_project::design_has_nozzle_choice(&self.engine) {
+            return;
+        }
+        self.engine = base.with_vacuum_bell_within(nozzle, self.bell_exit_budget_m(tank_fineness));
+    }
+
     /// Wet mass: dry mass + propellant.
     pub fn wet_mass_kg(&self) -> f64 {
         self.dry_mass_kg() + self.propellant_mass_kg
@@ -406,6 +449,26 @@ pub fn recompute_structural_masses(stage_groups: &mut [Vec<Stage>]) {
 mod tests {
     use super::*;
     use crate::engine::*;
+
+    /// 25_1_BODIES.md step 1: a stage is as wide as its tanks need at
+    /// the configured fineness. Falcon 9's first stage (411 t kerolox)
+    /// comes out 3.7 m (real 3.66); Electron's (9.25 t) 1.05 m (real 1.2).
+    #[test]
+    fn diameter_follows_the_tanks() {
+        let mut s = Stage {
+            id: StageId(1), name: "S1".into(), engine: test_engine(), engine_count: 9,
+            propellant_mass_kg: 411_000.0, structural_mass_kg: 0.0, fairing: None, power_sources: Vec::new(),
+        };
+        let d = s.diameter_m(10.0);
+        assert!((d - 3.7).abs() < 0.15, "F9 S1 {d}");
+        assert!((s.bell_exit_budget_m(10.0).unwrap() - d / 3.0).abs() < 1e-9, "nine engines share the width");
+        s.propellant_mass_kg = 9_250.0;
+        let d = s.diameter_m(10.0);
+        assert!((d - 1.05).abs() < 0.1, "Electron S1 {d}");
+        s.propellant_mass_kg = 0.0;
+        assert_eq!(s.diameter_m(10.0), 0.0);
+        assert!(s.bell_exit_budget_m(10.0).is_none());
+    }
     use crate::propellant::Propellant;
 
     fn test_engine() -> EngineDesign {

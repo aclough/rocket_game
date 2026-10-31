@@ -463,6 +463,14 @@ impl EngineDesign {
     /// without a bell is returned as it is (a bell-less `Nozzle` fixture
     /// only loses its sea-level flag).
     pub fn with_vacuum_bell(&self, cfg: &NozzleConfig) -> EngineDesign {
+        self.with_vacuum_bell_within(cfg, None)
+    }
+
+    /// `with_vacuum_bell` for an engine that has to fit under a stage:
+    /// the bell's exit may not be wider than `exit_budget_m`
+    /// (`Stage::bell_exit_budget_m`, the stage's derived diameter shared
+    /// among its engines). `None` is the engine's own rules alone.
+    pub fn with_vacuum_bell_within(&self, cfg: &NozzleConfig, exit_budget_m: Option<f64>) -> EngineDesign {
         let mut vac = self.clone();
         let Some((pc, eps_sl, gamma)) = self.propulsion.bell() else {
             if let Propulsion::Nozzle { sea_level, .. } = &mut vac.propulsion {
@@ -475,7 +483,11 @@ impl EngineDesign {
         let eps_by_exit = nozzle::expansion_ratio_for_exit_diameter(
             throat, cfg.min_vacuum_bell_exit_m, cfg.max_expansion_ratio, eps_sl,
         );
-        let eps_geometric = eps_by_ratio.max(eps_by_exit).min(cfg.max_expansion_ratio).max(eps_sl);
+        let mut eps_geometric = eps_by_ratio.max(eps_by_exit).min(cfg.max_expansion_ratio).max(eps_sl);
+        if let Some(budget) = exit_budget_m {
+            let eps_fits = nozzle::expansion_ratio_for_exit_diameter(throat, budget, cfg.max_expansion_ratio, eps_sl);
+            eps_geometric = eps_geometric.min(eps_fits);
+        }
         let eps_vac = eps_geometric.min(self.vacuum_bell_optimum_eps(cfg)).max(eps_sl);
         let gain = nozzle::thrust_coefficient_vacuum(eps_vac, gamma)
             / nozzle::thrust_coefficient_vacuum(eps_sl, gamma);

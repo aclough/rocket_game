@@ -202,7 +202,7 @@ impl App {
         };
         if changed {
             if let Some(s) = state.as_mut() {
-                sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
+                sync_stages_to_projects(s, &self.game.player_company, &self.game.balance);
             }
         }
     }
@@ -440,7 +440,7 @@ impl App {
                 let (next_cycle, new_preset) = next.family(preset);
                 self.apply_engine_family(project_id, name, next_cycle, new_preset);
                 if let Some(s) = state.as_mut() {
-                    sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
+                    sync_stages_to_projects(s, &self.game.player_company, &self.game.balance);
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
@@ -453,7 +453,7 @@ impl App {
                     .unwrap_or(preset);
                 self.apply_engine_family(project_id, name, cycle, next);
                 if let Some(s) = state.as_mut() {
-                    sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
+                    sync_stages_to_projects(s, &self.game.player_company, &self.game.balance);
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }
@@ -464,7 +464,7 @@ impl App {
                     self.apply_engine_headline(project_id, target);
                 }
                 if let Some(s) = state.as_mut() {
-                    sync_stages_to_projects(s, &self.game.player_company, &self.game.balance.nozzle);
+                    sync_stages_to_projects(s, &self.game.player_company, &self.game.balance);
                 }
                 self.input_mode = InputMode::EngineEditor { project_id, cursor, state };
             }

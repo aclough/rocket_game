@@ -5,6 +5,7 @@
 
 use super::*;
 use super::text_field::{edit_text_field, FieldEdit, FieldKind};
+use crate::balance_config::BalanceConfig;
 use crate::stage::{
     autosize_propellant, propellant_step, recompute_structural_masses, MIN_AUTOSIZED_PROPELLANT,
 };
@@ -293,8 +294,9 @@ impl RocketDesignerState {
 /// `engine_sources[gi][si]` always describe the same stage, so we walk
 /// them in parallel.
 pub(super) fn sync_stages_to_projects(
-    state: &mut RocketDesignerState, company: &crate::game_state::Company, nozzle: &crate::balance_config::NozzleConfig,
+    state: &mut RocketDesignerState, company: &crate::game_state::Company, bal: &BalanceConfig,
 ) {
+    let nozzle = &bal.nozzle;
     for (gi, (group, sources)) in state.stage_groups.iter_mut()
         .zip(state.engine_sources.iter())
         .enumerate()
@@ -328,7 +330,7 @@ pub(super) fn sync_stages_to_projects(
     // kerolox-sized tank on an ion engine. Done in a second pass because
     // each stage is sized against the mass of the others, which the first
     // pass is still changing.
-    resize_all_tanks(state);
+    resize_all_tanks(state, company, bal);
 }
 
 /// Re-solve every tank in the stack, top-down.
@@ -343,9 +345,25 @@ pub(super) fn sync_stages_to_projects(
 /// The repeat pass is for stages sharing a group: side boosters fire
 /// alongside each other, so each one's answer moves the others'. Groups
 /// alone would settle in a single sweep.
-fn resize_all_tanks(state: &mut RocketDesignerState) {
+fn resize_all_tanks(state: &mut RocketDesignerState, company: &crate::game_state::Company, bal: &BalanceConfig) {
     if let Some(top) = state.stage_groups.len().checked_sub(1) {
-        resize_tanks_through(state, top);
+        resize_tanks_through(state, top, company, bal);
+    }
+}
+
+/// Everything a stage derives from its tanks, after any change to
+/// propellant, engines or stages: its structure, and the long bell its
+/// own diameter allows (25_1_BODIES.md step 1).
+fn refresh_derived(state: &mut RocketDesignerState, company: &crate::game_state::Company, bal: &BalanceConfig) {
+    recompute_structural_masses(&mut state.stage_groups);
+    for gi in 0..state.stage_groups.len() {
+        for si in 0..state.stage_groups[gi].len() {
+            let Some(EngineSource::PlayerDesign(pid)) = state.engine_sources.get(gi).and_then(|g| g.get(si)).copied() else {
+                continue;
+            };
+            let Some(ep) = company.find_engine_project(pid) else { continue };
+            state.stage_groups[gi][si].fit_vacuum_bell(&ep.design, &bal.nozzle, bal.bodies.tank_fineness);
+        }
     }
 }
 
@@ -357,7 +375,7 @@ fn resize_all_tanks(state: &mut RocketDesignerState) {
 /// it was before. Leaving the upper groups alone keeps whatever the
 /// player set there by hand — adding a booster is not a request to
 /// redesign the spacecraft on top of it.
-fn resize_tanks_through(state: &mut RocketDesignerState, top: usize) {
+fn resize_tanks_through(state: &mut RocketDesignerState, top: usize, company: &crate::game_state::Company, bal: &BalanceConfig) {
     /// Enough for the sizes to stop moving in practice; the loop exits
     /// early once they do.
     const MAX_PASSES: usize = 12;
@@ -376,7 +394,7 @@ fn resize_tanks_through(state: &mut RocketDesignerState, top: usize) {
                     (sized - state.stage_groups[gi][si].propellant_mass_kg).abs(),
                 );
                 state.stage_groups[gi][si].propellant_mass_kg = sized;
-                recompute_structural_masses(&mut state.stage_groups);
+                refresh_derived(state, company, bal);
             }
         }
         if moved <= SETTLED_KG {
@@ -404,6 +422,8 @@ fn apply_picked_engine_to_designer(
     source: EngineSource,
     engine: EngineDesign,
     slot: PickSlot,
+    company: &crate::game_state::Company,
+    bal: &BalanceConfig,
 ) {
     let engine_count = 1u32;
     // Placeholder — the real load is solved once the stage is in place and
@@ -445,7 +465,7 @@ fn apply_picked_engine_to_designer(
     }
 
     rename_all_stages(&mut state.stage_groups);
-    recompute_structural_masses(&mut state.stage_groups);
+    refresh_derived(state, company, bal);
 
     // Size the stage that was just placed and everything under it. A new
     // upper stage is new mass for the booster to lift, so the booster
@@ -454,7 +474,7 @@ fn apply_picked_engine_to_designer(
     // undersized-first-stage trap. Groups above are left as the player
     // had them — their own load hasn't changed.
     if !state.stage_groups.is_empty() {
-        resize_tanks_through(state, state.selected_group);
+        resize_tanks_through(state, state.selected_group, company, bal);
     }
 }
 
@@ -511,7 +531,7 @@ impl App {
                         let old_count = stage.engine_count;
                         stage.engine_count -= 1;
                         stage.propellant_mass_kg *= stage.engine_count as f64 / old_count as f64;
-                        recompute_structural_masses(&mut state.stage_groups);
+                        refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
                     }
                 }
                 self.input_mode = InputMode::designer(state);
@@ -529,7 +549,7 @@ impl App {
                         let old_count = stage.engine_count;
                         stage.engine_count += 1;
                         stage.propellant_mass_kg *= stage.engine_count as f64 / old_count as f64;
-                        recompute_structural_masses(&mut state.stage_groups);
+                        refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
                     }
                 }
                 self.input_mode = InputMode::designer(state);
@@ -545,7 +565,7 @@ impl App {
                     } else {
                         let step = propellant_step(&stage.engine, stage.engine_count);
                         stage.propellant_mass_kg = (stage.propellant_mass_kg + step).min(2_000_000.0);
-                        recompute_structural_masses(&mut state.stage_groups);
+                        refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
                     }
                 }
                 self.input_mode = InputMode::designer(state);
@@ -561,7 +581,7 @@ impl App {
                     } else {
                         let step = propellant_step(&stage.engine, stage.engine_count);
                         stage.propellant_mass_kg = (stage.propellant_mass_kg - step).max(100.0);
-                        recompute_structural_masses(&mut state.stage_groups);
+                        refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
                     }
                 }
                 self.input_mode = InputMode::designer(state);
@@ -657,7 +677,7 @@ impl App {
                         match swapped {
                             Some(engine) => {
                                 state.stage_groups[gi][si].engine = engine;
-                                recompute_structural_masses(&mut state.stage_groups);
+                                refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
                                 self.status_message = Some(format!(
                                     "{} nozzle fitted",
                                     if want_vacuum { "Vacuum" } else { "Sea-level" },
@@ -691,7 +711,7 @@ impl App {
                         // Remove entire group
                         state.remove_group(gi);
                         rename_all_stages(&mut state.stage_groups);
-                        recompute_structural_masses(&mut state.stage_groups);
+                        refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
                         // Adjust selection
                         if state.selected_group >= state.stage_groups.len() && state.selected_group > 0 {
                             state.selected_group -= 1;
@@ -702,7 +722,7 @@ impl App {
                         // Remove just the inner stage
                         state.remove_inner(gi, si);
                         rename_all_stages(&mut state.stage_groups);
-                        recompute_structural_masses(&mut state.stage_groups);
+                        refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
                         if state.selected_inner >= state.stage_groups[gi].len() {
                             state.selected_inner = state.stage_groups[gi].len() - 1;
                         }
@@ -899,6 +919,7 @@ impl App {
                     if let Some(engine) = engine {
                         apply_picked_engine_to_designer(
                             &mut state, EngineSource::PlayerDesign(project_id), engine, pick.slot,
+                            &self.game.player_company, &self.game.balance,
                         );
                     }
                     self.input_mode = InputMode::EngineEditor {
@@ -927,7 +948,7 @@ impl App {
                     let group_index = pick.slot.group_index(state.stage_groups.len());
                     let engine = self.engine_for_placement(
                         source, engine, group_index);
-                    apply_picked_engine_to_designer(&mut state, source, engine, pick.slot);
+                    apply_picked_engine_to_designer(&mut state, source, engine, pick.slot, &self.game.player_company, &self.game.balance);
                     self.input_mode = InputMode::designer(state);
                 }
             }
@@ -1121,7 +1142,7 @@ mod sync_tests {
             "stage engine should have zero power draw before sync");
         let kerolox_prop = state.stage_groups[0][0].propellant_mass_kg;
 
-        sync_stages_to_projects(&mut state, &company, &crate::balance_config::NozzleConfig::default());
+        sync_stages_to_projects(&mut state, &company, &BalanceConfig::default());
 
         // After sync: stage reflects the ion design.
         assert!(state.stage_groups[0][0].engine.thrust_n < 100.0,
@@ -1165,6 +1186,12 @@ mod autosize_tests {
         }
     }
 
+    /// A company with no engine projects: the derived refresh then
+    /// leaves bells alone and only the structure follows the tanks.
+    fn empty_company() -> crate::company::Company {
+        crate::company::Company::new("T".into(), 1e9, &crate::seed::GameSeed::new(1), &BalanceConfig::default())
+    }
+
     fn stack(engines: Vec<EngineDesign>, payload: f64) -> RocketDesignerState {
         let n = engines.len();
         let mut st = RocketDesignerState::new("T".into());
@@ -1180,7 +1207,7 @@ mod autosize_tests {
                 crate::engine_project::EngineProjectId(i as u64 + 1))]);
         }
         let _ = n;
-        resize_all_tanks(&mut st);
+        resize_all_tanks(&mut st, &empty_company(), &BalanceConfig::default());
         st
     }
 
@@ -1200,7 +1227,7 @@ mod autosize_tests {
             for _ in 0..2 {
                 apply_picked_engine_to_designer(
                     &mut st, EngineSource::PlayerDesign(crate::engine_project::EngineProjectId(9)),
-                    booster.clone(), PickSlot::BoosterFor(0),
+                    booster.clone(), PickSlot::BoosterFor(0), &empty_company(), &BalanceConfig::default(),
                 );
             }
             let design = RocketDesign {
@@ -1236,7 +1263,7 @@ mod autosize_tests {
             for _ in 0..2 {
                 apply_picked_engine_to_designer(
                     &mut st, EngineSource::PlayerDesign(crate::engine_project::EngineProjectId(9)),
-                    booster.clone(), PickSlot::BoosterFor(0),
+                    booster.clone(), PickSlot::BoosterFor(0), &empty_company(), &BalanceConfig::default(),
                 );
             }
             for si in 1..=2 {
@@ -1324,7 +1351,7 @@ mod autosize_tests {
             &mut st,
             EngineSource::PlayerDesign(crate::engine_project::EngineProjectId(2)),
             engine(2, 500_000.0, 440.0, 800.0, EngineCycle::Expander, Propellant::LH2),
-            PickSlot::Append,
+            PickSlot::Append, &empty_company(), &BalanceConfig::default(),
         );
         assert_eq!(st.stage_groups.len(), 2, "the new stage should be its own group");
 
@@ -1359,7 +1386,7 @@ mod autosize_tests {
             &mut st,
             EngineSource::PlayerDesign(crate::engine_project::EngineProjectId(2)),
             engine(2, 9_000_000.0, 300.0, 3_000.0, EngineCycle::GasGenerator, Propellant::RP1),
-            PickSlot::InsertAt(0),
+            PickSlot::InsertAt(0), &empty_company(), &BalanceConfig::default(),
         );
         assert_eq!(st.stage_groups.len(), 2, "the booster should be its own group");
         assert_eq!(st.stage_groups[1][0].propellant_mass_kg, 12_345.0,
@@ -1490,14 +1517,14 @@ mod nozzle_variant_tests {
         let balance = app.game.balance.clone();
         app.game.player_company.find_engine_project_mut(pid).unwrap()
             .apply_edit("Family".into(), EngineCycle::Expander, PropellantPreset::Methalox, 1.0, &balance);
-        sync_stages_to_projects(&mut state, &app.game.player_company, &app.game.balance.nozzle);
+        sync_stages_to_projects(&mut state, &app.game.player_company, &app.game.balance);
         assert!(state.stage_groups[0][0].engine.is_vacuum_variant(),
             "an expander family has only the vacuum form");
 
         // ... and back to GasGenerator.
         app.game.player_company.find_engine_project_mut(pid).unwrap()
             .apply_edit("Family".into(), EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.0, &balance);
-        sync_stages_to_projects(&mut state, &app.game.player_company, &app.game.balance.nozzle);
+        sync_stages_to_projects(&mut state, &app.game.player_company, &app.game.balance);
         assert!(!state.stage_groups[0][0].engine.is_vacuum_variant(),
             "back on a family with a choice, the first stage is sea-level again");
         assert!(state.stage_groups[1][0].engine.is_vacuum_variant(),
@@ -1511,7 +1538,7 @@ mod nozzle_variant_tests {
         }
         app.game.player_company.find_engine_project_mut(pid).unwrap()
             .apply_edit("Family".into(), EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.5, &balance);
-        sync_stages_to_projects(&mut state, &app.game.player_company, &app.game.balance.nozzle);
+        sync_stages_to_projects(&mut state, &app.game.player_company, &app.game.balance);
         assert!(state.stage_groups[0][0].engine.is_vacuum_variant(),
             "a chosen vacuum bell is kept across a scale edit");
     }
@@ -1583,7 +1610,7 @@ mod nozzle_variant_tests {
         }
 
         app.apply_engine_scale(pid, 2.0);
-        sync_stages_to_projects(&mut state, &app.game.player_company, &app.game.balance.nozzle);
+        sync_stages_to_projects(&mut state, &app.game.player_company, &app.game.balance);
 
         assert!(!state.stage_groups[0][0].engine.is_vacuum_variant(),
             "booster keeps its sea-level bell across an engine edit");
@@ -1596,7 +1623,10 @@ mod nozzle_variant_tests {
         let scaled = ep.design.thrust_n;
         assert_eq!(state.stage_groups[0][0].engine.thrust_n, scaled,
             "booster should pick up the rescaled thrust");
-        let vac_thrust = ep.design_variant(true, &app.game.balance.nozzle).thrust_n;
+        // …the long bell being the one that fits the upper stage's own
+        // diameter (25_1_BODIES.md step 1).
+        let budget = state.stage_groups[1][0].bell_exit_budget_m(app.game.balance.bodies.tank_fineness);
+        let vac_thrust = ep.design_variant_for_stage(true, &app.game.balance.nozzle, budget).thrust_n;
         assert_eq!(state.stage_groups[1][0].engine.thrust_n, vac_thrust,
             "upper stage should pick up the rescaled vacuum bell");
         assert!(vac_thrust > scaled);

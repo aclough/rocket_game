@@ -112,6 +112,7 @@ impl GameState {
     /// never change.
     pub(crate) fn refresh_rocket_engines(&mut self) {
         let cfg = self.balance.nozzle.clone();
+        let fineness = self.balance.bodies.tank_fineness;
         let company = &mut self.player_company;
         let mut changed = false;
         for rp in company.rocket_projects.iter_mut() {
@@ -120,7 +121,10 @@ impl GameState {
                     let Some(ep) = company.engine_projects.iter().find(|ep| ep.design.id == stage.engine.id) else {
                         continue;
                     };
-                    let current = ep.design_variant(stage.engine.is_vacuum_variant(), &cfg);
+                    // The long bell is the one that fits this stage's own
+                    // diameter (25_1_BODIES.md step 1).
+                    let budget = stage.bell_exit_budget_m(fineness);
+                    let current = ep.design_variant_for_stage(stage.engine.is_vacuum_variant(), &cfg, budget);
                     if current == stage.engine {
                         continue;
                     }

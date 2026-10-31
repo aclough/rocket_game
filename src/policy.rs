@@ -518,6 +518,9 @@ impl BasicPolicy {
         // vehicle tracks it (24_STRATEGIES.md step 3) instead of the
         // 6 450 / 1 500 kg it carried when the model was heavier.
         let mut groups = vec![vec![s1], vec![s2]];
+        // The upper stage's bell is the one its own diameter allows.
+        let fineness = game.balance.bodies.tank_fineness;
+        groups[1][0].fit_vacuum_bell(&upper.design, &game.balance.nozzle, fineness);
         crate::stage::recompute_structural_masses(&mut groups);
         // Cover housekeeping power like the designer's default panels —
         // sized after the structure, which sets the demand.

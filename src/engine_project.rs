@@ -932,12 +932,18 @@ impl EngineProject {
     /// Baselines that only exist in vacuum (electric, solar sail, NTR)
     /// ignore `vacuum` and always return the vacuum form.
     pub fn design_variant(&self, vacuum: bool, cfg: &NozzleConfig) -> EngineDesign {
+        self.design_variant_for_stage(vacuum, cfg, None)
+    }
+
+    /// `design_variant` for an engine placed on a stage: the long bell
+    /// also has to fit the stage's `exit_budget_m` (25_1_BODIES.md).
+    pub fn design_variant_for_stage(&self, vacuum: bool, cfg: &NozzleConfig, exit_budget_m: Option<f64>) -> EngineDesign {
         // The project's design is the sea-level bell (or, for a
         // vacuum-only family, already the long bell); improvements and
         // deficiencies have been applied to it, so both variants carry
         // them.
         if vacuum && !self.design.is_vacuum_variant() {
-            self.design.with_vacuum_bell(cfg)
+            self.design.with_vacuum_bell_within(cfg, exit_budget_m)
         } else {
             self.design.clone()
         }
@@ -1317,6 +1323,27 @@ mod tests {
         let eps_vac = vac.propulsion.bell().unwrap().1;
         assert!(sl.vacuum_bell_optimum_eps(&bal.nozzle) > eps_vac, "a pump-fed engine's optimum is past the geometric bound");
         assert!((eps_vac - 187.0).abs() < 2.0, "ε {eps_vac} unchanged");
+    }
+
+    /// 25_1_BODIES.md step 1: a long bell has to fit under its stage.
+    /// An MVac-class engine alone takes ε 187 (3.8 m exit); on a 3.66 m
+    /// stage it takes what fits, ~176 (real MVac: 165); a budget wider
+    /// than its own rule changes nothing.
+    #[test]
+    fn vacuum_bell_fits_the_stage_it_sits_under() {
+        let bal = bal();
+        let merlin = EngineProject::new(
+            EngineProjectId(1), EngineId(1), "Merlin".into(),
+            EngineCycle::GasGenerator, PropellantPreset::Kerolox, 1.08, &bal,
+        ).unwrap();
+        let free = merlin.design_variant(true, &bal.nozzle).propulsion.bell().unwrap().1;
+        let fitted = merlin.design_variant_for_stage(true, &bal.nozzle, Some(3.66)).propulsion.bell().unwrap().1;
+        let roomy = merlin.design_variant_for_stage(true, &bal.nozzle, Some(6.0)).propulsion.bell().unwrap().1;
+        assert!(fitted < free, "fitted ε {fitted} under free ε {free}");
+        assert!((170.0..=185.0).contains(&fitted), "ε {fitted}");
+        assert_eq!(roomy, free);
+        let sl = merlin.design_variant_for_stage(false, &bal.nozzle, Some(1.0));
+        assert!(!sl.is_vacuum_variant(), "a sea-level bell is not packaged");
     }
 
     #[test]

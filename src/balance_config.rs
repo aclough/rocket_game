@@ -17,6 +17,24 @@ use crate::contract::MarketArchetype;
 use crate::economy::EconomicCondition;
 use crate::resources::Resource;
 
+/// A stage's body: what its size follows from (25_1_BODIES.md).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BodiesConfig {
+    /// Tank length over diameter. A stage's diameter is never chosen:
+    /// it is what its propellant volume needs at this fineness, so a
+    /// 411 t kerolox stage comes out 3.7 m across (Falcon 9: 3.66) and
+    /// a 9 t one 1.05 m (Electron: 1.2). The diameter sizes the bells
+    /// that can sit under the stage and, later, its heat shield.
+    pub tank_fineness: f64,
+}
+
+impl Default for BodiesConfig {
+    fn default() -> Self {
+        BodiesConfig { tank_fineness: 10.0 }
+    }
+}
+
 /// All tunable balance parameters. Lives on `GameState` (serialized
 /// into saves, so a save remembers the balance it was played under).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -37,6 +55,7 @@ pub struct BalanceConfig {
     pub improvements: ImprovementsConfig,
     pub uprates: UpratesConfig,
     pub third_party: ThirdPartyConfig,
+    pub bodies: BodiesConfig,
 }
 
 impl BalanceConfig {
