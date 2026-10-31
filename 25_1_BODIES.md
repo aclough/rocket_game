@@ -248,3 +248,24 @@ per 10 t looks light) is its own balance step with the bands re-run.
 Aluminium is today's numbers: the medium bot's 100 seeds are
 byte-identical, so the bands were not re-run. Tests: structure factors,
 the serde default, `[T]` in the designer.
+
+**Step 3 — pressure-fed tanks and pressurant.** `tank_pressure_bar`
+(1.3 × chamber pressure for a liquid pressure-fed engine, zero for
+pump-fed and solids), `propellant_volume_m3`, and two new lines in the
+structural breakdown: `pressure_wall` = volume × pressure × the
+material's `pressure_kg_per_m3_per_bar` (aluminium 2.8, steel 3.0,
+composite 1.2) and `pressurant` = 0.06 % of propellant per bar. A
+15 bar kerolox pressure-fed engine puts its tanks at 19.5 bar: +5.3 %
+of propellant in wall, +1.2 % in pressurant, a 9–10 % tank where a
+pump-fed stage has 4 %. Probe: the all-pressure-fed 19 t two-stage
+vehicle, 172 kg to LEO before, now falls short of orbit (it was a free
+lunch; no such launcher has flown), while a Falcon-1-like vehicle —
+pump-fed 400 kN first stage under a 31 kN pressure-fed upper, 34 t —
+lifts 298 kg to LEO at $5.8M materials (Falcon 1: 27 t, 420–670 kg,
+~$7M a flight), its upper stage carrying 127 kg of wall and 28 kg of
+pressurant on 2.1 t of propellant. No bot flies a pressure-fed stage:
+100 seeds byte-identical. The TODO's pressure-fed line goes; the
+dry-mass line stays for 25_2's heat shield. One rough edge for later:
+the pressure wall counts toward the structural mass the assembly
+hardware is priced on, though thick walls add no plumbing. 743 tests,
+clippy clean.

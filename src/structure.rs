@@ -92,6 +92,18 @@ impl StructuralMaterial {
         }
     }
 
+    /// Tank wall mass per cubic metre of tank per bar of tank pressure
+    /// (thin-wall vessel: `k_shape · p · ρ / σ_allow`, cylinder plus
+    /// domes with the safety factor in σ). From ρ/σ: aluminium 2.8,
+    /// stainless 3.0, composite 1.2.
+    pub fn pressure_kg_per_m3_per_bar(self) -> f64 {
+        match self {
+            Self::Aluminium => 2.8,
+            Self::Steel => 3.0,
+            Self::Composite => 1.2,
+        }
+    }
+
     /// The skin temperature a stage may reach, during entry, without a
     /// shield and still hold itself up: 2219 aluminium has lost a third
     /// of its strength at 150 °C, austenitic stainless keeps ~60 % at
@@ -116,6 +128,31 @@ const STRUCTURAL_G_LIMIT: f64 = 150.0;
 
 /// Aerodynamic shell mass fraction for stages exposed to airflow.
 const AERO_SHELL_FRACTION: f64 = 0.05;
+
+/// A pressure-fed engine's tanks run at this multiple of its chamber
+/// pressure (the feed drop); a pump-fed stage's tanks run at a few bar
+/// for ullage, which the tank fraction already describes
+/// (25_1_BODIES.md step 3).
+const PRESSURE_FED_TANK_RATIO: f64 = 1.3;
+/// Pressurant and its bottles, as a share of propellant mass per bar
+/// of tank pressure: helium at high pressure plus the vessels that
+/// hold it, ~1.2 % of propellant at 20 bar.
+const PRESSURANT_FRACTION_PER_BAR: f64 = 0.0006;
+
+/// Tank pressure of a stage fed by `engine`, in bar: zero unless the
+/// engine is pressure-fed and liquid (a solid's case is the motor and
+/// already in its mass).
+pub fn tank_pressure_bar(engine: &EngineDesign) -> f64 {
+    if engine.cycle != crate::engine::EngineCycle::PressureFed || engine.is_solid() {
+        return 0.0;
+    }
+    engine.propulsion.bell().map_or(0.0, |(pc, _, _)| pc / 100_000.0 * PRESSURE_FED_TANK_RATIO)
+}
+
+/// Volume of `propellant_mass_kg` of the mix, in cubic metres.
+pub fn propellant_volume_m3(propellant_mass_kg: f64, mix: &[(Propellant, f64)]) -> f64 {
+    mix.iter().map(|(p, f)| propellant_mass_kg * f / p.density_kg_per_l()).sum::<f64>() / 1000.0
+}
 
 /// Interstage adapter: this share of the wet mass it carries (the
 /// stages above it), never less than the floor. A flat 200 kg was 1 %
@@ -196,17 +233,26 @@ pub fn compute_structural_mass(
 ) -> StructuralMassBreakdown {
     let tank_fraction = tank_mass_fraction(propellant_mix) * material.tank_mass_factor();
     let tank_mass = propellant_mass_kg * tank_fraction;
+    // A pressure-fed stage's tanks are pressure vessels: thick walls
+    // by the pressure and the material, and the pressurant that fills
+    // them (25_1_BODIES.md step 3). Zero for pump-fed and solid stages.
+    let pressure_bar = tank_pressure_bar(engine);
+    let pressure_wall = propellant_volume_m3(propellant_mass_kg, propellant_mix)
+        * pressure_bar * material.pressure_kg_per_m3_per_bar();
+    let pressurant = propellant_mass_kg * pressure_bar * PRESSURANT_FRACTION_PER_BAR;
     let thrust_struct = thrust_structure_mass_kg(engine, engine_count);
-    let base_structure = tank_mass + thrust_struct;
+    let base_structure = tank_mass + pressure_wall + thrust_struct;
     let aero_shell = aero_shell_mass_kg(base_structure, exposed_to_airflow) * material.skin_factor();
     let interstage = interstage_carried_kg.map_or(0.0, interstage_mass_kg) * material.skin_factor();
 
     StructuralMassBreakdown {
         tank_mass,
+        pressure_wall,
+        pressurant,
         thrust_structure: thrust_struct,
         aero_shell,
         interstage,
-        total: tank_mass + thrust_struct + aero_shell + interstage,
+        total: tank_mass + pressure_wall + pressurant + thrust_struct + aero_shell + interstage,
     }
 }
 
@@ -214,6 +260,10 @@ pub fn compute_structural_mass(
 #[derive(Debug, Clone, Copy)]
 pub struct StructuralMassBreakdown {
     pub tank_mass: f64,
+    /// Thick tank walls on a pressure-fed stage; zero otherwise.
+    pub pressure_wall: f64,
+    /// Pressurant and its bottles on a pressure-fed stage; zero otherwise.
+    pub pressurant: f64,
     pub thrust_structure: f64,
     pub aero_shell: f64,
     pub interstage: f64,
@@ -331,6 +381,35 @@ mod tests {
         assert!(breakdown.total > 0.0);
     }
 
+    /// 25_1_BODIES.md step 3: a pressure-fed stage's tanks are pressure
+    /// vessels. A 15 bar kerolox pressure-fed engine puts its tanks at
+    /// ~20 bar: 2.8 kg/m³/bar on 0.97 L/kg adds ~5.3 % of propellant in
+    /// wall and ~1.2 % in pressurant — a 9–10 % tank where a pump-fed
+    /// stage has 4 %, which is what keeps pressure-fed stages small.
+    #[test]
+    fn pressure_fed_tanks_are_pressure_vessels() {
+        let mut pf = test_engine(225_000.0, 350.0);
+        pf.cycle = EngineCycle::PressureFed;
+        pf.propulsion = Propulsion::nozzle(15.0e5, 5.5, 1.22, false);
+        let pumped = test_engine(225_000.0, 350.0);
+        assert!((tank_pressure_bar(&pf) - 19.5).abs() < 1e-9);
+        assert_eq!(tank_pressure_bar(&pumped), 0.0);
+        let prop = 14_800.0;
+        let b = compute_structural_mass(prop, &kerolox_mix(), &pf, 1, true, None, StructuralMaterial::Aluminium);
+        let wall_share = b.pressure_wall / prop;
+        let pressurant_share = b.pressurant / prop;
+        assert!((wall_share - 0.053).abs() < 0.006, "wall {wall_share}");
+        assert!((pressurant_share - 0.0117).abs() < 0.001, "pressurant {pressurant_share}");
+        let p = compute_structural_mass(prop, &kerolox_mix(), &pumped, 1, true, None, StructuralMaterial::Aluminium);
+        assert!(b.total > p.total * 1.4, "pressure-fed {} vs pump-fed {}", b.total, p.total);
+        // Composite walls carry pressure for less; a solid carries none.
+        let c = compute_structural_mass(prop, &kerolox_mix(), &pf, 1, true, None, StructuralMaterial::Composite);
+        assert!(c.pressure_wall < b.pressure_wall * 0.5);
+        let mut solid = pf.clone();
+        solid.propellant_mix = vec![PropellantFraction { propellant: Propellant::SolidMix, mass_fraction: 1.0 }];
+        assert_eq!(tank_pressure_bar(&solid), 0.0);
+    }
+
     #[test]
     fn test_structural_fraction_reasonable() {
         // For a typical first stage with kerolox, structural mass should be
@@ -351,6 +430,9 @@ mod tests {
         assert!((composite.tank_mass / breakdown.tank_mass - 0.70).abs() < 1e-9);
         assert_eq!(steel.thrust_structure, breakdown.thrust_structure);
         assert!(steel.total > breakdown.total && composite.total < breakdown.total);
+        // A pump-fed stage carries no pressure vessel.
+        assert_eq!(breakdown.pressure_wall, 0.0);
+        assert_eq!(breakdown.pressurant, 0.0);
         let fraction = breakdown.total / 100_000.0;
         assert!(fraction > 0.04 && fraction < 0.15,
             "Structural fraction {} should be 4-15% for first stage", fraction);

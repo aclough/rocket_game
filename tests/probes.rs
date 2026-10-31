@@ -1017,8 +1017,8 @@ mod small_launch {
             let carried = (gi + 1 < rp.design.stage_groups.len()).then(|| rp.design.stage_groups[gi + 1..].iter().flatten().map(|s| s.wet_mass_kg()).sum::<f64>());
             let b = rocket_tycoon::structure::compute_structural_mass(
                 s.propellant_mass_kg, &mix, &s.engine, s.engine_count, gi == 0, carried, s.material);
-            println!("   S{} structure: tank {:.0}  thrust structure {:.0}  aero {:.0}  interstage {:.0}  (engines {:.0})",
-                gi + 1, b.tank_mass, b.thrust_structure, b.aero_shell, b.interstage, s.engine.mass_kg * s.engine_count as f64);
+            println!("   S{} structure: tank {:.0}  pressure wall {:.0}  pressurant {:.0}  thrust structure {:.0}  aero {:.0}  interstage {:.0}  (engines {:.0})",
+                gi + 1, b.tank_mass, b.pressure_wall, b.pressurant, b.thrust_structure, b.aero_shell, b.interstage, s.engine.mass_kg * s.engine_count as f64);
         }
         let fixed = rp.design.stage_groups.iter().flatten()
             .map(|s| rocket_tycoon::resources::stage_assembly_cost(s.material.geometry_mass_kg(s.structural_mass_kg), &bal.costs)).sum::<f64>()
@@ -1052,6 +1052,9 @@ mod small_launch {
             (C::GasGenerator, P::Kerolox, 225e3, 1), (C::GasGenerator, P::Kerolox, 25e3, 1), 300.0);
         vehicle("Pressure-fed small (1× 225 kN kerolox PF)", 1,
             (C::PressureFed, P::Kerolox, 225e3, 1), (C::PressureFed, P::Kerolox, 25e3, 1), 300.0);
+        // Falcon 1: a pump-fed first stage under a pressure-fed upper.
+        vehicle("Falcon-1-like (1× 400 kN GG + 31 kN PF upper)", 1,
+            (C::GasGenerator, P::Kerolox, 400e3, 1), (C::PressureFed, P::Kerolox, 31e3, 1), 500.0);
         // Medium-lift alternatives to the kerolox/hydrolox pair.
         vehicle("Medium methalox (2× 750 kN GG + 100 kN GG)", 1,
             (C::GasGenerator, P::Methalox, 750e3, 2), (C::GasGenerator, P::Methalox, 100e3, 1), 3_000.0);
