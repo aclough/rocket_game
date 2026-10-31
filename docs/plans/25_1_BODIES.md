@@ -269,3 +269,10 @@ dry-mass line stays for 25_2's heat shield. One rough edge for later:
 the pressure wall counts toward the structural mass the assembly
 hardware is priced on, though thick walls add no plumbing. 743 tests,
 clippy clean.
+
+**Close.** Filed 2026-10-31. Stages have a derived diameter, a
+structural material and honest pressure-fed tanks; the bells fit the
+stages they sit under. Left for 25_2: the entry check that cashes in
+steel's temperature limit and the heat shield's area from the derived
+diameter. Tabled: stage-versus-engine labour; the pressure wall in
+the assembly-hardware mass.
