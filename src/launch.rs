@@ -161,7 +161,8 @@ pub struct FlawRoll {
 }
 
 /// A moment in a flight at which flaws roll, in the order
-/// `ascent_events` walks them (22_FLAWS.md §3.12). Groups index the
+/// `ascent_events` walks them (22_FLAWS.md §3.12) and, on a surface
+/// arrival, `landing_events` (25_2_EDL_CORE.md §2.1). Groups index the
 /// design's `stage_groups`; players read them one-based.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FlightEvent {
@@ -170,6 +171,12 @@ pub enum FlightEvent {
     Burn { group: usize },
     Separation { group: usize },
     PayloadDeploy,
+    /// Atmospheric entry, arriving at a surface with air.
+    Entry,
+    /// Chutes or the braking burn.
+    Descent,
+    /// Touchdown.
+    Landing,
 }
 
 impl FlightEvent {
@@ -181,24 +188,30 @@ impl FlightEvent {
             FlightEvent::Burn { .. } => FlawPhase::Burn,
             FlightEvent::Separation { .. } => FlawPhase::Separation,
             FlightEvent::PayloadDeploy => FlawPhase::PayloadDeploy,
+            FlightEvent::Entry => FlawPhase::Entry,
+            FlightEvent::Descent => FlawPhase::Descent,
+            FlightEvent::Landing => FlawPhase::Landing,
         }
     }
 
     /// The stage group whose hardware is on the line: max-Q is the
-    /// first stage's moment, payload deploy the last's.
+    /// first stage's moment, payload deploy and the landing the last's.
     pub fn group(self, design: &RocketDesign) -> usize {
         match self {
             FlightEvent::Ignition { group } | FlightEvent::Burn { group } | FlightEvent::Separation { group } => group,
             FlightEvent::MaxQ => 0,
-            FlightEvent::PayloadDeploy => design.stage_groups.len().saturating_sub(1),
+            FlightEvent::PayloadDeploy | FlightEvent::Entry | FlightEvent::Descent | FlightEvent::Landing =>
+                design.stage_groups.len().saturating_sub(1),
         }
     }
 
-    /// As the player reads it: "S1 ignition", "max-Q", "S2 separation".
+    /// As the player reads it: "S1 ignition", "max-Q", "S2 separation",
+    /// "entry".
     pub fn word(self) -> String {
         match self {
             FlightEvent::MaxQ => "max-Q".to_string(),
-            FlightEvent::PayloadDeploy => "payload deploy".to_string(),
+            FlightEvent::PayloadDeploy | FlightEvent::Entry | FlightEvent::Descent | FlightEvent::Landing =>
+                self.phase().word().to_string(),
             other => format!("S{} {}", other.group_index() + 1, other.phase().word()),
         }
     }
@@ -206,9 +219,28 @@ impl FlightEvent {
     fn group_index(self) -> usize {
         match self {
             FlightEvent::Ignition { group } | FlightEvent::Burn { group } | FlightEvent::Separation { group } => group,
-            FlightEvent::MaxQ | FlightEvent::PayloadDeploy => 0,
+            FlightEvent::MaxQ | FlightEvent::PayloadDeploy
+            | FlightEvent::Entry | FlightEvent::Descent | FlightEvent::Landing => 0,
         }
     }
+
+    /// Whether this is an entry, descent or landing event.
+    pub fn is_landing(self) -> bool {
+        matches!(self, FlightEvent::Entry | FlightEvent::Descent | FlightEvent::Landing)
+    }
+}
+
+/// The events of coming down onto a surface, before the payload is
+/// released: entry only where there is air to enter, then the descent
+/// and the touchdown (25_2_EDL_CORE.md §2.1).
+pub fn landing_events(atmosphere: bool) -> Vec<FlightEvent> {
+    let mut events = Vec::with_capacity(3);
+    if atmosphere {
+        events.push(FlightEvent::Entry);
+    }
+    events.push(FlightEvent::Descent);
+    events.push(FlightEvent::Landing);
+    events
 }
 
 /// The events of a burn that fires `groups` in order: each group
@@ -482,6 +514,43 @@ pub struct LaunchRecord {
     pub payload_kg: f64,
     pub outcome: LaunchOutcome,
     pub flaws_activated: Vec<FlawActivation>,
+}
+
+/// Record of a landing on a surface: how the entry, descent and
+/// touchdown went (25_2_EDL_CORE.md §2.1). The launch that put the
+/// vehicle up has its own `LaunchRecord`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LandingRecord {
+    pub date: GameDate,
+    pub rocket_name: String,
+    pub contract_id: Option<ContractId>,
+    pub destination: String,
+    pub payload_kg: f64,
+    pub outcome: LandingOutcome,
+    /// The flaws that fired on the way down, in order.
+    pub flaws_activated: Vec<FlawActivation>,
+}
+
+/// How a landing ended.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum LandingOutcome {
+    Landed,
+    /// Down in one piece but hard or off target: the contract pays its
+    /// partial fraction, the vehicle is damaged.
+    HardLanding { reason: String },
+    /// Vehicle and cargo lost on the way down.
+    Crashed { reason: String },
+}
+
+impl LandingOutcome {
+    /// One line for the log and the record list.
+    pub fn summary(&self) -> String {
+        match self {
+            LandingOutcome::Landed => "landed".to_string(),
+            LandingOutcome::HardLanding { reason } => format!("hard landing: {reason}"),
+            LandingOutcome::Crashed { reason } => format!("crashed: {reason}"),
+        }
+    }
 }
 
 /// Outcome of a launch.
@@ -1213,6 +1282,21 @@ mod tests {
 
         assert!(result.flaws_activated.is_empty());
         assert!(matches!(result.outcome, LaunchOutcome::Success));
+    }
+
+    /// A surface arrival walks entry (only where there is air), descent
+    /// and landing, all on the top stage, before the payload deploys.
+    #[test]
+    fn landing_events_enter_only_through_air() {
+        assert_eq!(landing_events(true), vec![FlightEvent::Entry, FlightEvent::Descent, FlightEvent::Landing]);
+        assert_eq!(landing_events(false), vec![FlightEvent::Descent, FlightEvent::Landing]);
+        let design = make_design();
+        for e in landing_events(true) {
+            assert_eq!(e.group(&design), design.stage_groups.len() - 1, "{e:?}");
+            assert!(e.is_landing());
+            assert_eq!(e.word(), e.phase().word());
+        }
+        assert!(!FlightEvent::PayloadDeploy.is_landing());
     }
 
     #[test]

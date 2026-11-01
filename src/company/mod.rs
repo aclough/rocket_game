@@ -33,7 +33,7 @@ use crate::engine_project::{EngineDesignStatus, EngineProject, EngineProjectId, 
 use crate::calendar::GameDate;
 use crate::event::{GameEvent, ProjectEvent};
 use crate::manufacturing::{Manufacturing, ManufacturingOrder, ManufacturingOrderType, InventoryEngine};
-use crate::launch::LaunchRecord;
+use crate::launch::{LandingRecord, LaunchRecord};
 use crate::reputation::Reputation;
 use crate::rocket::{RocketDesign, RocketDesignId};
 use crate::project::{Designable, DesignProject, WorkEvent};
@@ -105,6 +105,9 @@ pub struct Company {
     /// Launch history.
     #[serde(default)]
     pub launch_history: Vec<LaunchRecord>,
+    /// Landings on surfaces, in order (25_2_EDL_CORE.md §2.1).
+    #[serde(default)]
+    pub landing_history: Vec<LandingRecord>,
     /// Monthly financial records (rolling 12 months).
     #[serde(default)]
     pub monthly_financials: VecDeque<MonthlyFinancials>,
@@ -187,6 +190,7 @@ impl Company {
             active_contracts: Vec::new(),
             reputation: Reputation::new(),
             launch_history: Vec::new(),
+            landing_history: Vec::new(),
             monthly_financials: VecDeque::new(),
             last_launch_date: None,
             engine_build_counts: HashMap::new(),

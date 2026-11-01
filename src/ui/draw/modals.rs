@@ -696,6 +696,43 @@ pub(super) fn draw_modal(frame: &mut Frame, app: &App, area: Rect) {
 
             render_modal(frame, modal_area, " Launch Result ", lines);
         }
+        InputMode::LandingResult { record } => {
+            use crate::launch::LandingOutcome;
+            let mut lines = vec![Line::from("")];
+            let dest_name = contract::destination_display_name(&record.destination);
+            let outcome_line = match &record.outcome {
+                LandingOutcome::Landed => Line::from(Span::styled(
+                    format!("  LANDED on {}", dest_name),
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                )),
+                LandingOutcome::HardLanding { reason } => Line::from(Span::styled(
+                    format!("  HARD LANDING on {}: {}", dest_name, reason),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )),
+                LandingOutcome::Crashed { reason } => Line::from(Span::styled(
+                    format!("  CRASHED on {}: {}", dest_name, reason),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )),
+            };
+            lines.push(outcome_line);
+            lines.push(Line::from(""));
+            lines.push(Line::from(format!("  {} — {}", record.rocket_name, record.date)));
+            if record.payload_kg > 0.0 {
+                lines.push(Line::from(format!("  Payload: {}", format_mass(record.payload_kg))));
+            }
+            lines.push(Line::from(""));
+            if !record.flaws_activated.is_empty() {
+                lines.push(Line::from(Span::styled("  Flaws activated:", Style::default().fg(Color::Red))));
+                for flaw in &record.flaws_activated {
+                    let at = flaw.event.map(|e| format!("{}: ", e.word())).unwrap_or_default();
+                    lines.push(Line::from(format!("    {}{} ({}): {}",
+                        at, flaw.source, flaw.consequence, flaw.flaw_description)));
+                }
+                lines.push(Line::from(""));
+            }
+            lines.push(hint_line("  Press any key to continue"));
+            render_modal(frame, modal_area, " Landing Result ", lines);
+        }
         InputMode::PlannerSetup { state } => {
             use crate::ui::{PlannerSetupField};
             let mut lines = vec![

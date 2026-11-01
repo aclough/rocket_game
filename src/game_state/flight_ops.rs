@@ -7,7 +7,7 @@ use crate::engine_project::EngineSource;
 use crate::flight::{Flight, FlightStatus, Payload};
 use crate::event::{GameEvent, ProjectEvent};
 use crate::project::ProjectKind;
-use crate::launch::{self, FlawOwner, FlawRoll, FlawTables, LaunchRecord, LaunchOutcome};
+use crate::launch::{self, FlawOwner, FlawRoll, FlawTables, LandingOutcome, LandingRecord, LaunchRecord, LaunchOutcome};
 
 use super::*;
 
@@ -371,28 +371,92 @@ impl GameState {
         // index order so removals don't shift the indices still to remove.
         ended.sort_by_key(|&(i, _)| std::cmp::Reverse(i));
         let mut arrival_discoveries = FlawDiscoveries::default();
-        for (i, end) in ended {
+        for (i, mut end) in ended {
             let mut flight = self.active_flights.remove(i);
             let location = crate::contract::destination_display_name(flight.current_location.name())
                 .to_string();
+            let manifest: Vec<crate::contract::ContractId> = flight.payloads.iter()
+                .filter_map(|p| match p {
+                    Payload::ContractDelivery { contract_id, .. } => Some(*contract_id),
+                    _ => None,
+                })
+                .collect();
+            // Arriving on a surface: the vehicle comes down first —
+            // entry, descent, landing — on the top stage
+            // (25_2_EDL_CORE.md §2.1). A stage loss on the way down is a
+            // crash; a degradation is a hard landing that pays the
+            // partial fraction; the cargo can be wrecked at touchdown.
+            let mut payload_lost: Option<String> = None;
+            let mut landing: Option<LandingRecord> = None;
+            let surface = crate::location::DELTA_V_MAP.surface_properties(flight.destination()).map(|p| p.has_atmosphere);
+            if let Some(has_atmosphere) = surface.filter(|_| matches!(end, FlightEnd::Arrived) && !flight.design.stage_groups.is_empty()) {
+                let first = flight.flaws_activated.len();
+                let mut outcome = LandingOutcome::Landed;
+                for event in launch::landing_events(has_atmosphere) {
+                    let roll = roll_arrival_event(
+                        &mut flight, event, &mut self.seed.contingent_rng, &mut events, &mut arrival_discoveries,
+                    );
+                    if let Some(words) = roll.lost {
+                        outcome = LandingOutcome::Crashed { reason: words };
+                        break;
+                    }
+                    for a in &roll.activations {
+                        match a.consequence {
+                            crate::flaw::FlawConsequence::PayloadLoss => {
+                                payload_lost.get_or_insert_with(|| a.flaw_description.clone());
+                            }
+                            crate::flaw::FlawConsequence::PerformanceDegradation(_) if outcome == LandingOutcome::Landed => {
+                                outcome = LandingOutcome::HardLanding { reason: a.flaw_description.clone() };
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Without air the engines are the only brake: losing
+                    // the last one on the way down is a crash.
+                    let engine_gone = roll.activations.iter()
+                        .find(|a| matches!(a.consequence, crate::flaw::FlawConsequence::EngineLoss));
+                    if let Some(a) = engine_gone.filter(|_| !has_atmosphere) {
+                        let top = flight.design.stage_groups.last().is_none_or(|g| g.iter().all(|s| s.engine_count == 0));
+                        if top {
+                            outcome = LandingOutcome::Crashed {
+                                reason: format!("{} — no engine left for the landing burn", a.flaw_description),
+                            };
+                            break;
+                        }
+                    }
+                }
+                match &outcome {
+                    LandingOutcome::Crashed { reason } => {
+                        flight.status = FlightStatus::Failed { reason: format!("Crashed on landing: {reason}") };
+                        end = FlightEnd::Lost;
+                    }
+                    LandingOutcome::HardLanding { reason } => {
+                        flight.launch_partial.get_or_insert_with(|| format!("Hard landing: {reason}"));
+                    }
+                    LandingOutcome::Landed => {}
+                }
+                landing = Some(LandingRecord {
+                    date: self.date,
+                    rocket_name: flight.rocket_name.clone(),
+                    contract_id: manifest.first().copied(),
+                    destination: flight.destination().to_string(),
+                    payload_kg: flight.total_payload_kg(),
+                    outcome,
+                    flaws_activated: flight.flaws_activated[first..].to_vec(),
+                });
+            }
             // Arriving: the top stage releases the payload, and the
             // flaws of that moment roll (22_FLAWS.md §3.3).
-            let mut payload_lost: Option<String> = None;
             if matches!(end, FlightEnd::Arrived) && !flight.design.stage_groups.is_empty() {
-                let event = launch::FlightEvent::PayloadDeploy;
-                flight.events_reached.push(event);
-                let rockets = launch::rocket_flaw_table(flight.rocket_project_id, &flight.rocket_flaws);
-                let engines = launch::engine_flaw_table_from(&flight.stage_engine_flaws);
-                let roll = launch::roll_event_flaws(
-                    &mut self.seed.contingent_rng, &mut flight.design, event, &engines, &rockets, false,
+                let roll = roll_arrival_event(
+                    &mut flight, launch::FlightEvent::PayloadDeploy, &mut self.seed.contingent_rng,
+                    &mut events, &mut arrival_discoveries,
                 );
-                flight.rocket.extra_draw_w += roll.extra_draw_w;
-                flight.flaws_activated.extend(roll.activations.iter().cloned());
-                push_activation_events(&mut events, &flight.rocket_name, &roll);
-                arrival_discoveries.record(&roll);
-                payload_lost = roll.activations.iter()
+                if let Some(a) = roll.activations.iter()
                     .find(|a| matches!(a.consequence, crate::flaw::FlawConsequence::PayloadLoss))
-                    .map(|a| a.flaw_description.clone());
+                {
+                    payload_lost.get_or_insert_with(|| a.flaw_description.clone());
+                }
             }
             // However it ended, the flight exercised what it reached.
             let days = flight.launch_date.days_until(&self.date);
@@ -405,6 +469,14 @@ impl GameState {
                 FlightEnd::Arrived => {
                     let arrival_events = self.resolve_arrived_flight(flight, payload_lost);
                     events.extend(arrival_events);
+                    if let Some(record) = landing {
+                        events.push(GameEvent::Landed {
+                            rocket_name: record.rocket_name.clone(),
+                            destination: location.clone(),
+                            outcome: record.outcome.summary(),
+                        });
+                        self.player_company.landing_history.push(record);
+                    }
                 }
                 FlightEnd::Stranded => {
                     events.push(GameEvent::SpacecraftStranded {
@@ -420,17 +492,21 @@ impl GameState {
                         FlightStatus::Failed { reason } => reason.clone(),
                         _ => "stage loss".to_string(),
                     };
-                    let manifest: Vec<crate::contract::ContractId> = flight.payloads.iter()
-                        .filter_map(|p| match p {
-                            Payload::ContractDelivery { contract_id, .. } => Some(*contract_id),
-                            _ => None,
-                        })
-                        .collect();
                     let severity = self.manifest_failure_severity(&manifest);
                     self.player_company.reputation.on_launch_failure(
                         &self.balance.reputation, severity, !manifest.is_empty(),
                     );
-                    // A lost flight is a failed launch in the record too.
+                    // A crash on the way down is a landing in the record;
+                    // any other loss is a failed launch.
+                    if let Some(record) = landing {
+                        events.push(GameEvent::LandingFailed {
+                            rocket_name: record.rocket_name.clone(),
+                            destination: location.clone(),
+                            reason: record.outcome.summary(),
+                        });
+                        self.player_company.landing_history.push(record);
+                        continue;
+                    }
                     self.player_company.launch_history.push(LaunchRecord {
                         launch_date: flight.launch_date,
                         rocket_name: flight.rocket_name.clone(),
@@ -950,6 +1026,26 @@ enum FlightEnd {
     Arrived,
     Stranded,
     Lost,
+}
+
+/// Roll one arrival event — a landing step or the payload deploy — on a
+/// flight that has reached its destination, logging what fired.
+fn roll_arrival_event(
+    flight: &mut Flight,
+    event: launch::FlightEvent,
+    rng: &mut rand::rngs::StdRng,
+    events: &mut Vec<GameEvent>,
+    discoveries: &mut FlawDiscoveries,
+) -> FlawRoll {
+    flight.events_reached.push(event);
+    let rockets = launch::rocket_flaw_table(flight.rocket_project_id, &flight.rocket_flaws);
+    let engines = launch::engine_flaw_table_from(&flight.stage_engine_flaws);
+    let roll = launch::roll_event_flaws(rng, &mut flight.design, event, &engines, &rockets, false);
+    flight.rocket.extra_draw_w += roll.extra_draw_w;
+    flight.flaws_activated.extend(roll.activations.iter().cloned());
+    push_activation_events(events, &flight.rocket_name, &roll);
+    discoveries.record(&roll);
+    roll
 }
 
 /// Flaws that fired today, to be marked discovered on their owners once

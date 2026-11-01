@@ -79,6 +79,11 @@ pub enum GameEvent {
     /// more easily (22_FLAWS.md §3.2).
     FlightReviewOpened { rocket_name: String, projects: Vec<String>, cycles: u32 },
     FlightArrived { rocket_name: String, destination: String },
+    /// A vehicle came down on a surface in one piece; `outcome` is the
+    /// landing record's summary ("landed", "hard landing: …").
+    Landed { rocket_name: String, destination: String, outcome: String },
+    /// A vehicle was lost on the way down to a surface.
+    LandingFailed { rocket_name: String, destination: String, reason: String },
     SpacecraftDeployed { spacecraft_name: String, location: String },
     SpacecraftDocked { small: String, large: String, location: String },
     SpacecraftUndocked { payload: String, carrier: String, location: String },
@@ -309,6 +314,10 @@ impl fmt::Display for GameEvent {
                     rocket_name, cycles, projects.join(", ")),
             GameEvent::FlightArrived { rocket_name, destination } =>
                 write!(f, "Flight arrived: {} at {}", rocket_name, destination),
+            GameEvent::Landed { rocket_name, destination, outcome } =>
+                write!(f, "Landing: {} on {} — {}", rocket_name, destination, outcome),
+            GameEvent::LandingFailed { rocket_name, destination, reason } =>
+                write!(f, "Vehicle lost landing on {}: {} — {}", destination, rocket_name, reason),
             GameEvent::SpacecraftDeployed { spacecraft_name, location } =>
                 write!(f, "Deployed: {} at {}", spacecraft_name, location),
             GameEvent::SpacecraftDocked { small, large, location } =>
@@ -430,6 +439,7 @@ impl GameEvent {
             | GameEvent::RetrofitOrdered { .. }
             | GameEvent::RetrofitComplete { .. }
             | GameEvent::FlightArrived { .. }
+            | GameEvent::Landed { .. }
             | GameEvent::SpacecraftDeployed { .. }
             | GameEvent::SpacecraftDocked { .. }
             | GameEvent::SpacecraftUndocked { .. }
@@ -459,6 +469,7 @@ impl GameEvent {
                 if *liftable { EventImportance::Critical } else { EventImportance::Notable }
             }
             GameEvent::SpacecraftLost { .. }
+            | GameEvent::LandingFailed { .. }
             | GameEvent::EconomicShift { .. } => EventImportance::Critical,
         }
     }

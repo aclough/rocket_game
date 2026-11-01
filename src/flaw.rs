@@ -45,6 +45,13 @@ pub enum FlawPhase {
     Separation,
     /// The top stage releases the payload.
     PayloadDeploy,
+    /// Atmospheric entry on a surface arrival: the heat shield's moment
+    /// (25_2_EDL_CORE.md §2.1). Never rolled landing on an airless body.
+    Entry,
+    /// Coming down: the chutes in air, the braking burn without.
+    Descent,
+    /// Touchdown: legs, splashdown, the final burn.
+    Landing,
     /// Wear: the daily `PerDay` roll.
     Endurance,
 }
@@ -57,6 +64,9 @@ impl FlawPhase {
             FlawPhase::Burn => "burn",
             FlawPhase::Separation => "separation",
             FlawPhase::PayloadDeploy => "payload deploy",
+            FlawPhase::Entry => "entry",
+            FlawPhase::Descent => "descent",
+            FlawPhase::Landing => "landing",
             FlawPhase::Endurance => "endurance",
         }
     }
@@ -246,12 +256,13 @@ impl Flaw {
 }
 
 /// The stage group a rocket flaw of `phase` lives on: max-Q is the
-/// first stage's, payload deploy the last's, the rest anywhere.
+/// first stage's, payload deploy and the landing the last's, the rest
+/// anywhere.
 fn stage_group_for(phase: FlawPhase, stage_groups: usize, rng: &mut StdRng) -> usize {
     let groups = stage_groups.max(1);
     match phase {
         FlawPhase::MaxQ => 0,
-        FlawPhase::PayloadDeploy => groups - 1,
+        FlawPhase::PayloadDeploy | FlawPhase::Entry | FlawPhase::Descent | FlawPhase::Landing => groups - 1,
         _ => rng.gen_range(0..groups),
     }
 }
@@ -484,7 +495,9 @@ pub struct FlawPool {
 
 /// What a flaw's words assume the design has (22_FLAWS.md §3.4). A
 /// pressure-fed engine never gets a turbopump flaw, a hypergolic never
-/// an igniter flaw, a single-stage vehicle never a separation flaw.
+/// an igniter flaw, a single-stage vehicle never a separation flaw, and
+/// nothing without EDL hardware draws an entry, descent or landing flaw
+/// (25_2_EDL_CORE.md §2.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
     Turbopump,
@@ -500,6 +513,14 @@ pub enum Feature {
     Boosters,
     UpperStage,
     Fairing,
+    /// The top stage carries a heat shield: it enters an atmosphere.
+    HeatShield,
+    /// The top stage carries parachutes: it descends through air.
+    Parachute,
+    /// The top stage carries landing legs: it touches down on land.
+    Legs,
+    /// The top stage lands on its engines: a braking and landing burn.
+    LandingBurn,
 }
 
 /// What an engine of `cycle` burning `propellants` has for its flaws to
@@ -830,6 +851,12 @@ pub const ROCKET_FLAWS: FlawPool = FlawPool {
         e("Interstage vents too slowly, upper stage starts in backpressure", FlawPhase::Ignition, FlawExposure::Integrated, &[Feature::UpperStage]),
         e("Harness routing picks up vibration noise on the rate gyro", FlawPhase::Burn, FlawExposure::Bench, &[]),
         e("Tank insulation sheds, extra boiloff before liftoff", FlawPhase::Ignition, FlawExposure::Bench, &[Feature::Cryogenic]),
+        e("Heat shield ablates unevenly, entry runs off the corridor", FlawPhase::Entry, FlawExposure::Analysis, &[Feature::HeatShield]),
+        e("Parachute reefing line releases late, hard splashdown", FlawPhase::Descent, FlawExposure::Integrated, &[Feature::Parachute]),
+        e("Drogue deploys off-axis, capsule swings under the canopy", FlawPhase::Descent, FlawExposure::Analysis, &[Feature::Parachute]),
+        e("Throttle valve hysteresis makes the landing burn ragged", FlawPhase::Landing, FlawExposure::Integrated, &[Feature::LandingBurn]),
+        e("Landing radar misreads the slope, touchdown off target", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn]),
+        e("Landing leg damper bottoms out on touchdown", FlawPhase::Landing, FlawExposure::Integrated, &[Feature::Legs]),
     ],
     part_loss: &[
         e("Propellant feed starves the outboard engine", FlawPhase::Burn, FlawExposure::Integrated, &[Feature::MultiEngine]),
@@ -844,6 +871,9 @@ pub const ROCKET_FLAWS: FlawPool = FlawPool {
         e("Engine controller power bus browns out", FlawPhase::Burn, FlawExposure::Bench, &[]),
         e("Hydraulic reservoir leaks past a fitting", FlawPhase::Burn, FlawExposure::Bench, &[]),
         e("Heat shield gap lets plume gas into the aft bay", FlawPhase::Burn, FlawExposure::Analysis, &[Feature::MultiEngine]),
+        e("Entry plasma burns through a thruster housing", FlawPhase::Entry, FlawExposure::Analysis, &[Feature::HeatShield]),
+        e("Propellant fails to settle before the braking burn, engine starts dry", FlawPhase::Descent, FlawExposure::Integrated, &[Feature::LandingBurn]),
+        e("Landing engine ingests debris kicked up at touchdown", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn]),
     ],
     stage_loss: &[
         e("Interstage buckles under max-Q loading", FlawPhase::MaxQ, FlawExposure::Analysis, &[Feature::UpperStage]),
@@ -860,6 +890,14 @@ pub const ROCKET_FLAWS: FlawPool = FlawPool {
         e("Harness connector pulls free at liftoff shock", FlawPhase::Ignition, FlawExposure::Integrated, &[]),
         e("Aero loads exceed the fin attachment", FlawPhase::MaxQ, FlawExposure::Analysis, &[]),
         e("Hold-down release jams on one side", FlawPhase::Ignition, FlawExposure::Bench, &[]),
+        e("Heat shield bondline fails under peak heating", FlawPhase::Entry, FlawExposure::Integrated, &[Feature::HeatShield]),
+        e("Shield-to-backshell seal lets plasma into the aft bay", FlawPhase::Entry, FlawExposure::Analysis, &[Feature::HeatShield]),
+        e("Entry attitude control saturates, vehicle tumbles", FlawPhase::Entry, FlawExposure::Analysis, &[Feature::HeatShield]),
+        e("Main parachute fails to open on a tangled riser", FlawPhase::Descent, FlawExposure::Integrated, &[Feature::Parachute]),
+        e("Parachute mortar fires before the drogue is cut away", FlawPhase::Descent, FlawExposure::Analysis, &[Feature::Parachute]),
+        e("Braking burn cuts off early on a bad altimeter reading", FlawPhase::Descent, FlawExposure::Analysis, &[Feature::LandingBurn]),
+        e("Landing burn starts late, vehicle hits the ground still braking", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn]),
+        e("Landing leg latch fails to lock, vehicle tips over", FlawPhase::Landing, FlawExposure::Integrated, &[Feature::Legs]),
     ],
     pad_abort: &[
         e("Hold-down release sensor reads unlatched", FlawPhase::Ignition, FlawExposure::Integrated, &[]),
@@ -875,6 +913,8 @@ pub const ROCKET_FLAWS: FlawPool = FlawPool {
         e("Deploy sequencer fires with the stage still rotating", FlawPhase::PayloadDeploy, FlawExposure::Analysis, &[]),
         e("Payload clamp band hangs up", FlawPhase::PayloadDeploy, FlawExposure::Integrated, &[]),
         e("Vibration environment exceeds payload qualification", FlawPhase::PayloadDeploy, FlawExposure::Bench, &[]),
+        e("Cargo racks tear loose at touchdown", FlawPhase::Landing, FlawExposure::Integrated, &[Feature::Legs]),
+        e("Capsule floods after splashdown, cargo ruined", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::Parachute]),
     ],
     power_draw: &[],
 };
@@ -1307,6 +1347,10 @@ mod description_pool_tests {
         Feature::UpperStage, Feature::Boosters, Feature::MultiEngine, Feature::Fairing,
         Feature::Cryogenic, Feature::LiquidFeed,
     ];
+    const ALL_EDL_FEATURES: [Feature; 4] = [
+        Feature::HeatShield, Feature::Parachute, Feature::Legs, Feature::LandingBurn,
+    ];
+    const EDL_PHASES: [FlawPhase; 3] = [FlawPhase::Entry, FlawPhase::Descent, FlawPhase::Landing];
 
     fn gg_kerolox() -> Vec<Feature> {
         use crate::propellant::Propellant;
@@ -1604,6 +1648,42 @@ mod description_pool_tests {
         let full = words(FlawDomain::Rocket, 3, &ALL_ROCKET_FEATURES);
         for needed in ["Separation", "fairing", "Booster"] {
             assert!(full.iter().any(|w| w.contains(needed)), "a full-featured rocket never drew a {needed} flaw");
+        }
+    }
+
+    /// Entry, descent and landing flaws exist only for hardware that
+    /// goes through them: a full-featured launcher never draws one, a
+    /// vehicle with every piece of EDL hardware draws all three phases
+    /// on its top stage, and every EDL entry names the hardware it
+    /// needs (25_2_EDL_CORE.md §2.1).
+    #[test]
+    fn edl_words_need_edl_hardware() {
+        let cfg = cfg();
+        let draw = |features: &[Feature]| -> Vec<Flaw> {
+            let mut rng = StdRng::seed_from_u64(5);
+            (0..1500u64)
+                .map(|i| generate_single_flaw(FlawDomain::Rocket, FlawId(i), FlawTrigger::PerFlight, 3, features, &mut rng, &cfg))
+                .collect()
+        };
+        for f in draw(&ALL_ROCKET_FEATURES) {
+            assert!(!EDL_PHASES.contains(&f.phase), "a launcher drew {:?}: {}", f.phase, f.description);
+        }
+        let mut all: Vec<Feature> = ALL_ROCKET_FEATURES.to_vec();
+        all.extend(ALL_EDL_FEATURES);
+        let lander = draw(&all);
+        for phase in EDL_PHASES {
+            let at: Vec<&Flaw> = lander.iter().filter(|f| f.phase == phase).collect();
+            assert!(!at.is_empty(), "a lander never drew a {phase:?} flaw");
+            assert!(at.iter().all(|f| f.stage_group == Some(2)), "{phase:?} flaws live on the top stage");
+        }
+        for pool in ALL_POOLS {
+            for entry in pool.degradation.iter().chain(pool.part_loss).chain(pool.stage_loss)
+                .chain(pool.pad_abort).chain(pool.payload_loss).chain(pool.power_draw)
+            {
+                let edl = EDL_PHASES.contains(&entry.phase);
+                let needs = entry.requires.iter().any(|r| ALL_EDL_FEATURES.contains(r));
+                assert_eq!(edl, needs, "{:?}: an EDL phase and EDL hardware go together", entry.text);
+            }
         }
     }
 

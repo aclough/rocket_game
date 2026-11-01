@@ -276,6 +276,10 @@ pub enum InputMode {
     LaunchResult {
         record: crate::launch::LaunchRecord,
     },
+    /// Showing how a landing went, the day it happened.
+    LandingResult {
+        record: crate::launch::LandingRecord,
+    },
     /// Selecting which spacecraft to fly.
     FlySelectSpacecraft {
         selected: usize,
@@ -539,6 +543,18 @@ impl App {
         // Switch to Events tab on critical events
         if day_events.iter().any(|e| e.importance() == crate::event::EventImportance::Critical) {
             self.active_tab = Tab::Events;
+        }
+        // A landing is the launch popup's counterpart: show how it
+        // went the day it happened.
+        if matches!(self.input_mode, InputMode::Normal)
+            && day_events.iter().any(|e| matches!(
+                e, crate::event::GameEvent::Landed { .. } | crate::event::GameEvent::LandingFailed { .. },
+            ))
+        {
+            if let Some(record) = self.game.player_company.landing_history.last().cloned() {
+                self.game.speed = crate::game_state::GameSpeed::Paused;
+                self.enter_modal(InputMode::LandingResult { record });
+            }
         }
         // A liftable program announcement already paused the
         // game; open the programs modal on it so the block-bid

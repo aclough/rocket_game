@@ -114,6 +114,9 @@ pub fn report(
         c.teams.len(), c.unassigned_team_count(), c.manufacturing_teams.len(),
     ));
     out.push_str(&format!("launches:   {}\n", c.launch_history.len()));
+    if !c.landing_history.is_empty() {
+        out.push_str(&format!("landings:   {}\n", c.landing_history.len()));
+    }
 
     // --- Projects ---
     out.push_str("\nProjects\n--------\n");

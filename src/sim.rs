@@ -61,7 +61,8 @@ impl Tally {
             }
             GameEvent::LaunchPartialFailure { rocket_name, .. }
             | GameEvent::SpacecraftStranded { rocket_name, .. } => self.resolve(rocket_name, false),
-            GameEvent::SpacecraftLost { rocket_name, .. } => {
+            GameEvent::SpacecraftLost { rocket_name, .. }
+            | GameEvent::LandingFailed { rocket_name, .. } => {
                 self.vehicles_lost += 1;
                 self.resolve(rocket_name, false);
             }

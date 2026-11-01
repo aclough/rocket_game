@@ -894,6 +894,29 @@ pub(super) fn draw_launches_tab(frame: &mut Frame, app: &App, area: Rect, border
         }
     }
 
+    // Landings, once there have been any.
+    let landings = &game.player_company.landing_history;
+    if !landings.is_empty() {
+        use crate::launch::LandingOutcome;
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  ── Landing History ──",
+            Style::default().fg(Color::DarkGray),
+        )));
+        for record in landings.iter().rev().take(10) {
+            let dest_name = contract::destination_display_name(&record.destination);
+            let outcome_str = match &record.outcome {
+                LandingOutcome::Landed => Span::styled("LANDED", Style::default().fg(Color::Green)),
+                LandingOutcome::HardLanding { .. } => Span::styled("HARD LANDING", Style::default().fg(Color::Yellow)),
+                LandingOutcome::Crashed { .. } => Span::styled("CRASHED", Style::default().fg(Color::Red)),
+            };
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {} {} ↓{} ", record.date, record.rocket_name, dest_name)),
+                outcome_str,
+            ]));
+        }
+    }
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)

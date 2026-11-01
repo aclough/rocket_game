@@ -373,7 +373,7 @@ impl App {
                     _ => {}
                 }
             }
-            InputMode::LaunchResult { .. } => {
+            InputMode::LaunchResult { .. } | InputMode::LandingResult { .. } => {
                 // Any key dismisses the result
                 match key {
                     KeyCode::Enter | KeyCode::Esc | KeyCode::Char(_) => {

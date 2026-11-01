@@ -191,6 +191,75 @@ fn a_payload_loss_at_deploy_forfeits_the_contract() {
     assert!(gs.player_company.rocket_projects[0].flaws[0].discovered);
 }
 
+/// Coming down on a surface rolls the landing events on the top stage
+/// before the payload deploys: a certain `Landing` stage loss crashes
+/// the vehicle — a landing record, no launch record, no payment, the
+/// flaw found — and a certain `Descent` degradation is a hard landing
+/// that still delivers (25_2_EDL_CORE.md §2.1). An airless body never
+/// rolls `Entry`.
+#[test]
+fn landing_flaws_roll_on_the_way_down() {
+    use crate::flaw::{FlawConsequence, FlawPhase};
+    use crate::launch::LandingOutcome;
+    let contract = |id: u64| Contract {
+        id: crate::contract::ContractId(id), name: "Lander".into(), destination: "lunar_surface".into(),
+        payload_kg: 10.0, payment: 10_000_000.0, deadline: GameDate::new(2005, 1, 1),
+        status: crate::contract::ContractStatus::Accepted, market_id: crate::contract::MarketId::default(),
+        campaign_id: None, bid_deadline: None, budget_ceiling: 0.0, player_bid: None,
+    };
+    let fly = |flaws: Vec<crate::flaw::Flaw>| -> (GameState, Vec<GameEvent>) {
+        let mut gs = GameState::new("Test".into(), 1);
+        let item = shelve_rocket(&mut gs, flaws);
+        // The fixture has no power: a week to the Moon needs panels.
+        for stage in gs.player_company.rocket_projects[0].design.stage_groups.iter_mut().flatten() {
+            let panel = crate::power::solar_panel_for_stage_demand(stage);
+            stage.power_sources.push(panel);
+        }
+        gs.player_company.active_contracts.push(contract(7));
+        let (dest, payloads) = gs.build_launch_payloads(&[0], &[]).unwrap();
+        assert_eq!(dest, "lunar_surface");
+        let (_, record) = gs.launch_rocket(item, &dest, payloads, false).expect("launched");
+        assert!(record.is_none(), "the ascent itself is clean: {record:?}");
+        let mut all_events = Vec::new();
+        for _ in 0..120 {
+            all_events.extend(gs.advance_day());
+            if gs.active_flights.is_empty() {
+                break;
+            }
+        }
+        assert!(gs.active_flights.is_empty(), "the flight should have ended");
+        (gs, all_events)
+    };
+
+    // The crash.
+    let (gs, events) = fly(vec![
+        certain_flaw(1, FlawPhase::Entry, 2, FlawConsequence::StageLoss),
+        certain_flaw(2, FlawPhase::Landing, 2, FlawConsequence::StageLoss),
+    ]);
+    assert!(events.iter().any(|e| matches!(e, GameEvent::LandingFailed { .. })), "{events:?}");
+    assert!(!events.iter().any(|e| matches!(e, GameEvent::PaymentReceived { .. } | GameEvent::SpacecraftLost { .. })));
+    assert!(gs.player_company.launch_history.is_empty(), "the launch was fine; the landing was not");
+    let last = gs.player_company.landing_history.last().expect("a landing record");
+    assert!(matches!(&last.outcome, LandingOutcome::Crashed { reason } if reason == "certain flaw 2"), "{:?}", last.outcome);
+    assert_eq!(last.destination, "lunar_surface");
+    assert_eq!(last.flaws_activated.len(), 1, "only the landing's own activations: {:?}", last.flaws_activated);
+    let flaws = &gs.player_company.rocket_projects[0].flaws;
+    assert!(!flaws[0].discovered, "the Moon has no air: Entry never rolled");
+    assert!(flaws[1].discovered);
+    let review = gs.player_company.rocket_projects[0].flight_review.as_ref().expect("a review opened");
+    assert!(review.exercised.contains(&(FlawPhase::Landing, 2)));
+    assert!(review.exercised.contains(&(FlawPhase::Descent, 2)));
+    assert!(!review.exercised.contains(&(FlawPhase::Entry, 2)));
+
+    // The hard landing.
+    let (gs, events) = fly(vec![certain_flaw(1, FlawPhase::Descent, 2, FlawConsequence::PerformanceDegradation(0.2))]);
+    assert!(events.iter().any(|e| matches!(e, GameEvent::Landed { outcome, .. } if outcome.starts_with("hard landing"))), "{events:?}");
+    assert!(events.iter().any(|e| matches!(e, GameEvent::PaymentReceived { amount, .. } if *amount < 10_000_000.0)), "pays the partial fraction: {events:?}");
+    let last = gs.player_company.landing_history.last().expect("a landing record");
+    assert!(matches!(&last.outcome, LandingOutcome::HardLanding { .. }), "{:?}", last.outcome);
+    assert_eq!(gs.player_company.launch_history.len(), 1, "the launch record is the arrival's as before");
+}
+
 /// A built vehicle flies with the engine flaws it was built with: a fix
 /// on the engine project does not reach the shelf, and a flaw the
 /// project still has is found there by id when the vehicle fires it.
