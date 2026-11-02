@@ -845,7 +845,11 @@ impl GameState {
             // Spacecraft ops are player-only today.
             company: crate::flight::CompanyRef::Player,
             rocket_name: sc.name.clone(),
-            rocket_project_id: crate::rocket_project::RocketProjectId(0), // no project for spacecraft flights
+            // The spacecraft's own project: what its flaws fire on, where
+            // the discoveries land and whose flight review opens. (It
+            // used to be a placeholder 0, so a flaw that fired on a flown
+            // spacecraft was never found and fired again next time.)
+            rocket_project_id: sc.rocket_project_id,
             design: sc.design,
             rocket: sc.rocket,
             payloads: sc.payloads,

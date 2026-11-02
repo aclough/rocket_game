@@ -260,6 +260,43 @@ fn landing_flaws_roll_on_the_way_down() {
     assert_eq!(gs.player_company.launch_history.len(), 1, "the launch record is the arrival's as before");
 }
 
+/// A parked spacecraft flown on is its project's vehicle: a flaw that
+/// fires on the way is found on the project (and its flight review
+/// opens there), not credited to nobody.
+#[test]
+fn a_flown_spacecraft_finds_its_flaws_on_its_project() {
+    use crate::flaw::{FlawConsequence, FlawPhase};
+    let mut gs = GameState::new("Test".into(), 1);
+    let (design, engine_projects) = make_three_stage_design();
+    gs.player_company.engine_projects = engine_projects;
+    for ep in &mut gs.player_company.engine_projects {
+        ep.flaws.clear();
+    }
+    let flaws = vec![certain_flaw(1, FlawPhase::Burn, 0, FlawConsequence::PerformanceDegradation(0.05))];
+    let mut rp = RocketProject::new(RocketProjectId(1), design.clone(), &gs.balance);
+    rp.flaws = flaws.clone();
+    gs.player_company.rocket_projects.push(rp);
+    let rocket = design.instantiate(crate::rocket::RocketId(1), 0.0);
+    gs.spacecraft.push(crate::game_state::Spacecraft {
+        id: crate::game_state::SpacecraftId(1), name: "Lander".into(), rocket, design,
+        location: crate::location::LocationId::of("leo"), rocket_project_id: RocketProjectId(1),
+        payloads: Vec::new(), rocket_flaws: flaws, stage_engine_flaws: Vec::new(),
+    });
+    gs.fly_spacecraft(0, "gto");
+    assert_eq!(gs.active_flights.len(), 1, "it left");
+    assert_eq!(gs.active_flights[0].rocket_project_id, RocketProjectId(1));
+    let mut all_events = Vec::new();
+    for _ in 0..30 {
+        all_events.extend(gs.advance_day());
+        if gs.active_flights.is_empty() {
+            break;
+        }
+    }
+    assert!(gs.active_flights.is_empty(), "the flight should have ended: {all_events:?}");
+    assert!(gs.player_company.rocket_projects[0].flaws[0].discovered, "the flaw that fired is found on the project");
+    assert!(gs.player_company.rocket_projects[0].flight_review.is_some(), "and the review opens there");
+}
+
 /// A built vehicle flies with the engine flaws it was built with: a fix
 /// on the engine project does not reach the shelf, and a flaw the
 /// project still has is found there by id when the vehicle fires it.
