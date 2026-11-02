@@ -592,6 +592,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         }
     }
 

@@ -14,6 +14,19 @@ pub struct Fairing {
     pub diameter_m: f64,
 }
 
+/// How a stage lands on its engines (25_2_EDL_CORE.md §2.3): how many
+/// of them light for the final burn, and the body it is designed to come
+/// down on — which fixes the gravity the design's hover margin and
+/// hoverslam flaws are judged against. A stage without one has no
+/// landing burn: on an airless body that is a crash.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LandingBurn {
+    /// Engines lit for the landing burn, 1..=engine_count.
+    pub engines: u32,
+    /// The surface the landing is designed for.
+    pub on: crate::location::LocationId,
+}
+
 /// A rocket stage: structural mass, engines, propellant, optional fairing,
 /// and any power sources (batteries, panels, RTGs, etc.).
 ///
@@ -38,9 +51,23 @@ pub struct Stage {
     /// physical; this field is only the explicit, editable list.
     #[serde(default)]
     pub power_sources: Vec<PowerSource>,
+    /// Lands on its engines, with this many of them (25_2_EDL_CORE.md
+    /// §2.3). `None` for every design from before landings existed.
+    #[serde(default)]
+    pub landing: Option<LandingBurn>,
 }
 
 impl Stage {
+    /// The least thrust the landing engines can hold at touchdown, N:
+    /// the lit engines at their cycle's throttle floor. Zero without a
+    /// landing burn.
+    pub fn landing_min_thrust_n(&self) -> f64 {
+        match &self.landing {
+            Some(burn) => burn.engines.min(self.engine_count) as f64 * self.engine.thrust_n * self.engine.min_thrust_fraction(),
+            None => 0.0,
+        }
+    }
+
     /// The stage's power sources as the physics sees them: the explicit
     /// list, or — when the player fitted nothing — the default battery
     /// every stage carries.
@@ -462,7 +489,7 @@ mod tests {
         let s = Stage {
             id: StageId(1), name: "S1".into(), engine: test_engine(), engine_count: 1,
             propellant_mass_kg: 1_000.0, structural_mass_kg: 100.0, fairing: None,
-            material: crate::structure::StructuralMaterial::Composite, power_sources: Vec::new(),
+            material: crate::structure::StructuralMaterial::Composite, power_sources: Vec::new(), landing: None,
         };
         let mut json: serde_json::Value = serde_json::to_value(&s).unwrap();
         json.as_object_mut().unwrap().remove("material");
@@ -477,7 +504,7 @@ mod tests {
     fn diameter_follows_the_tanks() {
         let mut s = Stage {
             id: StageId(1), name: "S1".into(), engine: test_engine(), engine_count: 9,
-            propellant_mass_kg: 411_000.0, structural_mass_kg: 0.0, fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
+            propellant_mass_kg: 411_000.0, structural_mass_kg: 0.0, fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
         };
         let d = s.diameter_m(10.0);
         assert!((d - 3.7).abs() < 0.15, "F9 S1 {d}");
@@ -518,6 +545,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         }
     }
 

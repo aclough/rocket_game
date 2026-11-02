@@ -385,9 +385,17 @@ pub fn build_route_for_rocket(
         // Pick the active group's thrust class so we use the right
         // dv (impulsive vs spiral) for this transfer.
         let low_thrust = sim.is_current_stage_low_thrust(design);
-        let dv_cost = transfer.delta_v_for(low_thrust, current_mass)
-            .unwrap_or_else(|| transfer.cost_for_mass(current_mass))
-            + ascent_gravity_cost(design, payload_mass_kg, from);
+        let base_dv = transfer.delta_v_for(low_thrust, current_mass)
+            .unwrap_or_else(|| transfer.cost_for_mass(current_mass));
+        // Landing on an airless body: the braking burn's gravity loss,
+        // at the acceleration the active group starts it with (the
+        // planner's `accel_m_s2`, judged on the same mass).
+        let braking_accel = sim.active_group()
+            .and_then(|gi| design.stage_groups.get(gi))
+            .map_or(0.0, |g| g.iter().map(|s| s.total_thrust_n()).sum::<f64>() / current_mass.max(1.0));
+        let dv_cost = base_dv
+            + ascent_gravity_cost(design, payload_mass_kg, from)
+            + crate::edl::landing_gravity_loss(to, base_dv, braking_accel);
         let coast_days = transfer.transit_days;
 
         // Effective thrust at this leg's start: derate electric engines
@@ -455,6 +463,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let design = RocketDesign {
             id: RocketDesignId(id), name: format!("Tiny{}", id),
@@ -676,6 +685,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
@@ -684,6 +694,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let design = RocketDesign {
             id: RocketDesignId(1),
@@ -820,6 +831,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: vec![PowerSource::new_solar_panel(panel_w)],
+            landing: None,
         };
         RocketDesign {
             id: RocketDesignId(1), name: "Ion".into(),

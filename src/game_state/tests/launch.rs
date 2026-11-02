@@ -196,24 +196,40 @@ fn a_payload_loss_at_deploy_forfeits_the_contract() {
 /// the vehicle — a landing record, no launch record, no payment, the
 /// flaw found — and a certain `Descent` degradation is a hard landing
 /// that still delivers (25_2_EDL_CORE.md §2.1). An airless body never
-/// rolls `Entry`.
+/// rolls `Entry`. The landing burn is judged first (§2.3): no burn, or
+/// one too strong to time, is a crash at the descent before any flaw
+/// rolls.
 #[test]
 fn landing_flaws_roll_on_the_way_down() {
     use crate::flaw::{FlawConsequence, FlawPhase};
     use crate::launch::LandingOutcome;
+    use crate::stage::LandingBurn;
     let contract = |id: u64| Contract {
         id: crate::contract::ContractId(id), name: "Lander".into(), destination: "lunar_surface".into(),
         payload_kg: 10.0, payment: 10_000_000.0, deadline: GameDate::new(2005, 1, 1),
         status: crate::contract::ContractStatus::Accepted, market_id: crate::contract::MarketId::default(),
         campaign_id: None, bid_deadline: None, budget_ceiling: 0.0, player_bid: None,
     };
-    let fly = |flaws: Vec<crate::flaw::Flaw>| -> (GameState, Vec<GameEvent>) {
+    // `landing`: the top stage's landing burn, its engine's thrust and
+    // cycle. The fixture's 100 kN gas-generator upper engine cannot be
+    // timed at its 60 % floor on a 600 kg stage; a 5 kN pressure-fed
+    // engine brakes the 1.5 t stage at 3 m/s² and throttles to 500 N,
+    // under the stage's lunar weight: a hover. (A gas generator of any
+    // size cannot do both on this mass ratio — which is what landers
+    // are pressure-fed for.)
+    let fly = |flaws: Vec<crate::flaw::Flaw>, landing: Option<(u32, f64, crate::engine::EngineCycle)>| -> (GameState, Vec<GameEvent>) {
         let mut gs = GameState::new("Test".into(), 1);
         let item = shelve_rocket(&mut gs, flaws);
         // The fixture has no power: a week to the Moon needs panels.
         for stage in gs.player_company.rocket_projects[0].design.stage_groups.iter_mut().flatten() {
             let panel = crate::power::solar_panel_for_stage_demand(stage);
             stage.power_sources.push(panel);
+        }
+        if let Some((engines, thrust_n, cycle)) = landing {
+            let top = &mut gs.player_company.rocket_projects[0].design.stage_groups[2][0];
+            top.engine.thrust_n = thrust_n;
+            top.engine.cycle = cycle;
+            top.landing = Some(LandingBurn { engines, on: crate::location::LocationId::of("lunar_surface") });
         }
         gs.player_company.active_contracts.push(contract(7));
         let (dest, payloads) = gs.build_launch_payloads(&[0], &[]).unwrap();
@@ -231,11 +247,24 @@ fn landing_flaws_roll_on_the_way_down() {
         (gs, all_events)
     };
 
-    // The crash.
+    // No landing burn: nothing to brake with, a crash before any flaw rolls.
+    let (gs, events) = fly(vec![certain_flaw(1, FlawPhase::Landing, 2, FlawConsequence::StageLoss)], None);
+    let last = gs.player_company.landing_history.last().expect("a landing record");
+    assert!(matches!(&last.outcome, LandingOutcome::Crashed { reason } if reason == "no landing burn"), "{:?}", last.outcome);
+    assert!(events.iter().any(|e| matches!(e, GameEvent::LandingFailed { .. })));
+    assert!(!gs.player_company.rocket_projects[0].flaws[0].discovered, "the landing never happened");
+    assert!(last.flaws_activated.is_empty());
+
+    // Too much thrust at minimum throttle: the burn cannot be timed.
+    let (gs, _) = fly(Vec::new(), Some((1, 100_000.0, crate::engine::EngineCycle::GasGenerator)));
+    let last = gs.player_company.landing_history.last().expect("a landing record");
+    assert!(matches!(&last.outcome, LandingOutcome::Crashed { reason } if reason.starts_with("cannot land: too much thrust")), "{:?}", last.outcome);
+
+    // The crash from a flaw, on a stage that hovers.
     let (gs, events) = fly(vec![
         certain_flaw(1, FlawPhase::Entry, 2, FlawConsequence::StageLoss),
         certain_flaw(2, FlawPhase::Landing, 2, FlawConsequence::StageLoss),
-    ]);
+    ], Some((1, 5_000.0, crate::engine::EngineCycle::PressureFed)));
     assert!(events.iter().any(|e| matches!(e, GameEvent::LandingFailed { .. })), "{events:?}");
     assert!(!events.iter().any(|e| matches!(e, GameEvent::PaymentReceived { .. } | GameEvent::SpacecraftLost { .. })));
     assert!(gs.player_company.launch_history.is_empty(), "the launch was fine; the landing was not");
@@ -252,7 +281,7 @@ fn landing_flaws_roll_on_the_way_down() {
     assert!(!review.exercised.contains(&(FlawPhase::Entry, 2)));
 
     // The hard landing.
-    let (gs, events) = fly(vec![certain_flaw(1, FlawPhase::Descent, 2, FlawConsequence::PerformanceDegradation(0.2))]);
+    let (gs, events) = fly(vec![certain_flaw(1, FlawPhase::Descent, 2, FlawConsequence::PerformanceDegradation(0.2))], Some((1, 5_000.0, crate::engine::EngineCycle::PressureFed)));
     assert!(events.iter().any(|e| matches!(e, GameEvent::Landed { outcome, .. } if outcome.starts_with("hard landing"))), "{events:?}");
     assert!(events.iter().any(|e| matches!(e, GameEvent::PaymentReceived { amount, .. } if *amount < 10_000_000.0)), "pays the partial fraction: {events:?}");
     let last = gs.player_company.landing_history.last().expect("a landing record");

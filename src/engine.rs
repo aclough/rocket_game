@@ -39,6 +39,24 @@ impl EngineCycle {
             EngineCycle::SolarSail => "Solar Sail",
         }
     }
+
+    /// The deepest this cycle throttles, as a fraction of full thrust
+    /// (25_EDL.md §5): a pressure-fed engine just closes its valves, a
+    /// gas generator's turbine stalls below 60 %. Electric thrusters
+    /// throttle to nothing; a sail has no throttle. Solids are a
+    /// propellant, not a cycle — `EngineDesign::min_thrust_fraction`
+    /// pins them at 1.
+    pub fn throttle_floor(&self) -> f64 {
+        match self {
+            EngineCycle::PressureFed => 0.10,
+            EngineCycle::Expander => 0.20,
+            EngineCycle::StagedCombustion | EngineCycle::FullFlow => 0.40,
+            EngineCycle::GasGenerator => 0.60,
+            EngineCycle::NuclearThermal => 0.50,
+            EngineCycle::ElectricPropulsion => 0.0,
+            EngineCycle::SolarSail => 1.0,
+        }
+    }
 }
 
 /// A single propellant component in the engine's mix.
@@ -530,6 +548,13 @@ impl EngineDesign {
     pub fn is_solid(&self) -> bool {
         self.propellant_mix.len() == 1
             && self.propellant_mix[0].propellant == crate::propellant::Propellant::SolidMix
+    }
+
+    /// The least thrust this engine can run at, as a fraction of full: a
+    /// solid burns until it is done, the rest follow their cycle's
+    /// throttle floor.
+    pub fn min_thrust_fraction(&self) -> f64 {
+        if self.is_solid() { 1.0 } else { self.cycle.throttle_floor() }
     }
 
     /// Whether this engine is a low-thrust type (ion, Hall, solar sail).

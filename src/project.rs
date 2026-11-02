@@ -248,6 +248,13 @@ pub trait Designable: Clone + fmt::Debug {
     /// rockets and reactors use the project's stored complexity.
     fn flaw_complexity(&self, spec: &Self::Spec, project_complexity: u32) -> u32;
 
+    /// Extra flaws drawn on top of the count, each worded from the
+    /// entries that require a feature (`flaw::generate_flaws`): a
+    /// hoverslam lander's timing flaws. Nothing for most designs.
+    fn flaw_targeted(&self, _balance_cfg: &BalanceConfig) -> Vec<(flaw::Feature, u32)> {
+        Vec::new()
+    }
+
     /// Per-testing-cycle chance of finding an improvement, before the
     /// decay for improvements already found. `None` = this kind has no
     /// improvements and draws no roll.
@@ -496,9 +503,10 @@ impl<D: Designable> DesignProject<D> {
                 *work_completed += work;
                 if *work_completed >= *work_required {
                     let complexity = self.design.flaw_complexity(&self.spec, self.complexity);
-                    self.flaws = flaw::generate_flaws(
+                    self.flaws = flaw::generate_flaws_targeted(
                         self.design.flaw_domain(), complexity, self.design.flaw_stage_groups(),
-                        &self.design.flaw_features(), rng, next_flaw_id, &balance_cfg.flaws,
+                        &self.design.flaw_features(), &self.design.flaw_targeted(balance_cfg),
+                        rng, next_flaw_id, &balance_cfg.flaws,
                     );
                     self.status = DesignStatus::Testing { work_completed: 0.0 };
                     events.push(WorkEvent::DesignComplete);

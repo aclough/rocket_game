@@ -263,6 +263,7 @@ fn test_reactor_flaw_activates_mid_flight() {
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: vec![PowerSource::from_reactor_design(reactor_design)],
+        landing: None,
     };
     let design = RocketDesign {
         id: RocketDesignId(1), name: "ReactorCraft".into(),
@@ -358,6 +359,7 @@ fn test_reactor_perflight_flaw_fires_at_flight_start() {
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: vec![PowerSource::from_reactor_design(reactor_design)],
+        landing: None,
     };
     let design = RocketDesign {
         id: RocketDesignId(1), name: "ReactorCraft".into(),

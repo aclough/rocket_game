@@ -108,13 +108,16 @@ const CAPABILITY_CACHE_LIMIT: usize = 4096;
 
 /// What a design can put at one destination — see
 /// [`GameState::payload_table`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PayloadReach {
     pub destination: &'static str,
     pub max_payload_kg: f64,
     /// False when the design can lift the mass but goes dark on the way:
     /// a power problem wearing a delta-v problem's clothes.
     pub survives: bool,
+    /// How the top stage sets down, for an airless surface
+    /// (`edl::landing_verdict`); `None` anywhere else.
+    pub landing: Option<crate::edl::LandingVerdict>,
 }
 
 /// Look `key` up in a route-planning memo, computing and storing the
@@ -574,6 +577,7 @@ impl GameState {
                     // trip the row describes — a heavier load can take a
                     // different route and so a different number of days.
                     survives: self.survives_trip(design, from, dest, payload),
+                    landing: crate::edl::landing_verdict(design, payload, dest, &self.balance.edl),
                 });
             }
         }
@@ -619,6 +623,13 @@ impl GameState {
         }
         let cap = self.payload_capability(&project.design, "earth_surface", destination);
         if payload_kg > cap * self.balance.markets.bid_payload_margin {
+            return false;
+        }
+        // Landing on an airless body takes a landing burn the stage can
+        // time (25_2_EDL_CORE.md §2.3); a hoverslam counts, a crash does not.
+        if crate::edl::landing_verdict(&project.design, payload_kg, destination, &self.balance.edl)
+            .is_some_and(|v| !v.can_land())
+        {
             return false;
         }
         self.survives_trip(&project.design, "earth_surface", destination, payload_kg)

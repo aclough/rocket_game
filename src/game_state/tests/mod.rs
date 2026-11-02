@@ -81,6 +81,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
+        landing: None,
     };
     let stage2 = Stage {
         id: StageId(2),
@@ -92,6 +93,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
+        landing: None,
     };
     // Stage 3 sized so that LEO→GTO (2440 m/s) + GTO→GEO (1500 m/s) = 3940 m/s
     // exceeds its dv, ensuring it gets exhausted and jettisoned mid-flight.
@@ -106,6 +108,7 @@ fn make_three_stage_design() -> (RocketDesign, Vec<crate::engine_project::Engine
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
+        landing: None,
     };
 
     let design = RocketDesign {

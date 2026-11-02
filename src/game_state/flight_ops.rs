@@ -392,9 +392,26 @@ impl GameState {
             if let Some(has_atmosphere) = surface.filter(|_| matches!(end, FlightEnd::Arrived) && !flight.design.stage_groups.is_empty()) {
                 let first = flight.flaws_activated.len();
                 let mut outcome = LandingOutcome::Landed;
+                // Without air the landing burn is judged on the mass that
+                // actually comes down: hover, hoverslam (its flaws bite
+                // harder), or nothing to brake with / too much thrust to
+                // time, which is a crash at the burn (25_2_EDL_CORE.md §2.3).
+                let touchdown_mass = flight.rocket.attached_mass_kg(&flight.design) + flight.total_payload_kg();
+                let verdict = crate::edl::landing_verdict_at_mass(
+                    &flight.design, touchdown_mass, flight.destination(), &self.balance.edl,
+                );
+                let scale = verdict.as_ref().map_or(1.0, |v| v.activation_scale());
                 for event in launch::landing_events(has_atmosphere) {
-                    let roll = roll_arrival_event(
+                    if event == launch::FlightEvent::Descent {
+                        if let Some(v) = verdict.as_ref().filter(|v| !v.can_land()) {
+                            flight.events_reached.push(event);
+                            outcome = LandingOutcome::Crashed { reason: v.summary() };
+                            break;
+                        }
+                    }
+                    let roll = roll_arrival_event_scaled(
                         &mut flight, event, &mut self.seed.contingent_rng, &mut events, &mut arrival_discoveries,
+                        if event.is_landing() { scale } else { 1.0 },
                     );
                     if let Some(words) = roll.lost {
                         outcome = LandingOutcome::Crashed { reason: words };
@@ -1041,10 +1058,23 @@ fn roll_arrival_event(
     events: &mut Vec<GameEvent>,
     discoveries: &mut FlawDiscoveries,
 ) -> FlawRoll {
+    roll_arrival_event_scaled(flight, event, rng, events, discoveries, 1.0)
+}
+
+/// `roll_arrival_event` with the event's activations scaled (a
+/// hoverslam's landing).
+fn roll_arrival_event_scaled(
+    flight: &mut Flight,
+    event: launch::FlightEvent,
+    rng: &mut rand::rngs::StdRng,
+    events: &mut Vec<GameEvent>,
+    discoveries: &mut FlawDiscoveries,
+    activation_scale: f64,
+) -> FlawRoll {
     flight.events_reached.push(event);
     let rockets = launch::rocket_flaw_table(flight.rocket_project_id, &flight.rocket_flaws);
     let engines = launch::engine_flaw_table_from(&flight.stage_engine_flaws);
-    let roll = launch::roll_event_flaws(rng, &mut flight.design, event, &engines, &rockets, false);
+    let roll = launch::roll_event_flaws_scaled(rng, &mut flight.design, event, &engines, &rockets, false, activation_scale);
     flight.rocket.extra_draw_w += roll.extra_draw_w;
     flight.flaws_activated.extend(roll.activations.iter().cloned());
     push_activation_events(events, &flight.rocket_name, &roll);

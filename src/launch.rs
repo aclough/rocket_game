@@ -307,6 +307,22 @@ pub fn roll_event_flaws(
     rockets: &[FlawRef],
     on_pad: bool,
 ) -> FlawRoll {
+    roll_event_flaws_scaled(rng, design, event, engines, rockets, on_pad, 1.0)
+}
+
+/// `roll_event_flaws` with every activation chance at this event
+/// multiplied by `activation_scale` (capped at certainty): a hoverslam
+/// makes its landing's flaws bite harder (25_2_EDL_CORE.md §2.3).
+#[allow(clippy::too_many_arguments)] // the plain roll plus one scale
+pub fn roll_event_flaws_scaled(
+    rng: &mut StdRng,
+    design: &mut RocketDesign,
+    event: FlightEvent,
+    engines: &[FlawRef],
+    rockets: &[FlawRef],
+    on_pad: bool,
+    activation_scale: f64,
+) -> FlawRoll {
     let mut roll = FlawRoll::default();
     let phase = event.phase();
     let gi = event.group(design);
@@ -331,7 +347,7 @@ pub fn roll_event_flaws(
             if matches!(flaw.consequence, FlawConsequence::PadAbort { .. }) && !pad_aborts_roll {
                 continue;
             }
-            let effective_p = 1.0 - (1.0 - flaw.activation_chance).powi(engine_count as i32);
+            let effective_p = 1.0 - (1.0 - (flaw.activation_chance * activation_scale).min(1.0)).powi(engine_count as i32);
             if rng.gen::<f64>() < effective_p {
                 roll.activations.push(FlawActivation {
                     flaw_description: flaw.description.clone(),
@@ -353,7 +369,7 @@ pub fn roll_event_flaws(
         if matches!(flaw.consequence, FlawConsequence::PadAbort { .. }) && !pad_aborts_roll {
             continue;
         }
-        if rng.gen::<f64>() >= flaw.activation_chance {
+        if rng.gen::<f64>() >= (flaw.activation_chance * activation_scale).min(1.0) {
             continue;
         }
         let si = if stage_count > 1 { rng.gen_range(0..stage_count) } else { 0 };
@@ -892,6 +908,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         }
     }
 
@@ -953,6 +970,7 @@ mod tests {
             propellant_mass_kg: prop, structural_mass_kg: dry, fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         // A first stage whose nozzle is built for altitude: 40 kPa exit at
         // a 101 kPa pad is well into the penalty.
@@ -1297,6 +1315,27 @@ mod tests {
             assert_eq!(e.word(), e.phase().word());
         }
         assert!(!FlightEvent::PayloadDeploy.is_landing());
+    }
+
+    /// A hoverslam's scale multiplies the chance of every flaw at the
+    /// event: nothing fires at zero, a coin-flip flaw is certain at two.
+    #[test]
+    fn a_scaled_roll_bites_harder() {
+        let design = make_design();
+        let top = design.stage_groups.len() - 1;
+        let flaw = rocket_flaw(1, crate::flaw::FlawPhase::Landing, top);
+        let mut rockets = rocket_flaw_table(RocketProjectId(1), &[flaw]);
+        rockets[0].activation_chance = 0.5;
+        for (scale, expect) in [(0.0, 0usize), (2.0, 1usize)] {
+            let mut fired = 0;
+            for seed in 0..20u64 {
+                let mut rng = StdRng::seed_from_u64(seed);
+                let mut d = design.clone();
+                let roll = roll_event_flaws_scaled(&mut rng, &mut d, FlightEvent::Landing, &[], &rockets, false, scale);
+                fired += roll.activations.len().min(1);
+            }
+            assert_eq!(fired, expect * 20, "scale {scale}");
+        }
     }
 
     #[test]

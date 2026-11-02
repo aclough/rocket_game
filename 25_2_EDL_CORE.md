@@ -503,3 +503,41 @@ touchdown wrecks the cargo. `LandingRecord`/`LandingOutcome` in
 there is one, `landings:` in the report, the sim tally counts a crash
 as a vehicle lost. The flight review covers the phases reached. No
 design has the features and nothing crashes: 100 seeds byte-identical.
+
+**Step 2 — landing burn and hover.** `EngineCycle::throttle_floor`
+(pressure-fed 0.10, expander 0.20, staged/full-flow 0.40, gas
+generator 0.60, nuclear 0.50; solids 1 via
+`EngineDesign::min_thrust_fraction`). `Stage.landing: Option<LandingBurn
+{ engines, on }>` — how many engines light to land and the body the
+burn is designed for, set with `[G]` in the designer (cycles none, 1,
+…, all), re-aimed at the mission destination whenever that is an
+airless surface; the stage line shows "⤓1". The body is on the stage
+because flaws are drawn once, at design completion, and the hover
+question needs a gravity. `edl.rs`: `touchdown_excess_m_s2 = lit ×
+thrust × floor / m − g`; `LandingVerdict::{NoBurn, Hover (≤ 0),
+Hoverslam, TooMuchThrust}` under `EdlConfig { landing_max_excess_m_s2:
+20, hoverslam_complexity_max: 3 }`; the hoverslam's extra flaws and
+activation scale (1 + excess / max) are linear in the excess. The
+landing charge is physics rather than a knob, like the ascent's gravity
+loss: `landing_gravity_loss = g · (Δv / a_braking) · 0.25` on airless
+surface edges, charged by the planner (`GroupPerformance::accel_m_s2`
+of the group that starts the edge) and the route builder alike —
+Apollo's module pays ~230 m/s on 1 700. `Feature::{LandingBurn,
+Hoverslam}` from the design; a hoverslam design draws
+`extra_flaws` targeted `Landing` flaws on top of its count
+(`generate_flaws_targeted`, `Design::flaw_targeted`; the plain draw is
+unchanged) from six new hoverslam entries; the flight scales every
+Descent/Landing activation by the verdict at the mass that actually
+comes down (`roll_event_flaws_scaled`), and `NoBurn` / `TooMuchThrust`
+is a crash at the descent before any flaw rolls. `project_can_serve`
+refuses an airless-surface delivery the stage cannot set down, and the
+feasibility table's rows read "hover", "hoverslam (+1 flaws, ×1.2)",
+"▲ no landing burn — [G]" or "▲ cannot land: too much thrust (…)".
+Not done: engine-domain Landing words (an engine project does not know
+it lands; the rocket pool carries them), the Launch Manifest's red for
+a landing the stage cannot make (it reads capability only). Checks:
+the 5 kN pressure-fed test lander hovers where any gas generator on the
+same stage cannot both brake and hover — which is what landers are
+pressure-fed for; 100 seeds byte-identical; the capability probe's
+lunar-surface column (added) is 0 for every template before and after,
+so the charge waits for the lander bot to be measured.

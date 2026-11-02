@@ -394,6 +394,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
@@ -402,6 +403,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let rocket = RocketDesign {
@@ -442,6 +444,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let rocket = RocketDesign {
@@ -480,6 +483,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let srb = Stage {
             id: StageId(2), name: "SRB".into(),
@@ -488,6 +492,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let rocket = RocketDesign {
@@ -522,13 +527,13 @@ mod tests {
             id: StageId(1), name: "Core".into(),
             engine: core_engine, engine_count: 1,
             propellant_mass_kg: 100_000.0, structural_mass_kg: 5_000.0,
-            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
         };
         let srb = Stage {
             id: StageId(2), name: "SRB".into(),
             engine: srb_engine, engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
-            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
         };
         let design = RocketDesign {
             id: RocketDesignId(1), name: "CorePlusSRBs".into(),
@@ -568,13 +573,13 @@ mod tests {
             id: StageId(1), name: "Core".into(),
             engine: core_engine, engine_count: 1,
             propellant_mass_kg: 100_000.0, structural_mass_kg: 5_000.0,
-            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
         };
         let srb = Stage {
             id: StageId(2), name: "SRB".into(),
             engine: srb_engine, engine_count: 1,
             propellant_mass_kg: 30_000.0, structural_mass_kg: 2_000.0,
-            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
         };
         let design = RocketDesign {
             id: RocketDesignId(1), name: "CorePlusSRBs".into(),
@@ -610,6 +615,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let srb = Stage {
             id: StageId(2), name: "SRB".into(),
@@ -618,6 +624,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let payload = 10_000.0;
@@ -655,6 +662,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let srb = Stage {
             id: StageId(2), name: "SRB".into(),
@@ -663,6 +671,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let upper = Stage {
             id: StageId(3), name: "Upper".into(),
@@ -671,6 +680,7 @@ mod tests {
             fairing: Some(Fairing { mass_kg: 200.0, diameter_m: 4.0 }),
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let rocket = RocketDesign {
@@ -702,6 +712,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
@@ -710,6 +721,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let design = RocketDesign {
@@ -740,6 +752,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
@@ -748,6 +761,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let design = RocketDesign {
@@ -791,6 +805,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let lander_stage = Stage {
             id: StageId(11), name: "Lander".into(),
@@ -799,6 +814,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let design = RocketDesign {
@@ -826,6 +842,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let design = RocketDesign {
@@ -858,6 +875,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
@@ -866,6 +884,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let design = RocketDesign {
@@ -907,6 +926,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let design = RocketDesign {

@@ -239,7 +239,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
 
             lines.push(Line::from(Span::styled(
                 format!(
-                    " {} {} {:<14} x{}  {:>7} ⌀{:.1}m {}  {}",
+                    " {} {} {:<14} x{}  {:>7} ⌀{:.1}m {}{}  {}",
                     marker,
                     label_col,
                     engine_label,
@@ -247,6 +247,7 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                     format_mass(stage.propellant_mass_kg),
                     stage.diameter_m(app.game.balance.bodies.tank_fineness),
                     stage.material.tag(),
+                    stage.landing.as_ref().map_or(String::new(), |b| format!(" ⤓{}", b.engines)),
                     stat_str,
                 ),
                 style,
@@ -386,8 +387,13 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
         lines.push(Line::from(""));
 
         // Payload feasibility for destinations served by active markets
-        // (or the LEO/MEO/GTO/GEO fallback when none are active yet).
-        let dests = relevant_destinations(&app.game);
+        // (or the LEO/MEO/GTO/GEO fallback when none are active yet),
+        // and the mission destination whatever the markets say — a
+        // landing's verdict is read off this table.
+        let mut dests = relevant_destinations(&app.game);
+        if !dests.contains(&state.destination) {
+            dests.push(state.destination);
+        }
         let table = app.game.payload_table(&temp_design, state.launch_from, &dests);
         if !table.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -397,14 +403,22 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
             for row in &table {
                 // Lifting the mass and arriving with the lights on are
                 // separate failures, and a payload figure on its own reads
-                // as success — so say which one is missing.
-                let (note, style) = if row.survives {
-                    ("", Style::default())
-                } else {
+                // as success — so say which one is missing. On an airless
+                // surface the landing burn's verdict is a third.
+                use crate::edl::LandingVerdict;
+                let (note, style) = if !row.survives {
                     (
-                        "  ▲ goes dark en route — add power",
+                        "  ▲ goes dark en route — add power".to_string(),
                         Style::default().fg(Color::Red),
                     )
+                } else {
+                    match &row.landing {
+                        None => (String::new(), Style::default()),
+                        Some(LandingVerdict::Hover) => ("  hover".to_string(), Style::default()),
+                        Some(v @ LandingVerdict::Hoverslam { .. }) => (format!("  {}", v.summary()), Style::default().fg(Color::Yellow)),
+                        Some(LandingVerdict::NoBurn) => ("  ▲ no landing burn — [G]".to_string(), Style::default().fg(Color::Red)),
+                        Some(v @ LandingVerdict::TooMuchThrust { .. }) => (format!("  ▲ {}", v.summary()), Style::default().fg(Color::Red)),
+                    }
                 };
                 lines.push(Line::from(Span::styled(
                     format!(

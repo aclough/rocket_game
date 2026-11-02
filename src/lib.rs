@@ -20,6 +20,7 @@ pub mod team;
 pub mod engine_project;
 pub mod reactor_project;
 pub mod structure;
+pub mod edl;
 pub mod resources;
 pub mod rocket_project;
 pub mod rocket_perf;

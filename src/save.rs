@@ -1176,6 +1176,7 @@ mod tests {
                 fairing: None,
                 material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
+                landing: None,
             };
             RocketDesign {
                 id: RocketDesignId(id), name: name.into(),
@@ -1345,6 +1346,7 @@ mod tests {
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0, fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         state.player_company.start_rocket_project("Old".into(), vec![vec![stage(1)], vec![stage(2)]], &state.balance);
         let rp = &state.player_company.rocket_projects[0];
@@ -1390,6 +1392,7 @@ mod tests {
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0, fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         state.player_company.start_rocket_project(
             "Legacy".into(), vec![vec![stage(1)], vec![stage(2)]], &state.balance,

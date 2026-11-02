@@ -52,6 +52,16 @@ impl Designable for RocketDesign {
         project_complexity
     }
 
+    /// A hoverslam lander draws its timing flaws on top of the count,
+    /// as many as its excess over hovering earns (25_2_EDL_CORE.md §2.3).
+    fn flaw_targeted(&self, balance_cfg: &BalanceConfig) -> Vec<(crate::flaw::Feature, u32)> {
+        match crate::edl::design_landing_verdict(self, &balance_cfg.edl) {
+            Some(crate::edl::LandingVerdict::Hoverslam { extra_flaws, .. }) if extra_flaws > 0 =>
+                vec![(crate::flaw::Feature::Hoverslam, extra_flaws)],
+            _ => Vec::new(),
+        }
+    }
+
     fn improvement_chance(_cfg: &FlawsConfig) -> Option<f64> {
         None
     }
@@ -126,6 +136,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
@@ -134,6 +145,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         RocketDesign {
             id: crate::rocket::RocketDesignId(1),

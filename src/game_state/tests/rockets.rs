@@ -251,6 +251,7 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
+        landing: None,
     };
     let stage2 = Stage {
         id: StageId(2), name: "S2".into(),
@@ -259,6 +260,7 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
+        landing: None,
     };
 
     // Stage 3: ion engine for transit (very high Isp, very low thrust)
@@ -281,6 +283,7 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
+        landing: None,
     };
 
     // Stage 4: small hypergolic thruster for asteroid landing
@@ -304,6 +307,7 @@ fn test_hybrid_ion_chemical_to_asteroid_surface() {
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
+        landing: None,
     };
 
     let design = RocketDesign {

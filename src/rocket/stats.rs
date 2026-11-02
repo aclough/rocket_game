@@ -28,6 +28,9 @@ pub struct GroupPerformance {
     pub overexpansion_loss: f64,
     /// Thrust-to-weight ratio at ignition.
     pub twr: f64,
+    /// Thrust over the mass the group starts with (its own wet mass and
+    /// everything above), m/s²: what a braking burn begins at.
+    pub accel_m_s2: f64,
     /// Burn time in seconds.
     pub burn_time_s: f64,
     /// Solar sail: unbounded delta-v, no propellant. Displays show ∞.
@@ -135,10 +138,10 @@ impl DesignPerformance {
                 (group_wet + payload_above) / (group_dry + payload_above)
             };
             let delta_v_vacuum = design.group_delta_v(gi, payload_above);
-            let twr = if (group_wet + payload_above) > 0.0 {
-                thrust / ((group_wet + payload_above) * surface_g)
+            let (twr, accel_m_s2) = if (group_wet + payload_above) > 0.0 {
+                (thrust / ((group_wet + payload_above) * surface_g), thrust / (group_wet + payload_above))
             } else {
-                0.0
+                (0.0, 0.0)
             };
             // The group's burn lasts as long as its longest tank.
             let burn_time_s = design.burn_phases(gi, payload_above).iter().map(|p| p.duration_s).sum();
@@ -156,6 +159,7 @@ impl DesignPerformance {
                 aero_drag_loss,
                 overexpansion_loss,
                 twr,
+                accel_m_s2,
                 burn_time_s,
                 is_sail,
             });
@@ -285,6 +289,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
@@ -293,6 +298,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
 
         let design = RocketDesign {
@@ -331,6 +337,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let design_single = RocketDesign {
             id: RocketDesignId(1),
@@ -346,6 +353,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let design_triple = RocketDesign {
             id: RocketDesignId(2),
@@ -373,6 +381,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let design = RocketDesign {
             id: RocketDesignId(1),

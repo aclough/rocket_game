@@ -331,18 +331,79 @@ pub fn generate_flaws(
     next_flaw_id: &mut crate::id::IdAllocator<FlawId>,
     cfg: &FlawsConfig,
 ) -> Vec<Flaw> {
+    generate_flaws_targeted(domain, effective_complexity, stage_groups, features, &[], rng, next_flaw_id, cfg)
+}
+
+/// `generate_flaws`, then `targeted`: a fixed number of per-flight
+/// flaws worded from the entries that require a feature — a hoverslam's
+/// extra landing flaws — on top of the count. Empty for every other
+/// design, and then this draws exactly what `generate_flaws` always did.
+#[allow(clippy::too_many_arguments)] // the plain draw plus the targets
+pub fn generate_flaws_targeted(
+    domain: FlawDomain,
+    effective_complexity: u32,
+    stage_groups: usize,
+    features: &[Feature],
+    targeted: &[(Feature, u32)],
+    rng: &mut StdRng,
+    next_flaw_id: &mut crate::id::IdAllocator<FlawId>,
+    cfg: &FlawsConfig,
+) -> Vec<Flaw> {
     let mean = effective_complexity as f64;
     let count_f = gaussian_sample(mean, cfg.count_stddev, rng);
     let count = count_f.round().max(0.0) as u32;
 
-    (0..count).map(|_| {
+    let mut flaws: Vec<Flaw> = (0..count).map(|_| {
         let id = next_flaw_id.mint();
         let trigger = match domain.endurance_fraction(cfg) {
             Some(fraction) if rng.gen::<f64>() < fraction => FlawTrigger::PerDay,
             _ => FlawTrigger::PerFlight,
         };
         generate_single_flaw(domain, id, trigger, stage_groups, features, rng, cfg)
-    }).collect()
+    }).collect();
+    for &(feature, n) in targeted {
+        for _ in 0..n {
+            let id = next_flaw_id.mint();
+            flaws.push(generate_targeted_flaw(domain, id, stage_groups, features, feature, rng, cfg));
+        }
+    }
+    flaws
+}
+
+/// One per-flight flaw worded from an entry that requires `feature`:
+/// the consequence is redrawn until the pool has such words for it (a
+/// hoverslam has no pad-abort words), then the entry is picked among
+/// those alone.
+fn generate_targeted_flaw(
+    domain: FlawDomain, id: FlawId, stage_groups: usize, features: &[Feature], feature: Feature,
+    rng: &mut StdRng, cfg: &FlawsConfig,
+) -> Flaw {
+    const TRIES: usize = 32;
+    let pool = FlawPool::for_flaw(domain, FlawTrigger::PerFlight);
+    let mut rolled = roll_flaw_core(domain, pool, rng, cfg);
+    for _ in 0..TRIES {
+        if pool.entries(&rolled.0).iter().any(|e| e.requires.contains(&feature) && e.fits(features)) {
+            break;
+        }
+        rolled = roll_flaw_core(domain, pool, rng, cfg);
+    }
+    let (consequence, activation_chance, discovery_roll) = rolled;
+    let wanted = draw_exposure(&cfg.exposure_mix(domain), rng);
+    let entry = pool.pick_requiring(&consequence, wanted, features, feature, rng);
+    let stage_group = (domain == FlawDomain::Rocket)
+        .then(|| stage_group_for(entry.phase, stage_groups, rng));
+    Flaw {
+        id,
+        description: entry.text.to_string(),
+        consequence,
+        activation_chance,
+        discovery_roll,
+        discovered: false,
+        trigger: FlawTrigger::PerFlight,
+        phase: entry.phase,
+        stage_group,
+        exposure: entry.exposure,
+    }
 }
 
 /// Build one flaw: shared probability core, domain-worded description.
@@ -521,6 +582,11 @@ pub enum Feature {
     Legs,
     /// The top stage lands on its engines: a braking and landing burn.
     LandingBurn,
+    /// The landing engines cannot throttle to the stage's weight on the
+    /// body it was designed for: the landing burn is timed, not flown
+    /// (25_2_EDL_CORE.md §2.3). Drawn as extra `Landing` flaws on top
+    /// of the count.
+    Hoverslam,
 }
 
 /// What an engine of `cycle` burning `propellants` has for its flaws to
@@ -567,6 +633,19 @@ pub fn rocket_features(design: &crate::rocket::RocketDesign) -> Vec<Feature> {
     if stages().any(|s| s.fairing.is_some()) { f.push(Feature::Fairing); }
     if stages().any(|s| s.engine.propellant_mix.iter().any(|m| m.propellant.is_cryogenic())) { f.push(Feature::Cryogenic); }
     if stages().any(|s| !s.engine.is_solid() && !s.engine.is_low_thrust()) { f.push(Feature::LiquidFeed); }
+    if design.stage_groups.last().is_some_and(|g| g.iter().any(|s| s.landing.is_some())) {
+        f.push(Feature::LandingBurn);
+        // Hoverslam is a question of the designed body's gravity, not of
+        // any limit, so the features need no config.
+        let dry: f64 = design.stage_groups.last().map_or(0.0, |g| g.iter().map(|s| s.dry_mass_kg()).sum());
+        let stage = &design.stage_groups.last().unwrap()[0];
+        let gravity = stage.landing.as_ref()
+            .and_then(|b| crate::location::DELTA_V_MAP.surface_properties(b.on.name()))
+            .map_or(0.0, |p| p.gravity_m_s2);
+        if crate::edl::touchdown_excess_m_s2(stage, dry, gravity).is_some_and(|x| x > 0.0) {
+            f.push(Feature::Hoverslam);
+        }
+    }
     f
 }
 
@@ -619,6 +698,27 @@ impl FlawPool {
         let matching: Vec<&'static FlawEntry> = fitting.iter().copied().filter(|e| e.exposure == wanted).collect();
         if matching.is_empty() {
             fitting[rng.gen_range(0..fitting.len())]
+        } else {
+            matching[rng.gen_range(0..matching.len())]
+        }
+    }
+
+    /// `pick` among the entries that require `feature` (and fit), or
+    /// any fitting entry when the consequence has none.
+    fn pick_requiring(
+        &self, consequence: &FlawConsequence, wanted: FlawExposure, features: &[Feature], feature: Feature,
+        rng: &mut StdRng,
+    ) -> &'static FlawEntry {
+        let entries = self.entries(consequence);
+        let requiring: Vec<&'static FlawEntry> = entries.iter()
+            .filter(|e| e.requires.contains(&feature) && e.fits(features))
+            .collect();
+        if requiring.is_empty() {
+            return self.pick(consequence, wanted, features, rng);
+        }
+        let matching: Vec<&'static FlawEntry> = requiring.iter().copied().filter(|e| e.exposure == wanted).collect();
+        if matching.is_empty() {
+            requiring[rng.gen_range(0..requiring.len())]
         } else {
             matching[rng.gen_range(0..matching.len())]
         }
@@ -857,6 +957,8 @@ pub const ROCKET_FLAWS: FlawPool = FlawPool {
         e("Throttle valve hysteresis makes the landing burn ragged", FlawPhase::Landing, FlawExposure::Integrated, &[Feature::LandingBurn]),
         e("Landing radar misreads the slope, touchdown off target", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn]),
         e("Landing leg damper bottoms out on touchdown", FlawPhase::Landing, FlawExposure::Integrated, &[Feature::Legs]),
+        e("Landing burn lights a beat late, touchdown harder than rated", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn, Feature::Hoverslam]),
+        e("Throttle-up overshoots, vehicle climbs before it settles", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn, Feature::Hoverslam]),
     ],
     part_loss: &[
         e("Propellant feed starves the outboard engine", FlawPhase::Burn, FlawExposure::Integrated, &[Feature::MultiEngine]),
@@ -874,6 +976,7 @@ pub const ROCKET_FLAWS: FlawPool = FlawPool {
         e("Entry plasma burns through a thruster housing", FlawPhase::Entry, FlawExposure::Analysis, &[Feature::HeatShield]),
         e("Propellant fails to settle before the braking burn, engine starts dry", FlawPhase::Descent, FlawExposure::Integrated, &[Feature::LandingBurn]),
         e("Landing engine ingests debris kicked up at touchdown", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn]),
+        e("Landing engine start hangs on the timed burn, cuts out at the flare", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn, Feature::Hoverslam]),
     ],
     stage_loss: &[
         e("Interstage buckles under max-Q loading", FlawPhase::MaxQ, FlawExposure::Analysis, &[Feature::UpperStage]),
@@ -898,6 +1001,9 @@ pub const ROCKET_FLAWS: FlawPool = FlawPool {
         e("Braking burn cuts off early on a bad altimeter reading", FlawPhase::Descent, FlawExposure::Analysis, &[Feature::LandingBurn]),
         e("Landing burn starts late, vehicle hits the ground still braking", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn]),
         e("Landing leg latch fails to lock, vehicle tips over", FlawPhase::Landing, FlawExposure::Integrated, &[Feature::Legs]),
+        e("Landing burn timed off a stale altitude, vehicle impacts under power", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn, Feature::Hoverslam]),
+        e("Flip to the landing attitude runs long, burn starts too low", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn, Feature::Hoverslam]),
+        e("Engine start transient too slow for the timed burn, hits at speed", FlawPhase::Landing, FlawExposure::Analysis, &[Feature::LandingBurn, Feature::Hoverslam]),
     ],
     pad_abort: &[
         e("Hold-down release sensor reads unlatched", FlawPhase::Ignition, FlawExposure::Integrated, &[]),
@@ -1347,8 +1453,8 @@ mod description_pool_tests {
         Feature::UpperStage, Feature::Boosters, Feature::MultiEngine, Feature::Fairing,
         Feature::Cryogenic, Feature::LiquidFeed,
     ];
-    const ALL_EDL_FEATURES: [Feature; 4] = [
-        Feature::HeatShield, Feature::Parachute, Feature::Legs, Feature::LandingBurn,
+    const ALL_EDL_FEATURES: [Feature; 5] = [
+        Feature::HeatShield, Feature::Parachute, Feature::Legs, Feature::LandingBurn, Feature::Hoverslam,
     ];
     const EDL_PHASES: [FlawPhase; 3] = [FlawPhase::Entry, FlawPhase::Descent, FlawPhase::Landing];
 
@@ -1685,6 +1791,39 @@ mod description_pool_tests {
                 assert_eq!(edl, needs, "{:?}: an EDL phase and EDL hardware go together", entry.text);
             }
         }
+    }
+
+    /// A hoverslam lander draws its timing flaws on top of the count:
+    /// exactly the targeted number more than the same design without
+    /// them, every one a `Landing` flaw on the top stage worded for the
+    /// hoverslam, and the untargeted draw is unchanged by the mechanism.
+    #[test]
+    fn hoverslam_draws_extra_landing_flaws() {
+        let cfg = cfg();
+        let mut all: Vec<Feature> = ALL_ROCKET_FEATURES.to_vec();
+        all.extend(ALL_EDL_FEATURES);
+        let draw = |targeted: &[(Feature, u32)]| -> Vec<Flaw> {
+            let mut rng = StdRng::seed_from_u64(9);
+            let mut ids = crate::id::IdAllocator::<FlawId>::starting_at(0);
+            generate_flaws_targeted(FlawDomain::Rocket, 10, 3, &all, targeted, &mut rng, &mut ids, &cfg)
+        };
+        let plain = draw(&[]);
+        let slam = draw(&[(Feature::Hoverslam, 2)]);
+        assert_eq!(slam.len(), plain.len() + 2);
+        for (a, b) in plain.iter().zip(&slam) {
+            assert_eq!(a.description, b.description, "the plain draw comes first, unchanged");
+        }
+        for f in &slam[plain.len()..] {
+            assert_eq!(f.phase, FlawPhase::Landing, "{}", f.description);
+            assert_eq!(f.stage_group, Some(2));
+            assert_eq!(f.trigger, FlawTrigger::PerFlight);
+            let entry = entry_for_description(&f.description).expect("pool words");
+            assert!(entry.requires.contains(&Feature::Hoverslam), "{}", f.description);
+        }
+        let mut plain_again = StdRng::seed_from_u64(9);
+        let mut ids = crate::id::IdAllocator::<FlawId>::starting_at(0);
+        let via_old = generate_flaws(FlawDomain::Rocket, 10, 3, &all, &mut plain_again, &mut ids, &cfg);
+        assert_eq!(via_old.len(), plain.len());
     }
 
     /// A review covers the events the flight reached: a rocket flaw on

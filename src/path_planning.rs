@@ -43,11 +43,14 @@ fn group_thrust_class(design: &RocketDesign, gi: usize) -> ThrustClass {
 }
 
 /// Edge dv cost for a given thrust class. None if the class can't use the
-/// edge (low-thrust attempt against a non-low-thrust-ok edge).
+/// edge (low-thrust attempt against a non-low-thrust-ok edge). Landing on
+/// an airless body adds the braking burn's gravity loss at
+/// `braking_accel_m_s2` (`edl::landing_gravity_loss`).
 fn edge_cost_for_class(
     transfer: &Transfer,
     rocket_mass_kg: f64,
     class: ThrustClass,
+    braking_accel_m_s2: f64,
 ) -> Option<f64> {
     let base = match class {
         ThrustClass::HighThrust => transfer.delta_v,
@@ -63,7 +66,7 @@ fn edge_cost_for_class(
     } else {
         0.0
     };
-    Some(base + drag)
+    Some(base + drag + crate::edl::landing_gravity_loss(transfer.to, base, braking_accel_m_s2))
 }
 
 #[derive(Debug, Clone)]
@@ -85,7 +88,9 @@ fn try_class(
     class: ThrustClass,
     perf: &DesignPerformance,
 ) -> Option<EdgeOutcome> {
-    let cost = edge_cost_for_class(transfer, rocket_mass_kg, class)?;
+    // The group that starts the edge is the one that brakes on a landing.
+    let braking_accel = perf.groups.get(active_stage).map_or(0.0, |g| g.accel_m_s2);
+    let cost = edge_cost_for_class(transfer, rocket_mass_kg, class, braking_accel)?;
 
     // High-thrust attempt requires the active stage to be high-thrust.
     if class == ThrustClass::HighThrust
@@ -434,6 +439,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         }
     }
 

@@ -354,7 +354,24 @@ fn resize_all_tanks(state: &mut RocketDesignerState, company: &crate::game_state
 /// Everything a stage derives from its tanks, after any change to
 /// propellant, engines or stages: its structure, and the long bell its
 /// own diameter allows (25_1_BODIES.md step 1).
+/// The body a landing burn is designed for: the mission destination
+/// when it is an airless surface, else the Moon.
+fn landing_body_for(destination: &str) -> crate::location::LocationId {
+    let airless = DELTA_V_MAP.surface_properties(destination).is_some_and(|p| !p.has_atmosphere);
+    crate::location::LocationId::of(if airless { destination } else { "lunar_surface" })
+}
+
 fn refresh_derived(state: &mut RocketDesignerState, company: &crate::game_state::Company, bal: &BalanceConfig) {
+    // A landing burn follows the mission destination when that is an
+    // airless surface: the design's hover margin is judged there.
+    if DELTA_V_MAP.surface_properties(state.destination).is_some_and(|p| !p.has_atmosphere) {
+        let on = crate::location::LocationId::of(state.destination);
+        for stage in state.stage_groups.iter_mut().flatten() {
+            if let Some(burn) = stage.landing.as_mut() {
+                burn.on = on;
+            }
+        }
+    }
     // Bells first: a bell's mass is part of the stack an interstage
     // below it carries, so the structure is computed from fitted engines.
     for gi in 0..state.stage_groups.len() {
@@ -441,6 +458,7 @@ fn apply_picked_engine_to_designer(
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
+        landing: None,
     };
     state.next_stage_id += 1;
 
@@ -763,6 +781,29 @@ impl App {
                 }
                 self.input_mode = InputMode::designer(state);
             }
+            KeyCode::Char('g') | KeyCode::Char('G') => {
+                // Cycle the stage's landing burn: none, then one engine
+                // lit, two, … up to all of them, and round
+                // (25_2_EDL_CORE.md §2.3). Designed for the mission
+                // destination when that is an airless surface.
+                if !state.on_add_slot() && !state.stage_groups.is_empty() {
+                    let (gi, si) = (state.selected_group, state.selected_inner);
+                    let on = landing_body_for(state.destination);
+                    let stage = &mut state.stage_groups[gi][si];
+                    let next = match &stage.landing {
+                        None => 1,
+                        Some(burn) if burn.engines < stage.engine_count => burn.engines + 1,
+                        Some(_) => 0,
+                    };
+                    stage.landing = (next > 0).then_some(crate::stage::LandingBurn { engines: next, on });
+                    self.status_message = Some(match &stage.landing {
+                        Some(burn) => format!("Landing burn: {} engine(s) lit, designed for {}", burn.engines, burn.on.location().display_name),
+                        None => "No landing burn".to_string(),
+                    });
+                    refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
+                }
+                self.input_mode = InputMode::designer(state);
+            }
             KeyCode::Char('m') | KeyCode::Char('M') => {
                 // Pick mission destination
                 let locations: Vec<(&'static str, &'static str)> = DELTA_V_MAP.locations().iter()
@@ -1019,7 +1060,11 @@ impl App {
                 if let Some((id, _)) = locations.get(selected) {
                     match target {
                         LocationPickerTarget::LaunchSite => state.launch_from = id,
-                        LocationPickerTarget::MissionDestination => state.destination = id,
+                        LocationPickerTarget::MissionDestination => {
+                            state.destination = id;
+                            // A landing burn is designed for the destination.
+                            refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
+                        }
                     }
                 }
                 self.input_mode = InputMode::designer(state);
@@ -1127,6 +1172,7 @@ mod sync_tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
+            landing: None,
         };
         let mut state = RocketDesignerState {
             mode: DesignerMode::New,
@@ -1217,7 +1263,7 @@ mod autosize_tests {
                 id: StageId(i as u64 + 1), name: format!("S{}", i + 1),
                 engine: e, engine_count: 1,
                 propellant_mass_kg: 100.0, structural_mass_kg: 0.0,
-                fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
+                fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
             }]);
             st.engine_sources.push(vec![EngineSource::PlayerDesign(
                 crate::engine_project::EngineProjectId(i as u64 + 1))]);
@@ -1522,7 +1568,7 @@ mod nozzle_variant_tests {
                     id: StageId(gi as u64 + 1), name: format!("S{}", gi + 1),
                     engine: ep.design_variant(gi > 0, &app.game.balance.nozzle), engine_count: 1,
                     propellant_mass_kg: 10_000.0, structural_mass_kg: 1_000.0,
-                    fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
+                    fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
                 };
                 state.push_new_group(stage, EngineSource::PlayerDesign(pid));
             }
@@ -1577,6 +1623,7 @@ mod nozzle_variant_tests {
                 fairing: None,
                 material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
+                landing: None,
             };
             state.push_new_group(stage, EngineSource::PlayerDesign(pid));
         }
@@ -1605,6 +1652,74 @@ mod nozzle_variant_tests {
             "[V] should toggle back");
     }
 
+    /// [G] cycles the selected stage's landing burn — none, one engine,
+    /// two, …, all, none — designed for the mission destination when
+    /// that is an airless surface, and following it when it changes
+    /// (25_2_EDL_CORE.md §2.3).
+    #[test]
+    fn g_cycles_the_landing_burn_and_follows_the_destination() {
+        use crate::structure::StructuralMaterial as M;
+        let (mut app, pid) = app_with_engine();
+        let ep = app.game.player_company.find_engine_project(pid).unwrap();
+        let mut state = Box::new(RocketDesignerState::new("Lander".into()));
+        for gi in 0..2 {
+            let stage = Stage {
+                id: StageId(gi as u64 + 1), name: format!("S{}", gi + 1),
+                engine: ep.design_variant(gi > 0, &app.game.balance.nozzle), engine_count: 2,
+                propellant_mass_kg: 10_000.0, structural_mass_kg: 0.0, fairing: None,
+                material: M::Aluminium, power_sources: Vec::new(), landing: None,
+            };
+            state.push_new_group(stage, EngineSource::PlayerDesign(pid));
+        }
+        state.destination = "leo";
+        state.selected_group = 1;
+        state.selected_inner = 0;
+        app.input_mode = InputMode::designer(state);
+        let landing = |app: &App| match &app.input_mode {
+            InputMode::RocketDesigner { state, .. } => state.stage_groups[1][0].landing.clone(),
+            other => panic!("should stay in the designer, got {other:?}"),
+        };
+
+        app.handle_key(KeyCode::Char('g'));
+        let burn = landing(&app).expect("one engine lit");
+        assert_eq!(burn.engines, 1);
+        assert_eq!(burn.on.name(), "lunar_surface", "no airless destination: designed for the Moon");
+        app.handle_key(KeyCode::Char('g'));
+        assert_eq!(landing(&app).unwrap().engines, 2, "both engines");
+        app.handle_key(KeyCode::Char('g'));
+        assert!(landing(&app).is_none(), "and round to none");
+        app.handle_key(KeyCode::Char('g'));
+        assert_eq!(landing(&app).unwrap().engines, 1);
+        match &app.input_mode {
+            InputMode::RocketDesigner { state, .. } => assert!(state.stage_groups[0][0].landing.is_none(), "only the selected stage"),
+            other => panic!("{other:?}"),
+        }
+
+        // Picking an airless surface as the destination re-aims the burn.
+        app.handle_key(KeyCode::Char('m'));
+        let (target, start) = match &app.input_mode {
+            InputMode::RocketDesigner { sub: DesignerSubMode::LocationPicker { locations, selected, .. }, .. } => {
+                let idx = locations.iter().position(|(id, _)| *id == "lunar_surface").expect("the Moon is pickable");
+                (idx, *selected)
+            }
+            other => panic!("expected the destination picker, got {other:?}"),
+        };
+        for _ in start..target {
+            app.handle_key(KeyCode::Down);
+        }
+        for _ in target..start {
+            app.handle_key(KeyCode::Up);
+        }
+        app.handle_key(KeyCode::Enter);
+        match &app.input_mode {
+            InputMode::RocketDesigner { state, .. } => {
+                assert_eq!(state.destination, "lunar_surface");
+                assert_eq!(state.stage_groups[1][0].landing.as_ref().unwrap().on.name(), "lunar_surface");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
     /// [T] cycles the selected stage's material, and only that stage's;
     /// the structure follows (25_1_BODIES.md step 2).
     #[test]
@@ -1618,7 +1733,7 @@ mod nozzle_variant_tests {
                 id: StageId(gi as u64 + 1), name: format!("S{}", gi + 1),
                 engine: ep.design_variant(gi > 0, &app.game.balance.nozzle), engine_count: 1,
                 propellant_mass_kg: 10_000.0, structural_mass_kg: 0.0, fairing: None,
-                material: M::Aluminium, power_sources: Vec::new(),
+                material: M::Aluminium, power_sources: Vec::new(), landing: None,
             };
             state.push_new_group(stage, EngineSource::PlayerDesign(pid));
         }
@@ -1667,6 +1782,7 @@ mod nozzle_variant_tests {
                 fairing: None,
                 material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
+                landing: None,
             };
             state.push_new_group(stage, EngineSource::PlayerDesign(pid));
         }
@@ -1715,6 +1831,7 @@ mod nozzle_variant_tests {
                 structural_mass_kg: 1_000.0, fairing: None,
                 material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
+                landing: None,
             },
             EngineSource::Contracted(crate::third_party::ContractedEngineId(1)),
         );

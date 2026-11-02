@@ -35,6 +35,31 @@ impl Default for BodiesConfig {
     }
 }
 
+/// Entry, descent and landing (25_2_EDL_CORE.md §2.3). The physics —
+/// throttle floors, the landing burn's gravity loss, touchdown excess
+/// acceleration — is in `edl.rs`; these are the limits it is judged
+/// against.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EdlConfig {
+    /// The most the landing engines at minimum throttle may accelerate
+    /// the stage *over* local gravity, in m/s², and still time a
+    /// hoverslam. A stage that can throttle down to its own weight
+    /// (excess ≤ 0) hovers; between the two the landing is a hoverslam
+    /// that gets harder with every m/s² of excess, whatever the body.
+    pub landing_max_excess_m_s2: f64,
+    /// Extra `Landing` flaws a hoverslam design draws at the ceiling,
+    /// scaled down linearly with its excess (so a design just past
+    /// hovering draws almost none).
+    pub hoverslam_complexity_max: f64,
+}
+
+impl Default for EdlConfig {
+    fn default() -> Self {
+        EdlConfig { landing_max_excess_m_s2: 20.0, hoverslam_complexity_max: 3.0 }
+    }
+}
+
 /// All tunable balance parameters. Lives on `GameState` (serialized
 /// into saves, so a save remembers the balance it was played under).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -56,6 +81,7 @@ pub struct BalanceConfig {
     pub uprates: UpratesConfig,
     pub third_party: ThirdPartyConfig,
     pub bodies: BodiesConfig,
+    pub edl: EdlConfig,
 }
 
 impl BalanceConfig {
