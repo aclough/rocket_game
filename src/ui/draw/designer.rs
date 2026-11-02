@@ -239,19 +239,37 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
 
             lines.push(Line::from(Span::styled(
                 format!(
-                    " {} {} {:<14} x{}  {:>7} ⌀{:.1}m {}{}  {}",
+                    " {} {} {:<14} x{}  {:>7} ⌀{:.1}m {}  {}",
                     marker,
                     label_col,
                     engine_label,
                     stage.engine_count,
                     format_mass(stage.propellant_mass_kg),
-                    stage.diameter_m(app.game.balance.bodies.tank_fineness),
+                    stage.body_diameter_m(&app.game.balance.bodies),
                     stage.material.tag(),
-                    stage.landing.as_ref().map_or(String::new(), |b| format!(" ⤓{}", b.engines)),
                     stat_str,
                 ),
                 style,
             )));
+
+            // The way down, on its own line when the stage has one
+            // (25_2_EDL_CORE.md §2.2–2.3): what it enters behind, what
+            // it lands on, what it stands on.
+            {
+                let mut parts: Vec<String> = Vec::new();
+                if let Some(h) = &stage.heat_shield {
+                    parts.push(format!("{} shield {:.0} kg/m² ({:.0} kg)", h.rating.name(), h.areal_density_kg_m2, h.mass_kg));
+                }
+                if let Some(b) = &stage.landing {
+                    parts.push(format!("lands on {} engine{} ({})", b.engines, if b.engines == 1 { "" } else { "s" }, b.on.location().display_name));
+                }
+                if let Some(l) = &stage.legs {
+                    parts.push(format!("legs ({:.0} kg)", l.mass_kg));
+                }
+                if !parts.is_empty() {
+                    lines.push(hint_line(format!("{}      EDL: {}", group_indent, parts.join(" · "))));
+                }
+            }
 
             // Per-stage power summary (compact). Always shown: a stage with
             // an empty rack is not unpowered, it is flying the default
@@ -405,18 +423,22 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                 // separate failures, and a payload figure on its own reads
                 // as success — so say which one is missing. On an airless
                 // surface the landing burn's verdict is a third.
-                use crate::edl::LandingVerdict;
+                use crate::edl::{EntryVerdict, LandingVerdict};
                 let (note, style) = if !row.survives {
                     (
                         "  ▲ goes dark en route — add power".to_string(),
                         Style::default().fg(Color::Red),
                     )
+                } else if let Some(entry @ (EntryVerdict::NoShield | EntryVerdict::BurnThrough { .. })) = &row.entry {
+                    let hint = if matches!(entry, EntryVerdict::NoShield) { " — [H]" } else { "" };
+                    (format!("  ▲ {}{hint}", entry.summary()), Style::default().fg(Color::Red))
                 } else {
                     match &row.landing {
                         None => (String::new(), Style::default()),
                         Some(LandingVerdict::Hover) => ("  hover".to_string(), Style::default()),
                         Some(v @ LandingVerdict::Hoverslam { .. }) => (format!("  {}", v.summary()), Style::default().fg(Color::Yellow)),
                         Some(LandingVerdict::NoBurn) => ("  ▲ no landing burn — [G]".to_string(), Style::default().fg(Color::Red)),
+                        Some(LandingVerdict::NoLegs) => ("  ▲ no landing legs — [K]".to_string(), Style::default().fg(Color::Red)),
                         Some(v @ LandingVerdict::TooMuchThrust { .. }) => (format!("  ▲ {}", v.summary()), Style::default().fg(Color::Red)),
                     }
                 };

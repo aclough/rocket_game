@@ -89,6 +89,14 @@ pub struct FlightLeg {
     pub delta_v_cost: f64,
     pub burn_days: u32,
     pub coast_days: u32,
+    /// Flown by aerobraking behind the top stage's heat shield rather
+    /// than by burning (25_2_EDL_CORE.md §2.3).
+    #[serde(default)]
+    pub aerobraked: bool,
+    /// For an aerobraked leg: the entry speed the atmosphere pass starts
+    /// at if this is the first such leg of the descent.
+    #[serde(default)]
+    pub entry_speed_m_s: Option<f64>,
 }
 
 impl FlightLeg {
@@ -345,6 +353,8 @@ pub fn build_route(
                 delta_v_cost: dv_cost,
                 burn_days,
                 coast_days,
+            aerobraked: false,
+            entry_speed_m_s: None,
             });
         }
     }
@@ -393,9 +403,15 @@ pub fn build_route_for_rocket(
         let braking_accel = sim.active_group()
             .and_then(|gi| design.stage_groups.get(gi))
             .map_or(0.0, |g| g.iter().map(|s| s.total_thrust_n()).sum::<f64>() / current_mass.max(1.0));
-        let dv_cost = base_dv
+        let mut dv_cost = base_dv
             + ascent_gravity_cost(design, payload_mass_kg, from)
             + crate::edl::landing_gravity_loss(to, base_dv, braking_accel);
+        // The shielded top stage aerobrakes inward edges, as the planner
+        // costed them.
+        let entry_speed = sim.active_group().and_then(|gi| crate::edl::aerobrake_leg(design, gi, from, to));
+        if entry_speed.is_some() {
+            dv_cost = dv_cost.min(crate::edl::AEROBRAKE_DELTA_V_M_S);
+        }
         let coast_days = transfer.transit_days;
 
         // Effective thrust at this leg's start: derate electric engines
@@ -424,6 +440,8 @@ pub fn build_route_for_rocket(
             delta_v_cost: dv_cost,
             burn_days,
             coast_days,
+            aerobraked: entry_speed.is_some(),
+            entry_speed_m_s: entry_speed,
         });
 
         // Advance the simulated rocket through this burn so the next
@@ -463,7 +481,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         };
         let design = RocketDesign {
             id: RocketDesignId(id), name: format!("Tiny{}", id),
@@ -571,11 +589,11 @@ mod tests {
             route: vec![
                 FlightLeg {
                     from: crate::location::LocationId::of("earth_surface"), to: crate::location::LocationId::of("leo"),
-                    delta_v_cost: 9400.0, burn_days: 1, coast_days: 0,
+                    delta_v_cost: 9400.0, burn_days: 1, coast_days: 0, aerobraked: false, entry_speed_m_s: None,
                 },
                 FlightLeg {
                     from: crate::location::LocationId::of("leo"), to: crate::location::LocationId::of("gto"),
-                    delta_v_cost: 2440.0, burn_days: 0, coast_days: 1,
+                    delta_v_cost: 2440.0, burn_days: 0, coast_days: 1, aerobraked: false, entry_speed_m_s: None,
                 },
             ],
             current_leg: 0,
@@ -685,7 +703,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
@@ -694,7 +712,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         };
         let design = RocketDesign {
             id: RocketDesignId(1),
@@ -715,11 +733,11 @@ mod tests {
             route: vec![
                 FlightLeg {
                     from: crate::location::LocationId::of("earth_surface"), to: crate::location::LocationId::of("leo"),
-                    delta_v_cost: 9_400.0, burn_days: 1, coast_days: 0,
+                    delta_v_cost: 9_400.0, burn_days: 1, coast_days: 0, aerobraked: false, entry_speed_m_s: None,
                 },
                 FlightLeg {
                     from: crate::location::LocationId::of("leo"), to: crate::location::LocationId::of("gto"),
-                    delta_v_cost: 2_440.0, burn_days: 1, coast_days: 2,
+                    delta_v_cost: 2_440.0, burn_days: 1, coast_days: 2, aerobraked: false, entry_speed_m_s: None,
                 },
             ],
             current_leg: 0,
@@ -831,7 +849,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: vec![PowerSource::new_solar_panel(panel_w)],
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         };
         RocketDesign {
             id: RocketDesignId(1), name: "Ion".into(),

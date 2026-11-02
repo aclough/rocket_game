@@ -257,15 +257,18 @@ impl ManufacturingOrder {
         stage_name: String,
         structural_mass_kg: f64,
         material: crate::structure::StructuralMaterial,
+        edl_material_cost: f64,
         prior_builds: u32,
         balance_cfg: &crate::balance_config::BalanceConfig,
     ) -> Self {
         let stage_total_mass = structural_mass_kg; // structural mass drives build work
         let base_work = balance_cfg.work.stage_build_work(stage_total_mass, material);
         let learning = balance_cfg.work.learning_curve_multiplier(prior_builds);
-        // Assembly hardware follows the geometry, like the fittings.
+        // Assembly hardware follows the geometry, like the fittings; the
+        // shield and legs are priced as fitted (`edl_hardware_cost`).
         let material_cost = (resources::tank_material_cost(structural_mass_kg, material, &balance_cfg.costs.resource_prices)
-            + resources::stage_assembly_cost(material.geometry_mass_kg(structural_mass_kg), &balance_cfg.costs)) * learning;
+            + resources::stage_assembly_cost(material.geometry_mass_kg(structural_mass_kg), &balance_cfg.costs)
+            + edl_material_cost) * learning;
 
         ManufacturingOrder {
             id,
@@ -781,7 +784,7 @@ mod tests {
             0, 0,
             "S1".into(),
             3000.0,
-            crate::structure::StructuralMaterial::Aluminium,
+            crate::structure::StructuralMaterial::Aluminium, 0.0,
             0,
             &bal(),
         );
@@ -889,7 +892,7 @@ mod tests {
         let mut mfg = Manufacturing::new();
         let id = mfg.next_order_id.mint();
         let mut order = ManufacturingOrder::new_stage(
-            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, crate::structure::StructuralMaterial::Aluminium, 0, &bal(),
+            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, crate::structure::StructuralMaterial::Aluminium, 0.0, 0, &bal(),
         );
         order.teams_assigned = 2;
         mfg.orders.push(order);
@@ -908,7 +911,7 @@ mod tests {
         let mut mfg = Manufacturing::new();
         let id = mfg.next_order_id.mint();
         let mut order = ManufacturingOrder::new_stage(
-            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, crate::structure::StructuralMaterial::Aluminium, 0, &bal(),
+            id, RocketProjectId(1), 0, 0, "S1".into(), 3000.0, crate::structure::StructuralMaterial::Aluminium, 0.0, 0, &bal(),
         );
         order.teams_assigned = 2;
         order.waiting_for_prerequisites = false; // manually unblock

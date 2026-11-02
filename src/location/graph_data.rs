@@ -14,8 +14,38 @@ fn loc_orbit(
     Location {
         id, display_name: display, short_name: short,
         location_type: LocationType::Orbit, parent_body: parent, sun_distance_au: 0.0,
+        aero_body: None, entry_speed_m_s: None,
     }
 }
+
+/// Entry speeds, m/s, of the nodes bound to a body with an atmosphere:
+/// what a vehicle there meets the air at if it comes down
+/// (25_2_EDL_CORE.md §2.3). `(node, body, speed)`; the surface is 0 so
+/// every inward edge reads as a descent. Arrivals from outside the
+/// well use the body's escape speed plus the burn they skip instead.
+pub(crate) const ENTRY_SPEEDS: &[(&str, &str, f64)] = &[
+    ("earth_surface", "earth", 0.0),
+    ("suborbital", "earth", 7_800.0),
+    ("leo", "earth", 7_800.0),
+    ("sso", "earth", 7_800.0),
+    ("meo", "earth", 10_000.0),
+    ("gto", "earth", 10_300.0),
+    ("geo", "earth", 10_300.0),
+    ("l1", "earth", 11_000.0),
+    ("l2", "earth", 11_000.0),
+    ("lunar_orbit", "earth", 11_000.0),
+    ("earth_escape", "earth", 11_200.0),
+    ("venus_balloons", "venus", 0.0),
+    ("venus_orbit_400km", "venus", 7_300.0),
+    ("venus_capture", "venus", 10_000.0),
+    ("mars_surface", "mars", 0.0),
+    ("mars_orbit_200km", "mars", 3_600.0),
+    ("phobos_transfer", "mars", 4_500.0),
+    ("phobos_orbit", "mars", 4_500.0),
+    ("deimos_transfer", "mars", 4_700.0),
+    ("deimos_orbit", "mars", 4_700.0),
+    ("mars_capture", "mars", 4_900.0),
+];
 
 fn loc_lagrange(
     id: &'static str, display: &'static str, short: &'static str, parent: &'static str,
@@ -23,6 +53,7 @@ fn loc_lagrange(
     Location {
         id, display_name: display, short_name: short,
         location_type: LocationType::LagrangePoint, parent_body: parent, sun_distance_au: 0.0,
+        aero_body: None, entry_speed_m_s: None,
     }
 }
 
@@ -40,6 +71,7 @@ fn loc_surface(
         }),
         parent_body: parent,
         sun_distance_au: 0.0,
+        aero_body: None, entry_speed_m_s: None,
     }
 }
 

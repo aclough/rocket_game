@@ -4,3 +4,8 @@ Short-lived bugs and notes only — planning lives in ROADMAP.md.
 options to our rocket bodies.
 
 
+
+[] A launch whose flaws degrade it below what the planner can route gets
+a flight with an empty route: it "arrives" the same day at Earth's
+surface and is paid the partial fraction (seen on seed 16, basic bot,
+2006-03-09). Should fly the nominal path and strand or fall short instead.

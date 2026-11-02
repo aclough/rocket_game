@@ -230,6 +230,7 @@ fn landing_flaws_roll_on_the_way_down() {
             top.engine.thrust_n = thrust_n;
             top.engine.cycle = cycle;
             top.landing = Some(LandingBurn { engines, on: crate::location::LocationId::of("lunar_surface") });
+            top.legs = Some(crate::stage::Legs { mass_kg: 20.0 });
         }
         gs.player_company.active_contracts.push(contract(7));
         let (dest, payloads) = gs.build_launch_payloads(&[0], &[]).unwrap();
@@ -260,6 +261,30 @@ fn landing_flaws_roll_on_the_way_down() {
     let last = gs.player_company.landing_history.last().expect("a landing record");
     assert!(matches!(&last.outcome, LandingOutcome::Crashed { reason } if reason.starts_with("cannot land: too much thrust")), "{:?}", last.outcome);
 
+    // A burn that hovers but nothing to stand on: over on its side.
+    let (mut gs, _) = {
+        let mut gs = GameState::new("Test".into(), 1);
+        let item = shelve_rocket(&mut gs, Vec::new());
+        for stage in gs.player_company.rocket_projects[0].design.stage_groups.iter_mut().flatten() {
+            let panel = crate::power::solar_panel_for_stage_demand(stage);
+            stage.power_sources.push(panel);
+        }
+        let top = &mut gs.player_company.rocket_projects[0].design.stage_groups[2][0];
+        top.engine.thrust_n = 5_000.0;
+        top.engine.cycle = crate::engine::EngineCycle::PressureFed;
+        top.landing = Some(LandingBurn { engines: 1, on: crate::location::LocationId::of("lunar_surface") });
+        gs.player_company.active_contracts.push(contract(7));
+        let (dest, payloads) = gs.build_launch_payloads(&[0], &[]).unwrap();
+        gs.launch_rocket(item, &dest, payloads, false).expect("launched");
+        (gs, ())
+    };
+    for _ in 0..120 {
+        gs.advance_day();
+        if gs.active_flights.is_empty() { break; }
+    }
+    let last = gs.player_company.landing_history.last().expect("a landing record");
+    assert!(matches!(&last.outcome, LandingOutcome::Crashed { reason } if reason == "no landing legs"), "{:?}", last.outcome);
+
     // The crash from a flaw, on a stage that hovers.
     let (gs, events) = fly(vec![
         certain_flaw(1, FlawPhase::Entry, 2, FlawConsequence::StageLoss),
@@ -287,6 +312,71 @@ fn landing_flaws_roll_on_the_way_down() {
     let last = gs.player_company.landing_history.last().expect("a landing record");
     assert!(matches!(&last.outcome, LandingOutcome::HardLanding { .. }), "{:?}", last.outcome);
     assert_eq!(gs.player_company.launch_history.len(), 1, "the launch record is the arrival's as before");
+}
+
+/// Coming home through air needs a heat shield rated for the entry: a
+/// capsule parked in LEO with an LEO-rated shield, a landing burn and
+/// legs lands; without a shield it is lost at entry; rated for a Mars
+/// orbit it burns through from LEO. The shielded descent is flown as an
+/// aerobrake, for the targeting burn alone (25_2_EDL_CORE.md §2.2–2.3).
+#[test]
+fn an_earth_return_needs_a_shield_rated_for_it() {
+    use crate::launch::LandingOutcome;
+    use crate::stage::{EntryRating, HeatShield, LandingBurn, Legs};
+    let run = |rating: Option<EntryRating>| -> (GameState, Vec<GameEvent>) {
+        let mut gs = GameState::new("Test".into(), 1);
+        let (design, engine_projects) = make_three_stage_design();
+        gs.player_company.engine_projects = engine_projects;
+        for ep in &mut gs.player_company.engine_projects {
+            ep.flaws.clear();
+        }
+        // The capsule: the fixture's third stage alone, pressure-fed and
+        // gentle enough to hover on Earth, on legs, behind a shield.
+        let mut capsule = design.stage_groups[2][0].clone();
+        capsule.engine.cycle = crate::engine::EngineCycle::PressureFed;
+        capsule.engine.thrust_n = 60_000.0;
+        // Behind a shield the way down is a 150 m/s targeting burn; a
+        // bare capsule is charged the whole 7 800 m/s and needs the
+        // tanks to match, to reach the entry it will not survive.
+        capsule.propellant_mass_kg = if rating.is_some() { 400.0 } else { 20_000.0 };
+        capsule.landing = Some(LandingBurn { engines: 1, on: crate::location::LocationId::of("earth_surface") });
+        capsule.legs = Some(Legs { mass_kg: 0.0 });
+        capsule.heat_shield = rating.map(|rating| HeatShield { rating, areal_density_kg_m2: 0.0, mass_kg: 0.0, rated_heat_j_m2: 0.0 });
+        capsule.fit_edl(0.0, &gs.balance.edl, &gs.balance.bodies);
+        let design = crate::rocket::RocketDesign {
+            id: crate::rocket::RocketDesignId(1), name: "Capsule".into(), stage_groups: vec![vec![capsule]],
+        };
+        let rp = RocketProject::new(RocketProjectId(1), design.clone(), &gs.balance);
+        gs.player_company.rocket_projects.push(rp);
+        let rocket = design.instantiate(crate::rocket::RocketId(1), 0.0);
+        gs.spacecraft.push(crate::game_state::Spacecraft {
+            id: crate::game_state::SpacecraftId(1), name: "Capsule".into(), rocket, design,
+            location: crate::location::LocationId::of("leo"), rocket_project_id: RocketProjectId(1),
+            payloads: Vec::new(), rocket_flaws: Vec::new(), stage_engine_flaws: Vec::new(),
+        });
+        gs.fly_spacecraft(0, "earth_surface");
+        assert_eq!(gs.active_flights.len(), 1, "the capsule can afford the way down");
+        let mut all_events = Vec::new();
+        for _ in 0..30 {
+            all_events.extend(gs.advance_day());
+            if gs.active_flights.is_empty() {
+                break;
+            }
+        }
+        assert!(gs.active_flights.is_empty());
+        (gs, all_events)
+    };
+
+    let (gs, _) = run(Some(EntryRating::LeoReturn));
+    let leg = gs.player_company.landing_history.last().expect("a landing record");
+    assert_eq!(leg.outcome, LandingOutcome::Landed, "{:?}", leg.outcome);
+    let (gs2, _) = run(None);
+    let last = gs2.player_company.landing_history.last().expect("a landing record");
+    assert!(matches!(&last.outcome, LandingOutcome::Crashed { reason } if reason == "no heat shield"), "{:?}", last.outcome);
+    assert!(gs2.spacecraft.is_empty(), "lost, not parked");
+    let (gs3, _) = run(Some(EntryRating::MarsOrbit));
+    let last = gs3.player_company.landing_history.last().expect("a landing record");
+    assert!(matches!(&last.outcome, LandingOutcome::Crashed { reason } if reason.starts_with("burned through")), "{:?}", last.outcome);
 }
 
 /// A parked spacecraft flown on is its project's vehicle: a flaw that

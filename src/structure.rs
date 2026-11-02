@@ -116,6 +116,16 @@ impl StructuralMaterial {
             Self::Composite => 120.0,
         }
     }
+
+    /// Specific heat, J/(kg·K): with the temperature limit, how much
+    /// soak a wall takes before it fails (25_2_EDL_CORE.md §2.2).
+    pub fn specific_heat_j_per_kg_k(self) -> f64 {
+        match self {
+            Self::Aluminium => 900.0,
+            Self::Steel => 500.0,
+            Self::Composite => 1_000.0,
+        }
+    }
 }
 
 /// G-load the thrust structure is sized to carry: thrust / (g × this)

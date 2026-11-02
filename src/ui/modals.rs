@@ -738,7 +738,7 @@ pub(super) mod help_tests {
                 fairing: None,
                 material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
-                landing: None,
+                landing: None, heat_shield: None, legs: None,
             }]],
         };
         company.start_rocket_project(design.name.clone(), design.stage_groups.clone(), &bal);

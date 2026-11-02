@@ -60,6 +60,13 @@ impl SurfaceProperties {
     pub fn orbital_velocity(&self) -> f64 {
         (self.gravity_m_s2 * self.radius_m).sqrt()
     }
+
+    /// Escape speed at the surface, m/s: `√(2 g r)`. What a vehicle
+    /// arriving from outside the well meets the atmosphere at, before
+    /// its hyperbolic excess.
+    pub fn escape_speed_m_s(&self) -> f64 {
+        (2.0 * self.gravity_m_s2 * self.radius_m).sqrt()
+    }
 }
 
 /// Type of location in the delta-v graph
@@ -82,6 +89,14 @@ pub struct Location {
     /// [`DeltaVMap::from_parts`] from the parent-body table (see
     /// [`Location::sun_distance_au`]). Builders leave it 0.
     pub sun_distance_au: f64,
+    /// The body with an atmosphere this node is bound to, for
+    /// aerobraking (25_2_EDL_CORE.md §2.3): Earth's orbits, Lagrange
+    /// points, lunar orbit and escape node are all "earth". Set by
+    /// `from_parts` from `graph_data::ENTRY_SPEEDS`; `None` elsewhere.
+    pub aero_body: Option<&'static str>,
+    /// The speed a vehicle at this node meets its `aero_body`'s air at
+    /// if it comes down from here, m/s (the surface itself is 0).
+    pub entry_speed_m_s: Option<f64>,
 }
 
 /// Mean heliocentric distance in AU for a parent body. Used for
@@ -242,6 +257,10 @@ impl DeltaVMap {
     pub(crate) fn from_parts(mut locations: Vec<Location>, transfers: Vec<Transfer>) -> Self {
         for loc in &mut locations {
             loc.sun_distance_au = loc.derive_sun_distance_au();
+            if let Some(&(_, body, speed)) = graph_data::ENTRY_SPEEDS.iter().find(|(id, _, _)| *id == loc.id) {
+                loc.aero_body = Some(body);
+                loc.entry_speed_m_s = Some(speed);
+            }
         }
         let index: HashMap<&'static str, usize> =
             locations.iter().enumerate().map(|(i, l)| (l.id, i)).collect();
@@ -278,6 +297,28 @@ impl DeltaVMap {
         self.index_of(id)
             .map(|i| self.adjacency[i].iter().map(|&ti| &self.transfers[ti]).collect())
             .unwrap_or_default()
+    }
+
+    /// Whether a shielded stage can fly `from → to` by aerobraking
+    /// instead of burning, and the entry speed the atmosphere pass would
+    /// start at if this is the first such leg (25_2_EDL_CORE.md §2.3):
+    /// inward between two nodes bound to the same body with air, at the
+    /// origin's own entry speed; or arriving from outside the well, at
+    /// the body's escape speed plus the arrival burn this skips (the
+    /// periapsis-burn identity). `None` for any other edge.
+    pub fn aerobrake_entry_speed(&self, from: &str, to: &str) -> Option<f64> {
+        let (from_loc, to_loc) = (self.location(from)?, self.location(to)?);
+        let body = to_loc.aero_body?;
+        let to_speed = to_loc.entry_speed_m_s?;
+        if from_loc.aero_body == Some(body) {
+            let from_speed = from_loc.entry_speed_m_s?;
+            return (from_speed > to_speed).then_some(from_speed);
+        }
+        let surface = self.locations.iter()
+            .find(|l| l.aero_body == Some(body) && matches!(l.location_type, LocationType::Surface(_)))?;
+        let escape = self.surface_properties(surface.id)?.escape_speed_m_s();
+        let dv = self.transfer(from, to)?.delta_v;
+        Some(escape + dv)
     }
 
     /// Get a direct transfer between two locations (if one exists)
@@ -532,6 +573,32 @@ mod tests {
         for t in map.transfers.iter().filter(|t| t.can_aerobrake) {
             assert!(!t.through_atmosphere, "{} → {}: descent is never charged drag", t.from, t.to);
         }
+    }
+
+    /// Aerobraking is inward between nodes bound to the same body with
+    /// air, at the origin's entry speed; arriving from outside the well
+    /// it is escape speed plus the burn skipped; nothing else qualifies
+    /// (25_2_EDL_CORE.md §2.3).
+    #[test]
+    fn aerobrake_entry_speeds_follow_the_energy() {
+        let map = &*DELTA_V_MAP;
+        assert_eq!(map.aerobrake_entry_speed("leo", "earth_surface"), Some(7_800.0));
+        assert_eq!(map.aerobrake_entry_speed("lunar_orbit", "leo"), Some(11_000.0), "a lunar return comes in hot");
+        assert_eq!(map.aerobrake_entry_speed("gto", "leo"), Some(10_300.0), "aerobraking down from GTO");
+        assert_eq!(map.aerobrake_entry_speed("leo", "gto"), None, "outward is a burn");
+        assert_eq!(map.aerobrake_entry_speed("leo", "lunar_orbit"), None);
+        assert_eq!(map.aerobrake_entry_speed("lunar_orbit", "lunar_surface"), None, "no air on the Moon");
+        assert_eq!(map.aerobrake_entry_speed("earth_surface", "leo"), None, "an ascent");
+        let escape = map.surface_properties("earth_surface").unwrap().escape_speed_m_s();
+        assert!((escape - 11_180.0).abs() < 30.0, "{escape}");
+        let from_mars = map.aerobrake_entry_speed("mars_transfer", "earth_escape").unwrap();
+        assert!((from_mars - (escape + 388.0)).abs() < 1e-6, "{from_mars}");
+        let from_bennu = map.aerobrake_entry_speed("bennu_transfer", "earth_escape").unwrap();
+        assert!((from_bennu - (escape + 400.0)).abs() < 1e-6, "{from_bennu}");
+        let mars_escape = map.surface_properties("mars_surface").unwrap().escape_speed_m_s();
+        let mars_direct = map.aerobrake_entry_speed("mars_transfer", "mars_capture").unwrap();
+        assert!(mars_direct > mars_escape && mars_direct < 7_500.0, "{mars_direct}");
+        assert_eq!(map.aerobrake_entry_speed("mars_orbit_200km", "mars_surface"), Some(3_600.0));
     }
 
     #[test]

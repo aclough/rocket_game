@@ -180,6 +180,8 @@ pub const ROCKET_DESIGNER: &[KeyBinding] = &[
     always("W", Some("[W] Power"), "Power sources for this stage"),
     always("T", None, "Cycle the stage's material: aluminium, steel, composite"),
     always("G", None, "Cycle the landing burn: how many engines light to land"),
+    always("H", None, "Cycle the heat shield rating: none, Mars orbit … asteroid"),
+    always("K", None, "Toggle landing legs"),
     always("X", Some("[X] Rem"), "Remove this stage"),
     always("P", None, "Set the payload mass"),
     always("L", None, "Choose the launch site"),

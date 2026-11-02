@@ -314,7 +314,7 @@ mod tests {
             engine: kerolox_engine(1, 1_000_000.0, 500.0, 280.0),
             engine_count: 1,
             propellant_mass_kg: 50_000.0, structural_mass_kg: 3_000.0,
-            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
         };
         if panel_w > 0.0 {
             s1.power_sources.push(PowerSource::new_solar_panel(panel_w));
@@ -432,7 +432,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: vec![PowerSource::new_rtg(RtgClass::Cassini)],
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         };
         // small battery for bookkeeping
         s1.power_sources.push(PowerSource::new_battery(0.5));
@@ -467,7 +467,7 @@ mod tests {
             engine: ion_engine_design(thrust_n, power_draw_w),
             engine_count: 1,
             propellant_mass_kg: 1_000.0, structural_mass_kg: 100.0,
-            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
+            fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
         };
         if panel_w > 0.0 {
             stage.power_sources.push(PowerSource::new_solar_panel(panel_w));
@@ -547,7 +547,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: vec![PowerSource::new_fuel_cell(fuel_cell_w)],
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         };
         RocketDesign {
             id: RocketDesignId(1), name: "HydroloxCell".into(),
@@ -586,7 +586,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: vec![PowerSource::new_fuel_cell(1_000.0)],
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         };
         let design = RocketDesign {
             id: RocketDesignId(1), name: "IonCell".into(),

@@ -388,7 +388,12 @@ impl GameState {
             // partial fraction; the cargo can be wrecked at touchdown.
             let mut payload_lost: Option<String> = None;
             let mut landing: Option<LandingRecord> = None;
-            let surface = crate::location::DELTA_V_MAP.surface_properties(flight.destination()).map(|p| p.has_atmosphere);
+            // A flight with no legs never left the ground (a degraded
+            // launch the planner could not route "arrives" where it
+            // stands): nothing to come down from, so no landing.
+            let surface = crate::location::DELTA_V_MAP.surface_properties(flight.destination())
+                .filter(|_| !flight.route.is_empty())
+                .map(|p| p.has_atmosphere);
             if let Some(has_atmosphere) = surface.filter(|_| matches!(end, FlightEnd::Arrived) && !flight.design.stage_groups.is_empty()) {
                 let first = flight.flaws_activated.len();
                 let mut outcome = LandingOutcome::Landed;
@@ -402,6 +407,29 @@ impl GameState {
                 );
                 let scale = verdict.as_ref().map_or(1.0, |v| v.activation_scale());
                 for event in launch::landing_events(has_atmosphere) {
+                    // Through air the shield is judged first (§2.2): none,
+                    // or more heat than it was rated for, is a burn-through.
+                    if event == launch::FlightEvent::Entry {
+                        let entry_speed = crate::edl::route_entry_speed(&flight.route)
+                            .or_else(|| flight.route.last().and_then(|l| l.from.location().entry_speed_m_s))
+                            .unwrap_or(0.0);
+                        let entry = crate::edl::entry_verdict(
+                            &flight.design, touchdown_mass, entry_speed, &self.balance.edl, &self.balance.bodies,
+                        );
+                        let burned = match &entry {
+                            crate::edl::EntryVerdict::NoShield => true,
+                            crate::edl::EntryVerdict::BurnThrough { risk, .. } => rand::Rng::gen::<f64>(&mut self.seed.contingent_rng) < *risk,
+                            crate::edl::EntryVerdict::Ok { .. } => false,
+                        };
+                        if burned {
+                            flight.events_reached.push(event);
+                            outcome = LandingOutcome::Crashed { reason: match entry {
+                                crate::edl::EntryVerdict::NoShield => "no heat shield".to_string(),
+                                other => format!("burned through: {}", other.summary()),
+                            } };
+                            break;
+                        }
+                    }
                     if event == launch::FlightEvent::Descent {
                         if let Some(v) = verdict.as_ref().filter(|v| !v.can_land()) {
                             flight.events_reached.push(event);

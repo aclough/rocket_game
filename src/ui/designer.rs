@@ -384,6 +384,11 @@ fn refresh_derived(state: &mut RocketDesignerState, company: &crate::game_state:
         }
     }
     recompute_structural_masses(&mut state.stage_groups);
+    // Then the EDL hardware, sized on the structure and the payload.
+    let payload_kg = state.payload_kg;
+    for stage in state.stage_groups.iter_mut().flatten() {
+        stage.fit_edl(payload_kg, &bal.edl, &bal.bodies);
+    }
 }
 
 /// Re-solve the tanks of group `top` and every group beneath it.
@@ -458,7 +463,7 @@ fn apply_picked_engine_to_designer(
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
-        landing: None,
+        landing: None, heat_shield: None, legs: None,
     };
     state.next_stage_id += 1;
 
@@ -801,6 +806,48 @@ impl App {
                         None => "No landing burn".to_string(),
                     });
                     refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
+                }
+                self.input_mode = InputMode::designer(state);
+            }
+            KeyCode::Char('h') | KeyCode::Char('H') => {
+                // Cycle the stage's heat shield rating: none, Mars orbit,
+                // …, asteroid return, none (25_2_EDL_CORE.md §2.2). The
+                // mass is solved on refresh.
+                if !state.on_add_slot() && !state.stage_groups.is_empty() {
+                    let (gi, si) = (state.selected_group, state.selected_inner);
+                    let stage = &mut state.stage_groups[gi][si];
+                    let next = match &stage.heat_shield {
+                        None => Some(crate::stage::EntryRating::ALL[0]),
+                        Some(h) => h.rating.next(),
+                    };
+                    stage.heat_shield = next.map(|rating| crate::stage::HeatShield {
+                        rating, areal_density_kg_m2: 0.0, mass_kg: 0.0, rated_heat_j_m2: 0.0,
+                    });
+                    refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
+                    let stage = &state.stage_groups[gi][si];
+                    self.status_message = Some(match &stage.heat_shield {
+                        Some(h) => format!("Heat shield rated for {} ({:.0} m/s): {:.0} kg/m², {:.0} kg",
+                            h.rating.name(), h.rating.speed_m_s(), h.areal_density_kg_m2, h.mass_kg),
+                        None => "No heat shield".to_string(),
+                    });
+                }
+                self.input_mode = InputMode::designer(state);
+            }
+            KeyCode::Char('k') | KeyCode::Char('K') => {
+                // Toggle landing legs (25_2_EDL_CORE.md §2.2).
+                if !state.on_add_slot() && !state.stage_groups.is_empty() {
+                    let (gi, si) = (state.selected_group, state.selected_inner);
+                    let stage = &mut state.stage_groups[gi][si];
+                    stage.legs = match stage.legs {
+                        None => Some(crate::stage::Legs { mass_kg: 0.0 }),
+                        Some(_) => None,
+                    };
+                    refresh_derived(&mut state, &self.game.player_company, &self.game.balance);
+                    let stage = &state.stage_groups[gi][si];
+                    self.status_message = Some(match &stage.legs {
+                        Some(l) => format!("Landing legs: {:.0} kg", l.mass_kg),
+                        None => "No landing legs".to_string(),
+                    });
                 }
                 self.input_mode = InputMode::designer(state);
             }
@@ -1172,7 +1219,7 @@ mod sync_tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         };
         let mut state = RocketDesignerState {
             mode: DesignerMode::New,
@@ -1263,7 +1310,7 @@ mod autosize_tests {
                 id: StageId(i as u64 + 1), name: format!("S{}", i + 1),
                 engine: e, engine_count: 1,
                 propellant_mass_kg: 100.0, structural_mass_kg: 0.0,
-                fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
+                fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
             }]);
             st.engine_sources.push(vec![EngineSource::PlayerDesign(
                 crate::engine_project::EngineProjectId(i as u64 + 1))]);
@@ -1568,7 +1615,7 @@ mod nozzle_variant_tests {
                     id: StageId(gi as u64 + 1), name: format!("S{}", gi + 1),
                     engine: ep.design_variant(gi > 0, &app.game.balance.nozzle), engine_count: 1,
                     propellant_mass_kg: 10_000.0, structural_mass_kg: 1_000.0,
-                    fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None,
+                    fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
                 };
                 state.push_new_group(stage, EngineSource::PlayerDesign(pid));
             }
@@ -1623,7 +1670,7 @@ mod nozzle_variant_tests {
                 fairing: None,
                 material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
-                landing: None,
+                landing: None, heat_shield: None, legs: None,
             };
             state.push_new_group(stage, EngineSource::PlayerDesign(pid));
         }
@@ -1667,7 +1714,7 @@ mod nozzle_variant_tests {
                 id: StageId(gi as u64 + 1), name: format!("S{}", gi + 1),
                 engine: ep.design_variant(gi > 0, &app.game.balance.nozzle), engine_count: 2,
                 propellant_mass_kg: 10_000.0, structural_mass_kg: 0.0, fairing: None,
-                material: M::Aluminium, power_sources: Vec::new(), landing: None,
+                material: M::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
             };
             state.push_new_group(stage, EngineSource::PlayerDesign(pid));
         }
@@ -1720,6 +1767,56 @@ mod nozzle_variant_tests {
         }
     }
 
+    /// [H] cycles the selected stage's heat shield rating and [K] its
+    /// legs; both are solved on the spot and count in the dry mass
+    /// (25_2_EDL_CORE.md §2.2).
+    #[test]
+    fn h_and_k_fit_a_shield_and_legs() {
+        use crate::stage::EntryRating;
+        use crate::structure::StructuralMaterial as M;
+        let (mut app, pid) = app_with_engine();
+        let ep = app.game.player_company.find_engine_project(pid).unwrap();
+        let mut state = Box::new(RocketDesignerState::new("Capsule".into()));
+        let stage = Stage {
+            id: StageId(1), name: "S1".into(),
+            engine: ep.design_variant(false, &app.game.balance.nozzle), engine_count: 1,
+            propellant_mass_kg: 2_000.0, structural_mass_kg: 0.0, fairing: None,
+            material: M::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
+        };
+        state.push_new_group(stage, EngineSource::PlayerDesign(pid));
+        refresh_derived(&mut state, &app.game.player_company, &app.game.balance);
+        let bare = state.stage_groups[0][0].dry_mass_kg();
+        app.input_mode = InputMode::designer(state);
+        let top = |app: &App| match &app.input_mode {
+            InputMode::RocketDesigner { state, .. } => state.stage_groups[0][0].clone(),
+            other => panic!("should stay in the designer, got {other:?}"),
+        };
+
+        app.handle_key(KeyCode::Char('h'));
+        let s = top(&app);
+        let shield = s.heat_shield.as_ref().expect("a shield");
+        assert_eq!(shield.rating, EntryRating::MarsOrbit);
+        assert!(shield.mass_kg > 0.0 && s.dry_mass_kg() > bare);
+        let mars = shield.mass_kg;
+        app.handle_key(KeyCode::Char('h'));
+        app.handle_key(KeyCode::Char('h'));
+        let s = top(&app);
+        assert_eq!(s.heat_shield.as_ref().unwrap().rating, EntryRating::LeoReturn);
+        assert!(s.heat_shield.as_ref().unwrap().mass_kg > mars, "a hotter rating is a heavier shield");
+        for _ in 0..3 {
+            app.handle_key(KeyCode::Char('h'));
+        }
+        assert!(top(&app).heat_shield.is_none(), "and round to none");
+
+        app.handle_key(KeyCode::Char('k'));
+        let s = top(&app);
+        let legs = s.legs.as_ref().expect("legs");
+        assert!((legs.mass_kg - app.game.balance.edl.legs_mass_fraction * s.dry_mass_without_edl_kg()).abs() < 1e-6);
+        app.handle_key(KeyCode::Char('k'));
+        assert!(top(&app).legs.is_none());
+        assert!((top(&app).dry_mass_kg() - bare).abs() < 1e-6);
+    }
+
     /// [T] cycles the selected stage's material, and only that stage's;
     /// the structure follows (25_1_BODIES.md step 2).
     #[test]
@@ -1733,7 +1830,7 @@ mod nozzle_variant_tests {
                 id: StageId(gi as u64 + 1), name: format!("S{}", gi + 1),
                 engine: ep.design_variant(gi > 0, &app.game.balance.nozzle), engine_count: 1,
                 propellant_mass_kg: 10_000.0, structural_mass_kg: 0.0, fairing: None,
-                material: M::Aluminium, power_sources: Vec::new(), landing: None,
+                material: M::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
             };
             state.push_new_group(stage, EngineSource::PlayerDesign(pid));
         }
@@ -1782,7 +1879,7 @@ mod nozzle_variant_tests {
                 fairing: None,
                 material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
-                landing: None,
+                landing: None, heat_shield: None, legs: None,
             };
             state.push_new_group(stage, EngineSource::PlayerDesign(pid));
         }
@@ -1831,7 +1928,7 @@ mod nozzle_variant_tests {
                 structural_mass_kg: 1_000.0, fairing: None,
                 material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
-                landing: None,
+                landing: None, heat_shield: None, legs: None,
             },
             EngineSource::Contracted(crate::third_party::ContractedEngineId(1)),
         );

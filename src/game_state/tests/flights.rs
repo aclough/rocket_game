@@ -30,7 +30,7 @@ fn tiny_payload_spacecraft(
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
-        landing: None,
+        landing: None, heat_shield: None, legs: None,
     };
     let design = RocketDesign {
         id: RocketDesignId(id), name: name.into(),
@@ -75,7 +75,7 @@ fn arrive_test_flight(
         route: vec![FlightLeg {
             from: crate::location::LocationId::of("earth_surface"),
             to: crate::location::LocationId::of(destination),
-            delta_v_cost: 0.0, burn_days: 0, coast_days: 0,
+            delta_v_cost: 0.0, burn_days: 0, coast_days: 0, aerobraked: false, entry_speed_m_s: None,
         }],
         current_leg: 0,
         leg_days_remaining: 0,
@@ -122,7 +122,7 @@ fn arrival_reports_the_launch_sims_reason_verbatim() {
         current_location: crate::location::LocationId::of("leo"),
         route: vec![FlightLeg {
             from: crate::location::LocationId::of("earth_surface"), to: crate::location::LocationId::of("leo"),
-            delta_v_cost: 0.0, burn_days: 0, coast_days: 0,
+            delta_v_cost: 0.0, burn_days: 0, coast_days: 0, aerobraked: false, entry_speed_m_s: None,
         }],
         current_leg: 0,
         leg_days_remaining: 0,
@@ -264,7 +264,7 @@ fn push_test_spacecraft(gs: &mut GameState, id: u64, name: &str, location: &str)
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
-        landing: None,
+        landing: None, heat_shield: None, legs: None,
     };
     let design = RocketDesign {
         id: RocketDesignId(id), name: name.into(),
@@ -457,7 +457,7 @@ fn test_mid_flight_stage_loss_destroys_vehicle() {
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: vec![PowerSource::from_reactor_design(reactor_design)],
-        landing: None,
+        landing: None, heat_shield: None, legs: None,
     };
     let design = RocketDesign {
         id: RocketDesignId(1), name: "Doomed".into(),

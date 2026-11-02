@@ -254,6 +254,7 @@ impl Company {
                     stage_name,
                     stage.structural_mass_kg,
                     stage.material,
+                    crate::resources::edl_hardware_cost(stage, &balance_cfg.costs.resource_prices),
                     rocket_prior,
                     balance_cfg,
                 );

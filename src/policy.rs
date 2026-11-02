@@ -504,7 +504,7 @@ impl BasicPolicy {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         };
         let s2 = Stage {
             id: StageId(2),
@@ -516,7 +516,7 @@ impl BasicPolicy {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         };
         // Structure from the model the designer uses, so the bot's
         // vehicle tracks it (24_STRATEGIES.md step 3) instead of the

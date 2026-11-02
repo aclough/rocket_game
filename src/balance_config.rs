@@ -27,11 +27,19 @@ pub struct BodiesConfig {
     /// a 9 t one 1.05 m (Electron: 1.2). The diameter sizes the bells
     /// that can sit under the stage and, later, its heat shield.
     pub tank_fineness: f64,
+    /// Length over diameter of a stage that enters an atmosphere: a
+    /// blunt body (Apollo and Dragon are about 1), sized on the whole
+    /// body — tanks and dry kit — rather than the tanks alone.
+    pub capsule_fineness: f64,
+    /// Bulk density of a stage's dry kit, kg/m³, for the body volume of
+    /// a blunt entry stage (a capsule is mostly cabin and cargo, not
+    /// tank; Dragon's 6 t in ~17 m³ is ~350).
+    pub bulk_density_kg_m3: f64,
 }
 
 impl Default for BodiesConfig {
     fn default() -> Self {
-        BodiesConfig { tank_fineness: 10.0 }
+        BodiesConfig { tank_fineness: 10.0, capsule_fineness: 1.0, bulk_density_kg_m3: 300.0 }
     }
 }
 
@@ -52,11 +60,44 @@ pub struct EdlConfig {
     /// scaled down linearly with its excess (so a design just past
     /// hovering draws almost none).
     pub hoverslam_complexity_max: f64,
+    /// Fraction of the shed kinetic energy per m² of face that reaches
+    /// the vehicle at `heat_speed_ref_m_s`; it grows linearly with
+    /// speed, so the heat load goes as β v³ (25_2_EDL_CORE.md §2.2).
+    pub heat_fraction_ref: f64,
+    pub heat_speed_ref_m_s: f64,
+    /// Heat a kilogram of ablator carries off, J/kg (effective: char,
+    /// pyrolysis and the blown boundary layer together).
+    pub ablation_j_per_kg: f64,
+    /// Areal density of shield that cuts the soak reaching the wall by
+    /// a factor e, kg/m².
+    pub insulation_kg_m2: f64,
+    /// Drag coefficient of a blunt entry body, for the ballistic
+    /// coefficient.
+    pub capsule_drag_coefficient: f64,
+    /// Heat over the shield's rating at which burn-through is certain,
+    /// as a fraction: 0.5 means 50 % over the rated heat is a sure
+    /// loss, half that a coin toss.
+    pub burn_through_overshoot: f64,
+    /// Landing legs' mass as a fraction of the dry mass they carry.
+    pub legs_mass_fraction: f64,
+    /// Fastest touchdown legs survive, m/s.
+    pub legs_touchdown_limit_m_s: f64,
 }
 
 impl Default for EdlConfig {
     fn default() -> Self {
-        EdlConfig { landing_max_excess_m_s2: 20.0, hoverslam_complexity_max: 3.0 }
+        EdlConfig {
+            landing_max_excess_m_s2: 20.0,
+            hoverslam_complexity_max: 3.0,
+            heat_fraction_ref: 0.01,
+            heat_speed_ref_m_s: 7_800.0,
+            ablation_j_per_kg: 2.5e6,
+            insulation_kg_m2: 15.0,
+            capsule_drag_coefficient: 1.5,
+            burn_through_overshoot: 0.5,
+            legs_mass_fraction: 0.04,
+            legs_touchdown_limit_m_s: 3.0,
+        }
     }
 }
 

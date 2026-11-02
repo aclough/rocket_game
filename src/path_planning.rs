@@ -90,7 +90,12 @@ fn try_class(
 ) -> Option<EdgeOutcome> {
     // The group that starts the edge is the one that brakes on a landing.
     let braking_accel = perf.groups.get(active_stage).map_or(0.0, |g| g.accel_m_s2);
-    let cost = edge_cost_for_class(transfer, rocket_mass_kg, class, braking_accel)?;
+    let mut cost = edge_cost_for_class(transfer, rocket_mass_kg, class, braking_accel)?;
+    // A shielded top stage aerobrakes an inward edge for a targeting
+    // burn (25_2_EDL_CORE.md §2.3).
+    if crate::edl::aerobrake_leg(design, active_stage, transfer.from, transfer.to).is_some() {
+        cost = cost.min(crate::edl::AEROBRAKE_DELTA_V_M_S);
+    }
 
     // High-thrust attempt requires the active stage to be high-thrust.
     if class == ThrustClass::HighThrust
@@ -439,7 +444,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None,
+            landing: None, heat_shield: None, legs: None,
         }
     }
 

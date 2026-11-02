@@ -105,11 +105,14 @@ All three are stage attributes with mass and cost; none is a project.
     areal mass from the tank geometry, so a steel capsule takes about
     three times the soak an aluminium one does;
   - σ is the smallest with `(Q − σ A_abl)⁺ · exp(−σ / σ_ins) ≤ H`
-    (bisection, like the bell fit). At LEO, β 300: steel ~25 kg/m²,
-    aluminium ~31; lunar return ~55 / ~61; Mars direct, β 150: ~6 / ~8.
-    Lighter shield on a tougher structure, which is the point of steel
-    here, and the saving shrinks at lunar speeds where ablation does
-    the work (Apollo-like ~70 kg/m² with its structure).
+    (bisection, like the bell fit). At LEO, β 300, a 20 kg/m² wall:
+    steel ~27 kg/m², aluminium ~32; lunar return ~52 / ~61; Mars
+    direct, β 150: ~6 / ~8. Lighter shield on a tougher structure,
+    which is the point of steel here; the saving grows a little with
+    speed, since the insulation the wall needs is what the extra
+    density buys (Apollo-like ~70 kg/m² with its structure). The shield
+    is fitted at the stage's wet mass plus the designer's payload: a
+    stage enters as dense as its landing propellant makes it.
   Bill of materials: composites. An entry hotter than the rating
   (faster, or denser than designed) carries a burn-through risk
   ramping with the overshoot `Q_actual / Q_rated − 1` (the
@@ -541,3 +544,57 @@ same stage cannot both brake and hover — which is what landers are
 pressure-fed for; 100 seeds byte-identical; the capability probe's
 lunar-surface column (added) is 0 for every template before and after,
 so the charge waits for the lander bot to be measured.
+
+**Step 3 — heat shield, legs and the aerobrake chain.**
+`Stage.heat_shield: Option<HeatShield { rating: EntryRating, areal_density_kg_m2,
+mass_kg, rated_heat_j_m2 }>` and `Stage.legs: Option<Legs { mass_kg }>`,
+both solved by `Stage::fit_edl(payload, &EdlConfig, &BodiesConfig)`
+whenever the designer refreshes (after the structure), and counted in
+`dry_mass_kg`. `[H]` cycles the rating (none, Mars orbit 4 000, Mars
+direct 6 000, LEO 8 000, lunar 11 500, asteroid 12 500 m/s, none), `[K]`
+toggles legs; the stage line reads "hs8 legs". A shielded stage is a
+blunt body: `Stage::body_diameter_m` sizes it on tanks plus dry kit at
+`BodiesConfig::bulk_density_kg_m3` (300) and `capsule_fineness` (1),
+and that face carries the shield (a 1.5 t steel stage with 300 kg of
+propellant comes out ~2 m across). The model in `edl.rs`:
+`ballistic_coefficient`, `entry_heat_j_m2` (`EdlConfig::heat_fraction_ref`
+0.01 at 7 800 m/s, so Q ∝ β v³), `wall_heat_capacity_j_m2` (the structure
+spread over the body's skin, times `StructuralMaterial::specific_heat_j_per_kg_k`
+900/500/1 000 and the temperature limit), `heat_through_shield_j_m2`
+(`ablation_j_per_kg` 2.5 MJ, `insulation_kg_m2` 15), the bisection
+`shield_areal_density_kg_m2`, and `burn_through_risk` ramping to 1 at
+`burn_through_overshoot` 0.5 over the rated heat. Costs: `heat_shield_bom`
+(composites) and `legs_bom` priced as fitted through `edl_hardware_cost`
+in the stage order and the estimate. The graph: `Location.aero_body` and
+`entry_speed_m_s` from `graph_data::ENTRY_SPEEDS` (21 nodes of Earth,
+Mars and Venus; the surface is 0), `SurfaceProperties::escape_speed_m_s`,
+and `DeltaVMap::aerobrake_entry_speed(from, to)`: inward between two
+nodes of the same body at the origin's speed, or from outside the well
+at escape speed plus the arrival burn skipped (Earth from Mars 11 570,
+from Bennu 11 580; Mars direct ~5 900). `edl::aerobrake_leg` lets the
+shielded top group alone fly such an edge for `AEROBRAKE_DELTA_V_M_S`
+(150, a constant like the landing path factor), in the planner and the
+route builder; `FlightLeg.aerobraked` / `entry_speed_m_s` and
+`route_entry_speed` read the descent's speed off the first leg of the
+trailing aerobraked run. The flight judges the shield at `Entry` on
+the mass that comes down (`entry_verdict`): no shield, or a roll under
+the burn-through risk, is a crash before any flaw; a landing burn
+without legs is `LandingVerdict::NoLegs`, a crash, on any surface; and
+through air a landing burn is judged like an airless one (chutes are
+step 4's other way down). `PayloadReach.entry` and the feasibility rows
+read "▲ no heat shield — [H]" or "▲ burn-through risk 100% at 11 000
+m/s"; `project_can_serve` refuses both. Not done: aerocapture passes
+that end in orbit roll no `Entry` (only a surface arrival does), and
+the A* heuristic still counts the undiscounted edges, so a shielded
+route may be a little longer than optimal. Checks: a capsule parked in
+LEO with an LEO-rated shield, a pressure-fed landing burn and legs
+lands for a 150 m/s descent; bare, it needs 20 t of propellant to reach
+an entry it does not survive; rated for Mars orbit it burns through at
+7 800 m/s; the 100-seed oracle and the capability probe are unchanged
+(no template has a shield or lands). Found on the way: a launch whose
+flaws degrade it past what the planner can route gets a flight with no
+legs, which "arrives" the same day where it stands — Earth's surface —
+and is paid the partial fraction; step 3 first read that as an entry
+without a shield. The landing now needs a flown leg, which keeps the
+old behaviour, but the empty-route arrival itself looks like a bug to
+decide on (TODO).

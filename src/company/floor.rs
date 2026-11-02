@@ -389,7 +389,8 @@ impl Company {
                     };
                 }
                 total += (crate::resources::tank_material_cost(stage.structural_mass_kg, stage.material, prices)
-                    + crate::resources::stage_assembly_cost(stage.material.geometry_mass_kg(stage.structural_mass_kg), &balance.costs)) * rocket_learning;
+                    + crate::resources::stage_assembly_cost(stage.material.geometry_mass_kg(stage.structural_mass_kg), &balance.costs)
+                    + crate::resources::edl_hardware_cost(stage, prices)) * rocket_learning;
             }
         }
         total + crate::resources::rocket_integration_cost(project.design.dry_mass_kg(), &balance.costs) * rocket_learning

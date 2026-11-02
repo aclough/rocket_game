@@ -115,9 +115,13 @@ pub struct PayloadReach {
     /// False when the design can lift the mass but goes dark on the way:
     /// a power problem wearing a delta-v problem's clothes.
     pub survives: bool,
-    /// How the top stage sets down, for an airless surface
+    /// How the top stage sets down, for a surface
     /// (`edl::landing_verdict`); `None` anywhere else.
     pub landing: Option<crate::edl::LandingVerdict>,
+    /// How the top stage gets through the air, for a surface with an
+    /// atmosphere, at the entry speed of the route the planner picks;
+    /// `None` anywhere else.
+    pub entry: Option<crate::edl::EntryVerdict>,
 }
 
 /// Look `key` up in a route-planning memo, computing and storing the
@@ -578,6 +582,7 @@ impl GameState {
                     // different route and so a different number of days.
                     survives: self.survives_trip(design, from, dest, payload),
                     landing: crate::edl::landing_verdict(design, payload, dest, &self.balance.edl),
+                    entry: self.entry_verdict_for(design, from, dest, payload),
                 });
             }
         }
@@ -585,6 +590,24 @@ impl GameState {
             .partial_cmp(&a.max_payload_kg)
             .unwrap_or(std::cmp::Ordering::Equal));
         results
+    }
+
+    /// The entry verdict of `design` on a delivery of `payload_kg` from
+    /// `from` to `dest`, at the entry speed of the route the planner
+    /// picks; `None` unless `dest` is a surface with air.
+    pub fn entry_verdict_for(&self, design: &RocketDesign, from: &str, dest: &str, payload_kg: f64) -> Option<crate::edl::EntryVerdict> {
+        crate::location::DELTA_V_MAP.surface_properties(dest).filter(|p| p.has_atmosphere)?;
+        let top = design.stage_groups.last()?;
+        let mass = top.iter().map(|s| s.dry_mass_kg()).sum::<f64>() + payload_kg;
+        let entry_speed = crate::location::DELTA_V_MAP
+            .shortest_path_for_rocket(from, dest, design, payload_kg)
+            .and_then(|(path, _)| {
+                let probe = design.instantiate(crate::rocket::RocketId(0), payload_kg);
+                crate::edl::route_entry_speed(&crate::flight::build_route_for_rocket(&path, design, &probe, payload_kg))
+            })
+            .or_else(|| crate::location::DELTA_V_MAP.location(dest).and_then(|l| l.entry_speed_m_s))
+            .unwrap_or(0.0);
+        Some(crate::edl::entry_verdict(design, mass, entry_speed, &self.balance.edl, &self.balance.bodies))
     }
 
     /// Whether this project can serve a delivery of `payload_kg` to
@@ -629,6 +652,12 @@ impl GameState {
         // time (25_2_EDL_CORE.md §2.3); a hoverslam counts, a crash does not.
         if crate::edl::landing_verdict(&project.design, payload_kg, destination, &self.balance.edl)
             .is_some_and(|v| !v.can_land())
+        {
+            return false;
+        }
+        // And through air, a shield rated for the entry.
+        if self.entry_verdict_for(&project.design, "earth_surface", destination, payload_kg)
+            .is_some_and(|v| matches!(v, crate::edl::EntryVerdict::NoShield | crate::edl::EntryVerdict::BurnThrough { .. }))
         {
             return false;
         }

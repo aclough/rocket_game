@@ -191,6 +191,38 @@ pub fn tank_bom(material: crate::structure::StructuralMaterial) -> BillOfMateria
 /// BOM for stage assembly hardware: wiring harnesses, avionics,
 /// umbilicals. Its mass is `CostsConfig::assembly_floor_kg` plus a
 /// share of the stage's structure (24_STRATEGIES.md §2.1).
+/// An ablative heat shield: composites on an aluminium carrier.
+pub fn heat_shield_bom() -> BillOfMaterials {
+    BillOfMaterials {
+        fractions: vec![
+            (Resource::Composites, 0.80),
+            (Resource::Aluminium, 0.15),
+            (Resource::Electronics, 0.01),
+            (Resource::Wiring, 0.04),
+        ],
+    }
+}
+
+/// Landing legs: struts, dampers and their actuators.
+pub fn legs_bom() -> BillOfMaterials {
+    BillOfMaterials {
+        fractions: vec![
+            (Resource::Aluminium, 0.50),
+            (Resource::Steel, 0.30),
+            (Resource::Plumbing, 0.10),
+            (Resource::Wiring, 0.05),
+            (Resource::Electronics, 0.05),
+        ],
+    }
+}
+
+/// What a stage's EDL hardware — shield and legs, as fitted — costs in
+/// materials (25_2_EDL_CORE.md §2.2).
+pub fn edl_hardware_cost(stage: &crate::stage::Stage, prices: &ResourcePrices) -> f64 {
+    stage.heat_shield.as_ref().map_or(0.0, |h| heat_shield_bom().material_cost(h.mass_kg, prices))
+        + stage.legs.as_ref().map_or(0.0, |l| legs_bom().material_cost(l.mass_kg, prices))
+}
+
 pub fn stage_assembly_bom() -> BillOfMaterials {
     BillOfMaterials {
         fractions: vec![
