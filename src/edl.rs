@@ -98,6 +98,37 @@ pub fn route_entry_speed(route: &[crate::flight::FlightLeg]) -> Option<f64> {
     route.iter().rev().take_while(|leg| leg.aerobraked).last().and_then(|leg| leg.entry_speed_m_s)
 }
 
+/// Terminal velocity of `mass_kg` on a drag area `drag_area_m2` at
+/// `cd`, in air of `density_kg_m3` under `gravity_m_s2`:
+/// `√(2 m g / (ρ C_d A))`.
+pub fn terminal_velocity_m_s(mass_kg: f64, drag_area_m2: f64, cd: f64, gravity_m_s2: f64, density_kg_m3: f64) -> f64 {
+    let denom = density_kg_m3 * cd * drag_area_m2;
+    if denom <= 0.0 {
+        return f64::INFINITY;
+    }
+    (2.0 * mass_kg * gravity_m_s2 / denom).sqrt()
+}
+
+/// The canopy area that brings `mass_kg` to `speed_m_s` in air of
+/// `density_kg_m3` under `gravity_m_s2`.
+pub fn drag_area_for_terminal_velocity(mass_kg: f64, speed_m_s: f64, gravity_m_s2: f64, density_kg_m3: f64, cfg: &EdlConfig) -> f64 {
+    let denom = density_kg_m3 * cfg.chute_drag_coefficient * speed_m_s * speed_m_s;
+    if denom <= 0.0 {
+        return 0.0;
+    }
+    2.0 * mass_kg * gravity_m_s2 / denom
+}
+
+/// The chance a touchdown at `speed_m_s` against `limit_m_s` wrecks
+/// the stage: nothing within the limit, a ramp to certainty at
+/// `touchdown_overshoot` over it.
+pub fn touchdown_risk(speed_m_s: f64, limit_m_s: f64, cfg: &EdlConfig) -> f64 {
+    if limit_m_s <= 0.0 {
+        return 1.0;
+    }
+    ((speed_m_s / limit_m_s - 1.0) / cfg.touchdown_overshoot.max(1e-9)).clamp(0.0, 1.0)
+}
+
 /// Ballistic coefficient, kg/m²: mass over drag area.
 pub fn ballistic_coefficient(mass_kg: f64, base_area_m2: f64, cfg: &EdlConfig) -> f64 {
     if base_area_m2 <= 0.0 {
@@ -164,6 +195,18 @@ pub enum LandingVerdict {
     NoBurn,
     /// A landing burn but nothing to stand on: a crash on land.
     NoLegs,
+    /// Through air with neither canopy nor landing burn.
+    NoWayDown,
+    /// The canopy cannot open here: thin air for a subsonic package, or
+    /// a body too dense to slow before the ground.
+    ChuteCannotOpen { reason: &'static str },
+    /// Down under the canopy onto water.
+    Splashdown { speed_m_s: f64 },
+    /// Down under the canopy onto legs.
+    UnderCanopy { speed_m_s: f64 },
+    /// Down under the canopy faster than what it lands on takes: the
+    /// chance it is wrecked.
+    TooFast { speed_m_s: f64, limit_m_s: f64, risk: f64 },
     /// The engines throttle down to the stage's weight or below.
     Hover,
     /// The engines cannot hold the stage's weight: a timed burn, which
@@ -174,9 +217,23 @@ pub enum LandingVerdict {
 }
 
 impl LandingVerdict {
-    /// Whether the stage comes down in one piece, flaws aside.
+    /// Whether the stage comes down in one piece, flaws aside (a
+    /// touchdown over its limit counts while it is not a sure loss).
     pub fn can_land(&self) -> bool {
-        matches!(self, LandingVerdict::Hover | LandingVerdict::Hoverslam { .. })
+        match self {
+            LandingVerdict::Hover | LandingVerdict::Hoverslam { .. }
+            | LandingVerdict::Splashdown { .. } | LandingVerdict::UnderCanopy { .. } => true,
+            LandingVerdict::TooFast { risk, .. } => *risk < 1.0,
+            _ => false,
+        }
+    }
+
+    /// The chance the touchdown itself wrecks the stage.
+    pub fn touchdown_risk(&self) -> f64 {
+        match self {
+            LandingVerdict::TooFast { risk, .. } => *risk,
+            _ => 0.0,
+        }
     }
 
     /// How much harder this landing's flaws bite.
@@ -192,6 +249,12 @@ impl LandingVerdict {
         match self {
             LandingVerdict::NoBurn => "no landing burn".to_string(),
             LandingVerdict::NoLegs => "no landing legs".to_string(),
+            LandingVerdict::NoWayDown => "no way down: no canopy, no landing burn".to_string(),
+            LandingVerdict::ChuteCannotOpen { reason } => format!("canopy cannot open: {reason}"),
+            LandingVerdict::Splashdown { speed_m_s } => format!("splashdown at {speed_m_s:.0} m/s"),
+            LandingVerdict::UnderCanopy { speed_m_s } => format!("lands under canopy at {speed_m_s:.0} m/s"),
+            LandingVerdict::TooFast { speed_m_s, limit_m_s, risk } =>
+                format!("too fast: {speed_m_s:.0} m/s against {limit_m_s:.0} (risk {:.0}%)", risk * 100.0),
             LandingVerdict::Hover => "hover".to_string(),
             LandingVerdict::Hoverslam { extra_flaws, activation_scale, .. } =>
                 format!("hoverslam (+{extra_flaws} flaws, ×{activation_scale:.1})"),
@@ -242,21 +305,56 @@ pub fn verdict_for_excess_on_legs(excess_m_s2: Option<f64>, legs: bool, cfg: &Ed
 /// The landing verdict of `design`'s top stage coming down on `to` with
 /// `payload_kg` aboard and its tanks empty. `None` where `to` is not a
 /// surface.
-pub fn landing_verdict(design: &RocketDesign, payload_kg: f64, to: &str, cfg: &EdlConfig) -> Option<LandingVerdict> {
+pub fn landing_verdict(
+    design: &RocketDesign, payload_kg: f64, to: &str, cfg: &EdlConfig, bodies: &crate::balance_config::BodiesConfig,
+) -> Option<LandingVerdict> {
     let group = design.stage_groups.last()?;
     let dry: f64 = group.iter().map(|s| s.dry_mass_kg()).sum();
-    landing_verdict_at_mass(design, dry + payload_kg, to, cfg)
+    landing_verdict_at_mass(design, dry + payload_kg, to, cfg, bodies)
 }
 
 /// `landing_verdict` at a given touchdown mass — a flight's, with
 /// whatever is still aboard.
-pub fn landing_verdict_at_mass(design: &RocketDesign, touchdown_mass_kg: f64, to: &str, cfg: &EdlConfig) -> Option<LandingVerdict> {
-    // Through air a landing burn is judged the same way; chutes (step 4)
-    // will be the other way down.
+pub fn landing_verdict_at_mass(
+    design: &RocketDesign, touchdown_mass_kg: f64, to: &str, cfg: &EdlConfig, bodies: &crate::balance_config::BodiesConfig,
+) -> Option<LandingVerdict> {
     let props = DELTA_V_MAP.surface_properties(to)?;
     let stage = design.stage_groups.last()?.first()?;
     let excess = touchdown_excess_m_s2(stage, touchdown_mass_kg, props.gravity_m_s2);
-    Some(verdict_for_excess_on_legs(excess, stage.legs.is_some(), cfg))
+    if !props.has_atmosphere {
+        return Some(verdict_for_excess_on_legs(excess, stage.legs.is_some(), cfg));
+    }
+    // Through air: a landing burn finishes the job whatever the canopy
+    // did, as on an airless body; otherwise the canopy sets the
+    // touchdown speed and legs or water take it (25_2_EDL_CORE.md §2.3).
+    if stage.landing.is_some() {
+        return Some(verdict_for_excess_on_legs(excess, stage.legs.is_some(), cfg));
+    }
+    let Some(canopy) = stage.recovery.as_ref() else { return Some(LandingVerdict::NoWayDown) };
+    let thin = props.atmosphere_density < cfg.subsonic_chute_min_density_kg_m3;
+    if thin {
+        if canopy.kind == crate::stage::RecoveryKind::Parachutes {
+            return Some(LandingVerdict::ChuteCannotOpen { reason: "too thin for a subsonic canopy" });
+        }
+        // The body's face: an aeroshell's if it is rated for one, else
+        // whatever the stage is.
+        let area = stage.base_area_m2(bodies);
+        if ballistic_coefficient(touchdown_mass_kg, area, cfg) > cfg.thin_air_chute_beta_limit_kg_m2 {
+            return Some(LandingVerdict::ChuteCannotOpen { reason: "too dense to slow before the ground" });
+        }
+    }
+    let speed = terminal_velocity_m_s(
+        touchdown_mass_kg, canopy.drag_area_m2, cfg.chute_drag_coefficient, props.gravity_m_s2, props.atmosphere_density,
+    );
+    let (limit, ok) = if stage.legs.is_some() {
+        (cfg.legs_touchdown_limit_m_s, LandingVerdict::UnderCanopy { speed_m_s: speed })
+    } else if props.has_oceans {
+        (cfg.splashdown_limit_m_s, LandingVerdict::Splashdown { speed_m_s: speed })
+    } else {
+        return Some(LandingVerdict::NoLegs);
+    };
+    let risk = touchdown_risk(speed, limit, cfg);
+    Some(if risk > 0.0 { LandingVerdict::TooFast { speed_m_s: speed, limit_m_s: limit, risk } } else { ok })
 }
 
 /// The verdict a design carries into its flaw draw: its landing stage
@@ -285,7 +383,7 @@ mod tests {
             id: crate::stage::StageId(1), name: "Lander".into(), engine, engine_count: engines,
             propellant_mass_kg: 2_350.0, structural_mass_kg: 2_000.0, fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(),
-            landing: landing.map(|n| LandingBurn { engines: n, on: LocationId::of("lunar_surface") }), heat_shield: None, legs: None,
+            landing: landing.map(|n| LandingBurn { engines: n, on: LocationId::of("lunar_surface") }), heat_shield: None, legs: None, recovery: None,
         }
     }
 
@@ -394,6 +492,83 @@ mod tests {
         ];
         assert_eq!(route_entry_speed(&lunar_return), Some(11_000.0));
         assert_eq!(route_entry_speed(&lunar_return[..2]), None);
+    }
+
+    /// Through air the canopy sets the touchdown: parachutes bring a
+    /// capsule to a splashdown on Earth but cannot open in Mars's air,
+    /// the supersonic canopy opens there but leaves it far too fast for
+    /// legs, so a Mars lander burns the last of it; nothing at all is
+    /// no way down (25_2_EDL_CORE.md §2.2–2.3).
+    #[test]
+    fn canopies_set_the_touchdown() {
+        use crate::balance_config::BodiesConfig;
+        use crate::stage::{LandingBurn, Legs, Recovery, RecoveryKind};
+        let cfg = EdlConfig::default();
+        let bodies = BodiesConfig::default();
+        let mut capsule = lander(60_000.0, EngineCycle::PressureFed, 1, None);
+        capsule.propellant_mass_kg = 400.0;
+        let design_with = |stage: crate::stage::Stage| crate::rocket::RocketDesign {
+            id: crate::rocket::RocketDesignId(1), name: "Capsule".into(), stage_groups: vec![vec![stage]],
+        };
+        assert_eq!(landing_verdict(&design_with(capsule.clone()), 0.0, "earth_surface", &cfg, &bodies), Some(LandingVerdict::NoWayDown));
+
+        capsule.recovery = Some(Recovery { kind: RecoveryKind::Parachutes, rated_mass_kg: 0.0, mass_kg: 0.0, drag_area_m2: 0.0 });
+        capsule.fit_edl(0.0, &cfg, &bodies);
+        let canopy = capsule.recovery.clone().unwrap();
+        assert!((canopy.rated_mass_kg - capsule.dry_mass_kg() - 400.0 + canopy.mass_kg).abs() < 1.0, "rated for the wet stage: {canopy:?}");
+        assert!((canopy.mass_kg - cfg.parachutes_mass_fraction * canopy.rated_mass_kg).abs() < 1e-6);
+        let earth = landing_verdict(&design_with(capsule.clone()), 0.0, "earth_surface", &cfg, &bodies).unwrap();
+        match earth {
+            LandingVerdict::Splashdown { speed_m_s } => assert!(speed_m_s < cfg.parachutes_design_speed_m_s && speed_m_s > 5.0, "{speed_m_s}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            landing_verdict(&design_with(capsule.clone()), 0.0, "mars_surface", &cfg, &bodies),
+            Some(LandingVerdict::ChuteCannotOpen { .. })
+        ));
+        // Legs on Earth under parachutes: 7 m/s against 3 is a sure loss.
+        let mut legged = capsule.clone();
+        legged.legs = Some(Legs { mass_kg: 50.0 });
+        match landing_verdict(&design_with(legged), 0.0, "earth_surface", &cfg, &bodies).unwrap() {
+            LandingVerdict::TooFast { risk, limit_m_s, .. } => { assert_eq!(risk, 1.0); assert_eq!(limit_m_s, cfg.legs_touchdown_limit_m_s); }
+            other => panic!("{other:?}"),
+        }
+
+        // Mars: a lander in a broad aeroshell is light enough for the
+        // supersonic canopy to open, at ~60 m/s; the burn and legs
+        // finish it. A five-tonne brick is too dense for any canopy.
+        use crate::stage::{EntryRating, HeatShield};
+        let mut mars = capsule.clone();
+        mars.structural_mass_kg = 800.0;
+        mars.heat_shield = Some(HeatShield { rating: EntryRating::MarsOrbit, areal_density_kg_m2: 0.0, mass_kg: 0.0, rated_heat_j_m2: 0.0 });
+        mars.recovery = Some(Recovery { kind: RecoveryKind::SupersonicChute, rated_mass_kg: 0.0, mass_kg: 0.0, drag_area_m2: 0.0 });
+        mars.fit_edl(0.0, &cfg, &bodies);
+        let beta = ballistic_coefficient(mars.dry_mass_kg(), mars.base_area_m2(&bodies), &cfg);
+        assert!(beta < cfg.thin_air_chute_beta_limit_kg_m2, "β {beta}");
+        match landing_verdict(&design_with(mars.clone()), 0.0, "mars_surface", &cfg, &bodies).unwrap() {
+            LandingVerdict::NoLegs => {}
+            other => panic!("no legs, no water on Mars: {other:?}"),
+        }
+        mars.legs = Some(Legs { mass_kg: 50.0 });
+        match landing_verdict(&design_with(mars.clone()), 0.0, "mars_surface", &cfg, &bodies).unwrap() {
+            LandingVerdict::TooFast { speed_m_s, risk, .. } => { assert!((30.0..70.0).contains(&speed_m_s), "{speed_m_s}"); assert_eq!(risk, 1.0); }
+            other => panic!("{other:?}"),
+        }
+        mars.landing = Some(LandingBurn { engines: 1, on: LocationId::of("mars_surface") });
+        assert!(landing_verdict(&design_with(mars), 0.0, "mars_surface", &cfg, &bodies).unwrap().can_land());
+        let mut brick = capsule.clone();
+        brick.structural_mass_kg = 5_000.0;
+        brick.heat_shield = Some(HeatShield { rating: EntryRating::MarsOrbit, areal_density_kg_m2: 0.0, mass_kg: 0.0, rated_heat_j_m2: 0.0 });
+        brick.recovery = Some(Recovery { kind: RecoveryKind::SupersonicChute, rated_mass_kg: 0.0, mass_kg: 0.0, drag_area_m2: 0.0 });
+        brick.fit_edl(0.0, &cfg, &bodies);
+        assert!(matches!(
+            landing_verdict(&design_with(brick), 0.0, "mars_surface", &cfg, &bodies),
+            Some(LandingVerdict::ChuteCannotOpen { reason }) if reason.contains("dense")
+        ));
+        // The physics helpers themselves.
+        assert!((terminal_velocity_m_s(1_000.0, 409.0, 0.8, 9.81, 1.225) - 7.0).abs() < 0.1);
+        assert_eq!(touchdown_risk(2.0, 3.0, &cfg), 0.0);
+        assert!((touchdown_risk(4.5, 3.0, &cfg) - 0.5).abs() < 1e-9);
     }
 
     /// The landing charge is a gravity loss: Apollo's module paid about

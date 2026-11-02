@@ -182,6 +182,7 @@ pub const ROCKET_DESIGNER: &[KeyBinding] = &[
     always("G", None, "Cycle the landing burn: how many engines light to land"),
     always("H", None, "Cycle the heat shield rating: none, Mars orbit … asteroid"),
     always("K", None, "Toggle landing legs"),
+    always("R", None, "Cycle the canopy: none, parachutes, supersonic chute"),
     always("X", Some("[X] Rem"), "Remove this stage"),
     always("P", None, "Set the payload mass"),
     always("L", None, "Choose the launch site"),

@@ -260,6 +260,9 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                 if let Some(h) = &stage.heat_shield {
                     parts.push(format!("{} shield {:.0} kg/m² ({:.0} kg)", h.rating.name(), h.areal_density_kg_m2, h.mass_kg));
                 }
+                if let Some(r) = &stage.recovery {
+                    parts.push(format!("{} {:.0} m² ({:.0} kg)", r.kind.name(), r.drag_area_m2, r.mass_kg));
+                }
                 if let Some(b) = &stage.landing {
                     parts.push(format!("lands on {} engine{} ({})", b.engines, if b.engines == 1 { "" } else { "s" }, b.on.location().display_name));
                 }
@@ -436,10 +439,15 @@ pub(super) fn draw_rocket_designer_content(frame: &mut Frame, app: &App, state: 
                     match &row.landing {
                         None => (String::new(), Style::default()),
                         Some(LandingVerdict::Hover) => ("  hover".to_string(), Style::default()),
-                        Some(v @ LandingVerdict::Hoverslam { .. }) => (format!("  {}", v.summary()), Style::default().fg(Color::Yellow)),
+                        Some(v @ (LandingVerdict::Splashdown { .. } | LandingVerdict::UnderCanopy { .. })) =>
+                            (format!("  {}", v.summary()), Style::default()),
+                        Some(v @ (LandingVerdict::Hoverslam { .. } | LandingVerdict::TooFast { .. })) =>
+                            (format!("  {}", v.summary()), Style::default().fg(Color::Yellow)),
                         Some(LandingVerdict::NoBurn) => ("  ▲ no landing burn — [G]".to_string(), Style::default().fg(Color::Red)),
                         Some(LandingVerdict::NoLegs) => ("  ▲ no landing legs — [K]".to_string(), Style::default().fg(Color::Red)),
-                        Some(v @ LandingVerdict::TooMuchThrust { .. }) => (format!("  ▲ {}", v.summary()), Style::default().fg(Color::Red)),
+                        Some(LandingVerdict::NoWayDown) => ("  ▲ no way down — [R] canopy or [G] burn".to_string(), Style::default().fg(Color::Red)),
+                        Some(v @ (LandingVerdict::TooMuchThrust { .. } | LandingVerdict::ChuteCannotOpen { .. })) =>
+                            (format!("  ▲ {}", v.summary()), Style::default().fg(Color::Red)),
                     }
                 };
                 lines.push(Line::from(Span::styled(

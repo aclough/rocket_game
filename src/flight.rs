@@ -481,7 +481,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None, heat_shield: None, legs: None,
+            landing: None, heat_shield: None, legs: None, recovery: None,
         };
         let design = RocketDesign {
             id: RocketDesignId(id), name: format!("Tiny{}", id),
@@ -703,7 +703,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None, heat_shield: None, legs: None,
+            landing: None, heat_shield: None, legs: None, recovery: None,
         };
         let s2 = Stage {
             id: StageId(2), name: "S2".into(),
@@ -712,7 +712,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None, heat_shield: None, legs: None,
+            landing: None, heat_shield: None, legs: None, recovery: None,
         };
         let design = RocketDesign {
             id: RocketDesignId(1),
@@ -849,7 +849,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: vec![PowerSource::new_solar_panel(panel_w)],
-            landing: None, heat_shield: None, legs: None,
+            landing: None, heat_shield: None, legs: None, recovery: None,
         };
         RocketDesign {
             id: RocketDesignId(1), name: "Ion".into(),

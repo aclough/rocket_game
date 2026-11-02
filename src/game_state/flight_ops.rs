@@ -403,7 +403,7 @@ impl GameState {
                 // time, which is a crash at the burn (25_2_EDL_CORE.md §2.3).
                 let touchdown_mass = flight.rocket.attached_mass_kg(&flight.design) + flight.total_payload_kg();
                 let verdict = crate::edl::landing_verdict_at_mass(
-                    &flight.design, touchdown_mass, flight.destination(), &self.balance.edl,
+                    &flight.design, touchdown_mass, flight.destination(), &self.balance.edl, &self.balance.bodies,
                 );
                 let scale = verdict.as_ref().map_or(1.0, |v| v.activation_scale());
                 for event in launch::landing_events(has_atmosphere) {
@@ -434,6 +434,16 @@ impl GameState {
                         if let Some(v) = verdict.as_ref().filter(|v| !v.can_land()) {
                             flight.events_reached.push(event);
                             outcome = LandingOutcome::Crashed { reason: v.summary() };
+                            break;
+                        }
+                    }
+                    // A touchdown over what legs or water take is a roll
+                    // against the overshoot, before the landing's flaws.
+                    if event == launch::FlightEvent::Landing {
+                        let risk = verdict.as_ref().map_or(0.0, |v| v.touchdown_risk());
+                        if risk > 0.0 && rand::Rng::gen::<f64>(&mut self.seed.contingent_rng) < risk {
+                            flight.events_reached.push(event);
+                            outcome = LandingOutcome::Crashed { reason: verdict.as_ref().map_or_else(String::new, |v| v.summary()) };
                             break;
                         }
                     }

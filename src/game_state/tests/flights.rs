@@ -30,7 +30,7 @@ fn tiny_payload_spacecraft(
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
-        landing: None, heat_shield: None, legs: None,
+        landing: None, heat_shield: None, legs: None, recovery: None,
     };
     let design = RocketDesign {
         id: RocketDesignId(id), name: name.into(),
@@ -264,7 +264,7 @@ fn push_test_spacecraft(gs: &mut GameState, id: u64, name: &str, location: &str)
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: Vec::new(),
-        landing: None, heat_shield: None, legs: None,
+        landing: None, heat_shield: None, legs: None, recovery: None,
     };
     let design = RocketDesign {
         id: RocketDesignId(id), name: name.into(),
@@ -457,7 +457,7 @@ fn test_mid_flight_stage_loss_destroys_vehicle() {
         fairing: None,
         material: crate::structure::StructuralMaterial::Aluminium,
         power_sources: vec![PowerSource::from_reactor_design(reactor_design)],
-        landing: None, heat_shield: None, legs: None,
+        landing: None, heat_shield: None, legs: None, recovery: None,
     };
     let design = RocketDesign {
         id: RocketDesignId(1), name: "Doomed".into(),

@@ -216,11 +216,25 @@ pub fn legs_bom() -> BillOfMaterials {
     }
 }
 
-/// What a stage's EDL hardware — shield and legs, as fitted — costs in
-/// materials (25_2_EDL_CORE.md §2.2).
+/// A canopy and its risers, mortar and bag.
+pub fn canopy_bom() -> BillOfMaterials {
+    BillOfMaterials {
+        fractions: vec![
+            (Resource::Composites, 0.70),
+            (Resource::Steel, 0.15),
+            (Resource::Aluminium, 0.10),
+            (Resource::Electronics, 0.02),
+            (Resource::Wiring, 0.03),
+        ],
+    }
+}
+
+/// What a stage's EDL hardware — shield, legs and canopy, as fitted —
+/// costs in materials (25_2_EDL_CORE.md §2.2).
 pub fn edl_hardware_cost(stage: &crate::stage::Stage, prices: &ResourcePrices) -> f64 {
     stage.heat_shield.as_ref().map_or(0.0, |h| heat_shield_bom().material_cost(h.mass_kg, prices))
         + stage.legs.as_ref().map_or(0.0, |l| legs_bom().material_cost(l.mass_kg, prices))
+        + stage.recovery.as_ref().map_or(0.0, |r| canopy_bom().material_cost(r.mass_kg, prices))
 }
 
 pub fn stage_assembly_bom() -> BillOfMaterials {

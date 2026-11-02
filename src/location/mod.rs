@@ -29,6 +29,8 @@ pub struct SurfaceProperties {
     /// `scale_height_m` of altitude (Earth ~8.5 km). 0 for an airless
     /// body, or to hold the ambient value all the way up.
     pub scale_height_m: f64,
+    /// Open water to splash down in. Set by `from_parts`.
+    pub has_oceans: bool,
 }
 
 impl SurfaceProperties {
@@ -260,6 +262,9 @@ impl DeltaVMap {
             if let Some(&(_, body, speed)) = graph_data::ENTRY_SPEEDS.iter().find(|(id, _, _)| *id == loc.id) {
                 loc.aero_body = Some(body);
                 loc.entry_speed_m_s = Some(speed);
+            }
+            if let LocationType::Surface(props) = &mut loc.location_type {
+                props.has_oceans = graph_data::SURFACES_WITH_OCEANS.contains(&loc.id);
             }
         }
         let index: HashMap<&'static str, usize> =

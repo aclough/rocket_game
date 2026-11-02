@@ -635,6 +635,7 @@ pub fn rocket_features(design: &crate::rocket::RocketDesign) -> Vec<Feature> {
     if stages().any(|s| !s.engine.is_solid() && !s.engine.is_low_thrust()) { f.push(Feature::LiquidFeed); }
     if design.stage_groups.last().is_some_and(|g| g.iter().any(|s| s.heat_shield.is_some())) { f.push(Feature::HeatShield); }
     if design.stage_groups.last().is_some_and(|g| g.iter().any(|s| s.legs.is_some())) { f.push(Feature::Legs); }
+    if design.stage_groups.last().is_some_and(|g| g.iter().any(|s| s.recovery.is_some())) { f.push(Feature::Parachute); }
     if design.stage_groups.last().is_some_and(|g| g.iter().any(|s| s.landing.is_some())) {
         f.push(Feature::LandingBurn);
         // Hoverslam is a question of the designed body's gravity, not of

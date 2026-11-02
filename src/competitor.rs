@@ -255,7 +255,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
                 fairing: None,
                 material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
-                landing: None, heat_shield: None, legs: None,
+                landing: None, heat_shield: None, legs: None, recovery: None,
             }],
             vec![Stage {
                 id: StageId(20_002),
@@ -267,7 +267,7 @@ pub fn realize_dinosoar(seed: &GameSeed, balance: &BalanceConfig) -> Competitor 
                 fairing: Some(Fairing { mass_kg: 2_500.0, diameter_m: 5.1 }),
                 material: crate::structure::StructuralMaterial::Aluminium,
                 power_sources: Vec::new(),
-                landing: None, heat_shield: None, legs: None,
+                landing: None, heat_shield: None, legs: None, recovery: None,
             }],
         ],
     };

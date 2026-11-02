@@ -379,6 +379,70 @@ fn an_earth_return_needs_a_shield_rated_for_it() {
     assert!(matches!(&last.outcome, LandingOutcome::Crashed { reason } if reason.starts_with("burned through")), "{:?}", last.outcome);
 }
 
+/// A capsule comes home under parachutes: behind an LEO-rated shield,
+/// with neither a landing burn nor legs, it splashes down and is paid;
+/// the same capsule at Mars finds the air too thin for its canopy; a
+/// supersonic canopy with a landing burn and legs sets down there
+/// (25_2_EDL_CORE.md §2.2–2.3).
+#[test]
+fn canopies_bring_a_capsule_down() {
+    use crate::launch::LandingOutcome;
+    use crate::stage::{EntryRating, HeatShield, LandingBurn, Legs, Recovery, RecoveryKind};
+    let run = |from: &str, to: &str, kind: RecoveryKind, burn_and_legs: bool| -> GameState {
+        let mut gs = GameState::new("Test".into(), 1);
+        let (design, engine_projects) = make_three_stage_design();
+        gs.player_company.engine_projects = engine_projects;
+        for ep in &mut gs.player_company.engine_projects {
+            ep.flaws.clear();
+        }
+        let mut capsule = design.stage_groups[2][0].clone();
+        capsule.engine.cycle = crate::engine::EngineCycle::PressureFed;
+        capsule.engine.thrust_n = 60_000.0;
+        capsule.propellant_mass_kg = 400.0;
+        let rating = if to == "mars_surface" { EntryRating::MarsOrbit } else { EntryRating::LeoReturn };
+        capsule.heat_shield = Some(HeatShield { rating, areal_density_kg_m2: 0.0, mass_kg: 0.0, rated_heat_j_m2: 0.0 });
+        capsule.recovery = Some(Recovery { kind, rated_mass_kg: 0.0, mass_kg: 0.0, drag_area_m2: 0.0 });
+        if burn_and_legs {
+            capsule.landing = Some(LandingBurn { engines: 1, on: crate::location::LocationId::of(to) });
+            capsule.legs = Some(Legs { mass_kg: 0.0 });
+        }
+        capsule.fit_edl(0.0, &gs.balance.edl, &gs.balance.bodies);
+        let design = crate::rocket::RocketDesign {
+            id: crate::rocket::RocketDesignId(1), name: "Capsule".into(), stage_groups: vec![vec![capsule]],
+        };
+        gs.player_company.rocket_projects.push(RocketProject::new(RocketProjectId(1), design.clone(), &gs.balance));
+        let rocket = design.instantiate(crate::rocket::RocketId(1), 0.0);
+        gs.spacecraft.push(crate::game_state::Spacecraft {
+            id: crate::game_state::SpacecraftId(1), name: "Capsule".into(), rocket, design,
+            location: crate::location::LocationId::of(from), rocket_project_id: RocketProjectId(1),
+            payloads: Vec::new(), rocket_flaws: Vec::new(), stage_engine_flaws: Vec::new(),
+        });
+        gs.fly_spacecraft(0, to);
+        assert_eq!(gs.active_flights.len(), 1, "the way down is a targeting burn");
+        for _ in 0..30 {
+            gs.advance_day();
+            if gs.active_flights.is_empty() {
+                break;
+            }
+        }
+        assert!(gs.active_flights.is_empty());
+        gs
+    };
+
+    let gs = run("leo", "earth_surface", RecoveryKind::Parachutes, false);
+    let last = gs.player_company.landing_history.last().expect("a landing record");
+    assert_eq!(last.outcome, LandingOutcome::Landed, "{:?}", last.outcome);
+    assert_eq!(gs.spacecraft.len(), 1, "parked on the surface");
+
+    let gs = run("mars_orbit_200km", "mars_surface", RecoveryKind::Parachutes, false);
+    let last = gs.player_company.landing_history.last().expect("a landing record");
+    assert!(matches!(&last.outcome, LandingOutcome::Crashed { reason } if reason.starts_with("canopy cannot open")), "{:?}", last.outcome);
+
+    let gs = run("mars_orbit_200km", "mars_surface", RecoveryKind::SupersonicChute, true);
+    let last = gs.player_company.landing_history.last().expect("a landing record");
+    assert_eq!(last.outcome, LandingOutcome::Landed, "{:?}", last.outcome);
+}
+
 /// A parked spacecraft flown on is its project's vehicle: a flaw that
 /// fires on the way is found on the project (and its flight review
 /// opens there), not credited to nobody.

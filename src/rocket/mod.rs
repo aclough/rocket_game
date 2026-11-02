@@ -327,7 +327,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None, heat_shield: None, legs: None,
+            landing: None, heat_shield: None, legs: None, recovery: None,
         };
 
         let design = RocketDesign {

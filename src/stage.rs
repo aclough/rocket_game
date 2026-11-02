@@ -75,6 +75,11 @@ impl EntryRating {
         format!("hs{:.0}", self.speed_m_s() / 1_000.0)
     }
 
+    /// A Mars entry is flown in a broad aeroshell rather than a capsule.
+    pub fn is_aeroshell(self) -> bool {
+        matches!(self, EntryRating::MarsOrbit | EntryRating::MarsDirect)
+    }
+
     /// The next rating up, or `None` past the last: how the designer
     /// cycles `[H]` from no shield through the ratings and round.
     pub fn next(self) -> Option<Self> {
@@ -102,6 +107,64 @@ pub struct HeatShield {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Legs {
     pub mass_kg: f64,
+}
+
+/// The two ways down through air (25_2_EDL_CORE.md §2.2), named by what
+/// they do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RecoveryKind {
+    /// The drogue + main package: opens subsonic, so thick air only,
+    /// and sized to bring its rated mass to a splashdown on Earth.
+    Parachutes,
+    /// One disk-gap-band canopy that opens at Mach 2 in thin air, sized
+    /// to its rated mass on Mars; on Earth it is a drogue alone.
+    SupersonicChute,
+}
+
+impl RecoveryKind {
+    pub const ALL: [RecoveryKind; 2] = [RecoveryKind::Parachutes, RecoveryKind::SupersonicChute];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            RecoveryKind::Parachutes => "parachutes",
+            RecoveryKind::SupersonicChute => "supersonic chute",
+        }
+    }
+
+    /// The next kind, or `None` past the last: how `[R]` cycles.
+    pub fn next(self) -> Option<Self> {
+        match self {
+            RecoveryKind::Parachutes => Some(RecoveryKind::SupersonicChute),
+            RecoveryKind::SupersonicChute => None,
+        }
+    }
+
+    pub fn mass_fraction(self, edl: &crate::balance_config::EdlConfig) -> f64 {
+        match self {
+            RecoveryKind::Parachutes => edl.parachutes_mass_fraction,
+            RecoveryKind::SupersonicChute => edl.supersonic_chute_mass_fraction,
+        }
+    }
+
+    /// The air the canopy is sized on and the speed it brings its rated
+    /// mass to there: `(surface id, m/s)`.
+    pub fn design_point(self, edl: &crate::balance_config::EdlConfig) -> (&'static str, f64) {
+        match self {
+            RecoveryKind::Parachutes => ("earth_surface", edl.parachutes_design_speed_m_s),
+            RecoveryKind::SupersonicChute => ("mars_surface", edl.supersonic_chute_design_speed_m_s),
+        }
+    }
+}
+
+/// A stage's canopy, as last fitted to its touchdown mass.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Recovery {
+    pub kind: RecoveryKind,
+    /// The touchdown mass it was sized for.
+    pub rated_mass_kg: f64,
+    pub mass_kg: f64,
+    /// Canopy drag area, m².
+    pub drag_area_m2: f64,
 }
 
 /// A rocket stage: structural mass, engines, propellant, optional fairing,
@@ -138,6 +201,9 @@ pub struct Stage {
     /// Sets down on these (§2.2).
     #[serde(default)]
     pub legs: Option<Legs>,
+    /// Comes down through air under this (§2.2).
+    #[serde(default)]
+    pub recovery: Option<Recovery>,
 }
 
 impl Stage {
@@ -186,9 +252,11 @@ impl Stage {
         self.structural_mass_kg + engine_mass + fairing_mass + power_mass
     }
 
-    /// Heat shield and legs, kg.
+    /// Heat shield, legs and canopy, kg.
     pub fn edl_mass_kg(&self) -> f64 {
-        self.heat_shield.as_ref().map_or(0.0, |h| h.mass_kg) + self.legs.as_ref().map_or(0.0, |l| l.mass_kg)
+        self.heat_shield.as_ref().map_or(0.0, |h| h.mass_kg)
+            + self.legs.as_ref().map_or(0.0, |l| l.mass_kg)
+            + self.recovery.as_ref().map_or(0.0, |r| r.mass_kg)
     }
 
     /// The body's diameter, m: the tanks' at the tank fineness for a
@@ -196,14 +264,21 @@ impl Stage {
     /// enters an atmosphere — tanks plus dry kit at the bulk density,
     /// at the capsule fineness (25_2_EDL_CORE.md §2.2).
     pub fn body_diameter_m(&self, bodies: &crate::balance_config::BodiesConfig) -> f64 {
-        if self.heat_shield.is_none() {
+        let Some(fineness) = self.entry_fineness(bodies) else {
             return self.diameter_m(bodies.tank_fineness);
-        }
+        };
         let v = self.tank_volume_m3() + self.dry_mass_without_edl_kg() / bodies.bulk_density_kg_m3.max(1.0);
-        if v <= 0.0 || bodies.capsule_fineness <= 0.0 {
+        if v <= 0.0 || fineness <= 0.0 {
             return 0.0;
         }
-        (4.0 * v / (std::f64::consts::PI * bodies.capsule_fineness)).cbrt()
+        (4.0 * v / (std::f64::consts::PI * fineness)).cbrt()
+    }
+
+    /// The fineness of a stage that enters air: a capsule's, or a Mars
+    /// aeroshell's; `None` for a stage that stays in space.
+    fn entry_fineness(&self, bodies: &crate::balance_config::BodiesConfig) -> Option<f64> {
+        let shield = self.heat_shield.as_ref()?;
+        Some(if shield.rating.is_aeroshell() { bodies.aeroshell_fineness } else { bodies.capsule_fineness })
     }
 
     /// The face a heat shield covers, m².
@@ -220,7 +295,7 @@ impl Stage {
         if d <= 0.0 {
             return 0.0;
         }
-        let fineness = if self.heat_shield.is_some() { bodies.capsule_fineness } else { bodies.tank_fineness };
+        let fineness = self.entry_fineness(bodies).unwrap_or(bodies.tank_fineness);
         let area = std::f64::consts::PI * d * d * (fineness + 0.5);
         self.structural_mass_kg / area
     }
@@ -237,17 +312,28 @@ impl Stage {
         if let Some(legs) = self.legs.as_mut() {
             legs.mass_kg = base * edl.legs_mass_fraction;
         }
+        let legs_mass = self.legs.as_ref().map_or(0.0, |l| l.mass_kg);
+        // The canopy is rated for what comes down under it: the stage
+        // wet, its legs and shield, and the payload.
+        if let Some(kind) = self.recovery.as_ref().map(|r| r.kind) {
+            let shield_mass = self.heat_shield.as_ref().map_or(0.0, |h| h.mass_kg);
+            let rated = base + self.propellant_mass_kg + legs_mass + shield_mass + payload_kg;
+            let (air, speed) = kind.design_point(edl);
+            let drag_area = crate::location::DELTA_V_MAP.surface_properties(air)
+                .map_or(0.0, |p| crate::edl::drag_area_for_terminal_velocity(rated, speed, p.gravity_m_s2, p.atmosphere_density, edl));
+            self.recovery = Some(Recovery { kind, rated_mass_kg: rated, mass_kg: rated * kind.mass_fraction(edl), drag_area_m2: drag_area });
+        }
         let Some(rating) = self.heat_shield.as_ref().map(|h| h.rating) else { return };
         let area = self.base_area_m2(bodies);
         let wall = crate::edl::wall_heat_capacity_j_m2(self.skin_kg_per_m2(bodies), self.material);
-        let legs_mass = self.legs.as_ref().map_or(0.0, |l| l.mass_kg);
+        let chute_mass = self.recovery.as_ref().map_or(0.0, |r| r.mass_kg);
         // The shield's own mass is part of what it slows: a few rounds
         // settle it.
         let mut shield_mass = self.heat_shield.as_ref().map_or(0.0, |h| h.mass_kg);
         let mut areal = 0.0;
         let mut heat = 0.0;
         for _ in 0..4 {
-            let entry_mass = base + self.propellant_mass_kg + legs_mass + shield_mass + payload_kg;
+            let entry_mass = base + self.propellant_mass_kg + legs_mass + chute_mass + shield_mass + payload_kg;
             let beta = crate::edl::ballistic_coefficient(entry_mass, area, edl);
             heat = crate::edl::entry_heat_j_m2(rating.speed_m_s(), beta, edl);
             areal = crate::edl::shield_areal_density_kg_m2(heat, wall, edl);
@@ -648,7 +734,7 @@ mod tests {
         let s = Stage {
             id: StageId(1), name: "S1".into(), engine: test_engine(), engine_count: 1,
             propellant_mass_kg: 1_000.0, structural_mass_kg: 100.0, fairing: None,
-            material: crate::structure::StructuralMaterial::Composite, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
+            material: crate::structure::StructuralMaterial::Composite, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None, recovery: None,
         };
         let mut json: serde_json::Value = serde_json::to_value(&s).unwrap();
         json.as_object_mut().unwrap().remove("material");
@@ -673,7 +759,7 @@ mod tests {
             engine: crate::test_util::kerolox_engine(1, 20_000.0, 60.0, 300.0), engine_count: 1,
             propellant_mass_kg: 300.0, structural_mass_kg: 1_500.0, fairing: None,
             material: crate::structure::StructuralMaterial::Steel, power_sources: Vec::new(),
-            landing: None, heat_shield: None, legs: None,
+            landing: None, heat_shield: None, legs: None, recovery: None,
         };
         let bare = capsule.dry_mass_kg();
         let slim = capsule.body_diameter_m(&bodies);
@@ -702,7 +788,7 @@ mod tests {
     fn diameter_follows_the_tanks() {
         let mut s = Stage {
             id: StageId(1), name: "S1".into(), engine: test_engine(), engine_count: 9,
-            propellant_mass_kg: 411_000.0, structural_mass_kg: 0.0, fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
+            propellant_mass_kg: 411_000.0, structural_mass_kg: 0.0, fairing: None, material: crate::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None, recovery: None,
         };
         let d = s.diameter_m(10.0);
         assert!((d - 3.7).abs() < 0.15, "F9 S1 {d}");
@@ -743,7 +829,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None, heat_shield: None, legs: None,
+            landing: None, heat_shield: None, legs: None, recovery: None,
         }
     }
 

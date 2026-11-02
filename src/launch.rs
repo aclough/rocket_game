@@ -908,7 +908,7 @@ mod tests {
             fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None, heat_shield: None, legs: None,
+            landing: None, heat_shield: None, legs: None, recovery: None,
         }
     }
 
@@ -970,7 +970,7 @@ mod tests {
             propellant_mass_kg: prop, structural_mass_kg: dry, fairing: None,
             material: crate::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None, heat_shield: None, legs: None,
+            landing: None, heat_shield: None, legs: None, recovery: None,
         };
         // A first stage whose nozzle is built for altitude: 40 kPa exit at
         // a 101 kPa pad is well into the penalty.

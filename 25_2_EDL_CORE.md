@@ -598,3 +598,38 @@ and is paid the partial fraction; step 3 first read that as an entry
 without a shield. The landing now needs a flown leg, which keeps the
 old behaviour, but the empty-route arrival itself looks like a bug to
 decide on (TODO).
+
+**Step 4 — canopies.** `Stage.recovery: Option<Recovery { kind:
+RecoveryKind, rated_mass_kg, mass_kg, drag_area_m2 }>`, two kinds named
+by what they do: `Parachutes` (the drogue + main package, 3 % of the
+touchdown mass it is rated for, sized by `drag_area_for_terminal_velocity`
+to `parachutes_design_speed_m_s` 7 on Earth's air) and `SupersonicChute`
+(2 %, sized to `supersonic_chute_design_speed_m_s` 60 on Mars's air),
+`chute_drag_coefficient` 0.8. `[R]` cycles none, parachutes, supersonic
+chute, none — a two-item catalogue wants a cycle key like `[H]` and
+`[G]`, not a sub-mode — and the EDL line reads "parachutes 410 m²
+(30 kg)". Through air (`landing_verdict_at_mass`): a landing burn
+finishes the job as on an airless body; else the canopy sets the
+touchdown at the body's `terminal_velocity_m_s`, legs take
+`legs_touchdown_limit_m_s` 3, water (`SurfaceProperties::has_oceans`,
+Earth only, `graph_data::SURFACES_WITH_OCEANS`) takes
+`splashdown_limit_m_s` 10, and over the limit the touchdown is a risk
+ramping to 1 at `touchdown_overshoot` 1.0 (double the limit), rolled at
+`Landing` before the flaws. `LandingVerdict::{NoWayDown,
+ChuteCannotOpen, Splashdown, UnderCanopy, TooFast}`; the rows read
+"splashdown at 6 m/s", "▲ no way down — [R] canopy or [G] burn",
+"▲ canopy cannot open: too thin for a subsonic canopy". Thin air
+(`subsonic_chute_min_density_kg_m3` 0.1, i.e. Mars) takes only the
+supersonic canopy, and only under `thin_air_chute_beta_limit_kg_m2`
+200 — which made the shape matter: a Mars-rated shield is a broad
+aeroshell (`BodiesConfig::aeroshell_fineness` 0.4; Viking and MSL) and
+the dry kit's `bulk_density_kg_m3` is 200 (was 300), so an 800 kg
+lander with 300 kg of propellant comes out β ≈ 180 and its canopy
+opens at ~45 m/s, while a 5 t brick (β ≈ 250) gets no canopy and must
+burn from supersonic. `Feature::Parachute`; `canopy_bom` in
+`edl_hardware_cost`. The verdict functions take `&BodiesConfig` now.
+Checks: a capsule parked in LEO behind an LEO shield with parachutes
+and nothing else splashes down and is paid; at Mars its parachutes
+cannot open; a Mars-rated aeroshell with a supersonic canopy, a
+landing burn and legs sets down from a 200 km orbit; 100 seeds
+byte-identical; the capability probe unchanged.

@@ -18,6 +18,9 @@ fn loc_orbit(
     }
 }
 
+/// Surfaces with open water to splash down in.
+pub(crate) const SURFACES_WITH_OCEANS: &[&str] = &["earth_surface"];
+
 /// Entry speeds, m/s, of the nodes bound to a body with an atmosphere:
 /// what a vehicle there meets the air at if it comes down
 /// (25_2_EDL_CORE.md §2.3). `(node, body, speed)`; the surface is 0 so
@@ -68,6 +71,7 @@ fn loc_surface(
             gravity_m_s2: gravity, radius_m: radius,
             has_atmosphere: has_atm, atmosphere_density: atm_density,
             ambient_pressure_pa: ambient, scale_height_m: scale_height,
+            has_oceans: false,
         }),
         parent_body: parent,
         sun_distance_au: 0.0,

@@ -581,7 +581,7 @@ impl GameState {
                     // trip the row describes — a heavier load can take a
                     // different route and so a different number of days.
                     survives: self.survives_trip(design, from, dest, payload),
-                    landing: crate::edl::landing_verdict(design, payload, dest, &self.balance.edl),
+                    landing: crate::edl::landing_verdict(design, payload, dest, &self.balance.edl, &self.balance.bodies),
                     entry: self.entry_verdict_for(design, from, dest, payload),
                 });
             }
@@ -650,7 +650,7 @@ impl GameState {
         }
         // Landing on an airless body takes a landing burn the stage can
         // time (25_2_EDL_CORE.md §2.3); a hoverslam counts, a crash does not.
-        if crate::edl::landing_verdict(&project.design, payload_kg, destination, &self.balance.edl)
+        if crate::edl::landing_verdict(&project.design, payload_kg, destination, &self.balance.edl, &self.balance.bodies)
             .is_some_and(|v| !v.can_land())
         {
             return false;

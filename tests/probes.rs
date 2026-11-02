@@ -501,7 +501,7 @@ mod falcon9 {
             fairing: fairing.map(|m| Fairing { mass_kg: m, diameter_m: 5.2 }),
             material: rocket_tycoon::structure::StructuralMaterial::Aluminium,
             power_sources: Vec::new(),
-            landing: None, heat_shield: None, legs: None,
+            landing: None, heat_shield: None, legs: None, recovery: None,
         }
     }
 
@@ -969,12 +969,12 @@ mod small_launch {
         let mut s1 = Stage {
             id: StageId(1), name: "S1".into(), engine: bep.design_variant(false, &bal.nozzle),
             engine_count: boost.3, propellant_mass_kg: 10_000.0, structural_mass_kg: 1_000.0,
-            fairing: None, material: rocket_tycoon::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
+            fairing: None, material: rocket_tycoon::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None, recovery: None,
         };
         let mut s2 = Stage {
             id: StageId(2), name: "S2".into(), engine: uep.design_variant(true, &bal.nozzle),
             engine_count: upper.3, propellant_mass_kg: 2_000.0, structural_mass_kg: 200.0,
-            fairing: None, material: rocket_tycoon::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
+            fairing: None, material: rocket_tycoon::structure::StructuralMaterial::Aluminium, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None, recovery: None,
         };
         s1.power_sources.push(rocket_tycoon::power::solar_panel_for_stage_demand(&s1));
         s2.power_sources.push(rocket_tycoon::power::solar_panel_for_stage_demand(&s2));
@@ -1385,7 +1385,7 @@ mod materials {
                 let uep = state.player_company.engine_projects[1].clone();
                 let mk = |id, engine, count, prop| Stage {
                     id: StageId(id), name: format!("S{id}"), engine, engine_count: count, propellant_mass_kg: prop,
-                    structural_mass_kg: 0.0, fairing: None, material, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None,
+                    structural_mass_kg: 0.0, fairing: None, material, power_sources: Vec::new(), landing: None, heat_shield: None, legs: None, recovery: None,
                 };
                 let mut groups = vec![
                     vec![mk(1, bep.design_variant(false, &bal.nozzle), b.3, b.4)],

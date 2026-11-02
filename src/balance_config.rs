@@ -31,15 +31,21 @@ pub struct BodiesConfig {
     /// blunt body (Apollo and Dragon are about 1), sized on the whole
     /// body — tanks and dry kit — rather than the tanks alone.
     pub capsule_fineness: f64,
+    /// Length over diameter of a stage rated for a Mars entry: the
+    /// broad aeroshell thin air needs (Viking and MSL were about 0.4),
+    /// which is what keeps its ballistic coefficient low enough for a
+    /// canopy to open before the ground.
+    pub aeroshell_fineness: f64,
     /// Bulk density of a stage's dry kit, kg/m³, for the body volume of
     /// a blunt entry stage (a capsule is mostly cabin and cargo, not
-    /// tank; Dragon's 6 t in ~17 m³ is ~350).
+    /// tank: Apollo's command module ~370, MSL inside its aeroshell
+    /// ~160).
     pub bulk_density_kg_m3: f64,
 }
 
 impl Default for BodiesConfig {
     fn default() -> Self {
-        BodiesConfig { tank_fineness: 10.0, capsule_fineness: 1.0, bulk_density_kg_m3: 300.0 }
+        BodiesConfig { tank_fineness: 10.0, capsule_fineness: 1.0, aeroshell_fineness: 0.4, bulk_density_kg_m3: 200.0 }
     }
 }
 
@@ -82,6 +88,28 @@ pub struct EdlConfig {
     pub legs_mass_fraction: f64,
     /// Fastest touchdown legs survive, m/s.
     pub legs_touchdown_limit_m_s: f64,
+    /// Fastest splashdown a stage without legs survives on water, m/s.
+    pub splashdown_limit_m_s: f64,
+    /// Touchdown over its limit by this fraction is a certain loss; the
+    /// risk ramps up to it (the overexpansion rule's shape).
+    pub touchdown_overshoot: f64,
+    /// The drogue + main package: mass as a fraction of the touchdown
+    /// mass it is rated for, and the speed it is sized to bring that
+    /// mass down to on Earth's air (25_2_EDL_CORE.md §2.2).
+    pub parachutes_mass_fraction: f64,
+    pub parachutes_design_speed_m_s: f64,
+    /// The supersonic canopy: mass fraction, and the speed it is sized
+    /// to bring its rated mass to on Mars's air.
+    pub supersonic_chute_mass_fraction: f64,
+    pub supersonic_chute_design_speed_m_s: f64,
+    /// Drag coefficient of a canopy.
+    pub chute_drag_coefficient: f64,
+    /// Air thinner than this at the surface, kg/m³, is too thin for a
+    /// subsonic package to open in; the supersonic canopy still can.
+    pub subsonic_chute_min_density_kg_m3: f64,
+    /// In thin air a body denser than this, kg/m², never slows enough
+    /// for any canopy to open before the ground.
+    pub thin_air_chute_beta_limit_kg_m2: f64,
 }
 
 impl Default for EdlConfig {
@@ -97,6 +125,15 @@ impl Default for EdlConfig {
             burn_through_overshoot: 0.5,
             legs_mass_fraction: 0.04,
             legs_touchdown_limit_m_s: 3.0,
+            splashdown_limit_m_s: 10.0,
+            touchdown_overshoot: 1.0,
+            parachutes_mass_fraction: 0.03,
+            parachutes_design_speed_m_s: 7.0,
+            supersonic_chute_mass_fraction: 0.02,
+            supersonic_chute_design_speed_m_s: 60.0,
+            chute_drag_coefficient: 0.8,
+            subsonic_chute_min_density_kg_m3: 0.1,
+            thin_air_chute_beta_limit_kg_m2: 200.0,
         }
     }
 }
